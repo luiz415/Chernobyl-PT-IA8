@@ -646,7 +646,18 @@ service cloud.firestore {
           || (resource.data.status == 'quest_completed' && request.resource.data.status in ['for_sale', 'sold'])
           || (resource.data.status == 'for_sale' && request.resource.data.status in ['quest_completed', 'sold']);
       }
-      allow read: if isAuth() && isApproved() && isNegotiationParticipant();
+      // GET em documento INEXISTENTE é permitido (`resource == null`): a
+      // transação de pré-aprovação lê o ID determinístico (dono+personagem)
+      // para detectar duplicata ANTES do create. Sem isto, o `||` das rules
+      // errava em `resource.data` e NEGAVA a leitura para todo não-Boss —
+      // era exatamente o "Missing or insufficient permissions" do botão
+      // "Pré-aprovar venda". Não há dado exposto (o documento não existe) e
+      // o `create` abaixo continua restrito ao DONO original. Documentos
+      // EXISTENTES seguem legíveis somente pelos participantes/Boss.
+      allow get: if isAuth() && isApproved() && (
+        resource == null || isNegotiationParticipant()
+      );
+      allow list: if isAuth() && isApproved() && isNegotiationParticipant();
       // Pré-aprovação: exclusivamente o DONO original define preço e taxa.
       allow create: if isAuth()
         && isApproved()
