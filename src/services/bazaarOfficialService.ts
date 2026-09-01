@@ -83,94 +83,18 @@ export interface BazaarInterestUser {
 
 export type BazaarInterestMap = Record<string, BazaarInterestUser[]>;
 
-/**
- * Entrada como é gravada no documento agregado (sem repetir auctionId/version).
- *
- * ESTRUTURA: `byAuction[auctionId]` é um MAP keyed por uid — NÃO um array.
- * Motivo: o Firestore não aceita o sentinel `serverTimestamp()` dentro de
- * arrays ("serverTimestamp() is not currently supported inside arrays"), mas
- * aceita em maps aninhados. Com o map:
- *   • `createdAt` é o Timestamp UNIVERSAL do servidor (imune a fuso/relógio
- *     do dispositivo) — é ele que define a ordem dos interessados;
- *   • duplicidade é estruturalmente impossível (uid é a chave);
- *   • remover/re-adicionar funciona por simples delete/insert da chave.
- * `createdAtMs` (relógio local) permanece apenas como fallback de exibição
- * otimista enquanto o valor do servidor ainda não foi resolvido.
- */
+/** Entrada como é gravada no documento agregado (sem repetir auctionId/version). */
 interface StoredInterestEntry {
+  uid: string;
   name: string;
-  /** Timestamp do servidor (fonte da verdade da ordem). */
-  createdAt?: unknown;
-  /** Relógio local no momento do clique — fallback/UI otimista. */
   createdAtMs: number;
 }
-
-type StoredAuctionInterests = Record<string, StoredInterestEntry>;
 
 /** Documento único `bazaarInterests/current`. */
 interface AggregatedInterestsDoc {
   bazaarVersion: string;
   updatedAtMs: number;
-  byAuction: Record<string, StoredAuctionInterests>;
-}
-
-/**
- * Resolve o instante REAL do interesse em milissegundos.
- * Prioridade: Timestamp do servidor (`createdAt`) → relógio local
- * (`createdAtMs`). O sentinel pendente de `serverTimestamp()` (ainda não
- * commitado) não tem `seconds`/`toDate` e cai no fallback local.
- */
-function resolveInterestMs(entry: { createdAt?: any; createdAtMs?: number } | null | undefined): number {
-  const createdAt: any = entry?.createdAt;
-  if (createdAt) {
-    if (typeof createdAt.toMillis === "function") {
-      const ms = Number(createdAt.toMillis());
-      if (Number.isFinite(ms) && ms > 0) return ms;
-    }
-    if (Number.isFinite(createdAt.seconds)) {
-      return Number(createdAt.seconds) * 1000 + Math.floor(Number(createdAt.nanoseconds || 0) / 1e6);
-    }
-    if (typeof createdAt.toDate === "function") {
-      const date = createdAt.toDate();
-      if (date instanceof Date && Number.isFinite(date.getTime())) return date.getTime();
-    }
-  }
-  const local = Number(entry?.createdAtMs || 0);
-  return Number.isFinite(local) ? local : 0;
-}
-
-/**
- * Normaliza as entradas de um leilão para o formato novo (map por uid).
- * Aceita também o formato LEGADO (array de {uid,...}) para que documentos
- * gravados antes desta correção continuem legíveis sem migração manual.
- */
-function normalizeAuctionEntries(raw: unknown): StoredAuctionInterests {
-  const normalized: StoredAuctionInterests = {};
-  if (Array.isArray(raw)) {
-    // Formato legado: array de entradas com uid embutido.
-    raw.forEach((entry: any) => {
-      const uid = String(entry?.uid || "").trim();
-      if (!uid || normalized[uid]) return;
-      normalized[uid] = {
-        name: String(entry?.name || "Usuário"),
-        ...(entry?.createdAt !== undefined ? { createdAt: entry.createdAt } : {}),
-        createdAtMs: Number(entry?.createdAtMs || 0),
-      };
-    });
-    return normalized;
-  }
-  if (raw && typeof raw === "object") {
-    Object.entries(raw as Record<string, any>).forEach(([uid, entry]) => {
-      const key = String(uid || "").trim();
-      if (!key || !entry || typeof entry !== "object") return;
-      normalized[key] = {
-        name: String(entry?.name || "Usuário"),
-        ...(entry?.createdAt !== undefined ? { createdAt: entry.createdAt } : {}),
-        createdAtMs: Number(entry?.createdAtMs || 0),
-      };
-    });
-  }
-  return normalized;
+  byAuction: Record<string, StoredInterestEntry[]>;
 }
 
 export interface PublishOfficialBazaarResult {
@@ -290,21 +214,20 @@ function expandAggregatedInterests(data: AggregatedInterestsDoc | null, bazaarVe
   // Invalida automaticamente interesses de uma consulta anterior.
   if (bazaarVersion && String(data.bazaarVersion || "") !== bazaarVersion) return {};
   const grouped: BazaarInterestMap = {};
-  Object.entries(data.byAuction).forEach(([auctionId, rawEntries]) => {
-    const entries = normalizeAuctionEntries(rawEntries);
-    const users = Object.entries(entries).map(([uid, entry]) => ({
-      uid,
-      name: String(entry.name || "Usuário"),
-      auctionId,
-      bazaarVersion: String(data.bazaarVersion || ""),
-      // Instante REAL (Timestamp do servidor quando disponível) — é este
-      // valor que a UI usa para exibir horário e definir o 1º, 2º, 3º...
-      createdAtMs: resolveInterestMs(entry),
-    }));
+  Object.entries(data.byAuction).forEach(([auctionId, entries]) => {
+    if (!Array.isArray(entries) || entries.length === 0) return;
+    const users = entries
+      .filter(entry => entry && String(entry.uid || "").trim())
+      .map(entry => ({
+        uid: String(entry.uid),
+        name: String(entry.name || "Usuário"),
+        auctionId,
+        bazaarVersion: String(data.bazaarVersion || ""),
+        createdAtMs: Number(entry.createdAtMs || 0),
+      }));
     if (users.length === 0) return;
-    // Ordem SEMPRE derivada do instante real registrado (universal),
-    // nunca da posição de inserção nem do fuso do dispositivo.
-    users.sort((a, b) => (a.createdAtMs || 0) - (b.createdAtMs || 0) || a.uid.localeCompare(b.uid));
+    // Ordem de chegada preservada.
+    users.sort((a, b) => (a.createdAtMs || 0) - (b.createdAtMs || 0));
     grouped[auctionId] = users;
   });
   return grouped;
@@ -314,10 +237,10 @@ function expandAggregatedInterests(data: AggregatedInterestsDoc | null, bazaarVe
  * Remove leilões sem interessados para o documento não crescer indefinidamente.
  * Retorna um novo objeto — nunca muta a entrada.
  */
-function compactByAuction(byAuction: Record<string, StoredAuctionInterests>): Record<string, StoredAuctionInterests> {
-  const compacted: Record<string, StoredAuctionInterests> = {};
+function compactByAuction(byAuction: Record<string, StoredInterestEntry[]>): Record<string, StoredInterestEntry[]> {
+  const compacted: Record<string, StoredInterestEntry[]> = {};
   Object.entries(byAuction || {}).forEach(([auctionId, entries]) => {
-    if (entries && Object.keys(entries).length > 0) compacted[auctionId] = entries;
+    if (Array.isArray(entries) && entries.length > 0) compacted[auctionId] = entries;
   });
   return compacted;
 }
@@ -325,17 +248,12 @@ function compactByAuction(byAuction: Record<string, StoredAuctionInterests>): Re
 /**
  * Lê o documento agregado dentro de uma transação e descarta o conteúdo quando
  * ele pertence a outra versão do Bazaar (auto-invalidação por `bazaarVersion`).
- * Entradas no formato legado (array) são normalizadas para o map por uid.
  */
-function readAggregateForVersion(snap: any, bazaarVersion: string): Record<string, StoredAuctionInterests> {
+function readAggregateForVersion(snap: any, bazaarVersion: string): Record<string, StoredInterestEntry[]> {
   if (!snap.exists()) return {};
   const data = snap.data() as AggregatedInterestsDoc;
   if (String(data?.bazaarVersion || "") !== bazaarVersion) return {};
-  const normalized: Record<string, StoredAuctionInterests> = {};
-  Object.entries(data?.byAuction || {}).forEach(([auctionId, rawEntries]) => {
-    normalized[auctionId] = normalizeAuctionEntries(rawEntries);
-  });
-  return compactByAuction(normalized);
+  return compactByAuction(data?.byAuction || {});
 }
 
 export function shouldAutoCheckOfficialBazaar(): boolean {
@@ -487,7 +405,7 @@ export async function syncOfficialBazaarList(options: { force?: boolean } = {}):
  * transação, então uma migração concorrente de outro cliente não duplica nem
  * sobrescreve dados.
  */
-async function migrateLegacyInterests(bazaarVersion: string): Promise<Record<string, StoredAuctionInterests> | null> {
+async function migrateLegacyInterests(bazaarVersion: string): Promise<Record<string, StoredInterestEntry[]> | null> {
   if (!db) return null;
   if (readNumber(LEGACY_MIGRATION_KEY) > 0) return null;
   try {
@@ -495,7 +413,7 @@ async function migrateLegacyInterests(bazaarVersion: string): Promise<Record<str
     writeNumber(LEGACY_MIGRATION_KEY, now());
     if (legacySnap.empty) return null;
 
-    const byAuction: Record<string, StoredAuctionInterests> = {};
+    const byAuction: Record<string, StoredInterestEntry[]> = {};
     legacySnap.docs.forEach(item => {
       // Segurança: só documentos que realmente pertencem a bazaarInterests.
       if (item.ref.parent.parent?.parent.id !== INTERESTS_COLLECTION) return;
@@ -505,11 +423,12 @@ async function migrateLegacyInterests(bazaarVersion: string): Promise<Record<str
       const auctionId = String(data?.auctionId || item.ref.parent.parent?.id || "").trim();
       const uid = String(data?.uid || item.id || "").trim();
       if (!auctionId || !uid) return;
-      if (!byAuction[auctionId]) byAuction[auctionId] = {};
-      if (byAuction[auctionId][uid]) return;
-      byAuction[auctionId][uid] = { name: String(data?.name || "Usuário"), createdAtMs: Number(data?.createdAtMs || 0) };
+      if (!byAuction[auctionId]) byAuction[auctionId] = [];
+      if (byAuction[auctionId].some(entry => entry.uid === uid)) return;
+      byAuction[auctionId].push({ uid, name: String(data?.name || "Usuário"), createdAtMs: Number(data?.createdAtMs || 0) });
     });
 
+    Object.values(byAuction).forEach(entries => entries.sort((a, b) => (a.createdAtMs || 0) - (b.createdAtMs || 0)));
     const compacted = compactByAuction(byAuction);
     if (Object.keys(compacted).length === 0) return null;
 
@@ -579,11 +498,11 @@ export async function syncBazaarInterests(bazaarVersion: string, options: { forc
  */
 async function mutateAggregatedInterests(
   bazaarVersion: string,
-  mutate: (byAuction: Record<string, StoredAuctionInterests>) => Record<string, StoredAuctionInterests> | null,
+  mutate: (byAuction: Record<string, StoredInterestEntry[]>) => Record<string, StoredInterestEntry[]> | null,
 ): Promise<BazaarInterestMap> {
   if (!db) throw new Error("Firestore indisponível.");
   const ref = doc(db, INTERESTS_COLLECTION, INTERESTS_DOC_ID);
-  let finalByAuction: Record<string, StoredAuctionInterests> = {};
+  let finalByAuction: Record<string, StoredInterestEntry[]> = {};
 
   await runTransaction(db, async tx => {
     const snap = await tx.get(ref);
@@ -597,8 +516,6 @@ async function mutateAggregatedInterests(
     }
     // Compacta: leilões sem interessados somem do documento.
     finalByAuction = compactByAuction(mutated);
-    // `serverTimestamp()` aqui é VÁLIDO: as entradas vivem em maps aninhados
-    // (byAuction.{auctionId}.{uid}.createdAt), nunca dentro de arrays.
     tx.set(ref, {
       bazaarVersion,
       updatedAtMs: now(),
@@ -615,12 +532,7 @@ async function mutateAggregatedInterests(
   return interests;
 }
 
-/**
- * Marca interesse. Um usuário possui NO MÁXIMO um interesse por leilão (uid é
- * a chave do map). O instante real do clique é o `serverTimestamp()` gravado
- * pelo próprio Firestore — universal, independente do fuso do dispositivo — e
- * é ele que determina a ordem dos interessados na leitura.
- */
+/** Marca interesse. Ignora duplicatas e preserva a ordem de chegada. */
 export async function setBazaarInterest(params: { auctionId: string | number; bazaarVersion: string; uid: string; name: string }): Promise<BazaarInterestMap> {
   const auctionId = normalizeFirestoreId(params.auctionId, "auctionId");
   const uid = normalizeFirestoreId(params.uid, "uid");
@@ -628,23 +540,22 @@ export async function setBazaarInterest(params: { auctionId: string | number; ba
   const name = String(params.name || "Usuário").trim().slice(0, 80) || "Usuário";
 
   return mutateAggregatedInterests(bazaarVersion, byAuction => {
-    const entries = byAuction[auctionId] || {};
+    const entries = byAuction[auctionId] || [];
     // Já registrado: sem duplicação e sem escrita.
-    if (entries[uid]) return null;
+    if (entries.some(entry => entry.uid === uid)) return null;
     return {
       ...byAuction,
-      [auctionId]: {
-        ...entries,
-        [uid]: {
-          name,
-          // Momento REAL da ação, resolvido pelo relógio do SERVIDOR no
-          // commit (Timestamp UTC). Válido aqui porque a entrada é um map
-          // aninhado — o sentinel não funciona dentro de arrays.
-          createdAt: serverTimestamp(),
-          // Fallback local para a UI otimista até o valor do servidor chegar.
-          createdAtMs: now(),
-        },
-      },
+      // Append no fim mantém a ordem de chegada.
+      [auctionId]: [...entries, {
+        uid,
+        name,
+        // Momento REAL da ação (relógio do servidor — referência confiável
+        // já usada no projeto). O `createdAtMs` local continua para a UI
+        // otimista; a leitura prefere o valor do servidor (ver
+        // getInterestCreatedAtMs no painel).
+        createdAt: serverTimestamp(),
+        createdAtMs: now(),
+      }],
     };
   });
 }
@@ -656,10 +567,10 @@ export async function removeBazaarInterest(params: { auctionId: string | number;
   const bazaarVersion = normalizeBazaarVersion(params.bazaarVersion);
 
   return mutateAggregatedInterests(bazaarVersion, byAuction => {
-    const entries = byAuction[auctionId] || {};
+    const entries = byAuction[auctionId] || [];
+    const next = entries.filter(entry => entry.uid !== uid);
     // Nada a remover: sem escrita.
-    if (!entries[uid]) return null;
-    const { [uid]: _removed, ...next } = entries;
+    if (next.length === entries.length) return null;
     const updated = { ...byAuction, [auctionId]: next };
     // Leilão sem interessados é removido pelo compactByAuction.
     return updated;

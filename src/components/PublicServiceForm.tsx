@@ -417,7 +417,7 @@ export default function PublicServiceForm() {
       {/* pt-24: compensa a altura do header fixo para o conteúdo não ficar escondido */}
       <div className="relative z-10 w-full max-w-3xl mx-auto px-3 sm:px-6 pt-28 pb-12">
         {/* ===== QUADRO: INFORMAÇÕES SOBRE O SERVICE ===== */}
-        <div className="psf-quadro bg-[var(--th-n-elev)] border border-amber-500/50 rounded-3xl shadow-2xl mb-8" style={{ "--psf-quadro-accent": "#f59e0b" } as CSSProperties}>
+        <div className="psf-quadro bg-[var(--th-n-elev)] border border-amber-500/50 rounded-3xl shadow-2xl mb-8">
           {/* Título do quadro */}
           <div className="psf-quadro-header bg-gradient-to-r from-amber-500/10 via-amber-500/15 to-amber-500/10 border-b border-amber-500/20 px-7 py-5 flex items-center gap-3">
             <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-amber-500 to-orange-600 flex items-center justify-center flex-shrink-0">
@@ -667,7 +667,7 @@ export default function PublicServiceForm() {
 
         {/* ===== ESTADO: FORMULÁRIO ===== */}
         {(formState === "filling" || formState === "submitting") && (
-          <form onSubmit={handleSubmit} className="psf-quadro bg-[var(--th-n-elev)] border border-cyan-500/50 rounded-3xl shadow-2xl" style={{ "--psf-quadro-accent": "#22d3ee" } as CSSProperties}>
+          <form onSubmit={handleSubmit} className="psf-quadro bg-[var(--th-n-elev)] border border-cyan-500/50 rounded-3xl shadow-2xl">
             {/* Banner do tipo de quest */}
             <div className="psf-quadro-header bg-gradient-to-r from-cyan-500/10 via-cyan-500/15 to-cyan-500/10 border-b border-cyan-500/20 px-7 py-5 flex items-center gap-3">
               <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-cyan-500 to-sky-600 flex items-center justify-center flex-shrink-0">

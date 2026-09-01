@@ -793,10 +793,10 @@ body {
    ============================================================================ */
 .public-service-form {
   /* Tema MAIS ESCURO: mesmas fórmulas das tokens neutras do tema (cm/dh),
-     com luminosidade ~4-5 pontos abaixo — profundidade sem virar breu. */
-  --th-n-raised: oklch(10.2% calc(0.009 * var(--th-cm-neutral)) calc(354.854 + var(--th-dh-neutral)));
-  --th-n-panel: oklch(12.8% calc(0.004 * var(--th-cm-neutral)) calc(295.226 + var(--th-dh-neutral)));
-  --th-n-elev: oklch(15.1% calc(0.004 * var(--th-cm-neutral)) calc(288.542 + var(--th-dh-neutral)));
+     com luminosidade ~3-4 pontos abaixo — profundidade sem virar breu. */
+  --th-n-raised: oklch(11.4% calc(0.009 * var(--th-cm-neutral)) calc(354.854 + var(--th-dh-neutral)));
+  --th-n-panel: oklch(13.6% calc(0.004 * var(--th-cm-neutral)) calc(295.226 + var(--th-dh-neutral)));
+  --th-n-elev: oklch(15.9% calc(0.004 * var(--th-cm-neutral)) calc(288.542 + var(--th-dh-neutral)));
   --psf-ease: cubic-bezier(0.22, 1, 0.36, 1);
   --psf-ease-bounce: cubic-bezier(0.34, 1.4, 0.64, 1);
 }
@@ -805,36 +805,10 @@ body {
 .public-service-form .psf-quadro-header {
   border-top-left-radius: 1.4rem;
   border-top-right-radius: 1.4rem;
-  position: relative;
 }
 
-/* LINHA NEON do header: filete de luz na base, na cor do quadro
-   (--psf-quadro-accent). Desenhada com ::after (sem afetar o layout),
-   com brilho que intensifica no hover do quadro. */
-.public-service-form .psf-quadro-header::after {
-  content: "";
-  position: absolute;
-  left: 8%;
-  right: 8%;
-  bottom: -1px;
-  height: 1px;
-  pointer-events: none;
-  background: linear-gradient(
-    90deg,
-    transparent,
-    color-mix(in oklab, var(--psf-quadro-accent, #22d3ee) 85%, white) 50%,
-    transparent
-  );
-  filter: drop-shadow(0 0 6px color-mix(in oklab, var(--psf-quadro-accent, #22d3ee) 70%, transparent));
-  opacity: 0.55;
-  transition: opacity 0.35s var(--psf-ease), filter 0.35s var(--psf-ease);
-}
-
-/* (4) Containers externos — profundidade + moldura neon viva no hover. */
+/* (4) Containers externos — profundidade sutil ao passar o mouse. */
 .public-service-form .psf-quadro {
-  box-shadow:
-    0 1px 0 0 rgb(255 255 255 / 0.03) inset,
-    0 24px 60px -24px rgb(0 0 0 / 0.8);
   transition: box-shadow 0.35s var(--psf-ease), border-color 0.35s var(--psf-ease);
 }
 
@@ -883,73 +857,34 @@ body {
     0 0 26px -4px color-mix(in oklab, var(--voc-glow, #94a3b8) 55%, transparent);
 }
 
-/* Inputs: base escura + foco com glow neon ciano vivo. */
-.public-service-form form input,
-.public-service-form form textarea {
-  transition:
-    border-color 0.25s var(--psf-ease),
-    box-shadow 0.25s var(--psf-ease),
-    background-color 0.25s var(--psf-ease);
-}
+/* Inputs: foco com glow neon ciano (contraste no estado de digitação). */
 .public-service-form form input:focus,
 .public-service-form form textarea:focus {
   box-shadow:
-    0 0 0 1px color-mix(in oklab, #22d3ee 55%, transparent),
-    0 0 22px -2px color-mix(in oklab, #22d3ee 30%, transparent);
-}
-
-/* Botão de envio: leve varredura de luz (sheen) no hover — premium sem
-   poluição. O pseudo-elemento vive DENTRO do botão (overflow hidden). */
-.public-service-form .psf-submit {
-  position: relative;
-  overflow: hidden;
-}
-.public-service-form .psf-submit::before {
-  content: "";
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: -60%;
-  width: 45%;
-  pointer-events: none;
-  background: linear-gradient(105deg, transparent, rgb(255 255 255 / 0.35), transparent);
-  transform: skewX(-18deg);
-  transition: left 0.55s var(--psf-ease);
+    0 0 0 1px color-mix(in oklab, #22d3ee 45%, transparent),
+    0 0 18px -2px color-mix(in oklab, #22d3ee 22%, transparent);
 }
 
 /* ── Efeitos de hover — APENAS em dispositivos com hover real ──────────── */
 @media (hover: hover) and (pointer: fine) {
-  /* Containers externos: profundidade + intensificação do filete neon. */
   .public-service-form .psf-quadro:hover {
-    box-shadow:
-      0 1px 0 0 rgb(255 255 255 / 0.04) inset,
-      0 0 34px -10px color-mix(in oklab, var(--psf-quadro-accent, #22d3ee) 32%, transparent),
-      0 28px 70px -16px rgb(0 0 0 / 0.78);
-  }
-  .public-service-form .psf-quadro:hover .psf-quadro-header::after {
-    opacity: 1;
-    filter: drop-shadow(0 0 10px color-mix(in oklab, var(--psf-quadro-accent, #22d3ee) 90%, transparent));
+    box-shadow: 0 28px 70px -16px rgb(0 0 0 / 0.75);
   }
 
-  /* Cards internos: zoom leve + elevação + neon contextual. */
   .public-service-form .psf-card:hover {
     translate: 0 -3px;
-    scale: 1.012;
-    border-color: color-mix(in oklab, var(--psf-accent, #38bdf8) 55%, transparent);
-    background-color: color-mix(in oklab, var(--psf-accent, #38bdf8) 4%, transparent);
+    border-color: color-mix(in oklab, var(--psf-accent, #38bdf8) 45%, transparent);
     box-shadow:
-      0 0 0 1px color-mix(in oklab, var(--psf-accent, #38bdf8) 32%, transparent),
-      0 0 30px -4px color-mix(in oklab, var(--psf-accent, #38bdf8) 40%, transparent),
-      0 18px 38px -14px rgb(0 0 0 / 0.65);
+      0 0 0 1px color-mix(in oklab, var(--psf-accent, #38bdf8) 26%, transparent),
+      0 0 24px -4px color-mix(in oklab, var(--psf-accent, #38bdf8) 32%, transparent),
+      0 16px 34px -14px rgb(0 0 0 / 0.6);
   }
 
   .public-service-form .psf-choice:hover:not(:disabled) {
     translate: 0 -2px;
-    scale: 1.015;
-    border-color: color-mix(in oklab, var(--psf-accent, #94a3b8) 65%, transparent);
+    border-color: color-mix(in oklab, var(--psf-accent, #94a3b8) 55%, transparent);
     box-shadow:
-      0 0 0 1px color-mix(in oklab, var(--psf-accent, #94a3b8) 30%, transparent),
-      0 0 26px -4px color-mix(in oklab, var(--psf-accent, #94a3b8) 42%, transparent),
+      0 0 20px -4px color-mix(in oklab, var(--psf-accent, #94a3b8) 34%, transparent),
       0 12px 26px -12px rgb(0 0 0 / 0.55);
   }
 
@@ -969,21 +904,12 @@ body {
     scale: 1.06;
   }
 
-  /* Inputs: hover discreto antes do foco (indica interatividade). */
-  .public-service-form form input:hover:not(:focus),
-  .public-service-form form textarea:hover:not(:focus) {
-    border-color: rgb(255 255 255 / 0.22);
-  }
-
-  /* Botão de envio: glow ciano reforçado + varredura de luz. */
+  /* Botão de envio: glow ciano reforçado (o grande call-to-action). */
   .public-service-form .psf-submit:hover:not(:disabled) {
     box-shadow:
-      0 0 26px -2px color-mix(in oklab, #22d3ee 55%, transparent),
-      0 0 70px -12px color-mix(in oklab, #22d3ee 35%, transparent),
+      0 0 26px -2px color-mix(in oklab, #22d3ee 50%, transparent),
+      0 0 64px -12px color-mix(in oklab, #22d3ee 30%, transparent),
       0 14px 36px -10px rgb(0 0 0 / 0.6);
-  }
-  .public-service-form .psf-submit:hover:not(:disabled)::before {
-    left: 120%;
   }
 }
 
@@ -996,18 +922,9 @@ body {
   }
   .public-service-form .psf-choice:active:not(:disabled) {
     scale: 0.98;
-    border-color: color-mix(in oklab, var(--psf-accent, #94a3b8) 60%, transparent);
-    box-shadow: 0 0 16px -4px color-mix(in oklab, var(--psf-accent, #94a3b8) 45%, transparent);
   }
   .public-service-form .psf-card {
     transition: none;
-  }
-  .public-service-form .psf-submit:active:not(:disabled) {
-    box-shadow: 0 0 24px -4px color-mix(in oklab, #22d3ee 50%, transparent);
-  }
-  /* Filete neon dos headers sempre visível no touch (não há hover). */
-  .public-service-form .psf-quadro-header::after {
-    opacity: 0.8;
   }
 }
 
@@ -1016,24 +933,16 @@ body {
   .public-service-form .psf-quadro,
   .public-service-form .psf-card,
   .public-service-form .psf-choice,
-  .public-service-form .psf-voc,
-  .public-service-form .psf-quadro-header::after,
-  .public-service-form .psf-submit::before,
-  .public-service-form form input,
-  .public-service-form form textarea {
+  .public-service-form .psf-voc {
     transition: none;
   }
   .public-service-form .psf-card:hover,
   .public-service-form .psf-choice:hover:not(:disabled) {
     translate: 0 0;
-    scale: 1;
   }
   .public-service-form .psf-voc:hover,
   .public-service-form .psf-voc[data-selected="true"]:hover {
     scale: 1;
-  }
-  .public-service-form .psf-submit::before {
-    display: none;
   }
 }
 
