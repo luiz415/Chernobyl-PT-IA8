@@ -1,0 +1,90 @@
+COMANDOS — BACKUP, RESTAURAÇÃO, BUILD E DEPLOY
+===============================================
+
+0. COMANDO INICIAL 
+------------------------------------------
+
+cd "C:\CAMINHO\DO\BACKUP_Chernobyl_PT"
+
+1. BACKUP DO PROJETO SEM PASTAS RECRIÁVEIS
+------------------------------------------
+
+robocopy . "C:\Users\lphil\OneDrive\Desktop\BACKUP_Chernobyl_PT" /E /XD node_modules dist dist_electron .vite .firebase .cache /XF npm-debug.log firebase-debug.log
+
+2. BACKUP COM DATA NO NOME DA PASTA
+-----------------------------------
+
+robocopy . "C:\Users\lphil\OneDrive\Desktop\BACKUP_Chernobyl_PT_%date:~-4%%date:~3,2%%date:~0,2%" /E /XD node_modules dist dist_electron .vite .firebase .cache /XF npm-debug.log firebase-debug.log
+
+3. RESTAURAR PROJETO EM UMA NOVA PASTA
+--------------------------------------
+
+cd "C:\CAMINHO\DO\BACKUP_Chernobyl_PT"
+npm install
+
+4. VALIDAR O PROJETO
+--------------------
+
+npx tsc --noEmit
+npm run build
+
+5. GERAR / ATUALIZAR INSTALADOR DO APLICATIVO
+---------------------------------------------
+
+npm run build:electron
+
+6. LOGIN E CONFERÊNCIA DO FIREBASE
+----------------------------------
+
+npm install -g firebase-tools
+firebase login
+firebase projects:list
+firebase use
+
+7. SELECIONAR / ADICIONAR PROJETO FIREBASE
+------------------------------------------
+
+firebase use --add
+
+8. DEPLOY DA VERSÃO WEB NO FIREBASE HOSTING
+-------------------------------------------
+
+npm run build
+firebase deploy --only hosting --project SEU_PROJECT_ID
+
+9. FLUXO COMPLETO EM UMA NOVA MÁQUINA / PASTA
+---------------------------------------------
+
+npm install
+npx tsc --noEmit
+npm run build
+firebase login
+firebase use
+firebase deploy --only hosting --project SEU_PROJECT_ID
+npm run build:electron
+
+10. PASTAS QUE NÃO PRECISAM SER COPIADAS NO BACKUP
+--------------------------------------------------
+
+node_modules
+dist
+dist_electron
+.vite
+.firebase
+.cache
+
+11. ARQUIVOS / PASTAS IMPORTANTES PARA GUARDAR
+----------------------------------------------
+
+src
+public
+build
+electron-main.cjs
+package.json
+package-lock.json
+firebase.json
+.firebaserc
+.env.local
+vite.config.ts
+tsconfig.json
+index.html

@@ -1,0 +1,72 @@
+CHERNOBYL PT
+
+|------------------|
+|------ PT'S-------|
+|------------------|
+
+|------------------|
+|---- GERAIS-------|
+|------------------|
+
+---
+
+
+*Adicionar no prompt inicial para o Agente:
+- Após cada modificação feita em algum arquivo, realizar o snapshot de cada código modificado e exibir o código completo após a modificação.
+- Após cada modificação feita, informar o que deve ser testado para continuar para a próxima modificação.
+
+
+|------------------|
+|----- TESTAR -----|
+|------------------|
+
+npm install
+npm run build
+npm run electron:dev
+
+npm run dev
+acessar rede local via nagevador ou abrir via index.html na pasta "dist"
+
+Para atualizar o site Web (se a pasta já estiver configurada):
+npm run build
+firebase deploy --only hosting
+
+Para gerar o instalador atualizado:
+npm run build:electron
+O instalador será gerado na pasta: dist_electron
+
+postar atualização:
+npm run publish
+
+Para atualizar basta trocar a versão no package, rodar o npm run build e depois npm run pubish
+
+|------------------|
+|----- GITHUB -----|
+|------------------|
+
+cd /caminho/para/seu/projeto
+git init
+git add .
+git commit -m "Commit inicial - projeto completo"
+git remote add origin https://github.com/seu-usuario/seu-projeto.git
+(git remote remove origin -> APENAS SE O COMANDO ANTERIOR DEU ERROR, NÃO DEVE SER USADO CASO O COMANDO ANTERIOR TENHA REALIZADO SEM ERRO)
+git branch -M main
+git push -u origin main
+
+|=====================|
+|------ FUTURO -------|
+|=====================|
+---- *criar automatização para fazer backup do sistema no HD conectado no PC todos os dias de madrugada*
+
+- Conta normal não poderá criar mais de 2 PT's simultaneamente (Limitar a quantidade de PT's simultâneas criadas por um usuário com o cargo "Normal" para 2).
+- Adicionar integração ao Discord.
+
+
+|=====================|
+|---- LIMPAR APP -----|
+|=====================|
+
+Pode excluir:
+Com tranquilidade: sharedCharacters, presence, user_logs, notifications
+Pode limpar, mas perde dados funcionais: parties, waitingList, donations, feedback
+Muito cuidado: users, settings, userCharacters

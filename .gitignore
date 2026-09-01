@@ -1,0 +1,22 @@
+# Dependencias
+node_modules
+functions/node_modules
+functions/lib
+# Build do app
+dist
+dist_electron
+out
+# Variaveis de ambiente - NAO envie seu .env.local real
+.env.local
+.env
+# Logs e cache
+npm-debug.log
+firebase-debug.log
+.vscode
+.DS_Store
+.firebase
+# Arquivos de auto-save local do usuario
+ChernobylTeam-AutoSave-*.json
+# Dados locais da Firebase Emulator Suite
+emulator-data
+.emulator-data

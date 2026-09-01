@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+
+    <!-- Favicons -->
+    <link rel="icon" href="/favicon.ico" sizes="any" />
+    <link rel="icon" type="image/png" href="/favicon.png" />
+
+
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+    <title>Chernobyl PT</title>
+
+    <!--
+      Anti-flash de tema: aplica o tema salvo em <html> ANTES de qualquer
+      pintura, evitando que o tema padrão apareça por um instante.
+      Mantido inline e síncrono de propósito.
+    -->
+    <script>
+      (function () {
+        try {
+          var t = localStorage.getItem("chernobyl_theme");
+          var valid = {
+            ember: 1, forest: 1,
+            graphite: 1, ash: 1, cyberpunk: 1, frost: 1, coffee: 1
+          };
+          document.documentElement.setAttribute(
+            "data-theme",
+            valid[t] ? t : "ember"
+          );
+        } catch (e) {
+          document.documentElement.setAttribute("data-theme", "ember");
+        }
+      })();
+    </script>
+  </head>
+
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

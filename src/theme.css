@@ -1,0 +1,238 @@
+/* ============================================================================
+   THEME LAYER — fonte única de verdade das cores de interface ("chrome").
+   ----------------------------------------------------------------------------
+   NÃO defina cores diretamente nos componentes. Toda a interface deriva dos
+   tokens abaixo, e cada token deriva de 8 variáveis de eixo definidas por tema.
+
+   EIXOS (o que um tema realmente define):
+     --th-dh-chrome  / --th-cm-chrome    superfícies, bordas e marca tingidas
+     --th-dh-neutral / --th-cm-neutral   superfícies neutras (cinza)
+     --th-dh-brand   / --th-cm-brand     família Tailwind "red"
+     --th-dh-accent  / --th-cm-accent    famílias "amber" / "orange" / "yellow"
+
+   "dh" = delta de matiz, em graus   |   "cm" = multiplicador de croma
+
+   Como os temas aplicam deltas/multiplicadores (e não cores absolutas), a
+   RELAÇÃO entre os tons — contraste, hierarquia e saturação relativa — é
+   preservada em todos os temas.
+
+   Os valores de L, C e H de cada token foram extraídos estatisticamente das
+   cores originais do projeto; por isso o tema "ember" reproduz o visual
+   anterior com fidelidade praticamente exata.
+
+   REDEFINIÇÃO DAS FAMÍLIAS TAILWIND
+   As famílias red / orange / amber / yellow são redefinidas dentro de @theme.
+   Por isso TODAS as classes já presentes no JSX (bg-amber-500/10,
+   border-red-900/30, text-amber-300, ...) passam a seguir o tema
+   automaticamente, sem necessidade de alterar os componentes.
+
+   NÃO TEMATIZADOS DE PROPÓSITO:
+     - rose-*                     estados destrutivos / erro (sempre vermelho)
+     - emerald / sky / violet     estados semânticos (sucesso, info, VIP)
+     - slate                      texto e elementos neutros de tipografia
+     - VOC_COLORS / ITEM_COLORS   cores de jogo (regra de negócio)
+   ============================================================================ */
+
+@theme {
+  /* Superfícies, bordas e marca — hue tingido pelo tema */
+  --th-bg-abyss: oklch(11.692% calc(0.015 * var(--th-cm-chrome)) calc(19.596 + var(--th-dh-chrome)));
+  --th-bg-deep: oklch(12.706% calc(0.018 * var(--th-cm-chrome)) calc(19.923 + var(--th-dh-chrome)));
+  --th-bg-base: oklch(14.77% calc(0.02 * var(--th-cm-chrome)) calc(19.805 + var(--th-dh-chrome)));
+  --th-bg-raised: oklch(16.14% calc(0.027 * var(--th-cm-chrome)) calc(20.437 + var(--th-dh-chrome)));
+  --th-bg-overlay: oklch(17.633% calc(0.024 * var(--th-cm-chrome)) calc(19.751 + var(--th-dh-chrome)));
+  --th-bg-hover: oklch(18.806% calc(0.028 * var(--th-cm-chrome)) calc(20.142 + var(--th-dh-chrome)));
+  --th-bg-active: oklch(20.657% calc(0.049 * var(--th-cm-chrome)) calc(22.258 + var(--th-dh-chrome)));
+  --th-line-subtle: oklch(23.131% calc(0.06 * var(--th-cm-chrome)) calc(30.671 + var(--th-dh-chrome)));
+  --th-line: oklch(27.171% calc(0.091 * var(--th-cm-chrome)) calc(25.684 + var(--th-dh-chrome)));
+  --th-line-strong: oklch(30.834% calc(0.106 * var(--th-cm-chrome)) calc(26.057 + var(--th-dh-chrome)));
+  --th-brand-deep: oklch(32.924% calc(0.135 * var(--th-cm-chrome)) calc(29.234 + var(--th-dh-chrome)));
+  --th-brand: oklch(39.741% calc(0.161 * var(--th-cm-chrome)) calc(28.962 + var(--th-dh-chrome)));
+  --th-brand-mid: oklch(41.973% calc(0.145 * var(--th-cm-chrome)) calc(26.076 + var(--th-dh-chrome)));
+  --th-brand-bright: oklch(46.618% calc(0.159 * var(--th-cm-chrome)) calc(25.965 + var(--th-dh-chrome)));
+
+  /* Superfícies neutras (cinza) */
+  --th-n-abyss: oklch(9.424% calc(0.012 * var(--th-cm-neutral)) calc(19.465 + var(--th-dh-neutral)));
+  --th-n-deep: oklch(12.108% calc(0.011 * var(--th-cm-neutral)) calc(18.747 + var(--th-dh-neutral)));
+  --th-n-base: oklch(14.132% calc(0.011 * var(--th-cm-neutral)) calc(13.632 + var(--th-dh-neutral)));
+  --th-n-raised: oklch(15.098% calc(0.009 * var(--th-cm-neutral)) calc(354.854 + var(--th-dh-neutral)));
+  --th-n-panel: oklch(17.726% calc(0.004 * var(--th-cm-neutral)) calc(295.226 + var(--th-dh-neutral)));
+  --th-n-elev: oklch(19.857% calc(0.004 * var(--th-cm-neutral)) calc(288.542 + var(--th-dh-neutral)));
+  --th-n-hi: oklch(22.036% calc(0.006 * var(--th-cm-neutral)) calc(285.915 + var(--th-dh-neutral)));
+  --th-n-track: oklch(27.067% calc(0.009 * var(--th-cm-neutral)) calc(285.77 + var(--th-dh-neutral)));
+  --th-n-thumb: oklch(37.032% calc(0.012 * var(--th-cm-neutral)) calc(285.805 + var(--th-dh-neutral)));
+
+  /* red -> brand */
+  --color-red-50: oklch(97.1% calc(0.013 * var(--th-cm-brand)) calc(17.38 + var(--th-dh-brand)));
+  --color-red-100: oklch(93.6% calc(0.032 * var(--th-cm-brand)) calc(17.717 + var(--th-dh-brand)));
+  --color-red-200: oklch(88.5% calc(0.062 * var(--th-cm-brand)) calc(18.334 + var(--th-dh-brand)));
+  --color-red-300: oklch(80.8% calc(0.114 * var(--th-cm-brand)) calc(19.571 + var(--th-dh-brand)));
+  --color-red-400: oklch(70.4% calc(0.191 * var(--th-cm-brand)) calc(22.216 + var(--th-dh-brand)));
+  --color-red-500: oklch(63.7% calc(0.237 * var(--th-cm-brand)) calc(25.331 + var(--th-dh-brand)));
+  --color-red-600: oklch(57.7% calc(0.245 * var(--th-cm-brand)) calc(27.325 + var(--th-dh-brand)));
+  --color-red-700: oklch(50.5% calc(0.213 * var(--th-cm-brand)) calc(27.518 + var(--th-dh-brand)));
+  --color-red-800: oklch(44.4% calc(0.177 * var(--th-cm-brand)) calc(26.899 + var(--th-dh-brand)));
+  --color-red-900: oklch(39.6% calc(0.141 * var(--th-cm-brand)) calc(25.723 + var(--th-dh-brand)));
+  --color-red-950: oklch(25.8% calc(0.092 * var(--th-cm-brand)) calc(26.042 + var(--th-dh-brand)));
+
+  /* orange -> accent */
+  --color-orange-50: oklch(98% calc(0.016 * var(--th-cm-accent)) calc(73.684 + var(--th-dh-accent)));
+  --color-orange-100: oklch(95.4% calc(0.038 * var(--th-cm-accent)) calc(75.164 + var(--th-dh-accent)));
+  --color-orange-200: oklch(90.1% calc(0.076 * var(--th-cm-accent)) calc(70.697 + var(--th-dh-accent)));
+  --color-orange-300: oklch(83.7% calc(0.128 * var(--th-cm-accent)) calc(66.29 + var(--th-dh-accent)));
+  --color-orange-400: oklch(75% calc(0.183 * var(--th-cm-accent)) calc(55.934 + var(--th-dh-accent)));
+  --color-orange-500: oklch(70.5% calc(0.213 * var(--th-cm-accent)) calc(47.604 + var(--th-dh-accent)));
+  --color-orange-600: oklch(64.6% calc(0.222 * var(--th-cm-accent)) calc(41.116 + var(--th-dh-accent)));
+  --color-orange-700: oklch(55.3% calc(0.195 * var(--th-cm-accent)) calc(38.402 + var(--th-dh-accent)));
+  --color-orange-800: oklch(47% calc(0.157 * var(--th-cm-accent)) calc(37.304 + var(--th-dh-accent)));
+  --color-orange-900: oklch(40.8% calc(0.123 * var(--th-cm-accent)) calc(38.172 + var(--th-dh-accent)));
+  --color-orange-950: oklch(26.6% calc(0.079 * var(--th-cm-accent)) calc(36.259 + var(--th-dh-accent)));
+
+  /* amber -> accent */
+  --color-amber-50: oklch(98.7% calc(0.022 * var(--th-cm-accent)) calc(95.277 + var(--th-dh-accent)));
+  --color-amber-100: oklch(96.2% calc(0.059 * var(--th-cm-accent)) calc(95.617 + var(--th-dh-accent)));
+  --color-amber-200: oklch(92.4% calc(0.12 * var(--th-cm-accent)) calc(95.746 + var(--th-dh-accent)));
+  --color-amber-300: oklch(87.9% calc(0.169 * var(--th-cm-accent)) calc(91.605 + var(--th-dh-accent)));
+  --color-amber-400: oklch(82.8% calc(0.189 * var(--th-cm-accent)) calc(84.429 + var(--th-dh-accent)));
+  --color-amber-500: oklch(76.9% calc(0.188 * var(--th-cm-accent)) calc(70.08 + var(--th-dh-accent)));
+  --color-amber-600: oklch(66.6% calc(0.179 * var(--th-cm-accent)) calc(58.318 + var(--th-dh-accent)));
+  --color-amber-700: oklch(55.5% calc(0.163 * var(--th-cm-accent)) calc(48.998 + var(--th-dh-accent)));
+  --color-amber-800: oklch(47.3% calc(0.137 * var(--th-cm-accent)) calc(46.201 + var(--th-dh-accent)));
+  --color-amber-900: oklch(41.4% calc(0.112 * var(--th-cm-accent)) calc(45.904 + var(--th-dh-accent)));
+  --color-amber-950: oklch(27.9% calc(0.077 * var(--th-cm-accent)) calc(45.635 + var(--th-dh-accent)));
+
+  /* yellow -> accent */
+  --color-yellow-50: oklch(98.7% calc(0.026 * var(--th-cm-accent)) calc(102.212 + var(--th-dh-accent)));
+  --color-yellow-100: oklch(97.3% calc(0.071 * var(--th-cm-accent)) calc(103.193 + var(--th-dh-accent)));
+  --color-yellow-200: oklch(94.5% calc(0.129 * var(--th-cm-accent)) calc(101.54 + var(--th-dh-accent)));
+  --color-yellow-300: oklch(90.5% calc(0.182 * var(--th-cm-accent)) calc(98.111 + var(--th-dh-accent)));
+  --color-yellow-400: oklch(85.2% calc(0.199 * var(--th-cm-accent)) calc(91.936 + var(--th-dh-accent)));
+  --color-yellow-500: oklch(79.5% calc(0.184 * var(--th-cm-accent)) calc(86.047 + var(--th-dh-accent)));
+  --color-yellow-600: oklch(68.1% calc(0.162 * var(--th-cm-accent)) calc(75.834 + var(--th-dh-accent)));
+  --color-yellow-700: oklch(55.4% calc(0.135 * var(--th-cm-accent)) calc(66.442 + var(--th-dh-accent)));
+  --color-yellow-800: oklch(47.6% calc(0.114 * var(--th-cm-accent)) calc(61.907 + var(--th-dh-accent)));
+  --color-yellow-900: oklch(42.1% calc(0.095 * var(--th-cm-accent)) calc(57.708 + var(--th-dh-accent)));
+  --color-yellow-950: oklch(28.6% calc(0.066 * var(--th-cm-accent)) calc(53.813 + var(--th-dh-accent)));
+}
+
+/* ---------------------------------------------------------------------------
+   PALETAS
+   Cada tema define somente os 8 eixos. Para criar um tema novo, copie um
+   bloco, troque o id e ajuste os valores — e registre o id em
+   src/theme/themes.ts.
+   --------------------------------------------------------------------------- */
+
+/* Padrão — Dark: Vermelho Queimado / Dourado */
+:root,
+[data-theme="ember"] {
+  --th-dh-chrome: 0;
+  --th-cm-chrome: 1;
+  --th-dh-neutral: 0;
+  --th-cm-neutral: 1;
+  --th-dh-brand: 0;
+  --th-cm-brand: 1;
+  --th-dh-accent: 0;
+  --th-cm-accent: 1;
+}
+
+/* Dark — Verde Escuro */
+[data-theme="forest"] {
+  --th-dh-chrome: 135;
+  --th-cm-chrome: 0.8;
+  --th-dh-neutral: -126;
+  --th-cm-neutral: 1.6;
+  --th-dh-brand: 128;
+  --th-cm-brand: 0.76;
+  --th-dh-accent: 62;
+  --th-cm-accent: 0.85;
+}
+
+/* Dark — Grafite Monocromático (preto, grafite e prata) */
+[data-theme="graphite"] {
+  --th-dh-chrome: 0;
+  --th-cm-chrome: 0.06;
+  --th-dh-neutral: 0;
+  --th-cm-neutral: 0.3;
+  --th-dh-brand: 0;
+  --th-cm-brand: 0.1;
+  --th-dh-accent: 0;
+  --th-cm-accent: 0.1;
+}
+
+/* Dark — Sangue e Cinzas (preto acinzentado + vermelho escuro) */
+[data-theme="ash"] {
+  --th-dh-chrome: 0;
+  --th-cm-chrome: 0.55;
+  --th-dh-neutral: -270;
+  --th-cm-neutral: 0.7;
+  --th-dh-brand: 0;
+  --th-cm-brand: 0.72;
+  --th-dh-accent: -20;
+  --th-cm-accent: 0.42;
+}
+
+/* Dark — Cyberpunk (azul-violeta profundo + magenta controlado) */
+[data-theme="cyberpunk"] {
+  --th-dh-chrome: 265;
+  --th-cm-chrome: 0.75;
+  --th-dh-neutral: -5;
+  --th-cm-neutral: 1.3;
+  --th-dh-brand: 300;
+  --th-cm-brand: 0.8;
+  --th-dh-accent: 245;
+  --th-cm-accent: 0.7;
+}
+
+/* Dark — Gelo Noturno (azul-marinho quase preto + azul-claro frio) */
+[data-theme="frost"] {
+  --th-dh-chrome: 230;
+  --th-cm-chrome: 0.7;
+  --th-dh-neutral: -35;
+  --th-cm-neutral: 1.35;
+  --th-dh-brand: 205;
+  --th-cm-brand: 0.7;
+  --th-dh-accent: 160;
+  --th-cm-accent: 0.62;
+}
+
+/* Dark — Café (marrom muito escuro + âmbar) */
+[data-theme="coffee"] {
+  --th-dh-chrome: 45;
+  --th-cm-chrome: 0.75;
+  --th-dh-neutral: -235;
+  --th-cm-neutral: 0.85;
+  --th-dh-brand: 30;
+  --th-cm-brand: 0.62;
+  --th-dh-accent: -5;
+  --th-cm-accent: 0.95;
+}
+
+/* ---------------------------------------------------------------------------
+   Superfícies globais que não passam por classes utilitárias.
+   --------------------------------------------------------------------------- */
+html {
+  background-color: var(--th-bg-abyss);
+  color-scheme: dark;
+}
+
+body {
+  background-color: var(--th-bg-abyss);
+  color: var(--color-slate-200);
+}
+
+::selection {
+  background-color: color-mix(in oklab, var(--color-amber-500) 30%, transparent);
+  color: #fff;
+}
+
+/* Scrollbars — WebKit e Firefox */
+::-webkit-scrollbar-track { background: var(--th-n-panel); }
+::-webkit-scrollbar-thumb { background: var(--th-n-track); }
+::-webkit-scrollbar-thumb:hover { background: var(--th-n-thumb); }
+::-webkit-scrollbar-corner { background: var(--th-n-panel); }
+* { scrollbar-color: var(--th-n-track) var(--th-n-panel); }
+
+/* Foco visível consistente em todo o app */
+:focus-visible {
+  outline: 2px solid color-mix(in oklab, var(--color-amber-500) 60%, transparent);
+  outline-offset: 1px;
+}
