@@ -65,6 +65,10 @@ interface BazaarFetchResult {
   error?: string;
   cancelled?: boolean;
   needsHumanVerification?: boolean;
+  // Pré-validação de disponibilidade: servidor offline/manutenção ou com
+  // menos de 1000 jogadores online. A consulta nem chegou a listar páginas.
+  serverNotReady?: boolean;
+  onlineCount?: number | null;
   // Navegador escolhido não pôde ser aberto (não instalado, por exemplo).
   browserUnavailable?: boolean;
   browserKey?: string;
@@ -1805,7 +1809,7 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
     }
   }
 
-  async function handleFetchBazaar(options?: { filtersOverride?: Partial<BazarConsultationFilters>; browserKey?: string; browserOrder?: string[]; cleanProfile?: boolean; retryBrowsers?: string[]; retryCounts?: BazaarRetryCounts; speedMode?: BazaarSpeedMode; method?: BazaarMethod }) {
+  async function handleFetchBazaar(options?: { filtersOverride?: Partial<BazarConsultationFilters>; browserKey?: string; browserOrder?: string[]; cleanProfile?: boolean; retryBrowsers?: string[]; retryCounts?: BazaarRetryCounts; speedMode?: BazaarSpeedMode; method?: BazaarMethod; autoRun?: boolean }) {
     if (!isBossUser) {
       setError("Apenas usuários Boss podem iniciar uma nova consulta do Bazaar.");
       return;
@@ -1882,10 +1886,23 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
         retryBrowsers: options?.retryBrowsers || loadUIState<string[]>(BAZAAR_RETRY_BROWSERS_KEY, []),
         // Quantidade de retries por navegador: é o que define o plano real.
         retryCounts: options?.retryCounts || normalizeRetryCounts(loadUIState<BazaarRetryCounts | null>(BAZAAR_RETRY_COUNTS_KEY, null)),
+        // Auto-Bazaar: a pré-validação de disponibilidade aguarda o servidor
+        // (recarga a cada 1 min) em vez de abortar; manual aborta e informa.
+        autoRun: options?.autoRun === true,
       }) as BazaarFetchResult;
       // Qualquer falha aqui (rede, Cloudflare, janela fechada, cancelamento)
       // encerra o fluxo ANTES de qualquer escrita no Firestore.
       if (!response?.ok || response?.cancelled) {
+        // Pré-validação de disponibilidade: o servidor/site ainda não está
+        // pronto (manutenção, página sem carregar ou menos de 1000 jogadores
+        // online). Mensagem específica para o Boss, com o número detectado.
+        if (response?.serverNotReady) {
+          const detected = typeof response.onlineCount === "number" && Number.isFinite(response.onlineCount)
+            ? ` Jogadores online detectados: ${response.onlineCount}.`
+            : "";
+          setError((response.error || "O servidor/site do Bazaar ainda não está pronto para a consulta.") + detected);
+          return;
+        }
         setError(response?.error || "Não foi possível consultar o Bazaar do Rubinot.");
         // Navegador indisponível: reabre o seletor para escolher outro,
         // em vez de deixar o usuário preso num erro genérico.
@@ -2175,6 +2192,10 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
         filtersOverride: {
           endUntil: getAutoBazarEndUntil(timezoneOffsetMinutes),
         },
+        // Consulta iniciada automaticamente: a pré-validação de disponibilidade
+        // aguarda o servidor ficar pronto (recarga a cada 1 min) em vez de
+        // abortar — nenhuma ação manual é necessária.
+        autoRun: true,
       });
     }
     window.addEventListener("auto-bazaar-run-request", handleAutoBazaarRun);
