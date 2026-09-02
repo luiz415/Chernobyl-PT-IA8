@@ -4372,6 +4372,31 @@ async function readRubinotOnlineCount(page) {
 }
 
 /**
+ * PRIMEIRA leitura após abrir/atualizar a página: espera de graça de ATÉ 5s.
+ *
+ * O número de players online é renderizado pelo JavaScript do site DEPOIS do
+ * `domcontentloaded` — a sessão pode estar validada (DOM do Bazaar + API ok)
+ * antes de o <span> do topo existir. Ler cedo demais gerava um FALSO
+ * "elemento não encontrado". Aqui fazemos polling a cada 500ms por até
+ * `maxWaitMs`: assim que o valor aparece, retornamos IMEDIATAMENTE (sem
+ * atraso fixo quando a página já carregou); só esgotamos os 5s quando o
+ * elemento realmente não surge — aí sim é indisponibilidade de verdade.
+ *
+ * Um valor ENCONTRADO (mesmo abaixo do mínimo) também retorna na hora: número
+ * baixo é estado real do servidor, não sintoma de carregamento.
+ */
+async function readRubinotOnlineCountWithGrace(page, maxWaitMs = 5000) {
+  const deadline = Date.now() + Math.max(0, Number(maxWaitMs) || 0);
+  let last = { found: false, count: NaN, source: '' };
+  for (;;) {
+    last = await readRubinotOnlineCount(page);
+    if (last.found && Number.isFinite(last.count)) return last;
+    if (Date.now() >= deadline || isRubinotManualStopRequested()) return last;
+    await sleep(500);
+  }
+}
+
+/**
  * Garante que o Bazaar está DISPONÍVEL antes da consulta começar.
  *
  * MANUAL (autoRun=false): uma única verificação. Se a página não carregar, o
@@ -4405,7 +4430,11 @@ async function ensureRubinotServerAvailability(progressSender, context, { autoRu
 
     let online = { found: false, count: NaN, source: '' };
     if (session.ok) {
-      online = await readRubinotOnlineCount(session.page);
+      // PRIMEIRA leitura após a página ter sido aberta (tentativa 1) ou
+      // recarregada (ciclos do Auto-Bazaar): tolera até 5s de renderização
+      // tardia do número de players. Retorna na hora assim que o valor
+      // aparece — o atraso só é consumido quando o elemento ainda não existe.
+      online = await readRubinotOnlineCountWithGrace(session.page, 5000);
     }
     const onlineReady = session.ok && online.found && Number.isFinite(online.count) && online.count >= RUBINOT_MIN_ONLINE_PLAYERS;
 
