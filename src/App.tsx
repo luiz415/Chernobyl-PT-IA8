@@ -4155,9 +4155,62 @@ export default function App() {
     }
 
     if (acquisition) {
-      const questReadyForSale = ["quest_completed", "for_sale", "sold"].includes(acquisition.status);
+      let questReadyForSale = ["quest_completed", "for_sale", "sold"].includes(acquisition.status);
+      // NOVA REGRA — venda liberada pela CONCLUSÃO DA QUEST, não pela
+      // finalização da PT: a condição que controla "Colocado à Venda"/
+      // "Vendido" em Meus Personagens é `party.questConcluida`. O status da
+      // negociação é promovido para `quest_completed` de forma assíncrona
+      // (Cloud Function reconcileQuestCompletion + sincronizações do
+      // cliente); se o dono tentar vender antes de a promoção refletir no
+      // snapshot dele, verificamos a PT diretamente e promovemos AQUI, na
+      // hora — pela MESMA transição já validada pelo serviço e pelas Rules
+      // (payment_confirmed/created → quest_completed, somente participantes).
+      // PT finalizada continua coberta: o arquivo `partyArchives` preserva
+      // `questConcluida` e serve de fallback quando a PT operacional já saiu
+      // de `parties`. Quest em andamento ou negociação ainda não paga
+      // (pre_approved) seguem bloqueadas como antes.
+      if (!questReadyForSale && (c.aVenda || c.vendido) && isPaymentConfirmed(acquisition)) {
+        let acquisitionParty = cloudParties.find(item => item.id === acquisition!.partyId);
+        if (!acquisitionParty && !isSimulation && db) {
+          try {
+            const active = await getDoc(doc(db, "parties", acquisition.partyId));
+            if (active.exists()) acquisitionParty = { id: active.id, ...active.data() } as PartyTab;
+            if (!acquisitionParty) {
+              const sanitizedArchive = await getDoc(doc(db, "partyArchives", acquisition.partyId));
+              if (sanitizedArchive.exists()) acquisitionParty = { id: sanitizedArchive.id, ...sanitizedArchive.data(), archived: true } as PartyTab;
+            }
+          } catch (error) {
+            console.error("Erro ao verificar a conclusão da Quest da PT para liberar a venda:", error);
+          }
+        }
+        if (
+          acquisitionParty?.questConcluida
+          && !acquisitionParty.questFalha
+          && (acquisitionParty.ptType === "soulwar" || acquisitionParty.ptType === "sanguine")
+        ) {
+          const promotion = await updateCharacterAcquisitionLifecycle(acquisition.id, {
+            status: "quest_completed",
+            questType: acquisitionParty.ptType as PtType,
+            markQuestCompletedAt: !acquisition.questCompletedAt,
+          }, currentUser?.uid);
+          if (promotion.ok && promotion.record) {
+            acquisition = promotion.record;
+            setCharacterAcquisitions(previous => previous.some(record => record.id === promotion.record!.id)
+              ? previous.map(record => record.id === promotion.record!.id ? promotion.record! : record)
+              : [promotion.record!, ...previous]);
+            questReadyForSale = true;
+          } else {
+            customAlert(promotion.error || "Não foi possível sincronizar a conclusão da Quest da negociação. Tente novamente.", "Venda não sincronizada");
+            return;
+          }
+        }
+      }
       if ((c.aVenda || c.vendido) && !questReadyForSale) {
-        customAlert("Conclua a Quest antes de colocar este personagem negociado à venda no Bazaar.", "Quest pendente");
+        if (acquisition.status === "pre_approved") {
+          customAlert("Aguarde o comprador aceitar a compra e confirmar o pagamento antes de colocar este personagem negociado à venda.", "Negociação pendente");
+        } else {
+          customAlert("Conclua a Quest antes de colocar este personagem negociado à venda no Bazaar.", "Quest pendente");
+        }
         return;
       }
       if (acquisition.status === "sold" && !c.vendido) {
