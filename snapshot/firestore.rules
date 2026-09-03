@@ -354,7 +354,6 @@ service cloud.firestore {
           isAuth()
           && request.resource.data.source == 'public_form'
           && request.resource.data.addedBy == 'Qualquer um'
-          && request.resource.data.triagem == false
           && request.resource.data.createdBy == request.auth.uid
           && request.resource.data.valorCombinado == 0
           && request.resource.data.personagem is string

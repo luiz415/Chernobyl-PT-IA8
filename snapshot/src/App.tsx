@@ -2805,8 +2805,8 @@ export default function App() {
   // personagem; com "Qualquer um", todos enxergam. Aplicado aqui, na fonte,
   // para valer igualmente no WaitingListPanel e na ServiceList — que
   // consomem esta mesma lista.
-  // A aba Services (WaitingListPanel) é exclusiva do Boss: ele faz a triagem
-  // dos pedidos enviados como "Qualquer um".
+  // A aba Services (WaitingListPanel) é exclusiva do Boss: ele atende os
+  // pedidos enviados como "Qualquer um".
   const isBossUser = userProfile?.role === "Boss";
 
   // Guarda de acesso: se um usuário não-Boss estiver na aba Services — por
@@ -5776,7 +5776,7 @@ function LandingPage({ onOpenHub, onOpenNotif, pendingCount, notificationOpen, s
     {
       icon: <Clock size={20} className="text-sky-400" />,
       title: "Lista de Espera",
-      desc: "Adicione e gerencie seus Services de Soulwar e Sanguine, com informações detalhadas de contato (WhatsApp), triagem e valores combinados. Seus personagens de Services poderão ser convidados para PT's",
+      desc: "Adicione e gerencie seus Services de Soulwar e Sanguine, com informações detalhadas de contato (WhatsApp), link do personagem e valores combinados. Seus personagens de Services poderão ser convidados para PT's",
       onClick: () => { onOpenHub(); setTab("waitlist"); }
     },
     {

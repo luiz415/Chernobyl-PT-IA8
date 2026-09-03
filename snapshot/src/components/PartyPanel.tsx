@@ -2273,8 +2273,6 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
       // `canViewServiceForViewer` já faz no App.
       if (!isServiceOpenToAnyone(i) && !isOwnedBySelfOrFriend(i.serviceiroUid)) return false;
       if (selectedSet.has(i.id)) return false;
-      if (wlFilters.triagem === "Sim" && !i.triagem) return false;
-      if (wlFilters.triagem === "Não" && i.triagem) return false;
       if (wlFilters.personagem && !i.personagem.toLowerCase().includes(wlFilters.personagem.toLowerCase())) return false;
       // Igualdade EXATA: o valor vem de um seletor de servidores (nome completo).
       // Com includes(), "Grimoria I" casava também com "Grimoria II/III/IV".
@@ -2313,8 +2311,6 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
   const serverChartWaitingList = useMemo(() => {
     return waitingList.filter(i => {
       if (selectedSet.has(i.id)) return false;
-      if (wlFilters.triagem === "Sim" && !i.triagem) return false;
-      if (wlFilters.triagem === "Não" && i.triagem) return false;
       if (wlFilters.personagem && !i.personagem.toLowerCase().includes(wlFilters.personagem.toLowerCase())) return false;
       if (wlFilters.voc && i.voc !== wlFilters.voc) return false;
       if (wlFilters.ownerName && !i.ownerName.toLowerCase().includes(wlFilters.ownerName.toLowerCase())) return false;

@@ -290,7 +290,6 @@ export default function PublicServiceForm() {
         whatsappNumber: whatsNumber.replace(/\D/g, ""),
         addedBy: serviceiro || "Qualquer um",
         quest,
-        triagem: false,
         createdAt: Date.now(),
         createdBy: uid,
         createdByName: ownerName.trim(),
@@ -303,7 +302,7 @@ export default function PublicServiceForm() {
       //   • Serviceiro específico -> sharedServices/{uid}/incoming, aparecendo
       //     direto em "Meus Services" daquele usuário. NÃO vai para a Lista
       //     de Espera.
-      //   • "Qualquer um"         -> waitingList, para triagem do Boss.
+      //   • "Qualquer um"         -> waitingList, para atendimento pelo Boss.
       //
       // Os dois caminhos são exclusivos, então o personagem nunca é criado
       // nas duas estruturas.
