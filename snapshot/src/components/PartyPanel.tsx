@@ -165,15 +165,44 @@ function describeFinalizationError(rawError: string): string {
 // ============================================================================
 // MINI-CALCULADORA kk -> RC
 // Calcula o valor em RC a partir de uma taxa (kk>RC) e um total (kk).
-// Fórmula: floor((total / rate) * 1000 / 25) * 25  -> sempre arredonda para
-// baixo ao múltiplo de 25 mais próximo.
-// Ex: rate=75, total=340 -> (340/75)*1000 = 4533.33 -> floor(4533.33/25)*25 = 4525
+// Fórmula: floor((total / rate) * 1000)  -> arredonda para baixo ao INTEIRO.
+// O resultado NÃO é mais forçado a múltiplo de 25: essa regra vale apenas
+// para a DIVISÃO entre participantes (ver `roundSplitTo25`), nunca para o
+// valor individual da venda do item.
+// Ex: rate=75, total=340 -> (340/75)*1000 = 4533.33 -> floor = 4533
+// Ex: rate=2.5, total=0.3446 -> 137.84 -> floor = 137
 // ============================================================================
 function computeItemRC(rateKk: number, totalKk: number): number {
   if (!Number.isFinite(rateKk) || rateKk <= 0) return 0;
   if (!Number.isFinite(totalKk) || totalKk <= 0) return 0;
   const raw = (totalKk / rateKk) * 1000;
-  return floorTo25(raw);
+  return Math.floor(raw);
+}
+
+// ============================================================================
+// ENTRADA DO PREÇO DO RC (kk>RC) COM UMA CASA DECIMAL
+// ----------------------------------------------------------------------------
+// O campo aceita valores como "1", "1,5", "2,3" (vírgula pt-BR; ponto também é
+// tolerado na digitação e normalizado para vírgula). Apenas UMA casa decimal.
+// `parseRateKk` converte o texto exibido para o número EXATO usado no cálculo
+// (vírgula -> ponto), sem truncamento.
+// ============================================================================
+function sanitizeRateKkInput(raw: string): string {
+  const unified = String(raw || "").replace(/[^\d.,]/g, "").replace(/\./g, ",");
+  const firstComma = unified.indexOf(",");
+  if (firstComma === -1) return unified;
+  const intPart = unified.slice(0, firstComma);
+  const decPart = unified.slice(firstComma + 1).replace(/,/g, "").slice(0, 1);
+  return `${intPart},${decPart}`;
+}
+function parseRateKk(raw: string): number {
+  const n = parseFloat(String(raw || "").replace(",", "."));
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+/** Texto exibido para um `calcRateKk` persistido (número -> vírgula pt-BR). */
+function formatRateKkDisplay(value: number | undefined): string {
+  if (!value) return "";
+  return String(value).replace(".", ",");
 }
 
 // ============================================================================
@@ -251,6 +280,29 @@ export function resolveSplitRecipient(slot: ExtendedPartySlotData | undefined, f
 export function floorTo25(value: number): number {
   if (!Number.isFinite(value) || value <= 0) return 0;
   return Math.floor(value / 25) * 25;
+}
+
+// ============================================================================
+// ARREDONDAMENTO DA DIVISÃO ENTRE PARTICIPANTES (múltiplo de 25, corte em 10)
+// ----------------------------------------------------------------------------
+// Regra EXCLUSIVA do valor individual da DIVISÃO (nunca do valor da venda do
+// item, que usa floor simples ao inteiro em `computeItemRC`):
+//
+//   • Se FALTAREM mais de 10 unidades para alcançar o múltiplo de 25
+//     imediatamente superior -> arredonda para BAIXO (múltiplo inferior);
+//   • Se faltarem 10 ou menos -> arredonda para CIMA (múltiplo superior).
+//
+// Exemplos normativos do produto:
+//   389 -> 375  (faltam 11 para 400 -> baixo)
+//   390 -> 400  (faltam 10 para 400 -> cima)
+//   375 -> 375  (já é múltiplo)
+// ============================================================================
+export function roundSplitTo25(value: number): number {
+  if (!Number.isFinite(value) || value <= 0) return 0;
+  const lower = Math.floor(value / 25) * 25;
+  const excess = value - lower;
+  if (excess === 0) return lower;
+  return (25 - excess) <= 10 ? lower + 25 : lower;
 }
 
 // ============================================================================
@@ -572,7 +624,9 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
   // slotData: calcRateKk, calcTotalKk e o itemVendido final (para que Totais,
   // Divisão e botão PG continuem funcionando normalmente).
   function commitCalcDrafts(id: string, rateRaw: string, totalRaw: string) {
-    const rateNum = parseInt(rateRaw.replace(/[^\d]/g, ""), 10) || 0;
+    // kk>RC aceita UMA casa decimal ("2,5") — o valor persistido/calculado é
+    // exatamente o digitado (vírgula -> ponto), sem truncar.
+    const rateNum = parseRateKk(rateRaw);
     const totalNum = parseInt(totalRaw.replace(/[^\d]/g, ""), 10) || 0;
     const computedRC = computeItemRC(rateNum, totalNum);
     const cur = getSD(id) as ExtendedPartySlotData;
@@ -695,6 +749,17 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
     const uids = new Set<string>();
     Object.values(party.slotData || {}).forEach((slot: any) => {
       if (slot?.ownerUid) uids.add(slot.ownerUid);
+      // O destinatário da DIVISÃO pode ser o JOGADOR (ou o beneficiário
+      // explícito da participação) — sem os UIDs deles aqui, o modal de
+      // pagamento não encontrava o personagem principal do participante e
+      // exibia "A definir" mesmo com o cadastro correto.
+      if (slot?.playerUid) uids.add(slot.playerUid);
+      if (slot?.splitBeneficiaryUid) uids.add(slot.splitBeneficiaryUid);
+      if (slot?.financialRightsHolderUid) uids.add(slot.financialRightsHolderUid);
+      if (slot?.player) {
+        const playerUser = allUsers.find(u => u.nome.toLowerCase() === slot.player.toLowerCase());
+        if (playerUser?.uid) uids.add(playerUser.uid);
+      }
     });
     uids.forEach(uid => {
       const user = allUsers.find(u => u.uid === uid);
@@ -1802,9 +1867,14 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
     if (wt) {
       ownerVal = wt.ownerName || userName;
       ownerUidVal = (wt as any).ownerUid || wt.createdBy || "";
-      // Importar o nome do jogador diretamente da coluna "ADD POR" da Lista de Espera
-      playerVal = wt.addedBy || userName;
-      playerUidVal = allUsers.find(user => user.nome?.toLowerCase() === playerVal.toLowerCase())?.uid || ownerUidVal;
+      // Service recém-adicionado começa SEM JOGADOR ("Nenhum Jogador" / N/A):
+      // nada de herdar o serviceiro da coluna "ADD POR". O JOGADOR só passa a
+      // existir quando alguém for selecionado explicitamente no seletor da
+      // coluna (handlePlayerSelect), que também resolve o UID e o roster.
+      // Mesma convenção do "+ Externo": player vazio => nenhum Service é
+      // contabilizado para ninguém até a atribuição manual.
+      playerVal = "";
+      playerUidVal = "";
     } else if (ch) {
       ownerVal = ch.ownerName || userName;
       ownerUidVal = ch.ownerUid || currentUser?.uid || "";
@@ -2261,7 +2331,9 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
     });
     }, [characters, selectedSet, filterServer, filterVoc, filterAccount, filterSW, filterSG, filterLevel, filterLevelOp, accountMap, filterDonos, userName, filterPersonagem, isOwnedBySelfOrFriend]);
 
-  const [wlFilters, setWlFilters] = useState<Record<string, string>>({});
+  // Persistido como os demais filtros da PT (`pt_*_${party.id}`): sair da
+  // lista/guia e voltar mantém os filtros exatamente como estavam.
+  const [wlFilters, setWlFilters] = usePersistedState<Record<string, string>>(`pt_wl_${party.id}`, {});
   const visibleWaitingList = useMemo(() => {
     return waitingList.filter(i => {
       // Mesma regra da lista de personagens: Service de NÃO-AMIGO não é
@@ -2644,9 +2716,9 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
   const splitMembers = allMemberIds.filter(id => getSD(id).split);
   const allSplitHaveRC = splitMembers.every(sid => {
     const slot = getSD(sid);
-    const rRaw = calcRateKkDrafts[sid] !== undefined ? calcRateKkDrafts[sid] : (slot.calcRateKk ? String(slot.calcRateKk) : "");
+    const rRaw = calcRateKkDrafts[sid] !== undefined ? calcRateKkDrafts[sid] : formatRateKkDisplay(slot.calcRateKk);
     const tRaw = calcTotalKkDrafts[sid] !== undefined ? calcTotalKkDrafts[sid] : (slot.calcTotalKk ? String(slot.calcTotalKk) : "");
-    const lCalc = computeItemRC(parseInt(rRaw, 10) || 0, parseInt(tRaw, 10) || 0);
+    const lCalc = computeItemRC(parseRateKk(rRaw), parseInt(tRaw, 10) || 0);
     const rcVal = rcDrafts[sid] !== undefined ? (parseInt(rcDrafts[sid], 10) || 0) : (slot.itemVendido || 0);
     return (lCalc > 0 ? lCalc : rcVal) > 0;
   });
@@ -2655,9 +2727,10 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
 
   const splitItemVendido = splitMembers.reduce((s, id) => s + getSD(id).itemVendido, 0);
   // ── VALOR INDIVIDUAL DA DIVISÃO ───────────────────────────────────────────
-  // Ajustado para o maior MÚLTIPLO DE 25 menor ou igual ao valor calculado
-  // (sempre para baixo), a mesma regra que a mini-calculadora já aplica em
-  // `computeItemRC`.
+  // Ajustado ao MÚLTIPLO DE 25 pela regra do corte em 10 (`roundSplitTo25`):
+  // para baixo quando faltam MAIS de 10 unidades para o múltiplo superior,
+  // para cima quando faltam 10 ou menos. Regra EXCLUSIVA da divisão — o valor
+  // individual da venda (`computeItemRC`) usa floor simples ao inteiro.
   //
   // Esta é a ÚNICA fonte do valor individual: alimenta o rodapé da guia, o
   // valor levado à confirmação de pagamento e o texto do "Copiar (WA)". Com
@@ -2665,7 +2738,7 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
   //
   // Os valores BRUTOS das vendas não são tocados — apenas o resultado final
   // da divisão.
-  const dropPerSplit = splitCount > 0 ? floorTo25(splitItemVendido / splitCount) : 0;
+  const dropPerSplit = splitCount > 0 ? roundSplitTo25(splitItemVendido / splitCount) : 0;
   const splitMembersWithUnsoldItems = splitMembers.filter(id => { const d = getSD(id); return !!d.itemDropado && (!d.itemVendido || d.itemVendido <= 0); });
   const allSplitItemsSold = splitMembersWithUnsoldItems.length === 0;
   const splitNames = splitMembers.map(id => {
@@ -2952,7 +3025,7 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
                       const currentSlot = updatedSlotData[id] as ExtendedPartySlotData;
                       // Merge dos drafts PENDENTES (kk>RC, kk e RC) para salvar o valor mais recente.
                       // Apenas campos com dados preenchidos são salvos/travados.
-                      const rateKk = calcRateKkDrafts[id] !== undefined ? parseInt(calcRateKkDrafts[id], 10) || 0 : (currentSlot.calcRateKk || 0);
+                      const rateKk = calcRateKkDrafts[id] !== undefined ? parseRateKk(calcRateKkDrafts[id]) : (currentSlot.calcRateKk || 0);
                       const totalKk = calcTotalKkDrafts[id] !== undefined ? parseInt(calcTotalKkDrafts[id], 10) || 0 : (currentSlot.calcTotalKk || 0);
                       const manualRc = rcDrafts[id] !== undefined ? parseInt(rcDrafts[id], 10) || 0 : (currentSlot.itemVendido || 0);
                       const computedRc = computeItemRC(rateKk, totalKk);
@@ -3783,9 +3856,9 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
                 }
 
                 // --- Mini-calculadora kk -> RC ---
-                const rateKkRaw = calcRateKkDrafts[id] !== undefined ? calcRateKkDrafts[id] : (d.calcRateKk ? String(d.calcRateKk) : "");
+                const rateKkRaw = calcRateKkDrafts[id] !== undefined ? calcRateKkDrafts[id] : formatRateKkDisplay(d.calcRateKk);
                 const totalKkRaw = calcTotalKkDrafts[id] !== undefined ? calcTotalKkDrafts[id] : (d.calcTotalKk ? String(d.calcTotalKk) : "");
-                const liveCalcRC = computeItemRC(parseInt(rateKkRaw, 10) || 0, parseInt(totalKkRaw, 10) || 0);
+                const liveCalcRC = computeItemRC(parseRateKk(rateKkRaw), parseInt(totalKkRaw, 10) || 0);
                 // Valor exibido/usado: prioriza o cálculo ao vivo quando os campos kk estão preenchidos
                 const slotNotesValue = slotNotesDrafts[id] !== undefined ? slotNotesDrafts[id] : (d.notes || "");
 
@@ -3986,7 +4059,7 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
                         const rateEnabled = hasItemDropado && !questLocked && !pgGlobalDisabled && !rateLocked;
                         const totalEnabled = hasItemDropado && !questLocked && !pgGlobalDisabled && !totalLocked;
                         // Campo RC fica readOnly quando a calculadora está ativa (ambos kk > 0)
-                        const isCalcLocked = rateKkRaw !== "" && parseInt(rateKkRaw, 10) > 0
+                        const isCalcLocked = rateKkRaw !== "" && parseRateKk(rateKkRaw) > 0
                                            && totalKkRaw !== "" && parseInt(totalKkRaw, 10) > 0;
                         // RC editável manualmente: quando NÃO há cálculo ativo E não está bloqueado por PG/quest/trava
                         const rcEditable = !isCalcLocked && !questLocked && !pgGlobalDisabled && !rcLocked;
@@ -4004,12 +4077,13 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
                             >
                               <input
                                 type="text"
-                                inputMode="numeric"
+                                inputMode="decimal"
                                 disabled={!rateEnabled}
                                 value={rateKkRaw}
                                 onFocus={() => setCalcFocused({ id, field: "rate" })}
                                 onChange={e => {
-                                  const cleaned = e.target.value.replace(/[^\d]/g, "");
+                                  // Aceita UMA casa decimal (vírgula pt-BR; ponto é normalizado)
+                                  const cleaned = sanitizeRateKkInput(e.target.value);
                                   setCalcRateKkDrafts(prev => ({ ...prev, [id]: cleaned }));
                                   scheduleDebounce(`calcRate_${id}`, () => commitCalcDrafts(id, cleaned, totalKkRaw));
                                 }}
@@ -4147,9 +4221,16 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
                                  // destinatário: pagar ao jogador exibindo o
                                  // char do dono mandaria o RC para a pessoa
                                  // errada.
+                                 // PTs legadas podem ter o JOGADOR sem UID
+                                 // persistido no slot — resolvemos pelo nome
+                                 // (mesma normalização do resto do painel)
+                                 // para o modal exibir o personagem correto
+                                 // em vez de "A definir".
                                  const destinatarioUid = d.splitBeneficiaryUid
                                    || (destinatarioEhJogador ? d.playerUid : d.ownerUid)
-                                   || "";
+                                   || (destinatario
+                                     ? (allUsers.find(u => u.nome.trim().toLowerCase() === destinatario.trim().toLowerCase())?.uid || "")
+                                     : "");
                                  const destinatarioMainChar = destinatarioEhJogador
                                    ? (destinatarioUid ? (ownerMainCharMap[destinatarioUid] || "") : "")
                                    : mainChar;

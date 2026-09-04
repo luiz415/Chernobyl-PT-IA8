@@ -349,16 +349,23 @@ export default function PartyManager({ parties, characters, waitingList, userNam
   }
   const [standaloneSortKey, setStandaloneSortKey] = useState<string | null>(null);
   const [standaloneSortDir, setStandaloneSortDir] = useState<"asc" | "desc" | null>(null);
-  const [standaloneFilterPersonagem, setStandaloneFilterPersonagem] = useState("");
-  const [standaloneFilterServer, setStandaloneFilterServer] = useState("");
-  const [standaloneFilterVoc, setStandaloneFilterVoc] = useState("");
-  const [standaloneFilterLevel, setStandaloneFilterLevel] = useState("");
-  const [standaloneFilterLevelOp, setStandaloneFilterLevelOp] = useState<"gte" | "lte">("gte");
-  const [standaloneFilterSW, setStandaloneFilterSW] = useState<ToggleState>("off");
-  const [standaloneFilterSG, setStandaloneFilterSG] = useState<ToggleState>("off");
-  const [standaloneFilterDonos, setStandaloneFilterDonos] = useState<string[]>([]);
-  const [standaloneSmartAccountFilter, setStandaloneSmartAccountFilter] = useState(false);
-  const [standaloneWlFilters, setStandaloneWlFilters] = useState<Record<string, string>>({});
+  // ── FILTROS PERSISTENTES da vista "Todos Personagens" ────────────────────
+  // Mesma mecânica dos filtros por PT do PartyPanel (`pt_*_${party.id}`),
+  // aqui com chave por usuário: sair da guia, trocar de vista ou remontar o
+  // componente NÃO reseta os filtros — eles voltam exatamente como estavam.
+  // (Inclui o filtro de servidor acionado pelo gráfico "Oportunidade por
+  // Servidor", que grava em `standaloneFilterServer` + `standaloneWlFilters`.)
+  const standaloneFilterKey = currentUser?.uid || userName || "default";
+  const [standaloneFilterPersonagem, setStandaloneFilterPersonagem] = usePersistedState(`pt_allchars_f_personagem_${standaloneFilterKey}`, "");
+  const [standaloneFilterServer, setStandaloneFilterServer] = usePersistedState(`pt_allchars_f_srv_${standaloneFilterKey}`, "");
+  const [standaloneFilterVoc, setStandaloneFilterVoc] = usePersistedState(`pt_allchars_f_voc_${standaloneFilterKey}`, "");
+  const [standaloneFilterLevel, setStandaloneFilterLevel] = usePersistedState(`pt_allchars_f_lvl_${standaloneFilterKey}`, "");
+  const [standaloneFilterLevelOp, setStandaloneFilterLevelOp] = usePersistedState<"gte" | "lte">(`pt_allchars_f_lvlop_${standaloneFilterKey}`, "gte");
+  const [standaloneFilterSW, setStandaloneFilterSW] = usePersistedState<ToggleState>(`pt_allchars_f_sw_${standaloneFilterKey}`, "off");
+  const [standaloneFilterSG, setStandaloneFilterSG] = usePersistedState<ToggleState>(`pt_allchars_f_sg_${standaloneFilterKey}`, "off");
+  const [standaloneFilterDonos, setStandaloneFilterDonos] = usePersistedState<string[]>(`pt_allchars_f_donos_${standaloneFilterKey}`, []);
+  const [standaloneSmartAccountFilter, setStandaloneSmartAccountFilter] = usePersistedState(`pt_allchars_f_smart_${standaloneFilterKey}`, false);
+  const [standaloneWlFilters, setStandaloneWlFilters] = usePersistedState<Record<string, string>>(`pt_allchars_f_wl_${standaloneFilterKey}`, {});
   const [standaloneIsRefreshing, setStandaloneIsRefreshing] = useState(false);
   const [standaloneRefreshDone, setStandaloneRefreshDone] = useState(false);
   const standaloneGetCharOwner = (c: Character) => (c as any).ownerName || userName || "—";
