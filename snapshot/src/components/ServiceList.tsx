@@ -18,7 +18,12 @@ export default function WaitingServiceAvailableList({ items, selectedIds, isFull
   serverLocked?: boolean;
 }) {
   const { userProfile } = useAuth();
-  const [sortKey, setSortKey] = useState<keyof WaitingService | null>("dataAdicionado");
+  // ── ORDENAÇÃO ──────────────────────────────────────────────────────────
+  // "Add em" (dataAdicionado) é o CRITÉRIO PRINCIPAL FIXO da lista: sempre
+  // da data mais antiga para a mais recente. O usuário ainda pode ordenar
+  // pelas demais colunas, mas elas atuam apenas como critério SECUNDÁRIO
+  // (desempate entre registros com o mesmo "Add em").
+  const [sortKey, setSortKey] = useState<keyof WaitingService | null>(null);
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
   const [copiedCharacterId, setCopiedCharacterId] = useState<string | null>(null);
 
@@ -107,8 +112,21 @@ export default function WaitingServiceAvailableList({ items, selectedIds, isFull
   }, [items, selectedIds, filters]);
   const sorted = useMemo(() => {
     const arr = [...filtered];
-    if (!sortKey) return arr;
+    // Critério PRINCIPAL fixo: "Add em" da data mais antiga para a mais
+    // recente. `dataAdicionado` é ISO curto (YYYY-MM-DD) — comparação
+    // lexicográfica equivale à cronológica; `createdAt` (ms) desempata
+    // dentro do mesmo dia preservando a cronologia real.
+    const primaryCmp = (a: WaitingService, b: WaitingService) => {
+      const cmpDate = String(a.dataAdicionado || "").localeCompare(String(b.dataAdicionado || ""));
+      if (cmpDate !== 0) return cmpDate;
+      return (a.createdAt || 0) - (b.createdAt || 0);
+    };
     arr.sort((a, b) => {
+      const main = primaryCmp(a, b);
+      if (main !== 0) return main;
+      // Critério SECUNDÁRIO: a coluna escolhida pelo usuário só desempata
+      // registros com o mesmo "Add em" (sort estável preserva o restante).
+      if (!sortKey) return 0;
       const av = a[sortKey];
       const bv = b[sortKey];
       let cmp = 0;
@@ -137,7 +155,9 @@ export default function WaitingServiceAvailableList({ items, selectedIds, isFull
             <th className={th} onClick={() => toggleSort("level")}><div className="flex items-center justify-center gap-0.5">Lv <SI col="level" /></div></th>
             <th className={th} onClick={() => toggleSort("ownerName")}><div className="flex items-center justify-center gap-0.5">Dono <SI col="ownerName" /></div></th>
             <th className={th} onClick={() => toggleSort("valorCombinado")}><div className="flex items-center justify-center gap-0.5">Valor <SI col="valorCombinado" /></div></th>
-            <th className={th} onClick={() => toggleSort("dataAdicionado")}><div className="flex items-center justify-center gap-0.5">Add em <SI col="dataAdicionado" /></div></th>
+            {/* "Add em" é o critério PRINCIPAL fixo (mais antigo → mais
+                recente); clicar não altera — as demais colunas desempatam. */}
+            <th className={th + " cursor-default"} title="Ordenação fixa: da data mais antiga para a mais recente (critério principal da lista)"><div className="flex items-center justify-center gap-0.5">Add em <ArrowUp size={11} className="text-emerald-400" /></div></th>
             <th className={th + " cursor-default"}>WA</th>
             <th className={th + " cursor-default"}>Quest</th>
             <th className={th} onClick={() => toggleSort("addedBy")}><div className="flex items-center justify-center gap-0.5">Serviceiro <SI col="addedBy" /></div></th>

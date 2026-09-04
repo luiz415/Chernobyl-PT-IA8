@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { createPortal } from "react-dom";
-import { Plus, Users, X, Lock, LockOpen, RotateCcw, ChevronDown, UserCheck, ArrowDown, ArrowUp, ArrowUpDown, Sparkles, RefreshCw, BarChart3 } from "lucide-react";
+import { Plus, Users, X, Lock, LockOpen, RotateCcw, ChevronDown, UserCheck, ArrowDown, ArrowUp, ArrowUpDown, Sparkles, RefreshCw, BarChart3, Eye, EyeOff, MousePointerClick } from "lucide-react";
 import type { Character, CharacterAcquisition, PartyFinalizationReason, PartyTab, WaitingService } from "../types";
 import { getCharacterAccountKey } from "../utils/accountIdentity";
 import { countPartiesAwaitingPaymentForUser } from "../utils/partyPendingPayment";
@@ -246,18 +246,61 @@ export default function PartyManager({ parties, characters, waitingList, userNam
   // aparência do PartyPanel. A chave é a MESMA (`pt_panels_global_{uid}`),
   // mantendo as larguras sincronizadas entre a visão da PT e a Visão Geral.
   const [standalonePanelWidths, setStandalonePanelWidths] = usePersistedState<{ p1: number; p2: number; p3: number }>(`pt_panels_global_${currentUser?.uid || userName || "default"}`, { p1: 38, p2: 16, p3: 46 });
-  const [standaloneDraggingPanel, setStandaloneDraggingPanel] = useState<"left" | "right" | null>(null);
+  const [standaloneDraggingPanel, setStandaloneDraggingPanel] = useState<"left" | "right" | "pair" | null>(null);
   const standalonePanelsRef = useRef<HTMLDivElement>(null);
+  // ── GUIA EXIBIDA QUANDO NENHUMA PT ESTÁ ABERTA ─────────────────────────
+  // "selectPrompt" (padrão) → tela "Selecione uma PT";
+  // "overview"              → guia "Visão Geral" (somente OverviewPanel);
+  // "allChars"              → guia "Todos Personagens" (3 painéis).
+  // Abrir uma PT retorna a área standalone ao padrão: minimizá-la depois
+  // volta a exibir "Selecione uma PT" (regra: nenhuma PT selecionada).
+  const [standaloneView, setStandaloneView] = useState<"selectPrompt" | "overview" | "allChars">("selectPrompt");
+  useEffect(() => {
+    if (activePt) setStandaloneView("selectPrompt");
+  }, [activePt]);
+  // ── VISIBILIDADE INDIVIDUAL DOS 3 PAINÉIS (guia "Todos Personagens") ───
+  // Persistida por usuário; cada painel liga/desliga de forma independente
+  // e os visíveis reaproveitam o espaço liberado.
+  const [panelVisibility, setPanelVisibility] = usePersistedState<{ available: boolean; chart: boolean; waiting: boolean }>(
+    `pt_allchars_panels_${currentUser?.uid || userName || "default"}`,
+    { available: true, chart: true, waiting: true },
+  );
+  // Larguras persistidas POR COMBINAÇÃO de painéis visíveis:
+  //   • 3 visíveis → `standalonePanelWidths` (p1/p2/p3 — chave/semântica
+  //     preservadas do comportamento anterior);
+  //   • 2 visíveis → % do painel esquerdo em `pairWidths[combo]`, onde
+  //     combo é "ac"/"aw"/"cw" (available/chart/waiting, na ordem fixa).
+  // Assim cada arranjo lembra o último ajuste feito pelo usuário.
+  const [pairWidths, setPairWidths] = usePersistedState<Record<string, number>>(
+    `pt_allchars_pairs_${currentUser?.uid || userName || "default"}`,
+    {},
+  );
+  const visiblePanelKeys = useMemo(() => {
+    const keys: Array<"available" | "chart" | "waiting"> = [];
+    if (panelVisibility.available) keys.push("available");
+    if (panelVisibility.chart) keys.push("chart");
+    if (panelVisibility.waiting) keys.push("waiting");
+    return keys;
+  }, [panelVisibility]);
+  const pairComboKey = visiblePanelKeys.length === 2 ? visiblePanelKeys.map(k => k[0]).join("") : "";
+  const PAIR_DEFAULT_WIDTHS: Record<string, number> = { ac: 65, aw: 50, cw: 30 };
   useEffect(() => {
     if (!standaloneDraggingPanel) return;
+    const dragMode = standaloneDraggingPanel;
+    const comboKey = pairComboKey;
     function onMove(e: MouseEvent) {
       if (!standalonePanelsRef.current) return;
       const rect = standalonePanelsRef.current.getBoundingClientRect();
       const x = e.clientX - rect.left;
       const totalW = rect.width || 1;
       const curPct = Math.max(15, Math.min(85, (x / totalW) * 100));
+      if (dragMode === "pair") {
+        // Dois painéis visíveis: o divisor único define a % do esquerdo.
+        if (comboKey) setPairWidths(prev => ({ ...prev, [comboKey]: Math.round(curPct) }));
+        return;
+      }
       setStandalonePanelWidths(prev => {
-        if (standaloneDraggingPanel === "left") {
+        if (dragMode === "left") {
           const maxPossible = 100 - prev.p3 - 10;
           const newP1 = Math.max(15, Math.min(maxPossible, curPct));
           const newP2 = 100 - newP1 - prev.p3;
@@ -281,7 +324,7 @@ export default function PartyManager({ parties, characters, waitingList, userNam
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
     return () => { window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); };
-  }, [standaloneDraggingPanel]);
+  }, [standaloneDraggingPanel, pairComboKey]);
   function shortAccountMask(index: number): string {
     const num = (index % 9) + 1;
     let letterIndex = Math.floor(index / 9);
@@ -875,14 +918,26 @@ export default function PartyManager({ parties, characters, waitingList, userNam
 
         <button
           type="button"
-          onClick={() => setActivePt(null)}
-          data-active={activePt === null || !filteredParties.find(p => p.id === activePt) || !!minimized[activePt]}
+          onClick={() => { setActivePt(null); setStandaloneView("overview"); }}
+          data-active={standaloneView === "overview" && (activePt === null || !filteredParties.find(p => p.id === activePt) || !!minimized[activePt])}
           className="nav-pill nav-pill--action inline-flex items-center gap-1 px-2.5 py-1 text-[10px] cursor-pointer whitespace-nowrap flex-shrink-0"
           style={{ ["--pill-accent" as string]: "var(--color-red-500)" }}
           title="Visão Geral das Estatísticas"
         >
-          <BarChart3 size={12} className={activePt === null || !filteredParties.find(p => p.id === activePt) || !!minimized[activePt] ? "text-amber-300" : "text-amber-600/80"} />
+          <BarChart3 size={12} className={standaloneView === "overview" && (activePt === null || !filteredParties.find(p => p.id === activePt) || !!minimized[activePt]) ? "text-amber-300" : "text-amber-600/80"} />
           Visão Geral
+        </button>
+
+        <button
+          type="button"
+          onClick={() => { setActivePt(null); setStandaloneView("allChars"); }}
+          data-active={standaloneView === "allChars" && (activePt === null || !filteredParties.find(p => p.id === activePt) || !!minimized[activePt])}
+          className="nav-pill nav-pill--action inline-flex items-center gap-1 px-2.5 py-1 text-[10px] cursor-pointer whitespace-nowrap flex-shrink-0"
+          style={{ ["--pill-accent" as string]: "var(--color-sky-500)" }}
+          title="Personagens Disponíveis, Lista de Espera e Oportunidade por Servidor"
+        >
+          <Users size={12} className={standaloneView === "allChars" && (activePt === null || !filteredParties.find(p => p.id === activePt) || !!minimized[activePt]) ? "text-sky-300" : "text-sky-600/80"} />
+          Todos Personagens
         </button>
 
         <button
@@ -1153,93 +1208,184 @@ export default function PartyManager({ parties, characters, waitingList, userNam
               />
             );
           })()
-        ) : (
-          <div className="flex flex-col h-full bg-[var(--th-n-deep)] text-sm overflow-y-auto overflow-x-hidden rounded-xl border border-[var(--th-line)]/80">
-            {/* Top area: OverviewPanel */}
-            <div className="flex-shrink-0 h-[320px] overflow-hidden border-b border-[var(--th-line)]/60">
-              <OverviewPanel
-                characters={characters}
-                waitingList={waitingList}
-                activeParties={parties}
-              />
+        ) : standaloneView === "overview" ? (
+          /* ── GUIA "VISÃO GERAL": somente o OverviewPanel, ocupando 100%
+                da área disponível (as listas e o gráfico agora vivem na
+                guia "Todos Personagens"). ─────────────────────────────── */
+          <div className="h-full w-full p-1">
+            <OverviewPanel
+              characters={characters}
+              waitingList={waitingList}
+              activeParties={parties}
+            />
+          </div>
+        ) : standaloneView === "allChars" ? (
+          /* ── GUIA "TODOS PERSONAGENS": os 3 painéis em tela cheia, com
+                visibilidade individual + divisores redimensionáveis. ──── */
+          <div className="flex flex-col h-full bg-[var(--th-n-deep)] text-sm overflow-hidden rounded-xl border border-[var(--th-line)]/80">
+            {/* Barra de controles: liga/desliga cada painel independentemente. */}
+            <div className="flex items-center gap-1.5 px-2 py-1.5 border-b border-[var(--th-line)]/60 bg-[var(--th-bg-raised)]/60 flex-shrink-0 overflow-x-auto">
+              <span className="text-[9px] uppercase tracking-widest font-black text-slate-500 whitespace-nowrap">Painéis:</span>
+              {([
+                { key: "available" as const, label: "Personagens Disponíveis", accent: "amber" },
+                { key: "waiting" as const, label: "Lista de Espera", accent: "red" },
+                { key: "chart" as const, label: "Oportunidade por Servidor", accent: "sky" },
+              ]).map(({ key, label, accent }) => {
+                const isOn = panelVisibility[key];
+                const activeCls = accent === "amber"
+                  ? "bg-amber-500/15 border-amber-500/50 text-amber-300"
+                  : accent === "red"
+                    ? "bg-red-500/15 border-red-500/50 text-red-300"
+                    : "bg-sky-500/15 border-sky-500/50 text-sky-300";
+                return (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => setPanelVisibility(prev => ({ ...prev, [key]: !prev[key] }))}
+                    className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-lg border text-[10px] font-bold transition-all cursor-pointer whitespace-nowrap ${
+                      isOn ? activeCls : "bg-black/20 border-white/10 text-slate-500 hover:text-slate-300 hover:bg-white/5"
+                    }`}
+                    title={isOn ? `Ocultar ${label}` : `Exibir ${label}`}
+                  >
+                    {isOn ? <Eye size={11} /> : <EyeOff size={11} />} {label}
+                  </button>
+                );
+              })}
             </div>
 
-            {/* Bottom area: 3 panels (redimensionáveis — mesma lógica do PartyPanel) */}
-            <div ref={standalonePanelsRef} className="flex flex-col xl:flex-row gap-2 items-stretch px-2 pt-1 pb-0 w-full relative box-border flex-1 min-h-0" style={{ minHeight: "200px" }}>
-              <div className="flex flex-col border border-red-800/50 rounded-xl bg-[var(--th-n-raised)] self-stretch overflow-hidden min-w-0" style={{ flex: `0 0 calc(${standalonePanelWidths.p1}% - 14px)` }}>
-                <AvailableCharacter
-                  onRefresh={onRefresh}
-                  handleRefresh={standaloneHandleRefresh}
-                  isRefreshing={standaloneIsRefreshing}
-                  refreshDone={standaloneRefreshDone}
-                  thCls={standaloneThCls}
-                  hdr={standaloneHdr}
-                  toggleSort={standaloneToggleSort}
-                  SI={StandaloneSI}
-                  resetAvailableFilters={standaloneResetFilters}
-                  smartAccountFilter={standaloneSmartAccountFilter}
-                  setSmartAccountFilter={setStandaloneSmartAccountFilter}
-                  filterPersonagem={standaloneFilterPersonagem}
-                  setFilterPersonagem={setStandaloneFilterPersonagem}
-                  serverOptions={standaloneServerOptions}
-                  filterServer={standaloneFilterServer}
-                  setFilterServer={setStandaloneFilterServer}
-                  vocOptions={standaloneVocOptions}
-                  filterVoc={standaloneFilterVoc}
-                  setFilterVoc={setStandaloneFilterVoc}
-                  filterLevel={standaloneFilterLevel}
-                  filterLevelOp={standaloneFilterLevelOp}
-                  setFilterLevel={setStandaloneFilterLevel}
-                  setFilterLevelOp={setStandaloneFilterLevelOp}
-                  filterSW={standaloneFilterSW}
-                  setFilterSW={setStandaloneFilterSW}
-                  filterSG={standaloneFilterSG}
-                  setFilterSG={setStandaloneFilterSG}
-                  donoOptions={standaloneDonoOptions}
-                  filterDonos={standaloneFilterDonos}
-                  setFilterDonos={setStandaloneFilterDonos}
-                  sortedAvailable={standaloneSortedAvailable}
-                  idsInOtherParties={standaloneIdsInOtherParties}
-                  otherPartiesInfoFor={standaloneOtherPartiesInfoFor}
-                  isFull={false}
-                  addToParty={() => {}}
-                  accountLabelFor={standaloneAccountLabelFor}
-                  getCharOwner={standaloneGetCharOwner}
-                />
+            {visiblePanelKeys.length === 0 ? (
+              <div className="flex-1 flex flex-col items-center justify-center gap-2 text-slate-500">
+                <EyeOff size={28} className="text-slate-600" />
+                <span className="text-xs font-bold text-slate-400">Todos os painéis estão ocultos</span>
+                <span className="text-[10px] text-slate-600">Use os botões acima para exibir os painéis desejados.</span>
               </div>
-              <div className="w-2.5 bg-transparent hover:bg-emerald-500/30 cursor-col-resize self-stretch flex items-center justify-center rounded transition-colors select-none group flex-shrink-0" title="Arraste para ajustar" onMouseDown={e => { e.preventDefault(); setStandaloneDraggingPanel("left"); }}>
-                <div className="w-[3px] h-12 bg-white/20 group-hover:bg-emerald-400 rounded-full transition-colors" />
-              </div>
-              <div className="self-stretch flex flex-col items-stretch overflow-hidden border border-red-900/30 rounded-xl bg-[var(--th-n-raised)]" style={{ flex: `0 0 calc(${standalonePanelWidths.p2}% - 14px)`, minWidth: "195px" }}>
-                <ServersPyramidChart
-                  availableChars={standaloneAvailable}
-                  waitingItems={standaloneVisibleWaitingList}
-                  selectedSet={new Set()}
-                  activeServer={standaloneFilterServer}
-                  onServerClick={standaloneHandleServerChartClick}
-                />
-              </div>
-              <>
-                <div className="w-2.5 bg-transparent hover:bg-emerald-500/30 cursor-col-resize self-stretch flex items-center justify-center rounded transition-colors select-none group flex-shrink-0" title="Arraste para ajustar" onMouseDown={e => { e.preventDefault(); setStandaloneDraggingPanel("right"); }}>
-                  <div className="w-[3px] h-12 bg-white/20 group-hover:bg-emerald-400 rounded-full transition-colors" />
-                </div>
-                <div className="flex flex-col border border-red-800/50 rounded-xl bg-[var(--th-n-raised)] self-stretch overflow-hidden min-w-0 flex-1">
-                  <div className="px-3 py-1 bg-[var(--th-bg-base)] border-b border-red-800/50 text-[10px] uppercase tracking-wider text-red-400 font-bold truncate flex-shrink-0 flex items-center justify-between gap-2">
-                    <span>Lista de Espera (Services)</span>
-                    {onRefresh && (
-                      <RefreshButton
-                        onRefresh={standaloneHandleRefresh}
+            ) : (
+              <div ref={standalonePanelsRef} className="flex flex-col xl:flex-row gap-2 items-stretch px-2 py-2 w-full relative box-border flex-1 min-h-0">
+                {visiblePanelKeys.map((panelKey, index) => {
+                  // Larguras: 1 visível = 100%; 2 visíveis = divisor único
+                  // (persistido por combinação); 3 visíveis = p1/p2/p3
+                  // originais. O último painel absorve a folga (flex-1).
+                  const isLast = index === visiblePanelKeys.length - 1;
+                  let flexStyle: React.CSSProperties;
+                  if (visiblePanelKeys.length === 1) {
+                    flexStyle = { flex: "1 1 auto" };
+                  } else if (visiblePanelKeys.length === 2) {
+                    const leftPct = pairWidths[pairComboKey] ?? PAIR_DEFAULT_WIDTHS[pairComboKey] ?? 50;
+                    flexStyle = isLast ? { flex: "1 1 0%" } : { flex: `0 0 calc(${leftPct}% - 14px)` };
+                  } else {
+                    flexStyle = panelKey === "available"
+                      ? { flex: `0 0 calc(${standalonePanelWidths.p1}% - 14px)` }
+                      : panelKey === "chart"
+                        ? { flex: `0 0 calc(${standalonePanelWidths.p2}% - 14px)`, minWidth: "195px" }
+                        : { flex: "1 1 0%" };
+                  }
+                  // Divisor entre este painel e o próximo: com 3 visíveis,
+                  // usa os manipuladores originais left/right; com 2, "pair".
+                  const dragTarget = visiblePanelKeys.length === 3
+                    ? (index === 0 ? "left" as const : "right" as const)
+                    : "pair" as const;
+                  const panelNode = panelKey === "available" ? (
+                    <div key={panelKey} className="flex flex-col border border-red-800/50 rounded-xl bg-[var(--th-n-raised)] self-stretch overflow-hidden min-w-0" style={flexStyle}>
+                      <AvailableCharacter
+                        onRefresh={onRefresh}
+                        handleRefresh={standaloneHandleRefresh}
                         isRefreshing={standaloneIsRefreshing}
                         refreshDone={standaloneRefreshDone}
-                        title="Sincronizar Lista de Espera (Services) da nuvem"
+                        thCls={standaloneThCls}
+                        hdr={standaloneHdr}
+                        toggleSort={standaloneToggleSort}
+                        SI={StandaloneSI}
+                        resetAvailableFilters={standaloneResetFilters}
+                        smartAccountFilter={standaloneSmartAccountFilter}
+                        setSmartAccountFilter={setStandaloneSmartAccountFilter}
+                        filterPersonagem={standaloneFilterPersonagem}
+                        setFilterPersonagem={setStandaloneFilterPersonagem}
+                        serverOptions={standaloneServerOptions}
+                        filterServer={standaloneFilterServer}
+                        setFilterServer={setStandaloneFilterServer}
+                        vocOptions={standaloneVocOptions}
+                        filterVoc={standaloneFilterVoc}
+                        setFilterVoc={setStandaloneFilterVoc}
+                        filterLevel={standaloneFilterLevel}
+                        filterLevelOp={standaloneFilterLevelOp}
+                        setFilterLevel={setStandaloneFilterLevel}
+                        setFilterLevelOp={setStandaloneFilterLevelOp}
+                        filterSW={standaloneFilterSW}
+                        setFilterSW={setStandaloneFilterSW}
+                        filterSG={standaloneFilterSG}
+                        setFilterSG={setStandaloneFilterSG}
+                        donoOptions={standaloneDonoOptions}
+                        filterDonos={standaloneFilterDonos}
+                        setFilterDonos={setStandaloneFilterDonos}
+                        sortedAvailable={standaloneSortedAvailable}
+                        idsInOtherParties={standaloneIdsInOtherParties}
+                        otherPartiesInfoFor={standaloneOtherPartiesInfoFor}
+                        isFull={false}
+                        addToParty={() => {}}
+                        accountLabelFor={standaloneAccountLabelFor}
+                        getCharOwner={standaloneGetCharOwner}
                       />
-                    )}
-                  </div>
-                  <div className="flex-1 min-h-0 overflow-y-auto" onWheel={e => e.stopPropagation()}>
-                    <WaitingServiceAvailableList items={standaloneVisibleWaitingList} selectedIds={new Set()} isFull={false} onAdd={() => {}} filters={standaloneWlFilters} setFilters={setStandaloneWlFilters} />
-                  </div>
-                </div>
-              </>
+                    </div>
+                  ) : panelKey === "chart" ? (
+                    <div key={panelKey} className="self-stretch flex flex-col items-stretch overflow-hidden border border-red-900/30 rounded-xl bg-[var(--th-n-raised)]" style={flexStyle}>
+                      <ServersPyramidChart
+                        availableChars={standaloneAvailable}
+                        waitingItems={standaloneVisibleWaitingList}
+                        selectedSet={new Set()}
+                        activeServer={standaloneFilterServer}
+                        onServerClick={standaloneHandleServerChartClick}
+                      />
+                    </div>
+                  ) : (
+                    <div key={panelKey} className="flex flex-col border border-red-800/50 rounded-xl bg-[var(--th-n-raised)] self-stretch overflow-hidden min-w-0" style={flexStyle}>
+                      <div className="px-3 py-1 bg-[var(--th-bg-base)] border-b border-red-800/50 text-[10px] uppercase tracking-wider text-red-400 font-bold truncate flex-shrink-0 flex items-center justify-between gap-2">
+                        <span>Lista de Espera (Services)</span>
+                        {onRefresh && (
+                          <RefreshButton
+                            onRefresh={standaloneHandleRefresh}
+                            isRefreshing={standaloneIsRefreshing}
+                            refreshDone={standaloneRefreshDone}
+                            title="Sincronizar Lista de Espera (Services) da nuvem"
+                          />
+                        )}
+                      </div>
+                      <div className="flex-1 min-h-0 overflow-y-auto" onWheel={e => e.stopPropagation()}>
+                        <WaitingServiceAvailableList items={standaloneVisibleWaitingList} selectedIds={new Set()} isFull={false} onAdd={() => {}} filters={standaloneWlFilters} setFilters={setStandaloneWlFilters} />
+                      </div>
+                    </div>
+                  );
+                  return (
+                    <div key={`wrap_${panelKey}`} className="contents">
+                      {panelNode}
+                      {!isLast && (
+                        <div className="w-2.5 bg-transparent hover:bg-emerald-500/30 cursor-col-resize self-stretch flex items-center justify-center rounded transition-colors select-none group flex-shrink-0" title="Arraste para ajustar" onMouseDown={e => { e.preventDefault(); setStandaloneDraggingPanel(dragTarget); }}>
+                          <div className="w-[3px] h-12 bg-white/20 group-hover:bg-emerald-400 rounded-full transition-colors" />
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        ) : (
+          /* ── NENHUMA PT SELECIONADA: tela "Selecione uma PT". ────────── */
+          <div className="flex flex-col h-full items-center justify-center bg-[var(--th-n-deep)] rounded-xl border border-[var(--th-line)]/80 relative overflow-hidden">
+            <div className="absolute inset-0 overflow-hidden pointer-events-none">
+              <div className="absolute top-1/4 left-1/3 w-72 h-72 bg-emerald-950/20 blur-[120px] rounded-full" />
+              <div className="absolute bottom-1/4 right-1/3 w-72 h-72 bg-red-950/15 blur-[120px] rounded-full" />
+            </div>
+            <div className="relative z-10 flex flex-col items-center gap-3 px-6 text-center">
+              <div className="w-16 h-16 rounded-2xl border border-[var(--th-brand-mid)]/40 bg-[var(--th-bg-raised)]/80 flex items-center justify-center shadow-lg">
+                <MousePointerClick size={28} className="text-amber-400" />
+              </div>
+              <h2 className="text-lg font-black text-white tracking-wide">Selecione uma PT</h2>
+              <p className="text-xs text-slate-400 max-w-sm leading-relaxed">
+                Clique em uma das PTs na barra acima para abrir seu painel completo,
+                ou utilize os botões <span className="font-bold text-amber-300">Visão Geral</span> e{" "}
+                <span className="font-bold text-sky-300">Todos Personagens</span> para explorar
+                as estatísticas e os personagens disponíveis.
+              </p>
             </div>
           </div>
         )}
