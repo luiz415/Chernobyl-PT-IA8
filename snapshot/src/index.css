@@ -486,7 +486,11 @@
     border-color: inherit;
     pointer-events: none;
     z-index: 0;
-    animation: footer-pulse-ring 1.6s ease-in-out infinite;
+    /* 1.8s = PULSE_PERIOD_MS (src/utils/pulseSync.ts): TODOS os pulsos
+       sincronizados compartilham o mesmo período; a fase é ancorada em t=0
+       da página pelo sincronizador global, então todo anel pulsa em uníssono
+       com os seletores de estágio do PartyManager. */
+    animation: footer-pulse-ring 1.8s ease-in-out infinite;
   }
 
   /* Hover: some com o anel para não competir com o realce próprio do botão. */
@@ -494,6 +498,15 @@
     animation: none;
     opacity: 0;
   }
+}
+
+/* Botões do rodapé que pulsam via `animate-pulse` do Tailwind (ex.: Boss e
+   Amigos com pendências): mesma duração do ciclo global (1.8s =
+   PULSE_PERIOD_MS de src/utils/pulseSync.ts) para o sincronizador poder
+   alinhá-los aos demais pulsos. Fora do @layer para vencer a utility do
+   Tailwind sem depender de ordem de camadas. */
+.footer-pulse > button.animate-pulse {
+  animation-duration: 1.8s;
 }
 
 /* Pulso marcado (não tão suave): o anel expande e some, em ciclo curto. */
