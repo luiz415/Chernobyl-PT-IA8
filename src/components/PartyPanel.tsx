@@ -3863,7 +3863,14 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
                 const slotNotesValue = slotNotesDrafts[id] !== undefined ? slotNotesDrafts[id] : (d.notes || "");
 
                 return (
-                  <tr key={id} className={`border-b border-white/5 ${rowBg} ${isInOther ? "ring-1 ring-inset ring-amber-500/30" : ""}`} title={isInOther ? "Este personagem está em outra PT" : ""}>
+                  <tr key={id} className={`border-b border-white/5 ${rowBg} ${isInOther ? "ring-1 ring-inset ring-amber-500/30" : ""}`} title={isInOther ? (() => {
+                    // Mesmo formato do tooltip da lista PERSONAGENS DISPONÍVEIS:
+                    // nomeia a PT e a Quest configurada nela.
+                    const infos = otherPartiesInfoFor(id);
+                    return infos?.length
+                      ? `Este personagem faz parte de ${infos.length > 1 ? "outras PT's" : "outra PT"}:\n\n${infos.map(info => `• ${info.name} — ${info.questLabel === "Quest não definida" ? info.questLabel : `Quest: ${info.questLabel}`}${info.statusNote ? ` (${info.statusNote})` : ""}`).join("\n")}`
+                      : "Este personagem está em outra PT";
+                  })() : ""}>
                     <td className="px-2 py-0.5 text-center font-mono text-slate-500 font-bold whitespace-nowrap">{i + 1}</td>
                     <td className={`px-2 py-0.5 text-center whitespace-nowrap ${isCustom ? "text-violet-300 italic" : "text-slate-400"}`}>
                       <span className="inline-flex items-center justify-center gap-1">

@@ -24,6 +24,7 @@ import { readBazaarDefaultBid, resolveBazaarBid, saveBazaarDefaultBid } from "..
 import { loadUIState, saveUIState, loadNotifications } from "../storage";
 import { SERVER_OPTIONS, serverKey } from "../constants/servers";
 import { computeUserPriority } from "../utils/bazaarUserPriority";
+import { collectBusyIdsForQuest } from "../utils/questEligibility";
 
 interface BazaarAuction {
   id: string;
@@ -1504,15 +1505,14 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
   // a tabela apenas consulta conjuntos pré-computados, sem refiltrar por linha.
   // ============================================================================
 
-  // Personagens do usuário atual que já estão alocados em PTs ativas (indisponíveis).
-  const activeBusyIds = useMemo(() => {
-    const set = new Set<string>();
-    (activeParties || []).forEach(party => {
-      if (party.archived) return;
-      (party.selectedIds || []).forEach(id => { if (id) set.add(id); });
-    });
-    return set;
-  }, [activeParties]);
+  // Personagens do usuário atual já alocados em PTs ativas — POR QUEST:
+  // mesma regra do Resumo de Amigos (`collectBusyIdsForQuest`), sob o MESMO
+  // `friendsSummaryQuestFilter` usado logo abaixo. Estar em PT de Sanguine
+  // não "cobre" nem bloqueia o servidor para o alvo Soul War (e vice-versa).
+  const activeBusyIds = useMemo(
+    () => collectBusyIdsForQuest(activeParties, friendsSummaryQuestFilter),
+    [activeParties, friendsSummaryQuestFilter],
+  );
 
   const currentUserName = userProfile?.nome || "Anônimo";
   const currentUserUid = currentUser?.uid || null;
