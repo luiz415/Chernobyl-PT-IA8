@@ -65,6 +65,86 @@ interface Props {
   publicPartiesEnabled?: boolean;
 }
 
+// ============================================================================
+// ESTÁGIOS DE UMA PT — fonte única da categorização do seletor
+// ----------------------------------------------------------------------------
+// A classificação reaproveita exatamente os estados que o PartyPanel já usa
+// (`questConcluida`, `ptStartedAt`, contagem de participantes vs. slots), sem
+// criar flags paralelas. Os estágios são mutuamente exclusivos e avaliados em
+// ordem de precedência — uma PT nunca aparece em duas categorias:
+//   1. aguardando — Quest concluída, PT ainda não finalizada (`questConcluida`;
+//      PTs finalizadas são arquivadas e nem chegam a este componente).
+//   2. iniciadas  — Quest em andamento OU pausada (`ptStartedAt` setado; a
+//      pausa não zera o início — mesma leitura do `questState` do PartyPanel).
+//   3. prontas    — todos os slots preenchidos, Quest ainda não iniciada.
+//   4. comVagas   — ainda há slots livres.
+// ============================================================================
+export type PartyStage = "comVagas" | "prontas" | "iniciadas" | "aguardando";
+
+export function getPartyStage(p: PartyTab): PartyStage {
+  if (p.questConcluida) return "aguardando";
+  if (p.ptStartedAt || p.isPaused) return "iniciadas";
+  const total = p.selectedIds.length + (p.customMembers?.length || 0);
+  if (total >= p.slots) return "prontas";
+  return "comVagas";
+}
+
+// Identidade visual de cada estágio: a MESMA cor do botão seletor é aplicada
+// ao card/aba da PT (aberta e fechada), mantendo contraste e legibilidade.
+const STAGE_THEME: Record<PartyStage, {
+  label: string;
+  /** Botão seletor ativo. */
+  btnActive: string;
+  /** Botão seletor inativo. */
+  btnIdle: string;
+  /** Card/aba da PT aberta (ativa e não minimizada). */
+  tabOpened: string;
+  /** Card/aba da PT fechada/minimizada. */
+  tabClosed: string;
+  /** Selo do contador de slots (apenas Com Vagas) — aberto/fechado. */
+  counterOpened: string;
+  counterClosed: string;
+}> = {
+  comVagas: {
+    label: "Com Vagas",
+    btnActive: "bg-violet-500/15 border-violet-500/50 text-violet-300 shadow-[0_0_8px_rgba(139,92,246,0.15)]",
+    btnIdle: "bg-black/20 border-violet-900/15 text-slate-500 hover:text-violet-300 hover:bg-violet-500/10 hover:border-violet-500/40",
+    tabOpened: "bg-gradient-to-b from-violet-500/20 to-violet-600/10 border border-violet-500/60 text-violet-200 shadow-[0_0_10px_rgba(139,92,246,0.18)]",
+    tabClosed: "border border-violet-500/15 text-violet-400/60 hover:text-violet-300 hover:border-violet-500/30 hover:bg-violet-500/[0.06] bg-transparent",
+    counterOpened: "bg-violet-500/25 text-violet-200",
+    counterClosed: "bg-violet-500/10 text-violet-400/60",
+  },
+  prontas: {
+    label: "Prontas",
+    btnActive: "bg-emerald-500/15 border-emerald-500/50 text-emerald-300 shadow-[0_0_8px_rgba(16,185,129,0.15)]",
+    btnIdle: "bg-black/20 border-emerald-900/15 text-slate-500 hover:text-emerald-300 hover:bg-emerald-500/10 hover:border-emerald-500/40",
+    tabOpened: "bg-gradient-to-b from-emerald-500/20 to-emerald-600/10 border border-emerald-500/60 text-emerald-200 shadow-[0_0_10px_rgba(16,185,129,0.18)]",
+    tabClosed: "border border-emerald-500/15 text-emerald-400/60 hover:text-emerald-300 hover:border-emerald-500/30 hover:bg-emerald-500/[0.06] bg-transparent",
+    counterOpened: "bg-emerald-500/25 text-emerald-200",
+    counterClosed: "bg-emerald-500/10 text-emerald-400/60",
+  },
+  iniciadas: {
+    label: "Iniciadas",
+    btnActive: "bg-sky-500/15 border-sky-500/50 text-sky-300 shadow-[0_0_8px_rgba(14,165,233,0.15)]",
+    btnIdle: "bg-black/20 border-sky-900/15 text-slate-500 hover:text-sky-300 hover:bg-sky-500/10 hover:border-sky-500/40",
+    tabOpened: "bg-gradient-to-b from-sky-500/20 to-sky-600/10 border border-sky-500/60 text-sky-200 shadow-[0_0_10px_rgba(14,165,233,0.18)]",
+    tabClosed: "border border-sky-500/15 text-sky-400/60 hover:text-sky-300 hover:border-sky-500/30 hover:bg-sky-500/[0.06] bg-transparent",
+    counterOpened: "bg-sky-500/25 text-sky-200",
+    counterClosed: "bg-sky-500/10 text-sky-400/60",
+  },
+  aguardando: {
+    label: "Aguardando Pagamento",
+    btnActive: "bg-amber-500/15 border-amber-500/50 text-amber-300 shadow-[0_0_8px_color-mix(in_oklab,var(--color-amber-500)_15%,transparent)]",
+    btnIdle: "bg-black/20 border-amber-900/15 text-slate-500 hover:text-amber-300 hover:bg-amber-500/10 hover:border-amber-500/40",
+    tabOpened: "bg-gradient-to-b from-amber-500/20 to-amber-600/10 border border-amber-500/60 text-amber-200 shadow-[0_0_10px_color-mix(in_oklab,var(--color-amber-500)_15%,transparent)]",
+    tabClosed: "border border-amber-500/15 text-amber-400/60 hover:text-amber-300 hover:border-amber-500/30 hover:bg-amber-500/[0.05] bg-transparent",
+    counterOpened: "bg-amber-600/25 text-amber-300",
+    counterClosed: "bg-amber-500/10 text-amber-400/50",
+  },
+};
+
+const STAGE_ORDER: PartyStage[] = ["comVagas", "prontas", "iniciadas", "aguardando"];
+
 export default function PartyManager({ parties, characters, waitingList, userName, onUpdate, onPersistPartyNow, onDelete, onCreate, onSaveParty, activePt, setActivePt, minimized, setMinimized, onPaymentMarked, onNotifyMembers, onRequestFinalization, onRefresh, characterAcquisitions = [], onCreateCharacterAcquisition, onConfirmCharacterAcquisitionPayment, onTabChange, publicPartiesEnabled = true }: Props) {
   const { currentUser, userProfile, allUsers, acceptedFriendUids } = useAuth();
   const isNormalUser = userProfile?.role === "Normal";
@@ -78,7 +158,7 @@ export default function PartyManager({ parties, characters, waitingList, userNam
       setMinimized(m => (m[target.id] ? { ...m, [target.id]: false } : m));
     }
 
-    const targetStatusView = target.questConcluida ? "pendentes" : "ativas";
+    const targetStatusView = getPartyStage(target);
     if (ptStatusView !== targetStatusView) {
       setPtStatusView(targetStatusView);
     }
@@ -155,7 +235,7 @@ export default function PartyManager({ parties, characters, waitingList, userNam
   const [filterPrivate, setFilterPrivate] = useState(false);
   const [filterPublic, setFilterPublic] = useState(false);
   const [filterMine, setFilterMine] = useState(false);
-  const [ptStatusView, setPtStatusView] = useState<"ativas" | "pendentes">("ativas");
+  const [ptStatusView, setPtStatusView] = useState<PartyStage>("comVagas");
   const [filterServer, setFilterServer] = useState("");
   const [serverDropOpen, setServerDropOpen] = useState(false);
   const serverBtnRef = useRef<HTMLButtonElement>(null);
@@ -387,11 +467,11 @@ export default function PartyManager({ parties, characters, waitingList, userNam
   // ============================================================================
   // SINCRONIZAÇÃO AUTOMÁTICA DE CATEGORIA AO CONCLUIR QUEST
   // ============================================================================
-  // Sempre que a PT atualmente selecionada (activePt) mudar para o estado
-  // "questConcluida = true", trocamos automaticamente a categoria visível
-  // para "Aguardando pagamento". Isto garante que a PT permaneça visível e selecionada
-  // sem exigir nenhuma ação manual do usuário (sincronização via Firestore).
-  // Mesma lógica vale para o caminho reverso (caso a PT volte a "Ativas").
+  // Sempre que a PT atualmente selecionada (activePt) mudar de estágio
+  // (Com Vagas → Prontas → Iniciadas → Aguardando Pagamento, ou o caminho
+  // reverso), trocamos automaticamente a categoria visível para o estágio
+  // real da PT. Isto garante que a PT permaneça visível e selecionada sem
+  // exigir nenhuma ação manual do usuário (sincronização via Firestore).
   useEffect(() => {
     if (!activePt) return;
     const current = parties.find(p => p.id === activePt);
@@ -456,8 +536,14 @@ export default function PartyManager({ parties, characters, waitingList, userNam
     });
   }, [parties, filterPrivate, filterPublic, filterServer, filterMine, isNormalUser, currentUser?.uid, userName, userProfile?.role, characters]);
 
-  const ativasParties = useMemo(() => baseFilteredParties.filter(p => !p.questConcluida), [baseFilteredParties]);
-  const pendentesParties = useMemo(() => baseFilteredParties.filter(p => !!p.questConcluida), [baseFilteredParties]);
+  // Agrupamento por estágio — uma única passada; os grupos são mutuamente
+  // exclusivos porque getPartyStage devolve exatamente um estágio por PT.
+  const partiesByStage = useMemo(() => {
+    const groups: Record<PartyStage, PartyTab[]> = { comVagas: [], prontas: [], iniciadas: [], aguardando: [] };
+    baseFilteredParties.forEach(p => { groups[getPartyStage(p)].push(p); });
+    return groups;
+  }, [baseFilteredParties]);
+  const pendentesParties = partiesByStage.aguardando;
 
   // PTs que são pendências de pagamento REAIS para o usuário logado: lideradas
   // por ele (deve pagar os membros) ou com slot da divisão ainda não pago
@@ -471,8 +557,8 @@ export default function PartyManager({ parties, characters, waitingList, userNam
   );
 
   const filteredParties = useMemo(() => {
-    return ptStatusView === "ativas" ? ativasParties : pendentesParties;
-  }, [ptStatusView, ativasParties, pendentesParties]);
+    return partiesByStage[ptStatusView];
+  }, [ptStatusView, partiesByStage]);
 
   function resetFilters() {
     setFilterPrivate(false);
@@ -609,10 +695,10 @@ export default function PartyManager({ parties, characters, waitingList, userNam
         <div ref={tabsContainerRef} onWheel={handleWheel} className="flex gap-0.5 bg-[var(--th-bg-base)] p-0.5 rounded-xl border border-[var(--th-brand)]/60 overflow-x-auto max-w-full flex-1">
           {[...filteredParties].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)).map(p => {
             const total = p.selectedIds.length + (p.customMembers?.length || 0);
-            const full = total >= p.slots;
-            // PT finalizada (quest concluída) exibe o card em amarelo, como uma
-            // PT incompleta/com vagas — mesmo que esteja cheia. Visual apenas.
-            const isFinalizada = !!p.questConcluida;
+            // Card/aba com a MESMA cor do botão seletor do estágio atual da
+            // PT — a categoria e o visual sempre andam juntos.
+            const stage = getPartyStage(p);
+            const theme = STAGE_THEME[stage];
             const isActive = activePt === p.id;
             const isMin = minimized[p.id];
             const isTabOpened = isActive && !isMin;
@@ -631,39 +717,26 @@ export default function PartyManager({ parties, characters, waitingList, userNam
                   }}
                   title={isTabOpened ? "Minimizar" : "Abrir PT"}
                   className={`inline-flex items-center gap-1 rounded-lg font-semibold transition-all duration-200 cursor-pointer whitespace-nowrap ${
-                    isTabOpened
-                      ? full && !isFinalizada
-                        ? "bg-gradient-to-b from-emerald-500/20 to-emerald-600/10 border border-emerald-500/60 text-emerald-200 shadow-[0_0_10px_rgba(16,185,129,0.18)]"
-                        : "bg-gradient-to-b from-amber-500/20 to-amber-600/10 border border-amber-500/60 text-amber-200 shadow-[0_0_10px_color-mix(in_oklab,var(--color-amber-500)_15%,transparent)]"
-                      : full && !isFinalizada
-                        ? "border border-emerald-500/15 text-emerald-400/60 hover:text-emerald-300 hover:border-emerald-500/30 hover:bg-emerald-500/[0.06] bg-transparent"
-                        : "border border-transparent text-amber-400/50 hover:text-amber-300 hover:border-amber-500/25 hover:bg-amber-500/[0.05] bg-transparent"
+                    isTabOpened ? theme.tabOpened : theme.tabClosed
                   }`}
                   style={{ padding: "clamp(3px, 0.4vh, 5px) clamp(5px, 0.65vw, 9px)", fontSize: "clamp(10px, 1.2vh, 12px)" }}
                 >
                   <Users size={11} className="flex-shrink-0" />
                   <span className="truncate max-w-[60px]">{p.name}</span>
-                  {p.visibility === "private" ? (
-                    <span className="inline-flex items-center justify-center w-3.5 h-3.5 rounded border border-red-700/30 bg-red-900/15 flex-shrink-0">
-                      <Lock size={8} className="text-red-400" />
-                    </span>
-                  ) : (
-                    <span className="inline-flex items-center justify-center w-3.5 h-3.5 rounded border border-emerald-500/30 bg-emerald-500/10 flex-shrink-0">
-                      <LockOpen size={8} className="text-emerald-400" />
-                    </span>
-                  )}
                   {p.ptType === "sanguine" ? (
                     <span className="text-[8px] font-bold px-1 py-px rounded border border-rose-500/30 bg-rose-500/10 text-rose-400 flex-shrink-0">SG</span>
                   ) : p.ptType === "soulwar" ? (
                     <span className="text-[8px] font-bold px-1 py-px rounded border border-slate-500/30 bg-slate-500/10 text-slate-400 flex-shrink-0">SW</span>
                   ) : null}
-                  <span className={`text-[9px] font-bold px-1 py-px rounded flex-shrink-0 ${
-                    isTabOpened
-                      ? full && !isFinalizada ? "bg-emerald-500/25 text-emerald-200" : "bg-amber-600/25 text-amber-300"
-                      : full && !isFinalizada ? "bg-emerald-500/10 text-emerald-400/60" : "bg-amber-500/10 text-amber-400/50"
-                  }`}>
-                    {total}/{p.slots}
-                  </span>
+                  {/* Contador de slots: apenas em "Com Vagas" — nos demais
+                      estágios a lotação já é implícita pela categoria. */}
+                  {stage === "comVagas" && (
+                    <span className={`text-[9px] font-bold px-1 py-px rounded flex-shrink-0 ${
+                      isTabOpened ? theme.counterOpened : theme.counterClosed
+                    }`}>
+                      {total}/{p.slots}
+                    </span>
+                  )}
                 </button>
               </div>
             );
@@ -671,32 +744,35 @@ export default function PartyManager({ parties, characters, waitingList, userNam
         </div>
 
         <div className="flex items-center gap-0.5 bg-[var(--th-bg-base)] p-0.5 rounded-xl border border-[var(--th-brand)]/60 flex-shrink-0">
-          <button
-            type="button"
-            onClick={() => setPtStatusView("ativas")}
-            className={`px-2.5 py-1 rounded-lg border text-[10px] font-bold transition-all duration-200 cursor-pointer whitespace-nowrap ${
-              ptStatusView === "ativas"
-                ? "bg-emerald-500/15 border-emerald-500/50 text-emerald-300 shadow-[0_0_8px_rgba(16,185,129,0.15)]"
-                : "bg-black/20 border-emerald-900/15 text-slate-500 hover:text-emerald-300 hover:bg-emerald-500/10 hover:border-emerald-500/40"
-            }`}
-            title="Exibir apenas PTs ativas"
-          >
-            Ativas ({ativasParties.length})
-          </button>
-          <button
-            type="button"
-            onClick={() => setPtStatusView("pendentes")}
-            className={`px-2.5 py-1 rounded-lg border text-[10px] font-bold transition-all duration-200 cursor-pointer whitespace-nowrap ${
-              ptStatusView === "pendentes"
-                ? "bg-amber-500/15 border-amber-500/50 text-amber-300 shadow-[0_0_8px_color-mix(in_oklab,var(--color-amber-500)_15%,transparent)]"
-                : `bg-black/20 border-amber-900/15 text-slate-500 hover:text-amber-300 hover:bg-amber-500/10 hover:border-amber-500/40${pendingPaymentForUserCount > 0 ? " pt-pending-pulse" : ""}`
-            }`}
-            title={pendingPaymentForUserCount > 0
-              ? `Exibir apenas PTs com quest finalizada e pagamento pendente — ${pendingPaymentForUserCount} aguardando pagamento com você`
-              : "Exibir apenas PTs com quest finalizada e pagamento pendente"}
-          >
-            Aguardando pagamento ({pendentesParties.length})
-          </button>
+          {STAGE_ORDER.map(stage => {
+            const theme = STAGE_THEME[stage];
+            const isCurrent = ptStatusView === stage;
+            // O pulso de pendência financeira continua exclusivo do estágio
+            // "Aguardando Pagamento" — mesma regra do botão antigo.
+            const pulse = stage === "aguardando" && !isCurrent && pendingPaymentForUserCount > 0 ? " pt-pending-pulse" : "";
+            const title = stage === "comVagas"
+              ? "Exibir PTs com slots ainda em aberto"
+              : stage === "prontas"
+                ? "Exibir PTs completas com Quest ainda não iniciada"
+                : stage === "iniciadas"
+                  ? "Exibir PTs com Quest iniciada ou pausada"
+                  : pendingPaymentForUserCount > 0
+                    ? `Exibir PTs com quest finalizada e pagamento pendente — ${pendingPaymentForUserCount} aguardando pagamento com você`
+                    : "Exibir PTs com quest finalizada e pagamento pendente";
+            return (
+              <button
+                key={stage}
+                type="button"
+                onClick={() => setPtStatusView(stage)}
+                className={`px-2.5 py-1 rounded-lg border text-[10px] font-bold transition-all duration-200 cursor-pointer whitespace-nowrap ${
+                  isCurrent ? theme.btnActive : `${theme.btnIdle}${pulse}`
+                }`}
+                title={title}
+              >
+                {theme.label} ({partiesByStage[stage].length})
+              </button>
+            );
+          })}
         </div>
 
         <div className="relative flex items-center gap-0.5 bg-[var(--th-bg-base)] p-0.5 rounded-xl border border-[var(--th-brand)]/60 flex-shrink-0">
