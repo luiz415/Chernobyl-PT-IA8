@@ -97,8 +97,42 @@ export interface Character {
   notes?: string;
   itemDropadoSW?: string;
   itemDropadoSG?: string;
+  /**
+   * Registro completo da venda do item da Quest (modal "Item Vendido").
+   * Separado por Quest — o MESMO personagem pode ter vendas diferentes em
+   * SW e SG, e os contextos nunca se misturam (Lucro SW × Lucro SG).
+   */
+  itemSaleSW?: ItemSaleRecord;
+  itemSaleSG?: ItemSaleRecord;
   createdAt: number;
   updatedAt: number;
+}
+
+/**
+ * VENDA DE ITEM — dados completos da operação (modal "Item Vendido").
+ *
+ * Persistimos a operação INTEIRA, não apenas o resultado: o "Copiar (WA)" e
+ * qualquer reconstrução futura precisam explicar COMO o valor foi obtido
+ * (valor bruto, cotação, taxa configurada, quantas ofertas pagaram taxa e o
+ * total descontado). Depender só do RC final perderia essa informação.
+ */
+export interface ItemSaleRecord {
+  /** Valor vendido do item, em kk (bruto, antes de taxas). */
+  vendaKk: number;
+  /** Cotação do RC no Market: quantos k equivalem a 1000 RC. */
+  rateKk: number;
+  /** Porcentagem configurada da taxa do Market (padrão 5). */
+  taxPercent: number;
+  /** Multiplicador do botão "Taxa Market" (0x = sem taxa, 1x, 2x...). */
+  taxCount: number;
+  /** Total efetivamente descontado em kk (já com o teto de 10kk por oferta). */
+  taxDeductedKk: number;
+  /** Valor considerado após a taxa, em kk. */
+  netKk: number;
+  /** Resultado final em RC = floor((netKk / rateKk) × 1000). */
+  resultRC: number;
+  /** Quando a venda foi registrada (epoch ms). */
+  soldAt?: number;
 }
 
 export interface PartyCustomMember {

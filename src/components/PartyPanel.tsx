@@ -10,7 +10,7 @@ import {
   questBossLabel,
 } from "../constants/questBosses";
 import type { QuestBoss } from "../constants/questBosses";
-import { ArrowDown, ArrowUp, ArrowUpDown, Plus, Minus, X, UserPlus, ExternalLink, Play, Clock, Pencil, Check, Lock, Users, Tv, Handshake } from "lucide-react";
+import { ArrowDown, ArrowUp, ArrowUpDown, Plus, Minus, X, UserPlus, ExternalLink, Play, Clock, Pencil, Check, Lock, Users, Tv, Handshake, Coins } from "lucide-react";
 import type { Character, CharacterAcquisition, PartyFinalizationReason, PartyTab, PartyCustomMember, PartySlotData, Vocation, WaitingService } from "../types";
 import { getCharacterAccountKey, hasAccountConflictWith } from "../utils/accountIdentity";
 import { resolveSplitBeneficiaryCandidate, buildResolvedUidPatch, type SplitBeneficiaryContext } from "../utils/splitBeneficiary";
@@ -27,6 +27,12 @@ import ServersPyramidChart from "./ServerGraphic";
 import WaitingServiceAvailableList from "./ServiceList";
 import CharacterAcquisitionModal, { type CharacterAcquisitionModalContext } from "./CharacterAcquisitionModal";
 import CharacterAcquisitionPaymentModal, { type CharacterAcquisitionPaymentModalContext } from "./CharacterAcquisitionPaymentModal";
+import ItemSoldModal from "./ItemSoldModal";
+// Cálculo da venda de item (kk -> RC) + Taxa Market: módulo puro compartilhado
+// com o modal "Item Vendido" e com Meus Personagens. `computeItemRC` e
+// `parseRateKk` são as MESMAS funções que este painel sempre usou (movidas).
+import { computeItemRC, formatItemSaleSummary } from "../utils/itemSale";
+import type { ItemSaleRecord } from "../types";
 import { openExternalUrl } from "../utils/openExternal";
 import WhatsappMessagePicker from "./WhatsappMessagePicker";
 import WhatsappTemplateModal from "./WhatsappTemplateModal";
@@ -62,13 +68,23 @@ export interface ExtendedPartySlotData extends PartySlotData {
   splitTarget?: SplitTarget;
   /** Nome do destinatário no instante da escolha (histórico legível). */
   splitTargetName?: string;
-  // Mini-calculadora kk -> RC
-  calcRateKk?: number;  // Campo 1 ("kk>RC"): taxa em k que equivale a 1000 RC
-  calcTotalKk?: number; // Campo 2 ("kk"): valor total em kk a ser convertido
+  // Mini-calculadora kk -> RC (LEGADO: campos dos antigos inputs kk>RC/kk da
+  // coluna. A entrada agora é o modal "Item Vendido"; estes campos continuam
+  // sendo gravados a partir do modal para manter Copiar (WA), Totais e
+  // qualquer leitura antiga 100% compatíveis).
+  calcRateKk?: number;  // Cotação: taxa em k que equivale a 1000 RC
+  calcTotalKk?: number; // Valor considerado (pós-taxa) em kk
   calcLocked?: boolean; // Legado: trava a edição da calculadora e do campo RC
   calcRateKkLocked?: boolean;
   calcTotalKkLocked?: boolean;
   itemVendidoLocked?: boolean;
+  /**
+   * Registro COMPLETO da venda feita pelo modal "Item Vendido" (valor bruto,
+   * cotação, taxa configurada, multiplicador de ofertas, desconto aplicado e
+   * resultado). Fonte da explicação no Copiar (WA); os campos legados acima
+   * continuam espelhando o essencial para compatibilidade.
+   */
+  itemSale?: ItemSaleRecord;
 }
 
 interface Props {
@@ -162,48 +178,6 @@ function describeFinalizationError(rawError: string): string {
   }
 }
 
-// ============================================================================
-// MINI-CALCULADORA kk -> RC
-// Calcula o valor em RC a partir de uma taxa (kk>RC) e um total (kk).
-// Fórmula: floor((total / rate) * 1000)  -> arredonda para baixo ao INTEIRO.
-// O resultado NÃO é mais forçado a múltiplo de 25: essa regra vale apenas
-// para a DIVISÃO entre participantes (ver `roundSplitTo25`), nunca para o
-// valor individual da venda do item.
-// Ex: rate=75, total=340 -> (340/75)*1000 = 4533.33 -> floor = 4533
-// Ex: rate=2.5, total=0.3446 -> 137.84 -> floor = 137
-// ============================================================================
-function computeItemRC(rateKk: number, totalKk: number): number {
-  if (!Number.isFinite(rateKk) || rateKk <= 0) return 0;
-  if (!Number.isFinite(totalKk) || totalKk <= 0) return 0;
-  const raw = (totalKk / rateKk) * 1000;
-  return Math.floor(raw);
-}
-
-// ============================================================================
-// ENTRADA DO PREÇO DO RC (kk>RC) COM UMA CASA DECIMAL
-// ----------------------------------------------------------------------------
-// O campo aceita valores como "1", "1,5", "2,3" (vírgula pt-BR; ponto também é
-// tolerado na digitação e normalizado para vírgula). Apenas UMA casa decimal.
-// `parseRateKk` converte o texto exibido para o número EXATO usado no cálculo
-// (vírgula -> ponto), sem truncamento.
-// ============================================================================
-function sanitizeRateKkInput(raw: string): string {
-  const unified = String(raw || "").replace(/[^\d.,]/g, "").replace(/\./g, ",");
-  const firstComma = unified.indexOf(",");
-  if (firstComma === -1) return unified;
-  const intPart = unified.slice(0, firstComma);
-  const decPart = unified.slice(firstComma + 1).replace(/,/g, "").slice(0, 1);
-  return `${intPart},${decPart}`;
-}
-function parseRateKk(raw: string): number {
-  const n = parseFloat(String(raw || "").replace(",", "."));
-  return Number.isFinite(n) && n > 0 ? n : 0;
-}
-/** Texto exibido para um `calcRateKk` persistido (número -> vírgula pt-BR). */
-function formatRateKkDisplay(value: number | undefined): string {
-  if (!value) return "";
-  return String(value).replace(".", ",");
-}
 
 // ============================================================================
 // ARREDONDAMENTO PARA MÚLTIPLO DE 25 (sempre para BAIXO)
@@ -570,12 +544,12 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
   const [acquisitionPaymentPrompt, setAcquisitionPaymentPrompt] = useState<CharacterAcquisition | null>(null);
 
   const [slotNotesDrafts, setSlotNotesDrafts] = useState<Record<string, string>>({});
-  // Drafts da mini-calculadora kk -> RC (Campo 1 = rate, Campo 2 = total)
-  const [calcRateKkDrafts, setCalcRateKkDrafts] = useState<Record<string, string>>({});
-  const [calcTotalKkDrafts, setCalcTotalKkDrafts] = useState<Record<string, string>>({});
-  // Controla qual campo da calculadora está focado (para exibir/ocultar o sufixo k/kk)
-  const [calcFocused, setCalcFocused] = useState<{ id: string; field: "rate" | "total" } | null>(null);
-  // Draft do campo RC editável manualmente (quando a calculadora não está ativa)
+  // Modal "Item Vendido": slot aberto para registrar a venda do item dropado.
+  // Substitui os antigos inputs kk>RC/kk da coluna (a lógica de cálculo vive
+  // em src/utils/itemSale.ts e o registro completo em slotData.itemSale).
+  const [itemSaleModalId, setItemSaleModalId] = useState<string | null>(null);
+  // Draft do campo RC editável manualmente (preenchimento direto na tabela —
+  // continua existindo; os dados do modal apenas têm prioridade sobre ele)
   const [rcDrafts, setRcDrafts] = useState<Record<string, string>>({});
   const partyRef = useRef(party);
   const debounceTimersRef = useRef<Record<string, number>>({});
@@ -618,28 +592,21 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
     }
   }
 
-  // Commit da mini-calculadora kk -> RC.
-  // Recebe os valores brutos dos Campos 1 (rate) e 2 (total), calcula o RC
-  // (arredondado para baixo ao múltiplo de 25 mais próximo) e grava tudo no
-  // slotData: calcRateKk, calcTotalKk e o itemVendido final (para que Totais,
-  // Divisão e botão PG continuem funcionando normalmente).
-  function commitCalcDrafts(id: string, rateRaw: string, totalRaw: string) {
-    // kk>RC aceita UMA casa decimal ("2,5") — o valor persistido/calculado é
-    // exatamente o digitado (vírgula -> ponto), sem truncar.
-    const rateNum = parseRateKk(rateRaw);
-    const totalNum = parseInt(totalRaw.replace(/[^\d]/g, ""), 10) || 0;
-    const computedRC = computeItemRC(rateNum, totalNum);
-    const cur = getSD(id) as ExtendedPartySlotData;
-    const patch: Partial<ExtendedPartySlotData> = {};
-    if ((cur.calcRateKk || 0) !== rateNum) patch.calcRateKk = rateNum;
-    if ((cur.calcTotalKk || 0) !== totalNum) patch.calcTotalKk = totalNum;
-    // Sempre sincroniza o itemVendido com o valor calculado
-    if ((cur.itemVendido || 0) !== computedRC) patch.itemVendido = computedRC;
-    if (Object.keys(patch).length > 0) {
-      setSD(id, patch);
-    }
-    setCalcRateKkDrafts(prev => { const next = { ...prev }; delete next[id]; return next; });
-    setCalcTotalKkDrafts(prev => { const next = { ...prev }; delete next[id]; return next; });
+  // Commit do modal "Item Vendido".
+  // Grava o registro COMPLETO da venda (itemSale) e espelha os campos legados
+  // (calcRateKk = cotação, calcTotalKk = valor considerado pós-taxa,
+  // itemVendido = RC final) para que Totais, Divisão, PG e Copiar (WA)
+  // continuem funcionando exatamente como antes.
+  function commitItemSale(id: string, sale: ItemSaleRecord) {
+    setSD(id, {
+      itemSale: sale,
+      calcRateKk: sale.rateKk,
+      calcTotalKk: sale.netKk,
+      itemVendido: sale.resultRC,
+    });
+    // O modal substitui qualquer digitação manual pendente do campo RC.
+    setRcDrafts(prev => { const next = { ...prev }; delete next[id]; return next; });
+    setItemSaleModalId(null);
   }
 
   // Commit do campo RC editável manualmente (quando a calculadora kk não está ativa)
@@ -2552,22 +2519,24 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
         if (d?.splitTarget) jogador = resolveSplitRecipient(d, jogador);
         const itemDropado = (d?.itemDropado || "").trim();
         const itemVendido = d?.itemVendido || 0;
-        // Valores REAIS da mini-calculadora, exatamente como persistidos:
-        //   • calcTotalKk -> valor de venda em kk
-        //   • calcRateKk  -> cotação (quantos k equivalem a 1000 RC)
-        // Nada é recalculado aqui: `itemVendido` já é o resultado gravado por
-        // `commitCalcDrafts`, que aplica `computeItemRC`.
+        // Registro COMPLETO da venda (modal "Item Vendido"), quando existir:
+        // explica a operação inteira — valor bruto, tentativas (Taxa Market
+        // Nx), desconto aplicado e cotação. Nada é recalculado aqui.
+        const saleRecord = d?.itemSale;
+        // Compatibilidade: PTs antigas têm apenas os campos legados da
+        // mini-calculadora (calcTotalKk = venda em kk, calcRateKk = cotação).
         const vendaKk = d?.calcTotalKk || 0;
         const cotacaoKk = d?.calcRateKk || 0;
 
         if (itemDropado && itemVendido > 0) {
-          // O detalhamento completo só existe quando a calculadora foi usada.
-          // Sem ela (valor RC digitado à mão), mantemos a linha antiga: é o
-          // único dado que de fato existe, e exibir uma cotação inventada
-          // seria falsear o resumo.
-          if (vendaKk > 0 && cotacaoKk > 0) {
+          if (saleRecord && saleRecord.resultRC > 0) {
+            // Resumo curto e explicativo do modal, com tentativas de venda.
+            linhas.push(`• ${jogador}: ${itemDropado} > ${formatItemSaleSummary(saleRecord)} = ${formatRC(itemVendido)}`);
+          } else if (vendaKk > 0 && cotacaoKk > 0) {
+            // Legado: calculadora kk antiga, linha idêntica à anterior.
             linhas.push(`• ${jogador}: ${itemDropado} > Vendido por ${formatKk(vendaKk, "kk")}, RC por ${formatKk(cotacaoKk, "k")} = ${formatRC(itemVendido)}`);
           } else {
+            // Valor RC digitado à mão: é o único dado que existe.
             linhas.push(`• ${jogador}: ${itemDropado} > Vendido por ${formatRC(itemVendido)}`);
           }
         } else if (!itemDropado && itemVendido > 0) {
@@ -2715,12 +2684,13 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
   const totalItemVendidoGeral = allMemberIds.reduce((s, id) => s + getSD(id).itemVendido, 0);
   const splitMembers = allMemberIds.filter(id => getSD(id).split);
   const allSplitHaveRC = splitMembers.every(sid => {
-    const slot = getSD(sid);
-    const rRaw = calcRateKkDrafts[sid] !== undefined ? calcRateKkDrafts[sid] : formatRateKkDisplay(slot.calcRateKk);
-    const tRaw = calcTotalKkDrafts[sid] !== undefined ? calcTotalKkDrafts[sid] : (slot.calcTotalKk ? String(slot.calcTotalKk) : "");
-    const lCalc = computeItemRC(parseRateKk(rRaw), parseInt(tRaw, 10) || 0);
+    const slot = getSD(sid) as ExtendedPartySlotData;
+    // Prioridade: registro do modal "Item Vendido" -> valor legado da
+    // calculadora -> RC digitado direto (draft pendente ou persistido).
+    const saleRC = slot.itemSale?.resultRC || 0;
+    const legacyCalc = computeItemRC(slot.calcRateKk || 0, slot.calcTotalKk || 0);
     const rcVal = rcDrafts[sid] !== undefined ? (parseInt(rcDrafts[sid], 10) || 0) : (slot.itemVendido || 0);
-    return (lCalc > 0 ? lCalc : rcVal) > 0;
+    return (saleRC > 0 ? saleRC : legacyCalc > 0 ? legacyCalc : rcVal) > 0;
   });
   const allSplitPaid = splitMembers.length > 0 && splitMembers.every(id => getSD(id).pago);
   const splitCount = splitMembers.length;
@@ -3019,43 +2989,34 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
               <span className="h-5 w-px bg-white/10" />
               <button
                 onClick={() => {
-                  customConfirm("Deseja salvar permanentemente os dados de Drop e Valor (calculadora kk/RC)? Estes dados não poderão ser alterados após esta ação.", () => {
+                  customConfirm("Deseja salvar permanentemente os dados de Drop e Valor? Estes dados não poderão ser alterados após esta ação.", () => {
                     const updatedSlotData = { ...party.slotData };
                     Object.keys(updatedSlotData).forEach(id => {
                       const currentSlot = updatedSlotData[id] as ExtendedPartySlotData;
-                      // Merge dos drafts PENDENTES (kk>RC, kk e RC) para salvar o valor mais recente.
-                      // Apenas campos com dados preenchidos são salvos/travados.
-                      const rateKk = calcRateKkDrafts[id] !== undefined ? parseRateKk(calcRateKkDrafts[id]) : (currentSlot.calcRateKk || 0);
-                      const totalKk = calcTotalKkDrafts[id] !== undefined ? parseInt(calcTotalKkDrafts[id], 10) || 0 : (currentSlot.calcTotalKk || 0);
+                      // Merge do draft PENDENTE do RC manual, para salvar o valor
+                      // mais recente. Dados do modal ("Item Vendido") já estão
+                      // persistidos no slot e têm prioridade sobre o RC manual.
+                      const saleRC = currentSlot.itemSale?.resultRC || 0;
                       const manualRc = rcDrafts[id] !== undefined ? parseInt(rcDrafts[id], 10) || 0 : (currentSlot.itemVendido || 0);
-                      const computedRc = computeItemRC(rateKk, totalKk);
-                      const rc = computedRc > 0 ? computedRc : manualRc;
+                      const rc = saleRC > 0 ? saleRC : manualRc;
 
                       const hasDrop = !!currentSlot.itemDropado;
-                      const hasRate = rateKk > 0;
-                      const hasTotal = totalKk > 0;
                       const hasRc = rc > 0;
 
-                      if (hasDrop || hasRate || hasTotal || hasRc) {
+                      if (hasDrop || hasRc) {
                         updatedSlotData[id] = {
                           ...currentSlot,
-                          ...(hasRate ? { calcRateKk: rateKk } : {}),
-                          ...(hasTotal ? { calcTotalKk: totalKk } : {}),
                           ...(hasRc ? {
                             itemVendido: rc,
                             itemVendidoLocked: true,
                             calcRateKkLocked: true,
                             calcTotalKkLocked: true
                           } : {}),
-                          ...(!hasRc && hasRate ? { calcRateKkLocked: true } : {}),
-                          ...(!hasRc && hasTotal ? { calcTotalKkLocked: true } : {}),
                           ...(hasDrop ? { dropLocked: true } : {}),
                         } as ExtendedPartySlotData;
                       }
                     });
                     // Limpa os drafts porque os valores foram persistidos/travados
-                    setCalcRateKkDrafts({});
-                    setCalcTotalKkDrafts({});
                     setRcDrafts({});
                     const updatedPartyObj = { ...party, slotData: updatedSlotData };
                     onUpdate(updatedPartyObj);
@@ -3065,14 +3026,6 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
                 disabled={!!party.isLocked || isPausedActive || (() => {
                   // Desabilita quando não há NENHUM dado preenchido ainda desbloqueado
                   const hasUnlockedDrafts =
-                    Object.entries(calcRateKkDrafts).some(([id, v]) => {
-                      const slot = (party.slotData || {})[id] as ExtendedPartySlotData | undefined;
-                      return (parseInt(v, 10) || 0) > 0 && !slot?.calcLocked && !slot?.calcRateKkLocked;
-                    }) ||
-                    Object.entries(calcTotalKkDrafts).some(([id, v]) => {
-                      const slot = (party.slotData || {})[id] as ExtendedPartySlotData | undefined;
-                      return (parseInt(v, 10) || 0) > 0 && !slot?.calcLocked && !slot?.calcTotalKkLocked;
-                    }) ||
                     Object.entries(rcDrafts).some(([id, v]) => {
                       const slot = (party.slotData || {})[id] as ExtendedPartySlotData | undefined;
                       return (parseInt(v, 10) || 0) > 0 && !slot?.calcLocked && !slot?.itemVendidoLocked;
@@ -3081,10 +3034,8 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
                   return !Object.values(party.slotData || {}).some(s => {
                     const es = s as ExtendedPartySlotData;
                     const hasDrop = !!s.itemDropado && !s.dropLocked;
-                    const hasRate = !es.calcLocked && !es.calcRateKkLocked && !!es.calcRateKk;
-                    const hasTotal = !es.calcLocked && !es.calcTotalKkLocked && !!es.calcTotalKk;
                     const hasRC = !es.calcLocked && !es.itemVendidoLocked && !!s.itemVendido;
-                    return hasDrop || hasRate || hasTotal || hasRC;
+                    return hasDrop || hasRC;
                   });
                 })()}
                 className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold border border-emerald-500/40 bg-emerald-500/15 text-emerald-300 hover:bg-emerald-500/25 transition-colors whitespace-nowrap cursor-pointer disabled:opacity-30 disabled:pointer-events-none"
@@ -3600,6 +3551,26 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
         document.body,
       )}
 
+      {/* MODAL "ITEM VENDIDO" — venda do item dropado com Taxa Market */}
+      {itemSaleModalId && (() => {
+        const saleSlot = getSD(itemSaleModalId) as ExtendedPartySlotData;
+        const saleSlotMember = slotMembers.find(m => m.id === itemSaleModalId);
+        const saleContext = saleSlot.player
+          || (saleSlotMember && saleSlotMember.type === "char" ? saleSlotMember.char.personagem : "")
+          || (saleSlotMember && saleSlotMember.type === "waiting" ? saleSlotMember.waiting.personagem : "")
+          || (saleSlotMember && saleSlotMember.type === "custom" ? saleSlotMember.custom.label : "")
+          || saleSlot.owner
+          || "";
+        return (
+          <ItemSoldModal
+            itemName={saleSlot.itemDropado || "Item"}
+            contextLabel={saleContext}
+            initial={saleSlot.itemSale || null}
+            onCancel={() => setItemSaleModalId(null)}
+            onSave={sale => commitItemSale(itemSaleModalId, sale)}
+          />
+        );
+      })()}
       {paymentConfirmData && createPortal(
         <div
           className="app-modal-overlay fixed inset-0 z-[400] flex items-center justify-center bg-black/75 backdrop-blur-sm"
@@ -3855,11 +3826,6 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
                   }
                 }
 
-                // --- Mini-calculadora kk -> RC ---
-                const rateKkRaw = calcRateKkDrafts[id] !== undefined ? calcRateKkDrafts[id] : formatRateKkDisplay(d.calcRateKk);
-                const totalKkRaw = calcTotalKkDrafts[id] !== undefined ? calcTotalKkDrafts[id] : (d.calcTotalKk ? String(d.calcTotalKk) : "");
-                const liveCalcRC = computeItemRC(parseRateKk(rateKkRaw), parseInt(totalKkRaw, 10) || 0);
-                // Valor exibido/usado: prioriza o cálculo ao vivo quando os campos kk estão preenchidos
                 const slotNotesValue = slotNotesDrafts[id] !== undefined ? slotNotesDrafts[id] : (d.notes || "");
 
                 return (
@@ -4051,97 +4017,71 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
 
                     <td className={`px-1 py-0.5 text-center ${(questState !== "post_complete") || !!party.isLocked || isPausedActive ? "pointer-events-none opacity-50" : ""}`}><ItemSelect value={d.itemDropado || ""} onChange={v => setSD(id, { itemDropado: v })} ptType={party.ptType} disabled={(questState !== "post_complete") || !!party.isLocked || isPausedActive || !!d.pago || !!d.dropLocked} /></td>
                     <td className={`px-1 py-0.5 text-center whitespace-nowrap ${(questState !== "post_complete") || !!party.isLocked || isPausedActive ? "pointer-events-none opacity-50" : ""}`}>
-                      {/* === MINI-CALCULADORA kk -> RC (3 campos lado a lado) === */}
+                      {/* === BOTÃO "VENDIDO" (modal Item Vendido) + CAMPO RC === */}
                       {(() => {
                         // --- Variáveis de controle de dependência ---
                         const hasItemDropado = !!d.itemDropado;
                         const pgGlobalDisabled = !!d.pago;
                         const extSlot = d as ExtendedPartySlotData;
                         const legacyCalcLocked = !!extSlot.calcLocked;
-                        const rateLocked = legacyCalcLocked || !!extSlot.calcRateKkLocked;
-                        const totalLocked = legacyCalcLocked || !!extSlot.calcTotalKkLocked;
                         const rcLocked = legacyCalcLocked || !!extSlot.itemVendidoLocked;
                         const questLocked = (questState !== "post_complete") || !!party.isLocked || isPausedActive;
-                        // kk>RC E kk habilitados somente quando ITEM DROPADO está preenchido E a quest permite edição E o campo não está travado
-                        const rateEnabled = hasItemDropado && !questLocked && !pgGlobalDisabled && !rateLocked;
-                        const totalEnabled = hasItemDropado && !questLocked && !pgGlobalDisabled && !totalLocked;
-                        // Campo RC fica readOnly quando a calculadora está ativa (ambos kk > 0)
-                        const isCalcLocked = rateKkRaw !== "" && parseRateKk(rateKkRaw) > 0
-                                           && totalKkRaw !== "" && parseInt(totalKkRaw, 10) > 0;
-                        // RC editável manualmente: quando NÃO há cálculo ativo E não está bloqueado por PG/quest/trava
-                        const rcEditable = !isCalcLocked && !questLocked && !pgGlobalDisabled && !rcLocked;
+                        // "Vendido" exige ITEM DROPADO selecionado (regra do fluxo) e
+                        // respeita as MESMAS travas dos antigos campos kk. Após o
+                        // "Salvar Drop/Valor" (itemVendidoLocked com valor completo),
+                        // o botão é BLOQUEADO — validação pelos dados persistidos,
+                        // nunca por estado visual temporário.
+                        const saleComplete = rcLocked && (d.itemVendido || 0) > 0;
+                        const vendidoEnabled = hasItemDropado && !questLocked && !pgGlobalDisabled && !saleComplete && !rcLocked;
+                        // Modal com dados salvos = RC vem do registro da venda; o
+                        // campo RC vira leitura (os dados do modal têm prioridade).
+                        const hasSaleData = !!extSlot.itemSale && (extSlot.itemSale.resultRC || 0) > 0;
+                        // RC editável direto na tabela: sem venda do modal registrada
+                        // e sem travas (preenchimento direto continua existindo).
+                        const rcEditable = !hasSaleData && !questLocked && !pgGlobalDisabled && !rcLocked;
 
                         const rcDisplayValue = rcDrafts[id] !== undefined
                           ? rcDrafts[id]
                           : String(d.itemVendido || "");
 
+                        const vendidoTitle = saleComplete
+                          ? "Venda salva permanentemente (Salvar Drop/Valor) — não pode ser alterada"
+                          : rcLocked
+                            ? "Valor salvo permanentemente — não pode ser alterado"
+                            : !hasItemDropado
+                              ? "Selecione um ITEM DROPADO para habilitar a venda"
+                              : hasSaleData
+                                ? "Venda registrada — clique para revisar/ajustar antes do Salvar Drop/Valor"
+                                : "Registrar a venda deste item (valor, cotação do RC e Taxa Market)";
+
                         return (
-                          <div className="flex items-center justify-center gap-1" style={{ minWidth: 150 }}>
-                            {/* Campo 1 — kk>RC (taxa em k que equivale a 1000 RC) */}
-                            <div
-                              className={`flex items-center rounded border bg-black/30 px-1 py-0.5 transition-opacity ${rateEnabled ? "border-red-500/40" : "border-red-500/15 opacity-50"}`}
-                              title={rateLocked ? "Campo kk>RC salvo permanentemente — não pode ser alterado" : rateEnabled ? "kk > RC (taxa): valor em k que vale 1000 RC" : "Preencha ITEM DROPADO para habilitar"}
+                          <div className="flex items-center justify-center gap-1" style={{ minWidth: 118 }}>
+                            {/* Botão "Vendido" — abre o modal Item Vendido */}
+                            <button
+                              type="button"
+                              disabled={!vendidoEnabled}
+                              onClick={() => { if (vendidoEnabled) setItemSaleModalId(id); }}
+                              title={vendidoTitle}
+                              className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded border text-[10px] font-bold transition-colors whitespace-nowrap ${
+                                hasSaleData
+                                  ? "border-emerald-500/50 bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30 cursor-pointer"
+                                  : vendidoEnabled
+                                    ? "border-amber-500/40 bg-amber-500/10 text-amber-300 hover:bg-amber-500/25 cursor-pointer"
+                                    : "border-white/10 bg-white/[0.03] text-slate-500 opacity-50 cursor-not-allowed"
+                              }`}
                             >
-                              <input
-                                type="text"
-                                inputMode="decimal"
-                                disabled={!rateEnabled}
-                                value={rateKkRaw}
-                                onFocus={() => setCalcFocused({ id, field: "rate" })}
-                                onChange={e => {
-                                  // Aceita UMA casa decimal (vírgula pt-BR; ponto é normalizado)
-                                  const cleaned = sanitizeRateKkInput(e.target.value);
-                                  setCalcRateKkDrafts(prev => ({ ...prev, [id]: cleaned }));
-                                  scheduleDebounce(`calcRate_${id}`, () => commitCalcDrafts(id, cleaned, totalKkRaw));
-                                }}
-                                onBlur={() => {
-                                  clearDebounce(`calcRate_${id}`);
-                                  commitCalcDrafts(id, rateKkRaw, totalKkRaw);
-                                  setCalcFocused(cur => (cur?.id === id && cur?.field === "rate" ? null : cur));
-                                }}
-                                placeholder="0"
-                                className="w-8 bg-transparent text-right text-[11px] tabular-nums text-red-300 placeholder-slate-650 outline-none disabled:cursor-not-allowed"
-                              />
-                              {!(calcFocused?.id === id && calcFocused?.field === "rate") && rateKkRaw
-                                ? <span className="text-red-400/70 text-[9px] font-bold ml-0.5 select-none">k</span>
-                                : <span className="text-red-500/30 text-[9px] font-bold ml-0.5 select-none w-[6px]">&nbsp;</span>}
-                            </div>
+                              {hasSaleData ? <Check size={10} /> : <Coins size={10} />} Vendido
+                              {hasSaleData && (extSlot.itemSale?.taxCount || 0) > 0 && (
+                                <span className="text-[8px] font-mono text-amber-300/80">{extSlot.itemSale?.taxCount}x</span>
+                              )}
+                            </button>
 
-                            {/* Campo 2 — kk (total a ser convertido) */}
-                            <div
-                              className={`flex items-center rounded border bg-black/30 px-1 py-0.5 transition-opacity ${totalEnabled ? "border-sky-500/40" : "border-sky-500/15 opacity-50"}`}
-                              title={totalLocked ? "Campo kk salvo permanentemente — não pode ser alterado" : totalEnabled ? "kk (total): valor total em kk a ser convertido em RC" : "Preencha ITEM DROPADO para habilitar"}
-                            >
-                              <input
-                                type="text"
-                                inputMode="numeric"
-                                disabled={!totalEnabled}
-                                value={totalKkRaw}
-                                onFocus={() => setCalcFocused({ id, field: "total" })}
-                                onChange={e => {
-                                  const cleaned = e.target.value.replace(/[^\d]/g, "");
-                                  setCalcTotalKkDrafts(prev => ({ ...prev, [id]: cleaned }));
-                                  scheduleDebounce(`calcTotal_${id}`, () => commitCalcDrafts(id, rateKkRaw, cleaned));
-                                }}
-                                onBlur={() => {
-                                  clearDebounce(`calcTotal_${id}`);
-                                  commitCalcDrafts(id, rateKkRaw, totalKkRaw);
-                                  setCalcFocused(cur => (cur?.id === id && cur?.field === "total" ? null : cur));
-                                }}
-                                placeholder="0"
-                                className="w-8 bg-transparent text-right text-[11px] tabular-nums text-sky-300 placeholder-slate-650 outline-none disabled:cursor-not-allowed"
-                              />
-                              {!(calcFocused?.id === id && calcFocused?.field === "total") && totalKkRaw
-                                ? <span className="text-sky-400/70 text-[9px] font-bold ml-0.5 select-none">kk</span>
-                                : <span className="text-sky-500/30 text-[9px] font-bold ml-0.5 select-none w-[10px]">&nbsp;</span>}
-                            </div>
-
-                            {/* Campo 3 — RC: input editável OU display somente leitura */}
+                            {/* Campo RC — mantido: leitura quando o modal preenche, editável para digitação direta */}
                             <div
                               className={`flex items-center rounded border px-1 py-0.5 ${
                                 rcLocked
                                   ? "border-emerald-500/50 bg-emerald-500/[0.10]"
-                                  : isCalcLocked
+                                  : hasSaleData
                                     ? "border-emerald-500/40 bg-emerald-500/[0.08]"
                                     : pgGlobalDisabled
                                       ? "border-emerald-500/25 bg-emerald-500/[0.04]"
@@ -4149,31 +4089,25 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
                               }`}
                               title={rcLocked
                                 ? "Valor salvo permanentemente — não pode ser alterado"
-                                : isCalcLocked
-                                  ? "RC calculado = floor((total / taxa) × 1000 / 25) × 25"
+                                : hasSaleData
+                                  ? "RC calculado pelo modal Item Vendido (dados da venda têm prioridade)"
                                   : pgGlobalDisabled
                                     ? "Pagamento confirmado — campos bloqueados"
                                     : "Campo editável — digite um valor de RC diretamente"
                               }
                             >
-                              {rcLocked ? (
-                                // Dados salvos/travados permanentemente: exibe valor salvo (somente leitura)
+                              {rcLocked || hasSaleData ? (
+                                // Travado ou registrado pelo modal: somente leitura
                                 <span className={`text-[11px] tabular-nums font-bold min-w-[38px] text-right ${(d.itemVendido || 0) > 0 ? "text-emerald-300" : "text-emerald-400/40"}`}>
                                   {(d.itemVendido || 0) > 0 ? (d.itemVendido || 0).toLocaleString("de-DE") : "0"}
                                 </span>
-                              ) : isCalcLocked ? (
-                                // Calculadora ativa: exibe valor calculated (somente leitura)
-                                <span className={`text-[11px] tabular-nums font-bold min-w-[38px] text-right ${liveCalcRC > 0 ? "text-emerald-300" : "text-emerald-400/40"}`}>
-                                  {liveCalcRC > 0 ? liveCalcRC.toLocaleString("de-DE") : "0"}
-                                </span>
                               ) : (
-                                // Calculadora inativa: input editável (ou desabilitado por PG)
+                                // Preenchimento direto do RC (continua existindo)
                                 <input
                                   type="text"
                                   inputMode="numeric"
                                   disabled={!rcEditable}
                                   value={rcDisplayValue}
-                                  onFocus={() => setCalcFocused(null)}
                                   onChange={e => {
                                     const cleaned = e.target.value.replace(/[^\d]/g, "");
                                     setRcDrafts(prev => ({ ...prev, [id]: cleaned }));
@@ -4184,7 +4118,7 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
                                     commitRcDraft(id, rcDisplayValue);
                                   }}
                                   placeholder="0"
-                                  className={`w-8 bg-transparent text-right text-[11px] tabular-nums outline-none ${rcEditable ? "text-emerald-300 placeholder-slate-650" : "text-emerald-400/50 placeholder-slate-650/50 cursor-not-allowed"} ${!rcEditable ? "opacity-50" : ""}`}
+                                  className={`w-10 bg-transparent text-right text-[11px] tabular-nums outline-none ${rcEditable ? "text-emerald-300 placeholder-slate-650" : "text-emerald-400/50 placeholder-slate-650/50 cursor-not-allowed"} ${!rcEditable ? "opacity-50" : ""}`}
                                 />
                               )}
                               <span className="text-emerald-400/70 text-[9px] font-bold ml-0.5 select-none">RC</span>
