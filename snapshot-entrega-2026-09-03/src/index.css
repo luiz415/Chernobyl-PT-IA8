@@ -1,0 +1,1543 @@
+@import "tailwindcss";
+/* Camada de temas — precisa vir depois do Tailwind para redefinir as famílias. */
+@import "./theme.css";
+
+/* A varredura de classes do Tailwind deve ignorar cópias do código-fonte.
+   Sem isto, a pasta _snapshots (cópias entregues ao usuário) reintroduz
+   classes já removidas — foi o que fez uma URL absoluta de imagem
+   (bg-[url('/bazar-bg.png')]) voltar ao CSS depois de corrigida. */
+@source not "../_snapshots";
+
+/* Os valores são atualizados pelo App a partir dos retângulos reais do
+   cabeçalho e do rodapé. Ficam no :root para alcançar também modais em Portal. */
+:root {
+  --app-modal-top-inset: 0px;
+  --app-modal-bottom-inset: 0px;
+}
+
+@layer components {
+  .ipt {
+    @apply w-full px-3 py-2 bg-black/40 border border-white/10 rounded-lg text-sm text-slate-200 placeholder-slate-600 focus:outline-none focus:border-emerald-500/50 focus:ring-1 focus:ring-emerald-500/20 transition-all;
+  }
+
+  .filter-select {
+    @apply w-full h-7 px-1.5 bg-black/40 border border-white/10 rounded text-xs text-slate-300 focus:outline-none focus:border-emerald-500/50 transition-colors cursor-pointer;
+  }
+
+  .filter-input {
+    @apply w-full h-7 px-2 bg-black/40 border border-white/10 rounded text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:border-emerald-500/50 transition-colors;
+  }
+
+  /* ========================================================================
+     BASE GLOBAL DE MODAIS
+     ------------------------------------------------------------------------
+     Aplicada nos overlays e superfícies de modal sem substituir o design de
+     cada recurso. A regra central garante que nenhum painel ultrapasse a área
+     realmente livre entre cabeçalho e rodapé, mesmo em zoom alto, mobile ou
+     telas baixas. Os insets são medidos pelo App e publicados no :root, logo
+     também valem para modais renderizados por React Portal em document.body.
+     Cabeçalho e rodapé permanecem nos componentes; apenas o miolo recebe
+     `.app-modal-body` quando precisa rolar.
+     ======================================================================== */
+  .app-modal-overlay {
+    /* `inset-0` continua nos componentes como fallback declarativo, mas estes
+       quatro limites prevalecem para que o overlay ocupe somente a área útil. */
+    --app-modal-available-height: max(0px, calc(100dvh - var(--app-modal-top-inset) - var(--app-modal-bottom-inset)));
+    --app-modal-frame-block-gutter: clamp(1.5rem, 4vw, 3rem);
+    top: var(--app-modal-top-inset) !important;
+    right: 0 !important;
+    bottom: var(--app-modal-bottom-inset) !important;
+    left: 0 !important;
+    box-sizing: border-box;
+    padding: clamp(0.75rem, 2vw, 1.5rem) !important;
+    overflow-x: hidden !important;
+    overflow-y: auto !important;
+    overscroll-behavior: contain;
+  }
+
+  .app-modal-frame {
+    /* Cada modal declara sua faixa por `.app-modal-size-*`. O padrão é
+       deliberadamente compacto para que uma tela Ultrawide não transforme
+       formulários simples em painéis largos e vazios. */
+    --app-modal-width: 36rem;
+    box-sizing: border-box;
+    inline-size: min(100%, var(--app-modal-width)) !important;
+    min-width: 0;
+    max-width: 100% !important;
+    /* A moldura nunca invade as faixas do cabeçalho/rodapé. Em conteúdo
+       extenso, a variante `--scroll` mantém a rolagem dentro do próprio modal. */
+    max-height: max(0px, calc(var(--app-modal-available-height) - var(--app-modal-frame-block-gutter))) !important;
+    min-height: 0;
+    margin-block: auto;
+  }
+
+  .app-modal-size-xs { --app-modal-width: 24rem; }
+  .app-modal-size-sm { --app-modal-width: 28rem; }
+  .app-modal-size-md { --app-modal-width: 34rem; }
+  .app-modal-size-lg { --app-modal-width: 40rem; }
+  .app-modal-size-xl { --app-modal-width: 48rem; }
+  .app-modal-size-wide { --app-modal-width: 58rem; }
+
+  .app-modal-frame--scroll {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden !important;
+  }
+
+  .app-modal-frame > header,
+  .app-modal-frame > .app-modal-header {
+    min-width: 0;
+    flex: 0 0 auto;
+  }
+
+  .app-modal-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: auto !important;
+    overscroll-behavior: contain;
+  }
+
+  .app-modal-footer {
+    flex: 0 0 auto;
+  }
+
+  @media (max-width: 640px) {
+    .app-modal-overlay {
+      /* Mantém o aproveitamento integral da área útil estreita, sem voltar a
+         considerar o viewport inteiro por baixo do cabeçalho ou rodapé. */
+      --app-modal-frame-block-gutter: 1.5rem;
+      align-items: flex-start !important;
+      padding: 0.75rem !important;
+    }
+
+    .app-modal-frame {
+      inline-size: 100% !important;
+    }
+  }
+
+  .header-btn {
+    @apply inline-flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg
+           border border-white/10 transition-all duration-200
+           bg-white/[0.03] text-slate-300
+           hover:bg-white/5 hover:border-white/20 hover:text-white
+           cursor-pointer;
+  }
+
+  /* ==========================================================================
+     NAV-PILL — estilo compartilhado dos botões principais de navegação.
+     --------------------------------------------------------------------------
+     Fonte única de verdade para os dois grupos:
+       • Navegação principal (Hub, Stats, Ranking, Notas, Bazaar)  -> WindowToggle
+       • Painel Hub (Meus Personagens, Histórico, Gerenciador de PT's,
+         Histórico de PT's, Services)                              -> TabButton
+
+     Somente aparência. A cor de destaque de cada botão é injetada pelo
+     componente através da variável --pill-accent, então tudo acompanha
+     automaticamente o tema ativo (nenhuma cor fixa aqui).
+
+     Estrutura de camadas:
+       elemento  -> superfície, texto e borda base
+       ::before  -> halo externo (glow) que "respira"  [z-index 0, atrás]
+       ::after   -> anel de borda que "respira"        [z-index 1, à frente]
+
+     IMPORTANTE: o botão tem `background-image` próprio. Se os pseudo-elementos
+     ficassem em `z-index:-1` dentro do stacking context criado por
+     `isolation:isolate`, esse fundo os cobriria e o efeito ficaria invisível.
+     Por isso o anel fica ACIMA da superfície e o halo logo abaixo dela.
+
+     A pulsação é controlada por variáveis, nunca por `opacity` direto nos
+     estados. Isso é essencial: uma animação em execução vence declarações
+     normais na cascata, então `:hover::after { opacity }` seria ignorado.
+     Alterando as variáveis, o próprio keyframe passa a usar os novos valores.
+     ========================================================================== */
+  .nav-pill {
+    --pill-accent: var(--color-amber-500);
+
+    /* Amplitude da respiração — anel de borda (::after) */
+    --pill-ring-from: 0.45;
+    --pill-ring-to: 1;
+    /* Amplitude da respiração — halo externo (::before) */
+    --pill-glow-from: 0.25;
+    --pill-glow-to: 0.85;
+    /* Ciclo lento e confortável */
+    --pill-duration: 3s;
+
+    position: relative;
+    isolation: isolate;
+    border-radius: 0.5rem;
+    border: 1px solid color-mix(in oklab, var(--pill-accent) 30%, transparent);
+    background-image: linear-gradient(
+      to bottom,
+      color-mix(in oklab, var(--pill-accent) 7%, transparent),
+      transparent 65%
+    );
+    color: color-mix(in oklab, var(--pill-accent) 22%, var(--color-slate-300));
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    transition:
+      color 220ms ease,
+      border-color 220ms ease,
+      background-color 220ms ease,
+      box-shadow 220ms ease,
+      transform 220ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  /* ---- Mecânica de respiração compartilhada -------------------------------
+     Um único par de pseudo-elementos e de keyframes atende tanto os botões
+     (.nav-pill) quanto as caixas do rodapé (.nav-frame). A intensidade é
+     sempre lida das variáveis --pill-*, então cada usuário da mecânica
+     ajusta a amplitude sem duplicar regra nenhuma.
+     ------------------------------------------------------------------------ */
+
+  /* Anel de borda vivo — desenhado ACIMA da superfície para não ser coberto
+     pelo background do elemento. Respira também sem hover. */
+  .nav-pill::after,
+  .nav-frame::after {
+    content: "";
+    position: absolute;
+    inset: -1px;
+    border-radius: inherit;
+    border: var(--pill-ring-width, 1.5px) solid var(--pill-accent);
+    pointer-events: none;
+    z-index: 1;
+    animation: nav-pill-ring var(--pill-duration) ease-in-out infinite;
+  }
+
+  /* Halo externo — logo atrás da superfície, respira em sincronia. */
+  .nav-pill::before,
+  .nav-frame::before {
+    content: "";
+    position: absolute;
+    inset: -1px;
+    border-radius: inherit;
+    pointer-events: none;
+    z-index: 0;
+    /* Blur, espalhamento e força saem de variáveis para que o estado ativo
+       possa intensificar o halo de verdade — só a opacidade não bastaria,
+       pois no ativo ela já opera perto do máximo. */
+    box-shadow:
+      0 0 var(--pill-glow-blur, 12px) var(--pill-glow-spread, 1px)
+        color-mix(in oklab, var(--pill-accent) var(--pill-glow-strength, 65%), transparent),
+      0 0 var(--pill-glow-blur-inner, 4px)
+        color-mix(in oklab, var(--pill-accent) var(--pill-glow-strength-inner, 45%), transparent);
+    animation: nav-pill-glow var(--pill-duration) ease-in-out infinite;
+  }
+
+  /* Conteúdo (ícone, rótulo, contador) acima de tudo. */
+  .nav-pill > *,
+  .nav-frame > * {
+    position: relative;
+    z-index: 2;
+  }
+
+  .nav-pill:hover {
+    color: color-mix(in oklab, var(--pill-accent) 30%, var(--color-slate-100));
+    border-color: color-mix(in oklab, var(--pill-accent) 60%, transparent);
+    background-color: color-mix(in oklab, var(--pill-accent) 10%, transparent);
+    transform: translateY(-1px);
+    box-shadow:
+      0 3px 10px -2px color-mix(in oklab, var(--pill-accent) 22%, transparent),
+      inset 0 1px 0 0 color-mix(in oklab, var(--color-white) 8%, transparent);
+  }
+
+  /* No hover intensificamos a própria amplitude da respiração — atuar em
+     `opacity` aqui não teria efeito, pois a animação vence na cascata. */
+  .nav-pill:hover {
+    --pill-ring-from: 0.85;
+    --pill-ring-to: 1;
+    --pill-glow-from: 0.6;
+    --pill-glow-to: 1;
+  }
+
+  .nav-pill:active {
+    transform: translateY(0);
+    transition-duration: 90ms;
+  }
+
+  .nav-pill:focus-visible {
+    outline: 2px solid color-mix(in oklab, var(--pill-accent) 65%, transparent);
+    outline-offset: 2px;
+  }
+
+  /* -------- Estado selecionado -------- */
+  .nav-pill[data-active="true"] {
+    /* Respiração nitidamente mais forte que a dos inativos: o anel chega ao
+       opaco e o halo fica bem mais presente, mantendo a hierarquia visual. */
+    --pill-ring-from: 0.9;
+    --pill-ring-to: 1;
+    --pill-glow-from: 0.85;
+    --pill-glow-to: 1;
+    --pill-duration: 2.2s;
+
+    /* Halo bem mais presente que o do inativo (12px/1px/65%): o brilho fica
+       maior e mais denso, sem virar neon — o blur alto mantém a luz difusa. */
+    --pill-glow-blur: 22px;
+    --pill-glow-spread: 6px;
+    --pill-glow-strength: 88%;
+    --pill-glow-blur-inner: 8px;
+    --pill-glow-strength-inner: 68%;
+
+    border-color: var(--pill-accent);
+    background-image: linear-gradient(
+      to bottom,
+      color-mix(in oklab, var(--pill-accent) 26%, transparent),
+      color-mix(in oklab, var(--pill-accent) 11%, transparent)
+    );
+    color: color-mix(in oklab, var(--pill-accent) 18%, var(--color-white));
+    font-weight: 700;
+    text-shadow: 0 0 12px color-mix(in oklab, var(--pill-accent) 55%, transparent);
+  }
+
+  /* Ativo + hover: mantém a amplitude máxima do ativo (o hover sozinho é
+     mais fraco, então precisa ser reafirmado aqui). */
+  .nav-pill[data-active="true"]:hover {
+    --pill-ring-from: 0.95;
+    --pill-ring-to: 1;
+    --pill-glow-from: 0.92;
+    --pill-glow-to: 1;
+    --pill-glow-blur: 26px;
+    --pill-glow-spread: 7px;
+    --pill-glow-strength: 96%;
+
+    transform: translateY(-1px);
+    border-color: var(--pill-accent);
+  }
+
+  /* Escala menor usada pelas abas do Hub (botões mais compactos). */
+  .nav-pill--sm {
+    border-radius: 0.375rem;
+  }
+  .nav-pill--sm[data-active="true"] {
+    text-shadow: 0 0 8px color-mix(in oklab, var(--pill-accent) 40%, transparent);
+  }
+
+  /* -------- Modificador HERO -------------------------------------------------
+     Usado nas áreas mais acessadas (Hub Principal e Bazaar). Só eleva a
+     amplitude/velocidade da respiração e reforça borda, fundo e texto —
+     toda a mecânica continua vindo de .nav-pill, sem CSS duplicado.
+     --------------------------------------------------------------------------- */
+  .nav-pill--hero {
+    --pill-ring-from: 0.7;
+    --pill-ring-to: 1;
+    --pill-glow-from: 0.5;
+    --pill-glow-to: 1;
+    --pill-duration: 2.4s;
+    --pill-ring-width: 2px;
+    --pill-glow-spread: 2px;
+
+    border-color: color-mix(in oklab, var(--pill-accent) 55%, transparent);
+    background-image: linear-gradient(
+      to bottom,
+      color-mix(in oklab, var(--pill-accent) 14%, transparent),
+      color-mix(in oklab, var(--pill-accent) 4%, transparent)
+    );
+    color: color-mix(in oklab, var(--pill-accent) 34%, var(--color-slate-100));
+    font-weight: 700;
+    text-shadow: 0 0 8px color-mix(in oklab, var(--pill-accent) 30%, transparent);
+  }
+
+  .nav-pill--hero:hover {
+    --pill-ring-from: 0.92;
+    --pill-ring-to: 1;
+    --pill-glow-from: 0.8;
+    --pill-glow-to: 1;
+  }
+
+  /* Selecionado: o ponto mais forte de toda a barra de navegação. */
+  .nav-pill--hero[data-active="true"] {
+    --pill-ring-from: 0.95;
+    --pill-ring-to: 1;
+    --pill-glow-from: 0.9;
+    --pill-glow-to: 1;
+    --pill-duration: 2s;
+    /* Precisa superar o ativo comum (22px/6px/88%) — estes seletores vêm
+       depois no arquivo, então os valores herdados seriam sobrescritos. */
+    --pill-glow-blur: 30px;
+    --pill-glow-spread: 8px;
+    --pill-glow-strength: 95%;
+    --pill-glow-blur-inner: 10px;
+    --pill-glow-strength-inner: 75%;
+
+    background-image: linear-gradient(
+      to bottom,
+      color-mix(in oklab, var(--pill-accent) 28%, transparent),
+      color-mix(in oklab, var(--pill-accent) 12%, transparent)
+    );
+    color: color-mix(in oklab, var(--pill-accent) 22%, var(--color-white));
+    text-shadow: 0 0 12px color-mix(in oklab, var(--pill-accent) 55%, transparent);
+  }
+
+  /* -------- Modificador ACTION ----------------------------------------------
+     Ações principais do Gerenciador de PT's (Visão Geral, Sugerir PT,
+     Criar PT). Respiração um pouco mais perceptível que a dos botões de
+     navegação comuns, conforme pedido.
+     --------------------------------------------------------------------------- */
+  .nav-pill--action {
+    --pill-ring-from: 0.62;
+    --pill-ring-to: 1;
+    --pill-glow-from: 0.4;
+    --pill-glow-to: 0.9;
+    --pill-duration: 2.6s;
+    --pill-ring-width: 1.5px;
+    --pill-glow-spread: 1px;
+
+    border-radius: 0.5rem;
+    border-color: color-mix(in oklab, var(--pill-accent) 50%, transparent);
+    background-image: linear-gradient(
+      to bottom,
+      color-mix(in oklab, var(--pill-accent) 16%, transparent),
+      color-mix(in oklab, var(--pill-accent) 5%, transparent)
+    );
+    color: color-mix(in oklab, var(--pill-accent) 32%, var(--color-slate-100));
+    font-weight: 700;
+    text-shadow: 0 0 8px color-mix(in oklab, var(--pill-accent) 28%, transparent);
+  }
+
+  .nav-pill--action:hover {
+    --pill-ring-from: 0.9;
+    --pill-ring-to: 1;
+    --pill-glow-from: 0.72;
+    --pill-glow-to: 1;
+  }
+
+  .nav-pill--action[data-active="true"] {
+    --pill-ring-from: 0.95;
+    --pill-ring-to: 1;
+    --pill-glow-from: 0.85;
+    --pill-glow-to: 1;
+    --pill-duration: 2.2s;
+    /* Alinhado ao ativo comum, que este seletor sobrescreveria. */
+    --pill-glow-blur: 24px;
+    --pill-glow-spread: 6px;
+    --pill-glow-strength: 90%;
+    --pill-glow-blur-inner: 8px;
+    --pill-glow-strength-inner: 70%;
+
+    background-image: linear-gradient(
+      to bottom,
+      color-mix(in oklab, var(--pill-accent) 30%, transparent),
+      color-mix(in oklab, var(--pill-accent) 12%, transparent)
+    );
+    color: color-mix(in oklab, var(--pill-accent) 22%, var(--color-white));
+    text-shadow: 0 0 12px color-mix(in oklab, var(--pill-accent) 50%, transparent);
+  }
+
+  /* ==========================================================================
+     NAV-FRAME — caixas de agrupamento (usada nas duas boxes do rodapé).
+     --------------------------------------------------------------------------
+     Reaproveita integralmente a mecânica de respiração de .nav-pill: mesmos
+     pseudo-elementos, mesmos keyframes, mesmas variáveis de amplitude.
+     A diferença é de papel: aqui só existe a MOLDURA. Nada de tipografia,
+     gradiente de superfície, elevação no hover ou estado ativo — para não
+     interferir no conteúdo nem nas dimensões do rodapé.
+
+     Amplitude propositalmente mais contida que a dos botões: a moldura é
+     grande, então a mesma intensidade seria chamativa e ofuscaria os botões
+     internos, que devem continuar sendo o foco.
+     ========================================================================== */
+  .nav-frame {
+    --pill-accent: var(--color-amber-500);
+
+    /* Respiração mais discreta que a dos botões (.nav-pill usa .45→1 / .25→.85) */
+    --pill-ring-from: 0.30;
+    --pill-ring-to: 0.62;
+    --pill-glow-from: 0.10;
+    --pill-glow-to: 0.30;
+    --pill-duration: 4.5s;
+    --pill-ring-width: 1px;
+
+    position: relative;
+    isolation: isolate;
+    transition: border-color 240ms ease;
+  }
+
+  /* Hover: mais presente, sem exagero — continua abaixo do nível dos botões. */
+  /* Hover: mais presente, sem exagero — continua abaixo do nível dos botões. */
+  .nav-frame:hover {
+    --pill-ring-from: 0.55;
+    --pill-ring-to: 0.85;
+    --pill-glow-from: 0.24;
+    --pill-glow-to: 0.48;
+  }
+
+  /* ==========================================================================
+     FOOTER-PULSE — pulso na borda dos botões de ação do rodapé.
+     --------------------------------------------------------------------------
+     Aplicado no contêiner (BOX 2): cada <button> filho direto ganha um anel
+     que pulsa. A cor sai de `border-color: inherit`, ou seja, é a MESMA borda
+     que o botão já define (slate, amber, violet, emerald, rose...) — nenhuma
+     cor fixa aqui, e cada botão pulsa na sua própria cor.
+
+     O anel é um ::after em `position:absolute`, então não ocupa espaço: o
+     tamanho, o layout e o espaçamento dos botões ficam intactos. Também usa
+     `pointer-events:none` e z-index 0 para não capturar cliques nem cobrir o
+     badge de solicitações pendentes do botão "Amigos".
+     ========================================================================== */
+  .footer-pulse > button {
+    position: relative;
+  }
+
+  .footer-pulse > button::after {
+    content: "";
+    position: absolute;
+    inset: -2px;
+    border-radius: inherit;
+    border: 1px solid;
+    border-color: inherit;
+    pointer-events: none;
+    z-index: 0;
+    animation: footer-pulse-ring 1.6s ease-in-out infinite;
+  }
+
+  /* Hover: some com o anel para não competir com o realce próprio do botão. */
+  .footer-pulse > button:hover::after {
+    animation: none;
+    opacity: 0;
+  }
+}
+
+/* Pulso marcado (não tão suave): o anel expande e some, em ciclo curto. */
+@keyframes footer-pulse-ring {
+  0% {
+    opacity: 0.9;
+    transform: scale(1);
+  }
+  70% {
+    opacity: 0;
+    transform: scale(1.14);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.14);
+  }
+}
+
+/* Respeita "Poupar CPU" e a preferência do sistema. */
+.low-cpu .footer-pulse > button::after {
+  animation: none;
+  opacity: 0;
+}
+
+/* Respiração do anel de borda. Os limites vêm de variáveis, então hover e
+   estado ativo mudam a intensidade sem duplicar o keyframe. */
+@keyframes nav-pill-ring {
+  0%,
+  100% {
+    opacity: var(--pill-ring-from);
+  }
+  50% {
+    opacity: var(--pill-ring-to);
+  }
+}
+
+/* Respiração do halo externo — mesmo ciclo, em sincronia com o anel. */
+@keyframes nav-pill-glow {
+  0%,
+  100% {
+    opacity: var(--pill-glow-from);
+  }
+  50% {
+    opacity: var(--pill-glow-to);
+  }
+}
+
+/* Respeita "Poupar CPU" (classe no <html>) e a preferência do sistema.
+   A pulsação é desligada, mas o anel e o halo permanecem visíveis num valor
+   fixo — os botões continuam destacados e a hierarquia ativo/inativo é
+   preservada, apenas sem movimento. */
+.low-cpu .nav-pill::after,
+.low-cpu .nav-pill::before,
+.low-cpu .nav-frame::after,
+.low-cpu .nav-frame::before,
+.nav-pill--no-anim::after,
+.nav-pill--no-anim::before {
+  animation: none;
+}
+.low-cpu .nav-pill::after,
+.low-cpu .nav-frame::after,
+.nav-pill--no-anim::after {
+  opacity: var(--pill-ring-to);
+}
+.low-cpu .nav-pill::before,
+.low-cpu .nav-frame::before,
+.nav-pill--no-anim::before {
+  opacity: var(--pill-glow-from);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nav-pill,
+  .nav-pill::after,
+  .nav-pill::before,
+  .nav-frame,
+  .nav-frame::after,
+  .nav-frame::before {
+    animation: none;
+    transition-duration: 1ms;
+  }
+  .nav-pill::after,
+  .nav-frame::after {
+    opacity: var(--pill-ring-to);
+  }
+  .nav-pill::before,
+  .nav-frame::before {
+    opacity: var(--pill-glow-from);
+  }
+  .nav-pill:hover {
+    transform: none;
+  }
+}
+
+@keyframes notification-pulse {
+  0%, 100% {
+    transform: scale(1);
+    box-shadow: 0 10px 20px -5px rgba(239, 68, 68, 0.35), 0 0 0 0 rgba(239, 68, 68, 0.55);
+  }
+  50% {
+    transform: scale(1.04);
+    box-shadow: 0 14px 28px -5px rgba(239, 68, 68, 0.55), 0 0 0 8px rgba(239, 68, 68, 0);
+  }
+}
+.notification-pulse-anim {
+  animation: notification-pulse 1.8s ease-in-out infinite;
+}
+
+/* Date inputs: dark color scheme + compact calendar icon */
+input[type="date"] {
+  color-scheme: dark;
+}
+input[type="date"]::-webkit-calendar-picker-indicator {
+  filter: invert(0.7);
+  cursor: pointer;
+  padding: 0;
+  margin-left: 4px;
+}
+
+/* Custom scrollbars for dark UI.
+   As cores vêm de theme.css (::-webkit-scrollbar-track / -thumb). */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-thumb {
+  border-radius: 4px;
+}
+
+/* Scrollbar discreta para painéis com rolagem própria (.custom-scrollbar):
+   fina (6px), polegar arredondado e trilho transparente. Usada pelo Painel
+   Bazaar (incluída a rolagem horizontal da tabela — aparece SOMENTE quando
+   o conteúdo não cabe na largura disponível) e pelas listas internas.
+   Firefox: scrollbar-width thin + scrollbar-color. */
+.custom-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: var(--th-n-track) transparent;
+}
+.custom-scrollbar::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: var(--th-n-track);
+  border-radius: 999px;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: var(--th-n-thumb);
+}
+.custom-scrollbar::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* ── Pulso dos seletores de estágio das PTs (PartyManager) ─────────────────
+   Mesmo efeito visual do antigo pulso âmbar de "Aguardando Pagamento", agora
+   PARAMETRIZADO por cor: um único keyframe lê a variável `--pt-pulse-rgb` e
+   cada modificador define o RGB da SUA categoria (mesmos números literais dos
+   tons *-500 do Tailwind usados no STAGE_THEME, para não depender de
+   variáveis de tema).
+
+   Aplicado SOMENTE ao botão NÃO selecionado: o corpo permanece neutro (fundo
+   escuro, texto slate — inconfundível com o estado selecionado, que tem
+   preenchimento colorido) e as BORDAS "respiram" entre o tom discreto e a cor
+   viva, com halo suave e anel externo no pico.
+
+   Gatilhos (decididos no PartyManager):
+     • Com Vagas / Prontas / Iniciadas → pulsa quando a categoria tem ≥1 PT;
+     • Aguardando Pagamento → regra original preservada: pulsa apenas quando
+       há pagamento pendente COM o usuário logado. */
+@keyframes pt-stage-border-pulse {
+  0%, 100% {
+    border-color: rgba(var(--pt-pulse-rgb), 0.3);
+    box-shadow: 0 0 0 0 rgba(var(--pt-pulse-rgb), 0);
+  }
+  50% {
+    border-color: rgba(var(--pt-pulse-rgb), 0.9);
+    box-shadow:
+      0 0 12px 1px rgba(var(--pt-pulse-rgb), 0.28),
+      0 0 0 3px rgba(var(--pt-pulse-rgb), 0.14);
+  }
+}
+.pt-stage-pulse {
+  animation: pt-stage-border-pulse 1.8s ease-in-out infinite;
+}
+/* Com Vagas — violet-500 */
+.pt-stage-pulse--violet { --pt-pulse-rgb: 139, 92, 246; }
+/* Prontas — emerald-500 */
+.pt-stage-pulse--emerald { --pt-pulse-rgb: 16, 185, 129; }
+/* Iniciadas — sky-500 */
+.pt-stage-pulse--sky { --pt-pulse-rgb: 14, 165, 233; }
+/* Aguardando Pagamento — amber-500 (mesmos valores do pulso original) */
+.pt-stage-pulse--amber { --pt-pulse-rgb: 245, 158, 11; }
+
+
+body {
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+/* ============================================================================
+   PUBLIC SERVICE FORM — Tipografia fluida responsiva
+   Ajusta automaticamente o tamanho de todos os elementos conforme a largura
+   da viewport, resolvendo o problema de fontes miúdas em monitores grandes
+   e fontes enormes em monitores pequenos.
+   ============================================================================ */
+.public-service-form {
+  /* Container principal: expande em telas grandes */
+  --psf-max-w: clamp(320px, 85vw, 880px);
+}
+/* Título principal Chernobyl PT (header) */
+.public-service-form h1 {
+  font-size: clamp(1.4rem, 0.6rem + 3vw, 2.75rem) !important;
+  line-height: 1.1 !important;
+}
+/* Subtítulo "By Exori Coins" */
+.public-service-form h1 + p {
+  font-size: clamp(0.45rem, 0.3rem + 0.5vw, 0.75rem) !important;
+}
+/* Títulos de quadros (Informações sobre o Service, Solicitar Service) */
+.public-service-form h2 {
+  font-size: clamp(1rem, 0.75rem + 1vw, 1.4rem) !important;
+  line-height: 1.25 !important;
+}
+/* Subtítulos (Level Mínimo, Formas de Pagamento, etc) */
+.public-service-form h3 {
+  font-size: clamp(0.85rem, 0.7rem + 0.6vw, 1.1rem) !important;
+  line-height: 1.3 !important;
+}
+/* Parágrafos de descrição */
+.public-service-form p {
+  font-size: clamp(0.75rem, 0.65rem + 0.35vw, 0.95rem) !important;
+  line-height: 1.55 !important;
+}
+/* Listas dentro dos quadros */
+.public-service-form ul,
+.public-service-form ol {
+  font-size: clamp(0.75rem, 0.65rem + 0.35vw, 0.95rem) !important;
+  line-height: 1.55 !important;
+}
+/* Labels dos campos do formulário */
+.public-service-form form label {
+  font-size: clamp(0.65rem, 0.55rem + 0.35vw, 0.8rem) !important;
+  letter-spacing: 0.08em !important;
+}
+/* Inputs, selects e textareas */
+.public-service-form form input,
+.public-service-form form select,
+.public-service-form form textarea {
+  font-size: clamp(0.875rem, 0.75rem + 0.45vw, 1.05rem) !important;
+}
+/* Botão principal de envio */
+.public-service-form form button[type="submit"] {
+  font-size: clamp(0.95rem, 0.8rem + 0.55vw, 1.25rem) !important;
+}
+/* Badges de vocação (EK, MS, RP, ED, MK) */
+.public-service-form .psf-voc-letter {
+  font-size: clamp(0.9rem, 0.75rem + 0.55vw, 1.2rem) !important;
+}
+/* Badges de level mínimo (400+, 550+) */
+.public-service-form .psf-voc-badge {
+  font-size: clamp(0.7rem, 0.6rem + 0.4vw, 0.9rem) !important;
+}
+/* Cards de pagamento (PIX, RC, 50/50) */
+.public-service-form .psf-pay-title {
+  font-size: clamp(0.9rem, 0.75rem + 0.55vw, 1.15rem) !important;
+}
+.public-service-form .psf-pay-value {
+  font-size: clamp(1rem, 0.8rem + 0.7vw, 1.35rem) !important;
+}
+.public-service-form .psf-pay-subtitle {
+  font-size: clamp(0.7rem, 0.6rem + 0.35vw, 0.85rem) !important;
+}
+/* Paddings fluidos dos quadros */
+.public-service-form .psf-quadro-inner {
+  padding: clamp(1.25rem, 0.75rem + 1.5vw, 2.25rem) !important;
+}
+.public-service-form .psf-quadro-header {
+  padding: clamp(1rem, 0.75rem + 1vw, 1.5rem) clamp(1.25rem, 0.75rem + 1.5vw, 2.25rem) !important;
+}
+/* Container principal do formulário (acima do max-w-2xl em telas grandes) */
+@media (min-width: 1280px) {
+  .public-service-form > .relative {
+    max-width: 900px !important;
+  }
+}
+/* Espaço entre campos em grids */
+.public-service-form form .grid {
+  gap: clamp(0.75rem, 0.5rem + 0.75vw, 1.5rem) !important;
+}
+
+/* ============================================================================
+   PUBLIC SERVICE FORM — Tema dark premium + efeitos neon/hover
+   ----------------------------------------------------------------------------
+   Hierarquia de destaque (não é o mesmo nível para tudo):
+     1. .psf-voc     quadros de VOCAÇÃO — topo da hierarquia: zoom sutil +
+                     neon INTENSO na COR DA PRÓPRIA vocação (--voc-color,
+                     definida inline a partir de VOC_COLORS no TSX);
+     2. .psf-card    quadros de informação internos (pagamentos, drops) —
+                     neon suave na cor de contexto (--psf-accent) + leve
+                     elevação (translate, sem reflow);
+     3. .psf-choice  botões de escolha (quest, forma de pagamento) — realce
+                     médio: elevação + glow na cor da opção;
+     4. .psf-quadro  containers externos — apenas profundidade (sombra),
+                     reforçando a hierarquia sem competir com o conteúdo.
+
+   Regras de engenharia:
+     • zoom/elevação usam as propriedades `scale`/`translate` (compositor,
+       SEM reflow) — conteúdo estável, grid intacto, sem deslocamentos;
+     • :hover só existe dentro de @media (hover: hover) — em touch os efeitos
+       não "grudam" e o feedback vem no :active;
+     • prefers-reduced-motion desliga transições/zoom;
+     • o container externo dos quadros não usa overflow-hidden (o glow não
+       pode ser cortado) — os cantos do header arredondam por conta própria.
+   ============================================================================ */
+.public-service-form {
+  /* Tema MAIS ESCURO: mesmas fórmulas das tokens neutras do tema (cm/dh),
+     com luminosidade ~4-5 pontos abaixo — profundidade sem virar breu. */
+  --th-n-raised: oklch(10.2% calc(0.009 * var(--th-cm-neutral)) calc(354.854 + var(--th-dh-neutral)));
+  --th-n-panel: oklch(12.8% calc(0.004 * var(--th-cm-neutral)) calc(295.226 + var(--th-dh-neutral)));
+  --th-n-elev: oklch(15.1% calc(0.004 * var(--th-cm-neutral)) calc(288.542 + var(--th-dh-neutral)));
+  --psf-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --psf-ease-bounce: cubic-bezier(0.34, 1.4, 0.64, 1);
+}
+
+/* Header dos quadros arredonda os próprios cantos (sem overflow-hidden). */
+.public-service-form .psf-quadro-header {
+  border-top-left-radius: 1.4rem;
+  border-top-right-radius: 1.4rem;
+  position: relative;
+}
+
+/* LINHA NEON do header: filete de luz na base, na cor do quadro
+   (--psf-quadro-accent). Desenhada com ::after (sem afetar o layout),
+   com brilho que intensifica no hover do quadro. */
+.public-service-form .psf-quadro-header::after {
+  content: "";
+  position: absolute;
+  left: 8%;
+  right: 8%;
+  bottom: -1px;
+  height: 1px;
+  pointer-events: none;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    color-mix(in oklab, var(--psf-quadro-accent, #22d3ee) 85%, white) 50%,
+    transparent
+  );
+  filter: drop-shadow(0 0 6px color-mix(in oklab, var(--psf-quadro-accent, #22d3ee) 70%, transparent));
+  opacity: 0.55;
+  transition: opacity 0.35s var(--psf-ease), filter 0.35s var(--psf-ease);
+}
+
+/* (4) Containers externos — profundidade + moldura neon viva no hover. */
+.public-service-form .psf-quadro {
+  box-shadow:
+    0 1px 0 0 rgb(255 255 255 / 0.03) inset,
+    0 24px 60px -24px rgb(0 0 0 / 0.8);
+  transition: box-shadow 0.35s var(--psf-ease), border-color 0.35s var(--psf-ease);
+}
+
+/* (2) Quadros de informação internos — base + hover (neon contextual). */
+.public-service-form .psf-card {
+  transition:
+    translate 0.3s var(--psf-ease),
+    border-color 0.3s var(--psf-ease),
+    box-shadow 0.3s var(--psf-ease),
+    background-color 0.3s var(--psf-ease);
+}
+
+/* (3) Botões de escolha — realce médio. */
+.public-service-form .psf-choice {
+  transition:
+    translate 0.28s var(--psf-ease),
+    scale 0.28s var(--psf-ease),
+    border-color 0.28s var(--psf-ease),
+    box-shadow 0.28s var(--psf-ease),
+    background-color 0.28s var(--psf-ease);
+}
+
+/* (1) VOCATIONS — zoom com aceleração/eleração suave (leve overshoot). */
+.public-service-form .psf-voc {
+  position: relative;
+  /* Neon precisa de LUMINOSIDADE para ser perceptível no fundo escuro: cores
+     de vocação escuras (MS #8B0000, ED #006400) gerariam glow invisível.
+     --voc-glow mantém o MATIZ exato da vocação e eleva a luminância (62% cor
+     + 38% branco). A borda e o conteúdo continuam na cor PURA da vocação. */
+  --voc-glow: color-mix(in oklab, var(--voc-color, #94a3b8) 62%, white);
+  border-color: color-mix(in oklab, var(--voc-glow, #94a3b8) 30%, transparent);
+  transition:
+    scale 0.32s var(--psf-ease-bounce),
+    border-color 0.32s var(--psf-ease),
+    box-shadow 0.32s var(--psf-ease),
+    background-color 0.32s var(--psf-ease);
+}
+
+/* Vocação selecionada: destaque PERMANENTE na cor da vocação. */
+.public-service-form .psf-voc[data-selected="true"] {
+  scale: 1.04;
+  border-color: var(--voc-color, #94a3b8);
+  background-color: color-mix(in oklab, var(--voc-glow, #94a3b8) 10%, transparent);
+  box-shadow:
+    0 0 0 2px color-mix(in oklab, var(--voc-glow, #94a3b8) 60%, transparent),
+    0 0 26px -4px color-mix(in oklab, var(--voc-glow, #94a3b8) 55%, transparent);
+}
+
+/* Inputs: base escura + foco com glow neon ciano vivo. */
+.public-service-form form input,
+.public-service-form form textarea {
+  transition:
+    border-color 0.25s var(--psf-ease),
+    box-shadow 0.25s var(--psf-ease),
+    background-color 0.25s var(--psf-ease);
+}
+.public-service-form form input:focus,
+.public-service-form form textarea:focus {
+  box-shadow:
+    0 0 0 1px color-mix(in oklab, #22d3ee 55%, transparent),
+    0 0 22px -2px color-mix(in oklab, #22d3ee 30%, transparent);
+}
+
+/* Botão de envio: leve varredura de luz (sheen) no hover — premium sem
+   poluição. O pseudo-elemento vive DENTRO do botão (overflow hidden). */
+.public-service-form .psf-submit {
+  position: relative;
+  overflow: hidden;
+}
+.public-service-form .psf-submit::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -60%;
+  width: 45%;
+  pointer-events: none;
+  background: linear-gradient(105deg, transparent, rgb(255 255 255 / 0.35), transparent);
+  transform: skewX(-18deg);
+  transition: left 0.55s var(--psf-ease);
+}
+
+/* ── Efeitos de hover — APENAS em dispositivos com hover real ──────────── */
+@media (hover: hover) and (pointer: fine) {
+  /* Containers externos: profundidade + intensificação do filete neon. */
+  .public-service-form .psf-quadro:hover {
+    box-shadow:
+      0 1px 0 0 rgb(255 255 255 / 0.04) inset,
+      0 0 34px -10px color-mix(in oklab, var(--psf-quadro-accent, #22d3ee) 32%, transparent),
+      0 28px 70px -16px rgb(0 0 0 / 0.78);
+  }
+  .public-service-form .psf-quadro:hover .psf-quadro-header::after {
+    opacity: 1;
+    filter: drop-shadow(0 0 10px color-mix(in oklab, var(--psf-quadro-accent, #22d3ee) 90%, transparent));
+  }
+
+  /* Cards internos: zoom leve + elevação + neon contextual. */
+  .public-service-form .psf-card:hover {
+    translate: 0 -3px;
+    scale: 1.012;
+    border-color: color-mix(in oklab, var(--psf-accent, #38bdf8) 55%, transparent);
+    background-color: color-mix(in oklab, var(--psf-accent, #38bdf8) 4%, transparent);
+    box-shadow:
+      0 0 0 1px color-mix(in oklab, var(--psf-accent, #38bdf8) 32%, transparent),
+      0 0 30px -4px color-mix(in oklab, var(--psf-accent, #38bdf8) 40%, transparent),
+      0 18px 38px -14px rgb(0 0 0 / 0.65);
+  }
+
+  .public-service-form .psf-choice:hover:not(:disabled) {
+    translate: 0 -2px;
+    scale: 1.015;
+    border-color: color-mix(in oklab, var(--psf-accent, #94a3b8) 65%, transparent);
+    box-shadow:
+      0 0 0 1px color-mix(in oklab, var(--psf-accent, #94a3b8) 30%, transparent),
+      0 0 26px -4px color-mix(in oklab, var(--psf-accent, #94a3b8) 42%, transparent),
+      0 12px 26px -12px rgb(0 0 0 / 0.55);
+  }
+
+  /* TOPO da hierarquia: zoom + neon intenso NA COR DA VOCAÇÃO. */
+  .public-service-form .psf-voc:hover {
+    scale: 1.05;
+    z-index: 5;
+    border-color: var(--voc-color, #94a3b8);
+    background-color: color-mix(in oklab, var(--voc-glow, #94a3b8) 9%, transparent);
+    box-shadow:
+      0 0 0 2px color-mix(in oklab, var(--voc-glow, #94a3b8) 70%, transparent),
+      0 0 24px -2px color-mix(in oklab, var(--voc-glow, #94a3b8) 70%, transparent),
+      0 0 56px -6px color-mix(in oklab, var(--voc-glow, #94a3b8) 50%, transparent),
+      0 12px 32px -10px rgb(0 0 0 / 0.55);
+  }
+  .public-service-form .psf-voc[data-selected="true"]:hover {
+    scale: 1.06;
+  }
+
+  /* Inputs: hover discreto antes do foco (indica interatividade). */
+  .public-service-form form input:hover:not(:focus),
+  .public-service-form form textarea:hover:not(:focus) {
+    border-color: rgb(255 255 255 / 0.22);
+  }
+
+  /* Botão de envio: glow ciano reforçado + varredura de luz. */
+  .public-service-form .psf-submit:hover:not(:disabled) {
+    box-shadow:
+      0 0 26px -2px color-mix(in oklab, #22d3ee 55%, transparent),
+      0 0 70px -12px color-mix(in oklab, #22d3ee 35%, transparent),
+      0 14px 36px -10px rgb(0 0 0 / 0.6);
+  }
+  .public-service-form .psf-submit:hover:not(:disabled)::before {
+    left: 120%;
+  }
+}
+
+/* ── Touch: sem hover — feedback tátil no toque, zoom desligado ────────── */
+@media (hover: none) {
+  .public-service-form .psf-voc:active {
+    scale: 0.97;
+    border-color: var(--voc-color, #94a3b8);
+    box-shadow: 0 0 18px -4px color-mix(in oklab, var(--voc-glow, #94a3b8) 65%, transparent);
+  }
+  .public-service-form .psf-choice:active:not(:disabled) {
+    scale: 0.98;
+    border-color: color-mix(in oklab, var(--psf-accent, #94a3b8) 60%, transparent);
+    box-shadow: 0 0 16px -4px color-mix(in oklab, var(--psf-accent, #94a3b8) 45%, transparent);
+  }
+  .public-service-form .psf-card {
+    transition: none;
+  }
+  .public-service-form .psf-submit:active:not(:disabled) {
+    box-shadow: 0 0 24px -4px color-mix(in oklab, #22d3ee 50%, transparent);
+  }
+  /* Filete neon dos headers sempre visível no touch (não há hover). */
+  .public-service-form .psf-quadro-header::after {
+    opacity: 0.8;
+  }
+}
+
+/* ── Acessibilidade: movimento reduzido — sem transições/zoom ──────────── */
+@media (prefers-reduced-motion: reduce) {
+  .public-service-form .psf-quadro,
+  .public-service-form .psf-card,
+  .public-service-form .psf-choice,
+  .public-service-form .psf-voc,
+  .public-service-form .psf-quadro-header::after,
+  .public-service-form .psf-submit::before,
+  .public-service-form form input,
+  .public-service-form form textarea {
+    transition: none;
+  }
+  .public-service-form .psf-card:hover,
+  .public-service-form .psf-choice:hover:not(:disabled) {
+    translate: 0 0;
+    scale: 1;
+  }
+  .public-service-form .psf-voc:hover,
+  .public-service-form .psf-voc[data-selected="true"]:hover {
+    scale: 1;
+  }
+  .public-service-form .psf-submit::before {
+    display: none;
+  }
+}
+
+/* ============================================================================
+   RESUMO DE AMIGOS — pulso de prioridade por vocação
+   ----------------------------------------------------------------------------
+   O pulso usa a COR DA PRÓPRIA VOCAÇÃO, não dourado: cada badge define
+   `--voc-hue` e a animação deriva tudo dessa cor. Assim a identidade visual
+   de EK/ED/MS/RP/MK é preservada enquanto o alerta fica evidente.
+
+   .voc-pulse         nível PRIORIDADE — menor quantidade do servidor.
+   .voc-pulse--max    nível CRÍTICO — vocação zerada. Mais forte e mais rápido.
+
+   Mecânica compartilhada por variáveis de amplitude (mesmo padrão das
+   .nav-pill): um único keyframe, sem duplicação.
+   ========================================================================== */
+@keyframes voc-pulse-beat {
+  0%, 100% {
+    border-color: color-mix(in oklab, var(--voc-hue) var(--voc-border-lo), transparent);
+    box-shadow:
+      0 0 0 0 color-mix(in oklab, var(--voc-hue) 0%, transparent),
+      0 0 var(--voc-blur-lo) color-mix(in oklab, var(--voc-hue) var(--voc-glow-lo), transparent),
+      inset 0 0 var(--voc-inset-lo) color-mix(in oklab, var(--voc-hue) var(--voc-inset-alpha-lo), transparent);
+  }
+  50% {
+    border-color: color-mix(in oklab, var(--voc-hue) var(--voc-border-hi), transparent);
+    box-shadow:
+      0 0 0 var(--voc-ring) color-mix(in oklab, var(--voc-hue) var(--voc-ring-alpha), transparent),
+      0 0 var(--voc-blur-hi) color-mix(in oklab, var(--voc-hue) var(--voc-glow-hi), transparent),
+      inset 0 0 var(--voc-inset-hi) color-mix(in oklab, var(--voc-hue) var(--voc-inset-alpha-hi), transparent);
+  }
+}
+
+/* Nível PRIORIDADE — forte e chamativo, um degrau abaixo do crítico. */
+.voc-pulse {
+  --voc-border-lo: 50%;
+  --voc-border-hi: 95%;
+  --voc-ring: 4px;
+  --voc-ring-alpha: 22%;
+  --voc-blur-lo: 6px;
+  --voc-blur-hi: 18px;
+  --voc-glow-lo: 20%;
+  --voc-glow-hi: 60%;
+  --voc-inset-lo: 2px;
+  --voc-inset-hi: 10px;
+  --voc-inset-alpha-lo: 8%;
+  --voc-inset-alpha-hi: 26%;
+  --voc-ripple-scale: 1.30;
+  --voc-ripple-opacity: 0.75;
+  --voc-ripple-width: 2px;
+  --voc-beat: 1.15s;
+
+  position: relative;
+  animation: voc-pulse-beat var(--voc-beat) ease-in-out infinite;
+}
+
+/* Nível CRÍTICO — zerada. Mais intenso e mais rápido. */
+.voc-pulse--max {
+  --voc-border-lo: 70%;
+  --voc-border-hi: 100%;
+  --voc-ring: 6px;
+  --voc-ring-alpha: 34%;
+  --voc-blur-lo: 10px;
+  --voc-blur-hi: 30px;
+  --voc-glow-lo: 34%;
+  --voc-glow-hi: 92%;
+  --voc-inset-lo: 4px;
+  --voc-inset-hi: 16px;
+  --voc-inset-alpha-lo: 14%;
+  --voc-inset-alpha-hi: 42%;
+  --voc-ripple-scale: 1.55;
+  --voc-ripple-opacity: 0.95;
+  --voc-ripple-width: 3px;
+  --voc-beat: 0.78s;
+}
+
+/* Anel de expansão que TRANSBORDA a borda do badge.
+   `::after` cresce para fora e se dissolve, criando uma onda luminosa que
+   sobressai o contorno. `overflow: visible` no badge garante que apareça. */
+@keyframes voc-pulse-ripple {
+  0% {
+    opacity: var(--voc-ripple-opacity);
+    transform: scale(1);
+  }
+  70% {
+    opacity: 0;
+    transform: scale(var(--voc-ripple-scale));
+  }
+  100% {
+    opacity: 0;
+    transform: scale(var(--voc-ripple-scale));
+  }
+}
+
+.voc-pulse {
+  overflow: visible;
+}
+
+.voc-pulse::after {
+  content: "";
+  position: absolute;
+  inset: -2px;
+  border-radius: inherit;
+  border: var(--voc-ripple-width) solid color-mix(in oklab, var(--voc-hue) 85%, transparent);
+  box-shadow: 0 0 14px color-mix(in oklab, var(--voc-hue) 60%, transparent);
+  pointer-events: none;
+  animation: voc-pulse-ripple var(--voc-beat) ease-out infinite;
+}
+
+/* Segunda onda, defasada, adensa o efeito no nível crítico. */
+.voc-pulse--max::before {
+  content: "";
+  position: absolute;
+  inset: -2px;
+  border-radius: inherit;
+  border: var(--voc-ripple-width) solid color-mix(in oklab, var(--voc-hue) 70%, transparent);
+  pointer-events: none;
+  animation: voc-pulse-ripple var(--voc-beat) ease-out infinite;
+  animation-delay: calc(var(--voc-beat) / 2);
+}
+
+/* O número acompanha o pulso, reforçando a leitura sem outro elemento. */
+@keyframes voc-pulse-count {
+  0%, 100% { text-shadow: 0 0 4px color-mix(in oklab, var(--voc-hue) 30%, transparent); }
+  50%      { text-shadow: 0 0 var(--voc-count-blur) color-mix(in oklab, var(--voc-hue) var(--voc-count-alpha), transparent); }
+}
+.voc-pulse .voc-pulse-count {
+  --voc-count-blur: 10px;
+  --voc-count-alpha: 75%;
+  animation: voc-pulse-count var(--voc-beat) ease-in-out infinite;
+}
+.voc-pulse--max .voc-pulse-count {
+  --voc-count-blur: 16px;
+  --voc-count-alpha: 100%;
+}
+
+/* Guardas: "Poupar CPU" e preferência do sistema desligam o movimento,
+   mantendo o destaque num valor fixo — a informação nunca se perde. */
+.low-cpu .voc-pulse,
+.low-cpu .voc-pulse::after,
+.low-cpu .voc-pulse::before,
+.low-cpu .voc-pulse .voc-pulse-count {
+  animation: none;
+}
+.low-cpu .voc-pulse::after,
+.low-cpu .voc-pulse::before {
+  opacity: 0;
+}
+.low-cpu .voc-pulse {
+  border-color: color-mix(in oklab, var(--voc-hue) var(--voc-border-hi), transparent);
+  box-shadow: 0 0 var(--voc-blur-lo) color-mix(in oklab, var(--voc-hue) var(--voc-glow-lo), transparent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .voc-pulse,
+  .voc-pulse::after,
+  .voc-pulse::before,
+  .voc-pulse .voc-pulse-count {
+    animation: none;
+  }
+  .voc-pulse::after,
+  .voc-pulse::before {
+    opacity: 0;
+  }
+  .voc-pulse {
+    border-color: color-mix(in oklab, var(--voc-hue) var(--voc-border-hi), transparent);
+    box-shadow: 0 0 var(--voc-blur-lo) color-mix(in oklab, var(--voc-hue) var(--voc-glow-lo), transparent);
+  }
+}
+
+/* Selo de exclamação nas vocações ZERADAS.
+   Fica no canto superior direito, transbordando o badge, com o mesmo
+   batimento do pulso — reforço redundante ao brilho (acessibilidade:
+   a informação não depende só de cor/luz). */
+@keyframes voc-alert-beat {
+  0%, 100% {
+    transform: scale(1);
+    box-shadow: 0 0 6px color-mix(in oklab, var(--voc-hue) 55%, transparent);
+  }
+  50% {
+    transform: scale(1.18);
+    box-shadow: 0 0 14px color-mix(in oklab, var(--voc-hue) 95%, transparent);
+  }
+}
+
+.voc-alert {
+  position: absolute;
+  top: -7px;
+  right: -7px;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 9999px;
+  border: 1px solid color-mix(in oklab, var(--voc-hue) 90%, transparent);
+  background: color-mix(in oklab, var(--voc-hue) 88%, #0b0707);
+  color: #0b0707;
+  font-size: 11px;
+  font-weight: 900;
+  line-height: 1;
+  animation: voc-alert-beat var(--voc-beat) ease-in-out infinite;
+}
+
+.low-cpu .voc-alert {
+  animation: none;
+}
+
+/* ============================================================================
+   PAINEL BAZAAR — indicadores da coluna Personagem + destaque da linha
+   ----------------------------------------------------------------------------
+   Os indicadores agora são SOMENTE ícones/emoji (sem texto), com tooltip.
+   Cada um tem identidade visual própria:
+     ⚠️  Prioridade          (amarelo simples, sem pulsação)
+     🔥  Prioridade Máxima   (amarelo/laranja vivo, pulsação suave)
+     🟣  Prioridade para você (roxo vivo, pulsação suave)
+     🚨  Quest suspeita      (vermelho forte — maior destaque)
+     🎯  Melhor vocação para você (indicador atual mantido)
+
+   PRECEDÊNCIA VISUAL DA LINHA (maior primeiro):
+     Quest suspeita > Prioridade para você > Prioridade Máxima > Prioridade
+   A linha usa SOMENTE a cor do indicador de maior prioridade; os demais ícones
+   permanecem visíveis na coluna.
+
+   Usa tokens `--color-*` (re-tematizados), então acompanha todos os temas.
+   ========================================================================== */
+
+/* ── Badges da coluna Personagem ──────────────────────────────────────────── */
+.bazaar-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  flex-shrink: 0;
+  cursor: help;
+  transition: transform 0.12s ease, box-shadow 0.15s ease;
+}
+.bazaar-badge:hover {
+  transform: scale(1.08);
+}
+
+/* 1) Quest suspeita — vermelho forte, maior destaque */
+.bazaar-badge-suspicious {
+  color: var(--color-red-300, #fca5a5);
+  background: color-mix(in oklab, var(--color-red-600) 22%, transparent);
+  border-color: color-mix(in oklab, var(--color-red-500) 55%, transparent);
+  box-shadow: 0 0 7px color-mix(in oklab, var(--color-red-600) 45%, transparent);
+}
+
+/* 2) Prioridade para você — roxo vivo + pulsação suave */
+.bazaar-badge-you {
+  color: var(--color-violet-300, #c4b5fd);
+  background: color-mix(in oklab, var(--color-violet-600) 24%, transparent);
+  border-color: color-mix(in oklab, var(--color-violet-500) 55%, transparent);
+  box-shadow: 0 0 7px color-mix(in oklab, var(--color-violet-500) 45%, transparent);
+  animation: bazaar-icon-pulse-soft 1.6s ease-in-out infinite;
+}
+
+/* 3) Prioridade Máxima — amarelo/dourado premium + pulsação suave */
+.bazaar-badge-max {
+  color: var(--color-amber-300, #fcd34d);
+  background: color-mix(in oklab, var(--color-amber-500) 26%, transparent);
+  border-color: color-mix(in oklab, var(--color-amber-400) 60%, transparent);
+  box-shadow: 0 0 7px color-mix(in oklab, var(--color-amber-500) 40%, transparent);
+  animation: bazaar-icon-pulse-soft 1.7s ease-in-out infinite;
+}
+
+/* 4) Prioridade — amarelo/dourado discreto, sem pulsação */
+.bazaar-badge-priority {
+  color: var(--color-amber-400, #fbbf24);
+  background: color-mix(in oklab, var(--color-amber-500) 16%, transparent);
+  border-color: color-mix(in oklab, var(--color-amber-500) 40%, transparent);
+}
+
+/* Melhor vocação para você — verde, consistente com o padrão */
+.bazaar-badge-bestvoc {
+  color: var(--color-emerald-300, #6ee7b7);
+  background: color-mix(in oklab, var(--color-emerald-600) 22%, transparent);
+  border-color: color-mix(in oklab, var(--color-emerald-500) 55%, transparent);
+  box-shadow: 0 0 6px color-mix(in oklab, var(--color-emerald-500) 35%, transparent);
+}
+
+/* Pulsação suave (não agressiva) dos indicadores de maior atenção. */
+@keyframes bazaar-icon-pulse-soft {
+  0%, 100% { transform: scale(1); }
+  50%      { transform: scale(1.12); }
+}
+
+/* ── Destaque da linha inteira (ordem de precedência) ───────────────────────
+   Ajuste final: destaques estáticos e elegantes (SEM pulsação/animacão na
+   linha — o pulso não trazia benefício perceptível e foi removido).
+   Quest suspeita, Prioridade para você e Prioridade Máxima usam borda neon +
+   glow externo + glow interno + barra lateral + contraste de fundo, aplicados
+   via box-shadow no <tr> — funciona porque a tabela usa `border-separate`
+   (em `border-collapse` o navegador descarta sombra/fundo do <tr>).
+   box-shadow não altera altura/layout. Cores: vermelho / roxo (Prioridade
+   para você) / dourado. Prioridade comum recebe o mesmo conceito, porém bem
+   mais fraco.
+   -------------------------------------------------------------------------- */
+
+/* Borda + glow compartilhados pelos 3 destaques principais. */
+.bazaar-row-suspicious,
+.bazaar-row-user-priority,
+.bazaar-row-max-priority {
+  border-color: var(--bz-ring);
+  background-color: var(--bz-bg);
+  box-shadow:
+    0 0 0 1px var(--bz-ring),
+    0 0 0 1px var(--bz-ring-soft),
+    0 0 4px var(--bz-glow),
+    0 0 8px var(--bz-glow-far),
+    inset 0 0 0 1px var(--bz-ring),
+    inset 0 0 4px var(--bz-glow-in),
+    inset 2px 0 0 var(--bz-bar);
+}
+
+/* 1) Quest suspeita — vermelho forte (maior destaque) */
+.bazaar-row-suspicious {
+  --bz-ring: color-mix(in oklab, var(--color-red-500) 48%, transparent);
+  --bz-ring-soft: color-mix(in oklab, var(--color-red-600) 18%, transparent);
+  --bz-glow: color-mix(in oklab, var(--color-red-500) 20%, transparent);
+  --bz-glow-far: color-mix(in oklab, var(--color-red-600) 12%, transparent);
+  --bz-glow-in: color-mix(in oklab, var(--color-red-600) 8%, transparent);
+  --bz-bar: color-mix(in oklab, var(--color-red-400) 60%, transparent);
+  --bz-bg: color-mix(in oklab, var(--color-red-600) 8%, transparent);
+}
+
+/* 2) Prioridade para você — roxo forte (coerente com o app) */
+.bazaar-row-user-priority {
+  --bz-ring: color-mix(in oklab, var(--color-violet-500) 45%, transparent);
+  --bz-ring-soft: color-mix(in oklab, var(--color-violet-600) 17%, transparent);
+  --bz-glow: color-mix(in oklab, var(--color-violet-400) 21%, transparent);
+  --bz-glow-far: color-mix(in oklab, var(--color-violet-600) 12%, transparent);
+  --bz-glow-in: color-mix(in oklab, var(--color-violet-600) 8%, transparent);
+  --bz-bar: color-mix(in oklab, var(--color-violet-400) 56%, transparent);
+  --bz-bg: color-mix(in oklab, var(--color-violet-600) 7%, transparent);
+}
+
+/* 3) Prioridade Máxima — amarelo/dourado forte */
+.bazaar-row-max-priority {
+  --bz-ring: color-mix(in oklab, var(--color-amber-500) 45%, transparent);
+  --bz-ring-soft: color-mix(in oklab, var(--color-amber-500) 16%, transparent);
+  --bz-glow: color-mix(in oklab, var(--color-amber-400) 21%, transparent);
+  --bz-glow-far: color-mix(in oklab, var(--color-amber-500) 12%, transparent);
+  --bz-glow-in: color-mix(in oklab, var(--color-amber-500) 7%, transparent);
+  --bz-bar: color-mix(in oklab, var(--color-amber-300) 56%, transparent);
+  --bz-bg: color-mix(in oklab, var(--color-amber-500) 6%, transparent);
+}
+
+/* 4) Prioridade — mesmo conceito, porém bem mais fraco (sem pulso) */
+.bazaar-row-priority {
+  border-color: color-mix(in oklab, var(--color-amber-500) 20%, transparent);
+  background-color: color-mix(in oklab, var(--color-amber-500) 3%, transparent);
+  box-shadow:
+    0 0 0 1px color-mix(in oklab, var(--color-amber-500) 16%, transparent),
+    0 0 3px color-mix(in oklab, var(--color-amber-500) 7%, transparent),
+    inset 0 0 0 1px color-mix(in oklab, var(--color-amber-500) 12%, transparent);
+}
+
+/* Guardas de acessibilidade dos badges (os destaques de linha não animam). */
+.low-cpu .bazaar-badge-max,
+.low-cpu .bazaar-badge-you {
+  animation: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bazaar-badge-max,
+  .bazaar-badge-you {
+    animation: none;
+  }
+}
+
+/* ============================================================================
+   BAZAAR — campos CONTA / VALOR PAGO do fluxo inline "Comprado"
+   ----------------------------------------------------------------------------
+   Pulso de borda + glow para os dois campos que exigem a atenção do usuário
+   antes de confirmar uma compra (prevenção de conta incorreta). Mesma mecânica
+   das .voc-pulse/.nav-pill: um único keyframe, cor via --bz-hue e amplitude
+   via variáveis — nada de escala/opacidade, então o layout da linha não muda.
+
+   Estados atendidos (as cores estáticas ficam nas classes do componente;
+   o pulso só acrescenta o "respirar"):
+   - .bz-field-pulse         atenção forte  (campo obrigatório ainda vazio)
+   - .bz-field-pulse--soft   atenção suave (conta pré-preenchida pela última
+                             utilizada — conferir antes de confirmar; não é
+                             alerta de erro, por isso um degrau abaixo)
+   O pulso cessa em :focus (o usuário já está atuando no campo) e nos guardas
+   de acessibilidade abaixo — os estados continuam legíveis sem movimento.
+   ============================================================================ */
+@keyframes bz-field-beat {
+  0%, 100% {
+    border-color: color-mix(in oklab, var(--bz-hue) var(--bz-border-lo), transparent);
+    box-shadow:
+      0 0 0 0 color-mix(in oklab, var(--bz-hue) 0%, transparent),
+      0 0 var(--bz-blur-lo) color-mix(in oklab, var(--bz-hue) var(--bz-glow-lo), transparent);
+  }
+  50% {
+    border-color: color-mix(in oklab, var(--bz-hue) var(--bz-border-hi), transparent);
+    box-shadow:
+      0 0 0 var(--bz-ring) color-mix(in oklab, var(--bz-hue) var(--bz-ring-alpha), transparent),
+      0 0 var(--bz-blur-hi) color-mix(in oklab, var(--bz-hue) var(--bz-glow-hi), transparent);
+  }
+}
+
+.bz-field-pulse {
+  /* Padrão: pedido de atenção (âmbar, tom de "confira" — não de erro). */
+  --bz-hue: var(--color-amber-400, #fbbf24);
+  --bz-border-lo: 45%;
+  --bz-border-hi: 85%;
+  --bz-ring: 3px;
+  --bz-ring-alpha: 20%;
+  --bz-blur-lo: 4px;
+  --bz-blur-hi: 12px;
+  --bz-glow-lo: 10%;
+  --bz-glow-hi: 26%;
+  animation: bz-field-beat 1.5s ease-in-out infinite;
+}
+
+/* Conta pré-preenchida: mesmo aviso, intensidade contida. */
+.bz-field-pulse--soft {
+  --bz-border-lo: 38%;
+  --bz-border-hi: 62%;
+  --bz-ring: 2px;
+  --bz-ring-alpha: 12%;
+  --bz-blur-lo: 3px;
+  --bz-blur-hi: 8px;
+  --bz-glow-lo: 8%;
+  --bz-glow-hi: 16%;
+}
+
+/* Focar o campo já é atenção suficiente: o pulso pausa (a borda estática do
+   estado/foco assume) e retoma ao sair, se o campo seguir vazio/pré-preenchido. */
+.bz-field-pulse:focus {
+  animation: none;
+}
+
+/* "Poupar CPU" e preferência do sistema: sem movimento, cores mantidas. */
+.low-cpu .bz-field-pulse {
+  animation: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bz-field-pulse {
+    animation: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .voc-alert {
+    animation: none;
+  }
+}
+
+/* ============================================================================
+   GUIA DE IMBUEMENTS — scrollbar da lista de cards
+   Herda a espessura global e usa apenas tokens --th-*, então acompanha os 7
+   temas. Definida aqui (e não inline) porque pseudo-elementos de scrollbar
+   não podem ser expressos em style={{ }}.
+   ============================================================================ */
+.imbue-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in oklab, var(--th-brand) 55%, transparent) transparent;
+}
+.imbue-scroll::-webkit-scrollbar {
+  width: 9px;
+}
+.imbue-scroll::-webkit-scrollbar-track {
+  background: color-mix(in oklab, var(--th-bg-base) 80%, transparent);
+  border-radius: 9999px;
+}
+.imbue-scroll::-webkit-scrollbar-thumb {
+  border-radius: 9999px;
+  background: linear-gradient(
+    180deg,
+    color-mix(in oklab, var(--th-brand) 60%, transparent),
+    color-mix(in oklab, var(--th-brand-deep) 70%, transparent)
+  );
+  border: 1px solid color-mix(in oklab, var(--th-brand) 35%, transparent);
+}
+.imbue-scroll::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(
+    180deg,
+    color-mix(in oklab, var(--th-brand) 85%, transparent),
+    color-mix(in oklab, var(--th-brand-deep) 90%, transparent)
+  );
+}
