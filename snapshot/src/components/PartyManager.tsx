@@ -97,6 +97,12 @@ const STAGE_THEME: Record<PartyStage, {
   btnActive: string;
   /** Botão seletor inativo. */
   btnIdle: string;
+  /**
+   * Classes do pulso de borda (src/index.css): keyframe único parametrizado
+   * pela cor da categoria. Aplicado ao botão NÃO selecionado quando o gatilho
+   * do estágio dispara (ver render dos seletores).
+   */
+  pulse: string;
   /** Card/aba da PT aberta (ativa e não minimizada). */
   tabOpened: string;
   /** Card/aba da PT fechada/minimizada. */
@@ -108,7 +114,10 @@ const STAGE_THEME: Record<PartyStage, {
   comVagas: {
     label: "Com Vagas",
     btnActive: "bg-violet-500/15 border-violet-500/50 text-violet-300 shadow-[0_0_8px_rgba(139,92,246,0.15)]",
-    btnIdle: "bg-black/20 border-violet-900/15 text-slate-500 hover:text-violet-300 hover:bg-violet-500/10 hover:border-violet-500/40",
+    // Sem PTs na categoria: borda FIXA na cor do seletor (mesmo tom do vale
+    // do pulso, para a transição pulsando ↔ parado ser imperceptível).
+    btnIdle: "bg-black/20 border-violet-500/30 text-slate-500 hover:text-violet-300 hover:bg-violet-500/10 hover:border-violet-500/40",
+    pulse: "pt-stage-pulse pt-stage-pulse--violet",
     tabOpened: "bg-gradient-to-b from-violet-500/20 to-violet-600/10 border border-violet-500/60 text-violet-200 shadow-[0_0_10px_rgba(139,92,246,0.18)]",
     tabClosed: "border border-violet-500/15 text-violet-400/60 hover:text-violet-300 hover:border-violet-500/30 hover:bg-violet-500/[0.06] bg-transparent",
     counterOpened: "bg-violet-500/25 text-violet-200",
@@ -117,7 +126,8 @@ const STAGE_THEME: Record<PartyStage, {
   prontas: {
     label: "Prontas",
     btnActive: "bg-emerald-500/15 border-emerald-500/50 text-emerald-300 shadow-[0_0_8px_rgba(16,185,129,0.15)]",
-    btnIdle: "bg-black/20 border-emerald-900/15 text-slate-500 hover:text-emerald-300 hover:bg-emerald-500/10 hover:border-emerald-500/40",
+    btnIdle: "bg-black/20 border-emerald-500/30 text-slate-500 hover:text-emerald-300 hover:bg-emerald-500/10 hover:border-emerald-500/40",
+    pulse: "pt-stage-pulse pt-stage-pulse--emerald",
     tabOpened: "bg-gradient-to-b from-emerald-500/20 to-emerald-600/10 border border-emerald-500/60 text-emerald-200 shadow-[0_0_10px_rgba(16,185,129,0.18)]",
     tabClosed: "border border-emerald-500/15 text-emerald-400/60 hover:text-emerald-300 hover:border-emerald-500/30 hover:bg-emerald-500/[0.06] bg-transparent",
     counterOpened: "bg-emerald-500/25 text-emerald-200",
@@ -126,7 +136,8 @@ const STAGE_THEME: Record<PartyStage, {
   iniciadas: {
     label: "Iniciadas",
     btnActive: "bg-sky-500/15 border-sky-500/50 text-sky-300 shadow-[0_0_8px_rgba(14,165,233,0.15)]",
-    btnIdle: "bg-black/20 border-sky-900/15 text-slate-500 hover:text-sky-300 hover:bg-sky-500/10 hover:border-sky-500/40",
+    btnIdle: "bg-black/20 border-sky-500/30 text-slate-500 hover:text-sky-300 hover:bg-sky-500/10 hover:border-sky-500/40",
+    pulse: "pt-stage-pulse pt-stage-pulse--sky",
     tabOpened: "bg-gradient-to-b from-sky-500/20 to-sky-600/10 border border-sky-500/60 text-sky-200 shadow-[0_0_10px_rgba(14,165,233,0.18)]",
     tabClosed: "border border-sky-500/15 text-sky-400/60 hover:text-sky-300 hover:border-sky-500/30 hover:bg-sky-500/[0.06] bg-transparent",
     counterOpened: "bg-sky-500/25 text-sky-200",
@@ -135,7 +146,8 @@ const STAGE_THEME: Record<PartyStage, {
   aguardando: {
     label: "Aguardando Pagamento",
     btnActive: "bg-amber-500/15 border-amber-500/50 text-amber-300 shadow-[0_0_8px_color-mix(in_oklab,var(--color-amber-500)_15%,transparent)]",
-    btnIdle: "bg-black/20 border-amber-900/15 text-slate-500 hover:text-amber-300 hover:bg-amber-500/10 hover:border-amber-500/40",
+    btnIdle: "bg-black/20 border-amber-500/30 text-slate-500 hover:text-amber-300 hover:bg-amber-500/10 hover:border-amber-500/40",
+    pulse: "pt-stage-pulse pt-stage-pulse--amber",
     tabOpened: "bg-gradient-to-b from-amber-500/20 to-amber-600/10 border border-amber-500/60 text-amber-200 shadow-[0_0_10px_color-mix(in_oklab,var(--color-amber-500)_15%,transparent)]",
     tabClosed: "border border-amber-500/15 text-amber-400/60 hover:text-amber-300 hover:border-amber-500/30 hover:bg-amber-500/[0.05] bg-transparent",
     counterOpened: "bg-amber-600/25 text-amber-300",
@@ -790,9 +802,18 @@ export default function PartyManager({ parties, characters, waitingList, userNam
           {STAGE_ORDER.map(stage => {
             const theme = STAGE_THEME[stage];
             const isCurrent = ptStatusView === stage;
-            // O pulso de pendência financeira continua exclusivo do estágio
-            // "Aguardando Pagamento" — mesma regra do botão antigo.
-            const pulse = stage === "aguardando" && !isCurrent && pendingPaymentForUserCount > 0 ? " pt-pending-pulse" : "";
+            // Pulso de borda por categoria (mesmo conceito visual do antigo
+            // pulso âmbar, agora na cor de CADA seletor):
+            //   • Com Vagas / Prontas / Iniciadas → pulsa quando existe ≥1 PT
+            //     na categoria (dinâmico: partiesByStage vem do estado vivo,
+            //     então entrar/sair de PT liga/desliga o pulso na hora);
+            //   • Aguardando Pagamento → regra ORIGINAL preservada: pulsa
+            //     apenas quando há pagamento pendente COM o usuário logado.
+            // Sem gatilho, a borda fica FIXA na cor do seletor (btnIdle).
+            const shouldPulse = stage === "aguardando"
+              ? pendingPaymentForUserCount > 0
+              : partiesByStage[stage].length > 0;
+            const pulse = !isCurrent && shouldPulse ? ` ${theme.pulse}` : "";
             const title = stage === "comVagas"
               ? "Exibir PTs com slots ainda em aberto"
               : stage === "prontas"

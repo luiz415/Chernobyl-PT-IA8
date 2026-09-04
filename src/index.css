@@ -649,28 +649,45 @@ input[type="date"]::-webkit-calendar-picker-indicator {
   background: transparent;
 }
 
-/* ── Pulso de pendência da guia "Aguardando pagamento" (PartyManager) ──────
-   Aplicado SOMENTE ao botão NÃO selecionado com pendências reais para o
-   usuário: o corpo do botão permanece neutro (fundo escuro, texto slate —
-   inconfundível com o estado selecionado, que tem preenchimento âmbar) e as
-   BORDAS "respiram" entre o tom discreto e o âmbar vivo, com halo suave e
-   anel externo no pico. Números literais (rgb do amber-500) para não
-   depender de variáveis de tema. */
-@keyframes pt-pending-border-pulse {
+/* ── Pulso dos seletores de estágio das PTs (PartyManager) ─────────────────
+   Mesmo efeito visual do antigo pulso âmbar de "Aguardando Pagamento", agora
+   PARAMETRIZADO por cor: um único keyframe lê a variável `--pt-pulse-rgb` e
+   cada modificador define o RGB da SUA categoria (mesmos números literais dos
+   tons *-500 do Tailwind usados no STAGE_THEME, para não depender de
+   variáveis de tema).
+
+   Aplicado SOMENTE ao botão NÃO selecionado: o corpo permanece neutro (fundo
+   escuro, texto slate — inconfundível com o estado selecionado, que tem
+   preenchimento colorido) e as BORDAS "respiram" entre o tom discreto e a cor
+   viva, com halo suave e anel externo no pico.
+
+   Gatilhos (decididos no PartyManager):
+     • Com Vagas / Prontas / Iniciadas → pulsa quando a categoria tem ≥1 PT;
+     • Aguardando Pagamento → regra original preservada: pulsa apenas quando
+       há pagamento pendente COM o usuário logado. */
+@keyframes pt-stage-border-pulse {
   0%, 100% {
-    border-color: rgba(245, 158, 11, 0.3);
-    box-shadow: 0 0 0 0 rgba(245, 158, 11, 0);
+    border-color: rgba(var(--pt-pulse-rgb), 0.3);
+    box-shadow: 0 0 0 0 rgba(var(--pt-pulse-rgb), 0);
   }
   50% {
-    border-color: rgba(245, 158, 11, 0.9);
+    border-color: rgba(var(--pt-pulse-rgb), 0.9);
     box-shadow:
-      0 0 12px 1px rgba(245, 158, 11, 0.28),
-      0 0 0 3px rgba(245, 158, 11, 0.14);
+      0 0 12px 1px rgba(var(--pt-pulse-rgb), 0.28),
+      0 0 0 3px rgba(var(--pt-pulse-rgb), 0.14);
   }
 }
-.pt-pending-pulse {
-  animation: pt-pending-border-pulse 1.8s ease-in-out infinite;
+.pt-stage-pulse {
+  animation: pt-stage-border-pulse 1.8s ease-in-out infinite;
 }
+/* Com Vagas — violet-500 */
+.pt-stage-pulse--violet { --pt-pulse-rgb: 139, 92, 246; }
+/* Prontas — emerald-500 */
+.pt-stage-pulse--emerald { --pt-pulse-rgb: 16, 185, 129; }
+/* Iniciadas — sky-500 */
+.pt-stage-pulse--sky { --pt-pulse-rgb: 14, 165, 233; }
+/* Aguardando Pagamento — amber-500 (mesmos valores do pulso original) */
+.pt-stage-pulse--amber { --pt-pulse-rgb: 245, 158, 11; }
 
 
 body {

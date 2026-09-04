@@ -4229,26 +4229,49 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
                         )}
                       </div>
                     </td>
-                    {/* Coluna Twitch — prioridade: JOGADOR → DONO */}
+                    {/* Coluna Twitch — MESMO sistema da coluna WhatsApp: DONO + JOGADOR */}
                     <td className="px-2 py-0.5 text-center whitespace-nowrap">
                       {(() => {
+                        // Espelha a coluna WhatsApp: primeiro ícone = DONO,
+                        // segundo ícone = JOGADOR quando for pessoa diferente.
+                        // Para Services (slot "waiting") não existe Twitch do
+                        // cliente — vale apenas o canal do JOGADOR, igual ao
+                        // critério do WhatsApp que separa cliente × usuários
+                        // do app (aqui só usuários do app têm twitchChannel).
+                        const donoTwitch = !isWaiting && d.ownerUid ? (ownerTwitchMap[d.ownerUid] || "") : "";
                         const playerTwitch = playerUid ? (ownerTwitchMap[playerUid] || "") : "";
-                        const ownerTwitch = d.ownerUid ? (ownerTwitchMap[d.ownerUid] || "") : "";
-                        const twitchUrl = playerTwitch || ownerTwitch;
-                        const twitchLabel = playerTwitch ? (d.player || "Jogador") : (d.owner || "—");
-                        if (twitchUrl) {
-                          return (
-                            <button
-                              type="button"
-                              onClick={(e) => { e.stopPropagation(); openExternalUrl(twitchUrl); }}
-                              className="inline-flex items-center justify-center w-6 h-6 rounded bg-violet-500/15 hover:bg-violet-500/30 text-violet-400 hover:text-violet-300 transition-colors cursor-pointer"
-                              title={`Abrir Twitch de ${twitchLabel}`}
-                            >
-                              <Tv size={12} />
-                            </button>
-                          );
+                        const showPlayerTwitch = !!playerTwitch && !isSamePerson;
+                        // Quando DONO = JOGADOR, um único botão (mesma pessoa,
+                        // mesmo canal) — idêntico ao comportamento do WhatsApp.
+                        if (!donoTwitch && !showPlayerTwitch && !(isSamePerson && playerTwitch)) {
+                          return <span className="text-slate-700 text-[10px]">—</span>;
                         }
-                        return <span className="text-slate-700 text-[10px]">—</span>;
+                        const firstUrl = donoTwitch || (isSamePerson ? playerTwitch : "");
+                        const firstLabel = donoTwitch ? donoLabel : playerLabel;
+                        return (
+                          <div className="flex items-center justify-center gap-1">
+                            {firstUrl && (
+                              <button
+                                type="button"
+                                onClick={(e) => { e.stopPropagation(); openExternalUrl(firstUrl); }}
+                                className="inline-flex items-center justify-center w-6 h-6 rounded bg-violet-500/15 hover:bg-violet-500/30 text-violet-400 hover:text-violet-300 transition-colors cursor-pointer"
+                                title={`Abrir Twitch de ${firstLabel}`}
+                              >
+                                <Tv size={12} />
+                              </button>
+                            )}
+                            {showPlayerTwitch && (
+                              <button
+                                type="button"
+                                onClick={(e) => { e.stopPropagation(); openExternalUrl(playerTwitch); }}
+                                className="inline-flex items-center justify-center w-6 h-6 rounded bg-violet-500/15 hover:bg-violet-500/30 text-violet-400 hover:text-violet-300 transition-colors cursor-pointer"
+                                title={`Abrir Twitch de ${playerLabel}`}
+                              >
+                                <Tv size={12} />
+                              </button>
+                            )}
+                          </div>
+                        );
                       })()}
                     </td>
                     <td className="px-1 py-0.5 text-center whitespace-nowrap">
