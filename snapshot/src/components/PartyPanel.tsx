@@ -1576,6 +1576,13 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
       ? "in_progress"
       : "pre_start";
   const canOrganizeParty = questState === "pre_start";
+  // ── ALTERAÇÃO DO SERVIDOR DA PT ───────────────────────────────────────────
+  // Permitida SOMENTE enquanto a PT está na categoria "Com Vagas" do seletor
+  // (espelho exato de `getPartyStage` no PartyManager): slot disponível
+  // (!isFull) E Quest não iniciada/pausada/concluída. O fallback do início da
+  // Quest já está embutido: `questState === "pre_start"` exige !ptStartedAt e
+  // !questConcluida; `!party.isPaused` cobre o estado "iniciadas" por pausa.
+  const canChangeServer = !isFull && questState === "pre_start" && !party.isPaused;
 
   // PERMISSÕES DE EDIÇÃO DA PT (adicionado)
   // O usuário é o líder da PT se o UID dele for igual ao `leaderUid` armazenado.
@@ -2780,7 +2787,15 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
           {party.servidor && (
             <>
               {ptTypeBadge && <span className="h-5 w-px bg-white/10" />}
-              {editingServer && (party.leaderUid === currentUser?.uid || party.LeaderPT === userName) ? (
+              {/* ── EDIÇÃO DO SERVIDOR — SÓ COM VAGAS ─────────────────────────
+                  O servidor só pode ser alterado enquanto a PT está na
+                  categoria "Com Vagas" do seletor: slot livre (!isFull) e
+                  Quest ainda não iniciada (fallback: ptStartedAt/isPaused/
+                  questConcluida bloqueiam — mesma regra de getPartyStage no
+                  PartyManager). PT formada/completa ou em andamento mantém o
+                  servidor fixo. A APARÊNCIA do botão não muda entre os
+                  estados — apenas o clique deixa de abrir o seletor. */}
+              {editingServer && canChangeServer && (party.leaderUid === currentUser?.uid || party.LeaderPT === userName) ? (
                 <div className="flex items-center gap-1">
                   <select
                     value={serverValue}
@@ -2806,7 +2821,7 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
                 <button
                   type="button"
                   onClick={() => {
-                    if (party.leaderUid === currentUser?.uid || party.LeaderPT === userName) {
+                    if (canChangeServer && (party.leaderUid === currentUser?.uid || party.LeaderPT === userName)) {
                       setServerValue(party.servidor || "");
                       setEditingServer(true);
                     }
@@ -2818,7 +2833,11 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
                   }`}
                   title={
                     (party.leaderUid === currentUser?.uid || party.LeaderPT === userName)
-                      ? "Clique para editar o servidor"
+                      ? (canChangeServer
+                          ? "Clique para editar o servidor"
+                          : questState !== "pre_start" || party.isPaused
+                            ? "O servidor não pode ser alterado após o início da Quest"
+                            : "O servidor só pode ser alterado enquanto a PT tem vagas")
                       : "Servidor da PT"
                   }
                 >
