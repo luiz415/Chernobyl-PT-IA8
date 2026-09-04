@@ -1,7 +1,7 @@
 import { useMemo, useState, type MouseEvent } from "react";
 import { ArrowDown, ArrowUp, ArrowUpDown, Check, Copy, ExternalLink } from "lucide-react";
 import type { WaitingService } from "../types";
-import { VOCATIONS, VOC_COLORS, formatRC, formatDateBR, customAlert } from "../types";
+import { VOCATIONS, VOC_COLORS, formatDateBR, customAlert } from "../types";
 import { FilterSelect, FilterInline, FilterNumber } from "./FilterTypes";
 import { useAuth } from "../context/AuthContext";
 import { openExternalUrl } from "../utils/openExternal";
@@ -154,13 +154,12 @@ export default function WaitingServiceAvailableList({ items, selectedIds, isFull
             <th className={th} onClick={() => toggleSort("voc")}><div className="flex items-center justify-center gap-0.5">Voc <SI col="voc" /></div></th>
             <th className={th} onClick={() => toggleSort("level")}><div className="flex items-center justify-center gap-0.5">Lv <SI col="level" /></div></th>
             <th className={th} onClick={() => toggleSort("ownerName")}><div className="flex items-center justify-center gap-0.5">Dono <SI col="ownerName" /></div></th>
-            <th className={th} onClick={() => toggleSort("valorCombinado")}><div className="flex items-center justify-center gap-0.5">Valor <SI col="valorCombinado" /></div></th>
+            <th className={th} onClick={() => toggleSort("addedBy")}><div className="flex items-center justify-center gap-0.5">Serviceiro <SI col="addedBy" /></div></th>
             {/* "Add em" é o critério PRINCIPAL fixo (mais antigo → mais
                 recente); clicar não altera — as demais colunas desempatam. */}
             <th className={th + " cursor-default"} title="Ordenação fixa: da data mais antiga para a mais recente (critério principal da lista)"><div className="flex items-center justify-center gap-0.5">Add em <ArrowUp size={11} className="text-emerald-400" /></div></th>
             <th className={th + " cursor-default"}>WA</th>
             <th className={th + " cursor-default"}>Quest</th>
-            <th className={th} onClick={() => toggleSort("addedBy")}><div className="flex items-center justify-center gap-0.5">Serviceiro <SI col="addedBy" /></div></th>
             <th className={th + " cursor-default"}>Notas</th>
           </tr>
           <tr>
@@ -221,7 +220,17 @@ export default function WaitingServiceAvailableList({ items, selectedIds, isFull
                 />
               </div>
             </th>
-            <th className="bg-[var(--th-bg-base)] px-1 py-1 border-b border-[var(--th-line)]/80" />
+            <th className="bg-[var(--th-bg-base)] px-1 py-1 border-b border-[var(--th-line)]/80">
+              <div className="flex justify-center">
+                <FilterSelect
+                  label="Serviceiro"
+                  options={wlAddedByOptions}
+                  selected={filters.addedBy || ""}
+                  onSelect={(v) => updateFilter("addedBy", v)}
+                  searchable
+                />
+              </div>
+            </th>
             <th className="bg-[var(--th-bg-base)] px-1 py-1 border-b border-[var(--th-line)]/80" />
             <th className="bg-[var(--th-bg-base)] px-1 py-1 border-b border-[var(--th-line)]/80" />
             <th className="bg-[var(--th-bg-base)] px-1 py-1 border-b border-[var(--th-line)]/80">
@@ -238,17 +247,6 @@ export default function WaitingServiceAvailableList({ items, selectedIds, isFull
             </th>
             <th className="bg-[var(--th-bg-base)] px-1 py-1 border-b border-[var(--th-line)]/80">
               <div className="flex justify-center">
-                <FilterSelect
-                  label="Serviceiro"
-                  options={wlAddedByOptions}
-                  selected={filters.addedBy || ""}
-                  onSelect={(v) => updateFilter("addedBy", v)}
-                  searchable
-                />
-              </div>
-            </th>
-            <th className="bg-[var(--th-bg-base)] px-1 py-1 border-b border-[var(--th-line)]/80">
-              <div className="flex justify-center">
                 <FilterInline
                   value={filters.notes || ""}
                   onChange={(v) => updateFilter("notes", v)}
@@ -259,7 +257,7 @@ export default function WaitingServiceAvailableList({ items, selectedIds, isFull
           </tr>
         </thead>
         <tbody>
-          {sorted.length === 0 && <tr><td colSpan={13} className="text-center py-6 text-slate-500 text-xs">Nenhum service disponível.</td></tr>}
+          {sorted.length === 0 && <tr><td colSpan={12} className="text-center py-6 text-slate-500 text-xs">Nenhum service disponível.</td></tr>}
           {sorted.map((w, idx) => {
             const canViewWhats = canViewServiceWhats(w);
             const hasVisibleWhats = canViewWhats && !!cleanPhone(w);
@@ -316,7 +314,7 @@ export default function WaitingServiceAvailableList({ items, selectedIds, isFull
                 <td className="px-2 py-1.5 text-center whitespace-nowrap"><span className="font-bold" style={{ color: VOC_COLORS[w.voc!] }}>{w.voc}</span></td>
                 <td className="px-2 py-1.5 text-center tabular-nums whitespace-nowrap">{w.level || "—"}</td>
                 <td className="px-2 py-1.5 text-center whitespace-nowrap">{w.ownerName || "—"}</td>
-                <td className="px-2 py-1.5 text-center tabular-nums whitespace-nowrap">{formatRC(w.valorCombinado || 0)}</td>
+                <td className="px-2 py-1.5 text-center whitespace-nowrap">{w.addedBy || "—"}</td>
                 <td className="px-2 py-1.5 text-center whitespace-nowrap">{formatDateBR(w.dataAdicionado)}</td>
                 <td className="px-2 py-1.5 text-center whitespace-nowrap">
                   {hasVisibleWhats ? (
@@ -331,7 +329,6 @@ export default function WaitingServiceAvailableList({ items, selectedIds, isFull
                     : <span className="text-slate-400 font-bold text-[10px] tracking-wider">SOULWAR</span>
                   }
                 </td>
-                <td className="px-2 py-1.5 text-center whitespace-nowrap">{w.addedBy || "—"}</td>
                 <td className="px-2 py-1.5 text-center truncate max-w-[160px] text-slate-400" title={w.notes}>{w.notes || "—"}</td>
               </tr>
             );
