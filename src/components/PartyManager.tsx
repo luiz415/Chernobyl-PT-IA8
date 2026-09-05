@@ -1,12 +1,13 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { createPortal } from "react-dom";
-import { Plus, Users, X, Lock, LockOpen, RotateCcw, ChevronDown, UserCheck, ArrowDown, ArrowUp, ArrowUpDown, Sparkles, RefreshCw, BarChart3, Eye, EyeOff, MousePointerClick } from "lucide-react";
+import { Plus, Users, X, Lock, LockOpen, RotateCcw, ChevronDown, UserCheck, ArrowDown, ArrowUp, ArrowUpDown, Sparkles, RefreshCw, BarChart3, Eye, EyeOff, MousePointerClick, Coins } from "lucide-react";
 import type { Character, CharacterAcquisition, PartyFinalizationReason, PartyTab, WaitingService } from "../types";
 import { getCharacterAccountKey } from "../utils/accountIdentity";
 import { countPartiesAwaitingPaymentForUser } from "../utils/partyPendingPayment";
 import { getPartyParticipation, isPartyVisibleToViewer } from "../utils/partyPermissions";
 import { VOCATIONS } from "../types";
 import PartyPanel from "./PartyPanel";
+import ItemsForSaleModal, { collectUnsoldSaleGroups } from "./ItemsForSaleModal";
 import AvailableCharacter, { type OtherPartyInfo } from "./AvailableCharacter";
 import RefreshButton from "./RefreshButton";
 import ServersPyramidChart from "./ServerGraphic";
@@ -607,6 +608,40 @@ export default function PartyManager({ parties, characters, waitingList, userNam
   }, [baseFilteredParties]);
   const pendentesParties = partiesByStage.aguardando;
 
+  // ── ITENS A VENDA ───────────────────────────────────────────────────────
+  // Itens dropados AINDA NÃO VENDIDOS nas PTs "Aguardando Pagamento" que o
+  // usuário atual pode ver. As PTs consideradas aplicam SOMENTE as regras de
+  // ACESSO da lista (isPartyVisibleToViewer + participação p/ Normal — as
+  // mesmas de baseFilteredParties), ignorando de propósito os filtros
+  // visuais (servidor/privada/pública/minhas): o modal reflete tudo a que o
+  // usuário tem acesso, não o recorte momentâneo da tela. A lista é
+  // individual por usuário — e 100% local: nenhuma consulta extra ao
+  // Firestore, apenas os documentos que o painel já escuta em tempo real.
+  const [showItemsForSale, setShowItemsForSale] = useState(false);
+  const itemsForSaleParties = useMemo(() => {
+    const uid = currentUser?.uid;
+    return parties.filter(p => {
+      if (getPartyStage(p) !== "aguardando") return false;
+      if (!isPartyVisibleToViewer(p, { uid: uid || "", userName, role: userProfile?.role },
+        (id) => characters.find(c => c.id === id)?.ownerUid || p.memberSnapshots?.[id]?.ownerUid)) {
+        return false;
+      }
+      if (isNormalUser) {
+        if (!uid) return false;
+        const participation = getPartyParticipation(p,
+          { uid, userName, role: userProfile?.role },
+          (id) => characters.find(c => c.id === id)?.ownerUid || p.memberSnapshots?.[id]?.ownerUid);
+        if (!participation.isParticipant) return false;
+      }
+      return true;
+    });
+  }, [parties, currentUser?.uid, userName, userProfile?.role, isNormalUser, characters]);
+  const unsoldItemsCount = useMemo(
+    () => collectUnsoldSaleGroups(itemsForSaleParties, characters, waitingList)
+      .reduce((s, g) => s + g.items.length, 0),
+    [itemsForSaleParties, characters, waitingList],
+  );
+
   // PTs que são pendências de pagamento REAIS para o usuário logado: lideradas
   // por ele (deve pagar os membros) ou com slot da divisão ainda não pago
   // beneficiando-o (deve receber). Participantes sem participação financeira
@@ -844,6 +879,24 @@ export default function PartyManager({ parties, characters, waitingList, userNam
               </button>
             );
           })}
+
+          {/* ── ITENS A VENDA ─────────────────────────────────────────────
+              Botão à direita do seletor "Aguardando Pagamento": abre o modal
+              que centraliza os itens ainda não vendidos das PTs "aguardando"
+              acessíveis ao usuário. O separador vertical deixa claro que NÃO
+              é um seletor de categoria, mantendo-o integrado à mesma área. */}
+          <div className="w-px h-4 bg-amber-500/25 mx-0.5" />
+          <button
+            type="button"
+            onClick={() => setShowItemsForSale(true)}
+            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border text-[10px] font-bold transition-all duration-200 cursor-pointer whitespace-nowrap bg-black/20 border-amber-500/30 text-slate-500 hover:text-amber-300 hover:bg-amber-500/10 hover:border-amber-500/40"
+            title={unsoldItemsCount > 0
+              ? `Ver itens ainda não vendidos nas PTs em Aguardando Pagamento — ${unsoldItemsCount} item${unsoldItemsCount === 1 ? "" : "s"} à venda`
+              : "Ver itens ainda não vendidos nas PTs em Aguardando Pagamento"}
+          >
+            <Coins size={11} className="flex-shrink-0" />
+            Itens a Venda{unsoldItemsCount > 0 ? ` (${unsoldItemsCount})` : ""}
+          </button>
         </div>
 
         <div className="relative flex items-center gap-0.5 bg-[var(--th-bg-base)] p-0.5 rounded-xl border border-[var(--th-brand)]/60 flex-shrink-0">
@@ -1441,6 +1494,19 @@ export default function PartyManager({ parties, characters, waitingList, userNam
           onCreate("", suggestedPtType, horarioTimestamp, visibility, undefined, suggestedServidor, suggestedIds);
         }}
       />
+
+      {/* Modal "Itens a Venda" — independente da PT selecionada; recebe as
+          PTs "Aguardando Pagamento" já filtradas pelas regras de ACESSO do
+          usuário atual (itemsForSaleParties). Props vivas do listener de
+          parties -> conteúdo em tempo real, sem nenhuma consulta extra. */}
+      {showItemsForSale && (
+        <ItemsForSaleModal
+          parties={itemsForSaleParties}
+          characters={characters}
+          waitingList={waitingList}
+          onClose={() => setShowItemsForSale(false)}
+        />
+      )}
     </div>
   );
 }
