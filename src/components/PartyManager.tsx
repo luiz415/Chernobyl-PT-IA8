@@ -641,6 +641,22 @@ export default function PartyManager({ parties, characters, waitingList, userNam
     [itemsForSaleParties, characters, waitingList],
   );
 
+  // ── PTs COM TODOS OS ITENS VENDIDOS ─────────────────────────────────────
+  // Reutiliza `collectSaleGroups` (a MESMA fonte do estado vendido/não
+  // vendido do modal "Itens a Venda"): uma PT entra no conjunto quando tem
+  // ≥1 item dropado e NENHUM pendente. A aba dessas PTs ganha o pulso âmbar
+  // (mesmas classes CSS dos seletores — um único keyframe compartilhado, o
+  // navegador alinha todas as animações no mesmo relógio, então múltiplas
+  // PTs pulsam perfeitamente sincronizadas). Cálculo local sobre PTs que o
+  // painel já escuta — zero Firestore.
+  const allItemsSoldPartyIds = useMemo(() => {
+    const set = new Set<string>();
+    collectSaleGroups(pendentesParties, characters, waitingList).forEach(g => {
+      if (g.items.length > 0 && g.items.every(it => it.sold)) set.add(g.partyId);
+    });
+    return set;
+  }, [pendentesParties, characters, waitingList]);
+
   // PTs que são pendências de pagamento REAIS para o usuário logado: lideradas
   // por ele (deve pagar os membros) ou com slot da divisão ainda não pago
   // beneficiando-o (deve receber). Participantes sem participação financeira
@@ -798,6 +814,13 @@ export default function PartyManager({ parties, characters, waitingList, userNam
             const isActive = activePt === p.id;
             const isMin = minimized[p.id];
             const isTabOpened = isActive && !isMin;
+            // PT com TODOS os itens vendidos: a aba pulsa em âmbar (mesmas
+            // classes dos seletores — keyframe único compartilhado, logo
+            // várias PTs pulsam em perfeita sincronia). Segue o padrão dos
+            // seletores: o pulso só aparece quando a aba NÃO está aberta.
+            const allSoldPulse = !isTabOpened && allItemsSoldPartyIds.has(p.id)
+              ? ` ${STAGE_THEME.aguardando.pulse}`
+              : "";
 
              return (
                 <div key={p.id} className="flex items-center gap-0 group/tab">
@@ -813,7 +836,7 @@ export default function PartyManager({ parties, characters, waitingList, userNam
                   }}
                   title={isTabOpened ? "Minimizar" : "Abrir PT"}
                   className={`inline-flex items-center gap-1 rounded-lg font-semibold transition-all duration-200 cursor-pointer whitespace-nowrap ${
-                    isTabOpened ? theme.tabOpened : theme.tabClosed
+                    isTabOpened ? theme.tabOpened : `${theme.tabClosed}${allSoldPulse}`
                   }`}
                   style={{ padding: "clamp(3px, 0.4vh, 5px) clamp(5px, 0.65vw, 9px)", fontSize: "clamp(10px, 1.2vh, 12px)" }}
                 >
