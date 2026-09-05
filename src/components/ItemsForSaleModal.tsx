@@ -345,7 +345,8 @@ export default function ItemsForSaleModal({ parties, characters, waitingList, on
           const operacao = it.saleSummary ? ` (${it.saleSummary})` : "";
           linhas.push(`• ✅ ${it.itemName}${participante} — Vendido: ${formatRC(it.soldValueRC)}${operacao}`);
         } else {
-          linhas.push(`• 🗡️ ${it.itemName}${participante}`);
+          // Pendente: estado explícito após o nome do usuário.
+          linhas.push(`• 🗡️ ${it.itemName}${participante} — Não vendido`);
         }
       });
     });
