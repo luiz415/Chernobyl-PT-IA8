@@ -211,6 +211,21 @@ function copyText(texto: string) {
   }
 }
 
+// ── PREFERÊNCIA "EXIBIR VENDIDOS" ───────────────────────────────────────────
+// Persistida em localStorage (MESMO padrão do `usePersistedState` já usado no
+// PartyManager para larguras/preferências de painel): estado local, leve e
+// sem NENHUMA leitura/escrita no Firestore. Padrão: marcada (true).
+const SHOW_SOLD_STORAGE_KEY = "itemsForSaleModal_showSold";
+
+function readShowSoldPreference(): boolean {
+  try {
+    const v = localStorage.getItem(SHOW_SOLD_STORAGE_KEY);
+    return v === null ? true : JSON.parse(v) === true;
+  } catch {
+    return true;
+  }
+}
+
 interface Props {
   /** PTs "Aguardando Pagamento" ACESSÍVEIS ao usuário atual (o PartyManager
    *  aplica as regras de acesso ANTES de passar — o modal nunca vê PT sem
@@ -232,6 +247,27 @@ export default function ItemsForSaleModal({ parties, characters, waitingList, on
   );
   const unsoldCount = countUnsoldItems(groups);
   const soldCount = groups.reduce((s, g) => s + g.items.filter(i => i.sold).length, 0);
+
+  // ── "Exibir Vendidos" — preferência persistente (localStorage) ────────────
+  // Marcada por padrão; sobrevive a fechar/reabrir o modal e ao próprio app.
+  const [showSold, setShowSold] = useState<boolean>(readShowSoldPreference);
+  useEffect(() => {
+    try { localStorage.setItem(SHOW_SOLD_STORAGE_KEY, JSON.stringify(showSold)); } catch {}
+  }, [showSold]);
+
+  // Grupos VISÍVEIS conforme o filtro: com "Exibir Vendidos" desmarcada, os
+  // itens vendidos saem de cada PT e PTs que ficarem sem itens saem da lista.
+  // É um filtro derivado (useMemo sobre dados já em memória) — nenhuma
+  // reconstrução além do necessário e nenhum acesso novo ao Firestore.
+  // A EXIBIÇÃO e o "Copiar Completo (WA)" usam esta MESMA lista, então o
+  // texto copiado corresponde exatamente ao que está na tela no clique.
+  const visibleGroups = useMemo(() => {
+    if (showSold) return groups;
+    return groups
+      .map(g => ({ ...g, items: g.items.filter(it => !it.sold) }))
+      .filter(g => g.items.length > 0);
+  }, [groups, showSold]);
+  const visibleSoldCount = showSold ? soldCount : 0;
 
   const [copied, setCopied] = useState<"resumo" | "completo" | null>(null);
   const [copiedPartyId, setCopiedPartyId] = useState<string | null>(null);
@@ -276,7 +312,10 @@ export default function ItemsForSaleModal({ parties, characters, waitingList, on
     flagCopied("resumo");
   }
 
-  // ── Copiar Completo (WA): pendentes E vendidos (com valores), por PT ──────
+  // ── Copiar Completo (WA): EXATAMENTE os itens exibidos no momento ─────────
+  // Usa `visibleGroups` (a mesma lista renderizada): com "Exibir Vendidos"
+  // marcada inclui pendentes E vendidos (com valores); desmarcada, somente
+  // pendentes — itens ocultos pelo filtro nunca entram no texto.
   function copyFull() {
     const fmtDateHH = (ts: number) => {
       const dt = new Date(ts);
@@ -288,9 +327,11 @@ export default function ItemsForSaleModal({ parties, characters, waitingList, on
     };
 
     const linhas: string[] = [
-      `🏷️ *Itens a Venda* (${unsoldCount} pendente${unsoldCount === 1 ? "" : "s"} · ${soldCount} vendido${soldCount === 1 ? "" : "s"})`,
+      showSold
+        ? `🏷️ *Itens a Venda* (${unsoldCount} pendente${unsoldCount === 1 ? "" : "s"} · ${soldCount} vendido${soldCount === 1 ? "" : "s"})`
+        : `🏷️ *Itens a Venda* (${unsoldCount} pendente${unsoldCount === 1 ? "" : "s"})`,
     ];
-    groups.forEach(g => {
+    visibleGroups.forEach(g => {
       linhas.push("");
       linhas.push(`📋 *PT: ${g.partyName}*${g.questSigla ? ` (${g.questSigla})` : ""}`);
       if (g.serverName) linhas.push(`🌍 Servidor: ${g.serverName}`);
@@ -388,34 +429,57 @@ export default function ItemsForSaleModal({ parties, characters, waitingList, on
                 </p>
               </div>
             </div>
-            <button
-              type="button"
-              onClick={onClose}
-              className="w-7 h-7 rounded-lg border border-white/10 bg-white/5 text-slate-400 hover:text-white hover:bg-white/10 flex items-center justify-center transition-colors cursor-pointer"
-              title="Fechar"
-            >
-              <X size={14} />
-            </button>
+            <div className="flex items-center gap-2.5">
+              {/* ☑ Exibir Vendidos — preferência persistente (localStorage).
+                  Controla a exibição E o conteúdo do Copiar Completo (WA). */}
+              <label
+                className="inline-flex items-center gap-1.5 cursor-pointer select-none text-[10px] font-bold text-slate-300 hover:text-emerald-300 transition-colors"
+                title={showSold
+                  ? "Ocultar os itens já vendidos (exibir somente os ainda à venda)"
+                  : "Exibir também os itens já vendidos, com seus valores"}
+              >
+                <input
+                  type="checkbox"
+                  checked={showSold}
+                  onChange={e => setShowSold(e.target.checked)}
+                  className={`w-3.5 h-3.5 accent-emerald-500 cursor-pointer appearance-none rounded-[3px] border ${showSold ? "border-emerald-400 bg-emerald-500/30" : "border-slate-600 bg-black/40"} checked:bg-emerald-500/40 checked:border-emerald-400 relative checked:after:content-['✓'] checked:after:absolute checked:after:inset-0 checked:after:flex checked:after:items-center checked:after:justify-center checked:after:text-[8px] checked:after:text-emerald-300 checked:after:font-bold`}
+                />
+                Exibir Vendidos
+              </label>
+              <button
+                type="button"
+                onClick={onClose}
+                className="w-7 h-7 rounded-lg border border-white/10 bg-white/5 text-slate-400 hover:text-white hover:bg-white/10 flex items-center justify-center transition-colors cursor-pointer"
+                title="Fechar"
+              >
+                <X size={14} />
+              </button>
+            </div>
           </div>
         </div>
 
         {/* Corpo */}
         <div className="flex-1 overflow-y-auto px-4 py-3 space-y-2.5">
-          {groups.length === 0 ? (
-            // Estado vazio elegante — o modal nunca fica em branco.
+          {visibleGroups.length === 0 ? (
+            // Estado vazio elegante — o modal nunca fica em branco. Quando o
+            // filtro está ocultando vendidos existentes, a mensagem explica.
             <div className="flex flex-col items-center justify-center text-center py-12 gap-3.5">
               <span className="w-14 h-14 rounded-2xl bg-amber-500/[0.06] border border-amber-500/20 flex items-center justify-center">
                 <PackageOpen size={26} className="text-amber-400/50" />
               </span>
               <p className="text-sm font-bold text-slate-200">
-                Você não tem acesso a nenhum item à venda no momento.
+                {!showSold && soldCount > 0
+                  ? "Nenhum item pendente de venda no momento."
+                  : "Você não tem acesso a nenhum item à venda no momento."}
               </p>
               <p className="text-[11px] text-slate-500 max-w-[320px] leading-relaxed">
-                Itens aparecem aqui quando uma PT sua entra em <span className="text-amber-400/80">Aguardando Pagamento</span> com itens dropados.
+                {!showSold && soldCount > 0
+                  ? <>Todos os {soldCount} ite{soldCount === 1 ? "m" : "ns"} já foram vendidos — marque <span className="text-emerald-400/90">Exibir Vendidos</span> para vê-los com seus valores.</>
+                  : <>Itens aparecem aqui quando uma PT sua entra em <span className="text-amber-400/80">Aguardando Pagamento</span> com itens dropados.</>}
               </p>
             </div>
           ) : (
-            groups.map(g => {
+            visibleGroups.map(g => {
               const party = parties.find(p => p.id === g.partyId);
               // "Copiar (WA)" da PT: MESMA condição de visibilidade do botão
               // no painel (quest finalizada e não falhada).
@@ -553,7 +617,7 @@ export default function ItemsForSaleModal({ parties, characters, waitingList, on
           <button
             type="button"
             onClick={copyFull}
-            disabled={unsoldCount === 0 && soldCount === 0}
+            disabled={unsoldCount === 0 && visibleSoldCount === 0}
             className="flex-1 py-2 rounded-lg border border-sky-500/40 bg-sky-500/12 text-sky-300 text-[11px] font-bold hover:bg-sky-500/22 hover:border-sky-500/60 transition-colors cursor-pointer inline-flex items-center justify-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
           >
             {copied === "completo" ? <Check size={12} /> : <Copy size={12} />}
