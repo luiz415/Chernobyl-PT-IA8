@@ -31,8 +31,8 @@ export const PULSE_PERIOD_MS = 1800;
 
 /** Keyframes que participam da sincronização global:
  *   • pt-stage-border-pulse — seletores de estágio das PTs (PartyManager);
- *   • footer-pulse-ring     — anel pulsante dos botões do rodapé (App). */
-const SYNCED_ANIMATION_NAMES = new Set(["pt-stage-border-pulse", "footer-pulse-ring"]);
+ *     também usado pelos botões do rodapé (App, container `.footer-pulse`). */
+const SYNCED_ANIMATION_NAMES = new Set(["pt-stage-border-pulse"]);
 
 let installed = false;
 

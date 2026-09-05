@@ -5307,7 +5307,7 @@ export default function App() {
             <button
               type="button"
               onClick={() => setFeedbackOpen(true)}
-              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[9px] font-medium border border-slate-500/35 bg-[var(--th-bg-base)] text-slate-300 hover:text-slate-100 hover:bg-[var(--th-bg-raised)] hover:border-slate-400/60 hover:shadow-[0_0_10px_rgba(148,163,184,0.10)] shadow-[0_0_6px_rgba(148,163,184,0.05)] transition-all duration-200 cursor-pointer"
+              className="pt-stage-pulse pt-stage-pulse--slate inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[9px] font-medium border border-slate-500/35 bg-[var(--th-bg-base)] text-slate-300 hover:text-slate-100 hover:bg-[var(--th-bg-raised)] hover:border-slate-400/60 hover:shadow-[0_0_10px_rgba(148,163,184,0.10)] shadow-[0_0_6px_rgba(148,163,184,0.05)] transition-all duration-200 cursor-pointer"
             >
               <MessageSquareMore size={10} className="text-slate-400/80" />
               Feedback
@@ -5316,7 +5316,7 @@ export default function App() {
             <button
               type="button"
               onClick={() => setDonationOpen(true)}
-              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[9px] font-medium border border-amber-600/35 bg-[var(--th-bg-base)] text-slate-300 hover:text-slate-100 hover:bg-[var(--th-bg-raised)] hover:border-amber-500/60 hover:shadow-[0_0_12px_color-mix(in_oklab,var(--color-amber-500)_15%,transparent)] shadow-[0_0_6px_color-mix(in_oklab,var(--color-amber-500)_6%,transparent)] transition-all duration-200 cursor-pointer"
+              className="pt-stage-pulse pt-stage-pulse--amber-600 inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[9px] font-medium border border-amber-600/35 bg-[var(--th-bg-base)] text-slate-300 hover:text-slate-100 hover:bg-[var(--th-bg-raised)] hover:border-amber-500/60 hover:shadow-[0_0_12px_color-mix(in_oklab,var(--color-amber-500)_15%,transparent)] shadow-[0_0_6px_color-mix(in_oklab,var(--color-amber-500)_6%,transparent)] transition-all duration-200 cursor-pointer"
               title="Colaborar com o projeto"
             >
               <Heart size={10} className="text-amber-500/70" />
@@ -5336,8 +5336,8 @@ export default function App() {
                 onClick={() => setAdminOpen(true)}
                 className={
                   totalPendingBossActions > 0
-                    ? "inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[9px] font-bold border-2 border-amber-500/80 bg-gradient-to-b from-amber-900/25 to-amber-950/15 text-amber-200 hover:from-amber-900/35 hover:to-amber-950/25 transition-all duration-200 cursor-pointer animate-pulse shadow-[0_0_16px_color-mix(in_oklab,var(--color-amber-500)_30%,transparent),0_0_4px_color-mix(in_oklab,var(--color-amber-500)_15%,transparent)]"
-                    : "inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[9px] font-medium border border-violet-600/35 bg-[var(--th-bg-base)] text-slate-300 hover:text-slate-100 hover:bg-[var(--th-bg-raised)] hover:border-violet-500/60 hover:shadow-[0_0_12px_rgba(139,92,246,0.15)] shadow-[0_0_6px_rgba(139,92,246,0.06)] transition-all duration-200 cursor-pointer"
+                    ? "pt-stage-pulse pt-stage-pulse--amber inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[9px] font-bold border-2 border-amber-500/80 bg-gradient-to-b from-amber-900/25 to-amber-950/15 text-amber-200 hover:from-amber-900/35 hover:to-amber-950/25 transition-all duration-200 cursor-pointer animate-pulse shadow-[0_0_16px_color-mix(in_oklab,var(--color-amber-500)_30%,transparent),0_0_4px_color-mix(in_oklab,var(--color-amber-500)_15%,transparent)]"
+                    : "pt-stage-pulse pt-stage-pulse--violet-600 inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[9px] font-medium border border-violet-600/35 bg-[var(--th-bg-base)] text-slate-300 hover:text-slate-100 hover:bg-[var(--th-bg-raised)] hover:border-violet-500/60 hover:shadow-[0_0_12px_rgba(139,92,246,0.15)] shadow-[0_0_6px_rgba(139,92,246,0.06)] transition-all duration-200 cursor-pointer"
                 }
               >
                 <Shield size={10} className="text-violet-500/70" />
@@ -5352,7 +5352,7 @@ export default function App() {
             <button
               type="button"
               onClick={() => setReceiveRCOpen(true)}
-              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md border border-emerald-600/35 bg-[var(--th-bg-base)] text-slate-300 hover:text-slate-100 hover:bg-[var(--th-bg-raised)] hover:border-emerald-500/60 hover:shadow-[0_0_12px_rgba(16,185,129,0.15)] shadow-[0_0_6px_rgba(16,185,129,0.06)] transition-all duration-200 text-[9px] font-medium cursor-pointer"
+              className="pt-stage-pulse pt-stage-pulse--emerald-600 inline-flex items-center gap-1 px-2.5 py-1 rounded-md border border-emerald-600/35 bg-[var(--th-bg-base)] text-slate-300 hover:text-slate-100 hover:bg-[var(--th-bg-raised)] hover:border-emerald-500/60 hover:shadow-[0_0_12px_rgba(16,185,129,0.15)] shadow-[0_0_6px_rgba(16,185,129,0.06)] transition-all duration-200 text-[9px] font-medium cursor-pointer"
               title="Configurar personagem principal para receber RC"
             >
               <User size={10} className="text-emerald-500/70" />
@@ -5361,7 +5361,7 @@ export default function App() {
             <button
               type="button"
               onClick={() => setTwitchOpen(true)}
-              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md border border-violet-600/35 bg-[var(--th-bg-base)] text-slate-300 hover:text-slate-100 hover:bg-[var(--th-bg-raised)] hover:border-violet-500/60 hover:shadow-[0_0_12px_rgba(139,92,246,0.15)] shadow-[0_0_6px_rgba(139,92,246,0.06)] transition-all duration-200 text-[9px] font-medium cursor-pointer"
+              className="pt-stage-pulse pt-stage-pulse--violet-600 inline-flex items-center gap-1 px-2.5 py-1 rounded-md border border-violet-600/35 bg-[var(--th-bg-base)] text-slate-300 hover:text-slate-100 hover:bg-[var(--th-bg-raised)] hover:border-violet-500/60 hover:shadow-[0_0_12px_rgba(139,92,246,0.15)] shadow-[0_0_6px_rgba(139,92,246,0.06)] transition-all duration-200 text-[9px] font-medium cursor-pointer"
               title="Configurar canal da Twitch"
             >
               <Tv size={10} className="text-violet-500/70" />
@@ -5372,8 +5372,8 @@ export default function App() {
               onClick={() => setFriendsOpen(true)}
               className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-md border text-[9px] transition-all duration-200 cursor-pointer relative ${
                 pendingFriendsCount > 0
-                  ? "bg-gradient-to-r from-amber-500/25 via-amber-500/15 to-[var(--th-bg-base)] border-amber-500/80 text-amber-200 font-bold shadow-[0_0_14px_color-mix(in_oklab,var(--color-amber-500)_30%,transparent)] animate-pulse"
-                  : "border-emerald-600/35 bg-[var(--th-bg-base)] text-slate-300 font-medium hover:text-slate-100 hover:bg-[var(--th-bg-raised)] hover:border-emerald-500/60 hover:shadow-[0_0_12px_rgba(16,185,129,0.15)] shadow-[0_0_6px_rgba(16,185,129,0.06)]"
+                  ? "pt-stage-pulse pt-stage-pulse--amber bg-gradient-to-r from-amber-500/25 via-amber-500/15 to-[var(--th-bg-base)] border-amber-500/80 text-amber-200 font-bold shadow-[0_0_14px_color-mix(in_oklab,var(--color-amber-500)_30%,transparent)] animate-pulse"
+                  : "pt-stage-pulse pt-stage-pulse--emerald-600 border-emerald-600/35 bg-[var(--th-bg-base)] text-slate-300 font-medium hover:text-slate-100 hover:bg-[var(--th-bg-raised)] hover:border-emerald-500/60 hover:shadow-[0_0_12px_rgba(16,185,129,0.15)] shadow-[0_0_6px_rgba(16,185,129,0.06)]"
               }`}
               title="Gerenciar Amigos"
             >
@@ -5397,7 +5397,7 @@ export default function App() {
                 localStorage.removeItem("tibia_saved_pass");
                 handleSignOut();
               })}
-              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md border border-rose-700/35 bg-[var(--th-bg-base)] text-slate-300 hover:text-slate-100 hover:bg-[var(--th-bg-raised)] hover:border-rose-600/60 hover:shadow-[0_0_12px_color-mix(in_oklab,var(--color-red-600)_12%,transparent)] shadow-[0_0_6px_color-mix(in_oklab,var(--color-red-600)_5%,transparent)] text-[9px] font-medium transition-all duration-200 cursor-pointer"
+              className="pt-stage-pulse pt-stage-pulse--rose-700 inline-flex items-center gap-1 px-2.5 py-1 rounded-md border border-rose-700/35 bg-[var(--th-bg-base)] text-slate-300 hover:text-slate-100 hover:bg-[var(--th-bg-raised)] hover:border-rose-600/60 hover:shadow-[0_0_12px_color-mix(in_oklab,var(--color-red-600)_12%,transparent)] shadow-[0_0_6px_color-mix(in_oklab,var(--color-red-600)_5%,transparent)] text-[9px] font-medium transition-all duration-200 cursor-pointer"
             >
               <User size={10} className="text-rose-600/70" />
               {displayUserName} (Sair)

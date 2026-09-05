@@ -463,40 +463,19 @@
   /* ==========================================================================
      FOOTER-PULSE — pulso na borda dos botões de ação do rodapé.
      --------------------------------------------------------------------------
-     Aplicado no contêiner (BOX 2): cada <button> filho direto ganha um anel
-     que pulsa. A cor sai de `border-color: inherit`, ou seja, é a MESMA borda
-     que o botão já define (slate, amber, violet, emerald, rose...) — nenhuma
-     cor fixa aqui, e cada botão pulsa na sua própria cor.
-
-     O anel é um ::after em `position:absolute`, então não ocupa espaço: o
-     tamanho, o layout e o espaçamento dos botões ficam intactos. Também usa
-     `pointer-events:none` e z-index 0 para não capturar cliques nem cobrir o
-     badge de solicitações pendentes do botão "Amigos".
+     Os botões usam o MESMO efeito dos seletores de estágio das PTs: o
+     keyframe `pt-stage-border-pulse` (borda respirando entre o tom discreto
+     e a cor viva, com halo e anel externo no pico). Cada botão recebe a
+     classe `pt-stage-pulse` + um modificador de COR que espelha a própria
+     borda dele (slate, amber-600, violet-600, emerald-600, rose-700 — ver
+     modificadores junto aos dos seletores). Como todos compartilham o mesmo
+     keyframe/período (1.8s = PULSE_PERIOD_MS) e o sincronizador global
+     (src/utils/pulseSync.ts) ancora a fase em t=0 da página, TODOS os
+     botões pulsam em uníssono entre si e com os seletores de PT — nenhum
+     ciclo de animação independente por botão.
      ========================================================================== */
   .footer-pulse > button {
     position: relative;
-  }
-
-  .footer-pulse > button::after {
-    content: "";
-    position: absolute;
-    inset: -2px;
-    border-radius: inherit;
-    border: 1px solid;
-    border-color: inherit;
-    pointer-events: none;
-    z-index: 0;
-    /* 1.8s = PULSE_PERIOD_MS (src/utils/pulseSync.ts): TODOS os pulsos
-       sincronizados compartilham o mesmo período; a fase é ancorada em t=0
-       da página pelo sincronizador global, então todo anel pulsa em uníssono
-       com os seletores de estágio do PartyManager. */
-    animation: footer-pulse-ring 1.8s ease-in-out infinite;
-  }
-
-  /* Hover: some com o anel para não competir com o realce próprio do botão. */
-  .footer-pulse > button:hover::after {
-    animation: none;
-    opacity: 0;
   }
 }
 
@@ -509,26 +488,14 @@
   animation-duration: 1.8s;
 }
 
-/* Pulso marcado (não tão suave): o anel expande e some, em ciclo curto. */
-@keyframes footer-pulse-ring {
-  0% {
-    opacity: 0.9;
-    transform: scale(1);
-  }
-  70% {
-    opacity: 0;
-    transform: scale(1.14);
-  }
-  100% {
-    opacity: 0;
-    transform: scale(1.14);
-  }
-}
-
-/* Respeita "Poupar CPU" e a preferência do sistema. */
-.low-cpu .footer-pulse > button::after {
-  animation: none;
-  opacity: 0;
+/* Boss/Amigos COM pendências: além do pulso de borda compartilhado, mantém o
+   piscar de opacidade do `animate-pulse` (Tailwind) como indicador de
+   pendência. As duas animações rodam juntas, ambas com 1.8s, e o
+   sincronizador global (pulseSync) ancora as duas em t=0 — tudo em uníssono. */
+.footer-pulse > button.pt-stage-pulse.animate-pulse {
+  animation:
+    pt-stage-border-pulse 1.8s ease-in-out infinite,
+    pulse 1.8s cubic-bezier(0.4, 0, 0.6, 1) infinite;
 }
 
 /* Respiração do anel de borda. Os limites vêm de variáveis, então hover e
@@ -701,6 +668,40 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 .pt-stage-pulse--sky { --pt-pulse-rgb: 14, 165, 233; }
 /* Aguardando Pagamento — amber-500 (mesmos valores do pulso original) */
 .pt-stage-pulse--amber { --pt-pulse-rgb: 245, 158, 11; }
+
+/* ── Modificadores de cor dos BOTÕES DO RODAPÉ (footer-pulse) ───────────────
+   Mesmo keyframe/período dos seletores acima; cada modificador espelha a cor
+   da PRÓPRIA borda do botão (tons *-600/700 usados no rodapé do App.tsx),
+   para o pulso respeitar a identidade individual de cada botão. */
+/* Feedback — slate-500 */
+.pt-stage-pulse--slate { --pt-pulse-rgb: 100, 116, 139; }
+/* Doação — amber-600 */
+.pt-stage-pulse--amber-600 { --pt-pulse-rgb: 217, 119, 6; }
+/* Boss / Streaming — violet-600 */
+.pt-stage-pulse--violet-600 { --pt-pulse-rgb: 124, 58, 237; }
+/* Receber RC / Amigos — emerald-600 */
+.pt-stage-pulse--emerald-600 { --pt-pulse-rgb: 5, 150, 105; }
+/* Sair — rose-700 */
+.pt-stage-pulse--rose-700 { --pt-pulse-rgb: 190, 18, 60; }
+
+/* Hover nos botões do rodapé: pausa o pulso para não competir com o realce
+   próprio do botão (mesmo comportamento do antigo anel footer-pulse-ring).
+   Exceção: botões COM pendência (`animate-pulse` — Boss/Amigos) continuam
+   pulsando no hover, como já acontecia antes. */
+.footer-pulse > button.pt-stage-pulse:not(.animate-pulse):hover {
+  animation: none;
+}
+
+/* Respeita "Poupar CPU": o pulso de borda dos botões do rodapé é desligado
+   (a borda estática original do botão permanece). Botões COM pendência
+   (`animate-pulse` — Boss/Amigos) mantêm o piscar de opacidade do Tailwind,
+   como já acontecia antes do pulso de borda. */
+.low-cpu .footer-pulse > button.pt-stage-pulse {
+  animation: none;
+}
+.low-cpu .footer-pulse > button.pt-stage-pulse.animate-pulse {
+  animation: pulse 1.8s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
 
 
 body {
