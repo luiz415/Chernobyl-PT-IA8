@@ -256,10 +256,12 @@ export default function ItemsForSaleModal({ parties, characters, waitingList, on
         linhas.push(`👥 Divisão entre ${g.splitParticipants.length}: ${g.splitParticipants.join(", ")}`);
       }
       g.items.forEach(it => {
+        // Linha enxuta: item + usuário participante da divisão (sem nome do
+        // personagem e sem o rótulo "Participante").
         const participante = it.inSplit && it.splitRecipient
-          ? ` — Participante: ${it.splitRecipient}`
+          ? ` — ${it.splitRecipient}`
           : " — fora da divisão";
-        linhas.push(`• 🗡️ ${it.itemName} (${it.characterName})${participante}`);
+        linhas.push(`• 🗡️ ${it.itemName}${participante}`);
       });
     });
     linhas.push("");

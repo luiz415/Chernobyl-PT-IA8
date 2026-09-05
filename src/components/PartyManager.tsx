@@ -886,10 +886,14 @@ export default function PartyManager({ parties, characters, waitingList, userNam
               acessíveis ao usuário. O separador vertical deixa claro que NÃO
               é um seletor de categoria, mantendo-o integrado à mesma área. */}
           <div className="w-px h-4 bg-amber-500/25 mx-0.5" />
+          {/* Borda pulsante IDÊNTICA e sincronizada com a dos seletores: as
+              MESMAS classes CSS (pt-stage-pulse + cor âmbar) compartilham o
+              mesmo keyframe e a mesma duração (1.8s), então todos os pulsos
+              da barra respiram juntos. Gatilho: existe ≥1 item à venda. */}
           <button
             type="button"
             onClick={() => setShowItemsForSale(true)}
-            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border text-[10px] font-bold transition-all duration-200 cursor-pointer whitespace-nowrap bg-black/20 border-amber-500/30 text-slate-500 hover:text-amber-300 hover:bg-amber-500/10 hover:border-amber-500/40"
+            className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border text-[10px] font-bold transition-all duration-200 cursor-pointer whitespace-nowrap bg-black/20 border-amber-500/30 text-slate-500 hover:text-amber-300 hover:bg-amber-500/10 hover:border-amber-500/40${unsoldItemsCount > 0 ? " pt-stage-pulse pt-stage-pulse--amber" : ""}`}
             title={unsoldItemsCount > 0
               ? `Ver itens ainda não vendidos nas PTs em Aguardando Pagamento — ${unsoldItemsCount} item${unsoldItemsCount === 1 ? "" : "s"} à venda`
               : "Ver itens ainda não vendidos nas PTs em Aguardando Pagamento"}
