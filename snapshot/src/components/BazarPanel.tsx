@@ -2478,6 +2478,32 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
 
         {localBazaarNotifications.length > 0 && (
           <div className="space-y-1">
+            {/* ── CABEÇALHO DAS NOTIFICAÇÕES + "ABRIR TODOS" ─────────────────
+                Só existe quando há ≥1 notificação de encerramento visível no
+                painel (o bloco inteiro é condicional). "Abrir todos" abre o
+                link de CADA personagem notificado no momento do clique, com
+                dedupe por leilão, usando os MESMOS openExternal e
+                markBazaarLinkOpened dos cliques individuais. */}
+            <div className="flex items-center justify-end">
+              <button
+                type="button"
+                onClick={() => {
+                  const seen = new Set<string>();
+                  localBazaarNotifications.forEach(item => {
+                    const dedupeKey = item.auctionId || item.url || "";
+                    if (!dedupeKey || seen.has(dedupeKey)) return;
+                    seen.add(dedupeKey);
+                    if (!item.url) return;
+                    if (item.auctionId) markBazaarLinkOpened(item.auctionId);
+                    openExternal(item.url);
+                  });
+                }}
+                className="inline-flex items-center gap-1 rounded border border-amber-500/40 bg-amber-500/15 px-2 py-0.5 text-[10px] font-black text-amber-200 hover:bg-amber-500/25 transition-colors cursor-pointer"
+                title={`Abrir o link de cada personagem notificado (${localBazaarNotifications.length} notificaç${localBazaarNotifications.length === 1 ? "ão" : "ões"})`}
+              >
+                <ExternalLink size={10} /> Abrir todos
+              </button>
+            </div>
             {localBazaarNotifications.map(notification => {
               // Status de abertura do link — MESMO controle da lista de
               // personagens (openedLinksState/getBazaarLinkState). Clicar
@@ -2488,6 +2514,24 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
               const notifOpenedLabel = notifOpenedAtMs
                 ? `Última abertura: ${new Date(notifOpenedAtMs).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}`
                 : "Link já aberto neste dispositivo";
+              // ── ENRIQUECIMENTO COM OS DADOS DA TABELA ─────────────────────
+              // Cruza a notificação com a linha correspondente da última
+              // consulta (result.auctions, já em memória — zero Firestore) e
+              // reutiliza EXATAMENTE os mesmos derivados da tabela: contagem
+              // da vocação no servidor (getVocationCountForAuction) e
+              // prioridades (priorityVocationsByServer / userPriority).
+              const notifAuction = notifAuctionKey
+                ? (result?.auctions || []).find(a => getAuctionKey(a) === notifAuctionKey)
+                : undefined;
+              const notifVocCode = notifAuction ? getAuctionVocationCode(notifAuction.vocation) : null;
+              const notifVocCount = notifAuction ? getVocationCountForAuction(notifAuction.server, notifVocCode) : 0;
+              const notifServerPriority = notifAuction && notifVocCode ? priorityVocationsByServer.get(notifAuction.server) : undefined;
+              const notifIsMaxPriority = !!notifVocCode && !!notifServerPriority?.max.has(notifVocCode);
+              const notifIsPriority = !!notifVocCode && !!notifServerPriority?.normal.has(notifVocCode);
+              const notifIsUserPriority = !!notifAuction
+                && userPriority.highlightedServers.has(serverKey(notifAuction.server))
+                && !!notifVocCode
+                && !!userPriority.priorityVocationsByServer.get(serverKey(notifAuction.server))?.has(notifVocCode);
               return (
                 <button
                   key={notification.id}
@@ -2503,6 +2547,28 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
                     <AlertTriangle size={12} className="flex-shrink-0" />
                     <strong className="truncate">{notification.title}</strong>
                     <span className="truncate text-amber-200/80">{notification.body}</span>
+                    {/* Complementos da TABELA na MESMA linha (altura intacta):
+                        pílula "VOC xN" + selo de prioridade quando houver. */}
+                    {notifAuction && notifVocCode && (
+                      <span
+                        className={`inline-flex items-baseline gap-[1px] rounded-md border px-1 py-0.5 text-[9px] font-black tabular-nums leading-none flex-shrink-0 ${notifVocCount === 0 ? "bg-white/[0.03] border-white/10 text-slate-500" : getVocationCountClass(notifAuction.vocation)}`}
+                        title={`${notifVocCount} ${getVocationAbbreviation(notifAuction.vocation)} em ${notifAuction.server} com os filtros atuais do Resumo de Amigos`}
+                      >
+                        {getVocationAbbreviation(notifAuction.vocation)}&nbsp;x{notifVocCount}
+                      </span>
+                    )}
+                    {/* Selos de prioridade — MESMAS classes/paleta da tabela,
+                        compactados a 16px inline para caber na altura atual
+                        da linha (o .bazaar-badge padrão tem 20px). */}
+                    {notifIsMaxPriority && (
+                      <span aria-label="Prioridade Máxima" title="Prioridade Máxima — nenhum personagem desta vocação neste servidor" className="bazaar-badge bazaar-badge-max flex-shrink-0" style={{ width: 16, height: 16 }}><Flame size={10} strokeWidth={2.5} /></span>
+                    )}
+                    {notifIsPriority && (
+                      <span aria-label="Prioridade" title="Prioridade — menor quantidade desta vocação neste servidor" className="bazaar-badge bazaar-badge-priority flex-shrink-0" style={{ width: 16, height: 16 }}><Star size={9} strokeWidth={2.5} /></span>
+                    )}
+                    {notifIsUserPriority && (
+                      <span aria-label="Prioridade para você" title="Prioridade para você — você não possui personagem neste servidor" className="bazaar-badge bazaar-badge-you flex-shrink-0" style={{ width: 16, height: 16 }}><Star size={9} strokeWidth={2.5} /></span>
+                    )}
                   </span>
                   <span className="inline-flex flex-shrink-0 items-center gap-1">
                     {notifLinkState !== "open" && (
