@@ -306,6 +306,192 @@ export function formatKk(value: number, suffix: "k" | "kk" = "kk"): string {
   return `${text}${suffix}`;
 }
 
+// ============================================================================
+// VENDA DE ITEM — NÚCLEO COMPARTILHADO (PartyPanel + modal "Itens a Venda")
+// ----------------------------------------------------------------------------
+// Fonte ÚNICA das três peças que o modal "Itens a Venda" reutiliza para não
+// duplicar a lógica da PT:
+//   • buildItemSaleCommitPatch — o patch EXATO que o commit do modal "Item
+//     Vendido" grava no slot (registro completo + espelhos legados);
+//   • getVendidoButtonState  — as MESMAS regras de habilitação do botão
+//     "Vendido" da coluna ITEM VENDIDO/SERVICE;
+//   • buildPartyWhatsAppSummaryText — o texto OFICIAL do botão "Copiar (WA)"
+//     da PT (extraído de copyWhatsAppSummary; o painel usa esta função, então
+//     qualquer alteração futura no texto vale automaticamente para os dois).
+// ============================================================================
+
+/** Patch gravado no slot ao salvar o modal "Item Vendido": registro COMPLETO
+ *  da venda + espelhos legados (cotação, valor pós-taxa, RC final) para que
+ *  Totais, Divisão, PG e Copiar (WA) continuem funcionando como sempre. */
+export function buildItemSaleCommitPatch(sale: ItemSaleRecord): Partial<ExtendedPartySlotData> {
+  return {
+    itemSale: sale,
+    calcRateKk: sale.rateKk,
+    calcTotalKk: sale.netKk,
+    itemVendido: sale.resultRC,
+  };
+}
+
+/**
+ * Estado do botão "Vendido" de um slot — EXATAMENTE as regras da coluna
+ * ITEM VENDIDO/SERVICE do painel (validação pelos dados persistidos, nunca
+ * por estado visual): exige ITEM DROPADO, Quest concluída, PT não travada/
+ * pausada, pagamento não confirmado e venda não salva permanentemente.
+ */
+export function getVendidoButtonState(party: PartyTab, slot: ExtendedPartySlotData | undefined) {
+  const hasItemDropado = !!slot?.itemDropado;
+  const pgGlobalDisabled = !!slot?.pago;
+  const rcLocked = !!slot?.calcLocked || !!slot?.itemVendidoLocked;
+  const postComplete = !!party.questConcluida;
+  const questLocked = !postComplete || !!party.isLocked || !!party.isPaused;
+  const saleComplete = rcLocked && (slot?.itemVendido || 0) > 0;
+  const hasSaleData = !!slot?.itemSale && (slot.itemSale.resultRC || 0) > 0;
+  const enabled = hasItemDropado && !questLocked && !pgGlobalDisabled && !saleComplete && !rcLocked;
+  return { enabled, hasSaleData, saleComplete, rcLocked, questLocked, hasItemDropado, pgGlobalDisabled };
+}
+
+/**
+ * TEXTO OFICIAL do "Copiar (WA)" da PT.
+ *
+ * Corpo integral do antigo copyWhatsAppSummary, parametrizado apenas pelo que
+ * era closure do componente (party/characters/waitingList). A resolução dos
+ * participantes reproduz a MESMA precedência do painel: snapshot da PT como
+ * fonte primária, depois fonte viva, Lista de Espera e membros externos, na
+ * MESMA ordem dos slots.
+ */
+export function buildPartyWhatsAppSummaryText(
+  party: PartyTab,
+  characters: Character[],
+  waitingList: WaitingService[],
+): string {
+  const sd = (party.slotData || {}) as Record<string, ExtendedPartySlotData | undefined>;
+  const linhas: string[] = [];
+
+  // Helper: formata data como "DD/MM, HH:MM"
+  const fmtDateHH = (ts: number) => {
+    const dt = new Date(ts);
+    const dia = String(dt.getDate()).padStart(2, "0");
+    const mes = String(dt.getMonth() + 1).padStart(2, "0");
+    const hh = String(dt.getHours()).padStart(2, "0");
+    const mm = String(dt.getMinutes()).padStart(2, "0");
+    return `${dia}/${mes}, ${hh}:${mm}`;
+  };
+
+  // Participantes na MESMA ordem e com as MESMAS quedas do painel
+  // (slotMembers): snapshot -> fonte viva -> Lista de Espera -> externo.
+  type MemberEntry = { id: string; kind: "char" | "waiting" | "custom"; name: string };
+  const customs = party.customMembers || [];
+  const entries: MemberEntry[] = [];
+  for (let i = 0; i < party.slots; i++) {
+    const cid = party.selectedIds[i];
+    if (cid) {
+      const snap = party.memberSnapshots?.[cid];
+      if (snap) { entries.push({ id: cid, kind: "char", name: snap.personagem || "?" }); continue; }
+      const live = characters.find(c => c.id === cid);
+      if (live) { entries.push({ id: cid, kind: "char", name: live.personagem || "?" }); continue; }
+      const wt = waitingList.find(w => w.id === cid);
+      if (wt) { entries.push({ id: cid, kind: "waiting", name: wt.personagem || "?" }); continue; }
+    }
+    const ci = i - party.selectedIds.length;
+    if (ci >= 0 && ci < customs.length) entries.push({ id: customs[ci].id, kind: "custom", name: customs[ci].label });
+  }
+
+  // 1) Cabeçalho — Nome da PT (SW/SG)
+  const questSigla = party.ptType === "sanguine" ? "SG" : "SW";
+  linhas.push(`📋 *Resumo da PT: ${party.name}* (${questSigla})`);
+
+  // 2) Servidor da PT — `serverLabel` resolve o nome canônico pós-merge;
+  // PTs antigas sem servidor gravado omitem a linha.
+  const partyServerLabel = serverLabel(party.servidor);
+  if (partyServerLabel) linhas.push(`🌍 *Servidor:* ${partyServerLabel}`);
+
+  // 3) Data da finalização
+  const finalizadaTs = (party.ptStartedAt && party.ptDuration)
+    ? party.ptStartedAt + party.ptDuration
+    : (party.archivedAt || Date.now());
+  linhas.push(`📅 PT Finalizada em: ${fmtDateHH(finalizadaTs)}`);
+
+  // 4) Status — considera APENAS itens dropados pelos membros da DIVISÃO
+  const splitEntries = entries.filter(e => sd[e.id]?.split);
+  const unsoldItemNames = splitEntries
+    .filter(e => {
+      const d = sd[e.id];
+      return !!d?.itemDropado && (!d?.itemVendido || d.itemVendido <= 0);
+    })
+    .map(e => (sd[e.id]?.itemDropado || "").trim())
+    .filter(Boolean);
+  linhas.push(``);
+  linhas.push(unsoldItemNames.length > 0
+    ? `📌 Status: Ainda falta vender ${unsoldItemNames.join(", ")}`
+    : `📌 Status: Todos os itens foram vendidos`);
+  linhas.push(``);
+
+  // 4b) Total Vendido — soma de TODOS os itemVendido dos membros da DIVISÃO
+  const totalVendido = splitEntries.reduce((s, e) => s + (sd[e.id]?.itemVendido || 0), 0);
+
+  // 5) Divisão entre os participantes
+  const splitCount = splitEntries.length;
+  linhas.push(`👥 *Divisão entre ${splitCount} participante${splitCount === 1 ? "" : "s"}:*`);
+  linhas.push(``);
+
+  splitEntries.forEach(e => {
+    const d = sd[e.id];
+    let jogador = d?.player || "?";
+    if (!d?.player) {
+      if (e.kind === "custom") jogador = e.name;
+      else if (e.kind === "waiting") jogador = e.name || "?";
+      else jogador = d?.owner || e.name || "?";
+    }
+    // Havendo escolha explícita de destinatário, ela prevalece.
+    if (d?.splitTarget) jogador = resolveSplitRecipient(d, jogador);
+    const itemDropado = (d?.itemDropado || "").trim();
+    const itemVendido = d?.itemVendido || 0;
+    // Registro COMPLETO da venda (modal "Item Vendido"), quando existir.
+    const saleRecord = d?.itemSale;
+    // Compatibilidade: campos legados da mini-calculadora kk.
+    const vendaKk = d?.calcTotalKk || 0;
+    const cotacaoKk = d?.calcRateKk || 0;
+
+    if (itemDropado && itemVendido > 0) {
+      if (saleRecord && saleRecord.resultRC > 0) {
+        linhas.push(`• ${jogador}: ${itemDropado} > ${formatItemSaleSummary(saleRecord)} = ${formatRC(itemVendido)}`);
+      } else if (vendaKk > 0 && cotacaoKk > 0) {
+        linhas.push(`• ${jogador}: ${itemDropado} > Vendido por ${formatKk(vendaKk, "kk")}, RC por ${formatKk(cotacaoKk, "k")} = ${formatRC(itemVendido)}`);
+      } else {
+        linhas.push(`• ${jogador}: ${itemDropado} > Vendido por ${formatRC(itemVendido)}`);
+      }
+    } else if (!itemDropado && itemVendido > 0) {
+      linhas.push(`• ${jogador}: Service: ${formatRC(itemVendido)}`);
+    } else if (itemDropado && itemVendido <= 0) {
+      linhas.push(`• ${jogador}: O item ${itemDropado} ainda não foi vendido.`);
+    } else {
+      linhas.push(`• ${jogador}: Não declarou nenhum valor.`);
+    }
+  });
+  linhas.push(``);
+
+  // 6) Totais — mesma regra de arredondamento exibida na guia da PT.
+  const dropPerSplit = splitCount > 0 ? roundSplitTo25(totalVendido / splitCount) : 0;
+  linhas.push(`💰 *Total Vendido:* ${formatRC(totalVendido)}`);
+  linhas.push(`🔹 *Valor Individual:* ${formatRC(dropPerSplit)} para cada.`);
+  linhas.push(``);
+
+  // 7) Status do pagamento — SÓ quando não há item pendente de venda.
+  if (unsoldItemNames.length === 0) {
+    const todosPagos = splitCount > 0 && splitEntries.every(e => sd[e.id]?.pago === true);
+    linhas.push(todosPagos
+      ? `💳 *Status do pagamento:* Pago. ✅`
+      : `💳 *Status do pagamento:* Falta pagar. ❌`);
+    linhas.push(``);
+  }
+
+  // 8) Timestamp do documento
+  linhas.push(`📅 Documento gerado em: ${fmtDateHH(Date.now())}`);
+
+  return linhas.join("\n");
+}
+
+
 const SOULWAR_ITEMS = [
   "Soulbleeder", "Soulkamas", "Soulshredder", "Pair of Soulwalkers", "Soulshell",
   "Pair of Soulstalkers", "Souleater", "Soulmaimer", "Soultainter", "Soulmantle",
@@ -598,12 +784,9 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
   // itemVendido = RC final) para que Totais, Divisão, PG e Copiar (WA)
   // continuem funcionando exatamente como antes.
   function commitItemSale(id: string, sale: ItemSaleRecord) {
-    setSD(id, {
-      itemSale: sale,
-      calcRateKk: sale.rateKk,
-      calcTotalKk: sale.netKk,
-      itemVendido: sale.resultRC,
-    });
+    // Patch canônico compartilhado com o modal "Itens a Venda" do Gerenciador
+    // (fonte única: buildItemSaleCommitPatch).
+    setSD(id, buildItemSaleCommitPatch(sale));
     // O modal substitui qualquer digitação manual pendente do campo RC.
     setRcDrafts(prev => { const next = { ...prev }; delete next[id]; return next; });
     setItemSaleModalId(null);
@@ -2444,161 +2627,12 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
   }
 
   // --- Copiar resumo para WhatsApp ---
+  // O TEXTO agora vem de `buildPartyWhatsAppSummaryText` (fonte única,
+  // compartilhada com o modal "Itens a Venda" do Gerenciador): este handler
+  // só copia para o clipboard e controla o feedback "Copiado!".
   function copyWhatsAppSummary() {
     try {
-      const sd = party.slotData || {};
-      const linhas: string[] = [];
-
-      // Helper: formata data como "DD/MM, HH:MM"
-      const fmtDateHH = (ts: number) => {
-        const dt = new Date(ts);
-        const dia = String(dt.getDate()).padStart(2, "0");
-        const mes = String(dt.getMonth() + 1).padStart(2, "0");
-        const hh = String(dt.getHours()).padStart(2, "0");
-        const mm = String(dt.getMinutes()).padStart(2, "0");
-        return `${dia}/${mes}, ${hh}:${mm}`;
-      };
-
-      // 1) Cabeçalho — Nome da PT (SW/SG)
-      const questSigla = party.ptType === "sanguine" ? "SG" : "SW";
-      linhas.push(`📋 *Resumo da PT: ${party.name}* (${questSigla})`);
-
-      // 2) Servidor da PT
-      //
-      // `serverLabel` é a MESMA função usada no restante do painel: ela resolve
-      // o nome canônico pós-merge (ex.: Spectrum -> Bellum), então o resumo
-      // nunca divulga um nome de servidor que já não existe. PTs antigas sem
-      // servidor gravado continuam funcionando — a linha é omitida.
-      const partyServerLabel = serverLabel(party.servidor);
-      if (partyServerLabel) linhas.push(`🌍 *Servidor:* ${partyServerLabel}`);
-
-      // 3) Data da finalização
-      const finalizadaTs = (party.ptStartedAt && party.ptDuration)
-        ? party.ptStartedAt + party.ptDuration
-        : (party.archivedAt || Date.now());
-      linhas.push(`📅 PT Finalizada em: ${fmtDateHH(finalizadaTs)}`);
-
-      // 4) Status — considera APENAS itens dropados pelos membros da DIVISÃO
-      //
-      // Um item é "pendente" quando foi dropado mas ainda não tem valor de
-      // venda (`itemVendido <= 0`) — exatamente o mesmo critério já usado
-      // antes. A diferença é que agora NOMEAMOS os itens pendentes em vez de
-      // exibir uma mensagem genérica.
-      const splitMembersList = allMemberIds.filter(id => sd[id]?.split);
-      const unsoldItemNames = splitMembersList
-        .filter(id => {
-          const d = sd[id];
-          return !!d?.itemDropado && (!d?.itemVendido || d.itemVendido <= 0);
-        })
-        .map(id => (sd[id]?.itemDropado || "").trim())
-        .filter(Boolean);
-      linhas.push(``);
-      linhas.push(unsoldItemNames.length > 0
-        ? `📌 Status: Ainda falta vender ${unsoldItemNames.join(", ")}`
-        : `📌 Status: Todos os itens foram vendidos`);
-      linhas.push(``);
-
-      // 4) Total Vendido — soma de TODOS os itemVendido dos membros da DIVISÃO
-      //
-      // O CÁLCULO permanece aqui (a lista de participantes abaixo não depende
-      // dele, mas o valor individual sim). A LINHA de exibição foi movida para
-      // depois da lista, junto do Valor Individual, onde os dois totais ficam
-      // agrupados.
-      const totalVendido = splitMembersList.reduce((s, id) => s + (sd[id]?.itemVendido || 0), 0);
-
-      // 5) Divisão entre os participantes
-      const splitCount = splitMembersList.length;
-      linhas.push(`👥 *Divisão entre ${splitCount} participante${splitCount === 1 ? "" : "s"}:*`);
-      linhas.push(``);
-
-      splitMembersList.forEach(id => {
-        const d = sd[id] as ExtendedPartySlotData | undefined;
-        const slot = slotMembers.find(m => m.id === id);
-        let jogador = d?.player || "?";
-        if (!d?.player && slot && slot.type !== "empty") {
-          if (slot.type === "custom") jogador = slot.custom.label;
-          else if (slot.type === "waiting") jogador = slot.waiting.personagem || "?";
-          else if (slot.type === "char") jogador = d?.owner || slot.char.personagem || "?";
-        }
-        // O resumo é usado para acertar contas, então precisa nomear QUEM
-        // RECEBE. Havendo escolha explícita de destinatário, ela prevalece
-        // sobre a resolução acima; sem escolha, nada muda.
-        if (d?.splitTarget) jogador = resolveSplitRecipient(d, jogador);
-        const itemDropado = (d?.itemDropado || "").trim();
-        const itemVendido = d?.itemVendido || 0;
-        // Registro COMPLETO da venda (modal "Item Vendido"), quando existir:
-        // explica a operação inteira — valor bruto, tentativas (Taxa Market
-        // Nx), desconto aplicado e cotação. Nada é recalculado aqui.
-        const saleRecord = d?.itemSale;
-        // Compatibilidade: PTs antigas têm apenas os campos legados da
-        // mini-calculadora (calcTotalKk = venda em kk, calcRateKk = cotação).
-        const vendaKk = d?.calcTotalKk || 0;
-        const cotacaoKk = d?.calcRateKk || 0;
-
-        if (itemDropado && itemVendido > 0) {
-          if (saleRecord && saleRecord.resultRC > 0) {
-            // Resumo curto e explicativo do modal, com tentativas de venda.
-            linhas.push(`• ${jogador}: ${itemDropado} > ${formatItemSaleSummary(saleRecord)} = ${formatRC(itemVendido)}`);
-          } else if (vendaKk > 0 && cotacaoKk > 0) {
-            // Legado: calculadora kk antiga, linha idêntica à anterior.
-            linhas.push(`• ${jogador}: ${itemDropado} > Vendido por ${formatKk(vendaKk, "kk")}, RC por ${formatKk(cotacaoKk, "k")} = ${formatRC(itemVendido)}`);
-          } else {
-            // Valor RC digitado à mão: é o único dado que existe.
-            linhas.push(`• ${jogador}: ${itemDropado} > Vendido por ${formatRC(itemVendido)}`);
-          }
-        } else if (!itemDropado && itemVendido > 0) {
-          // Service (sem item dropado, apenas valor em RC)
-          linhas.push(`• ${jogador}: Service: ${formatRC(itemVendido)}`);
-        } else if (itemDropado && itemVendido <= 0) {
-          // Item dropado, mas ainda não vendido
-          linhas.push(`• ${jogador}: O item ${itemDropado} ainda não foi vendido.`);
-        } else {
-          // Sem item e sem valor declarado
-          linhas.push(`• ${jogador}: Não declarou nenhum valor.`);
-        }
-      });
-      linhas.push(``);
-
-      // 6) Totais — Total Vendido e Valor Individual, lado a lado
-      //
-      // O valor individual usa `dropPerSplit`, a MESMA constante exibida na
-      // guia da PT. Antes o resumo recalculava a divisão por conta própria; ao
-      // reutilizar a constante, o texto copiado e a tela mostram exatamente o
-      // mesmo número por construção, e não por coincidência.
-      linhas.push(`💰 *Total Vendido:* ${formatRC(totalVendido)}`);
-      linhas.push(`🔹 *Valor Individual:* ${formatRC(dropPerSplit)} para cada.`);
-      linhas.push(``);
-
-      // 7) Status do pagamento — SÓ quando não há item pendente de venda
-      //
-      // Enquanto existir qualquer item por vender, a linha inteira é OMITIDA.
-      // Anunciar "Falta pagar" nesse momento seria enganoso: ainda não há o
-      // que pagar, porque o valor da divisão sequer está fechado (o resumo
-      // mostraria "0 RC para cada"). O que falta é vender, não pagar — e isso
-      // a linha "📌 Status: Ainda falta vender ..." já informa.
-      //
-      // Reutiliza `unsoldItemNames`, a MESMA lista que monta aquela linha, em
-      // vez de recalcular a pendência: um só critério, sem risco de as duas
-      // mensagens se contradizerem.
-      //
-      // A lógica de pagamento em si não muda: assim que todos os itens estão
-      // vendidos, a linha volta a aparecer normalmente como Pago/Falta pagar.
-      if (unsoldItemNames.length === 0) {
-        // "Pago" exige que TODOS os participantes da divisão estejam marcados.
-        // `every` sobre lista vazia devolve `true`, então a divisão sem ninguém
-        // é tratada explicitamente como NÃO paga — caso contrário uma PT sem
-        // participantes apareceria como quitada.
-        const todosPagos = splitCount > 0 && splitMembersList.every(id => sd[id]?.pago === true);
-        linhas.push(todosPagos
-          ? `💳 *Status do pagamento:* Pago. ✅`
-          : `💳 *Status do pagamento:* Falta pagar. ❌`);
-        linhas.push(``);
-      }
-
-      // 7) Timestamp do documento
-      linhas.push(`📅 Documento gerado em: ${fmtDateHH(Date.now())}`);
-
-      const texto = linhas.join("\n");
+      const texto = buildPartyWhatsAppSummaryText(party, characters, waitingList);
 
       // Copiar para clipboard
       try {
@@ -4039,25 +4073,20 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
                       {/* === BOTÃO "VENDIDO" (modal Item Vendido) + CAMPO RC === */}
                       {(() => {
                         // --- Variáveis de controle de dependência ---
-                        const hasItemDropado = !!d.itemDropado;
-                        const pgGlobalDisabled = !!d.pago;
                         const extSlot = d as ExtendedPartySlotData;
-                        const legacyCalcLocked = !!extSlot.calcLocked;
-                        const rcLocked = legacyCalcLocked || !!extSlot.itemVendidoLocked;
-                        const questLocked = (questState !== "post_complete") || !!party.isLocked || isPausedActive;
                         // "Vendido" exige ITEM DROPADO selecionado (regra do fluxo) e
                         // respeita as MESMAS travas dos antigos campos kk. Após o
                         // "Salvar Drop/Valor" (itemVendidoLocked com valor completo),
                         // o botão é BLOQUEADO — validação pelos dados persistidos,
                         // nunca por estado visual temporário.
-                        const saleComplete = rcLocked && (d.itemVendido || 0) > 0;
-                        const vendidoEnabled = hasItemDropado && !questLocked && !pgGlobalDisabled && !saleComplete && !rcLocked;
-                        // Modal com dados salvos = RC vem do registro da venda; o
-                        // campo RC vira leitura (os dados do modal têm prioridade).
-                        const hasSaleData = !!extSlot.itemSale && (extSlot.itemSale.resultRC || 0) > 0;
+                        // As regras vêm de `getVendidoButtonState` (fonte única,
+                        // compartilhada com o modal "Itens a Venda").
+                        const vendidoState = getVendidoButtonState(party, extSlot);
+                        const { hasItemDropado, pgGlobalDisabled, rcLocked, saleComplete, hasSaleData } = vendidoState;
+                        const vendidoEnabled = vendidoState.enabled;
                         // RC editável direto na tabela: sem venda do modal registrada
                         // e sem travas (preenchimento direto continua existindo).
-                        const rcEditable = !hasSaleData && !questLocked && !pgGlobalDisabled && !rcLocked;
+                        const rcEditable = !hasSaleData && !vendidoState.questLocked && !pgGlobalDisabled && !rcLocked;
 
                         const rcDisplayValue = rcDrafts[id] !== undefined
                           ? rcDrafts[id]

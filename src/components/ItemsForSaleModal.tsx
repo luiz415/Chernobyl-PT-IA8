@@ -1,16 +1,25 @@
 import { useMemo, useState, useEffect } from "react";
 import { createPortal } from "react-dom";
-import { X, Coins, Copy, Check, PackageOpen, Users, Swords, Globe } from "lucide-react";
-import type { Character, PartyTab, WaitingService } from "../types";
+import { X, Coins, Copy, Check, PackageOpen, Users, Swords, Globe, ExternalLink } from "lucide-react";
+import type { Character, ItemSaleRecord, PartyTab, WaitingService } from "../types";
+import { formatRC } from "../types";
 import { serverLabel } from "../constants/servers";
-import { resolveSplitRecipient, type ExtendedPartySlotData } from "./PartyPanel";
+import { formatItemSaleSummary } from "../utils/itemSale";
+import ItemSoldModal from "./ItemSoldModal";
+import {
+  buildItemSaleCommitPatch,
+  buildPartyWhatsAppSummaryText,
+  getVendidoButtonState,
+  resolveSplitRecipient,
+  type ExtendedPartySlotData,
+} from "./PartyPanel";
 
 // ============================================================================
 // MODAL "ITENS A VENDA" — Gerenciador de PT's
 // ----------------------------------------------------------------------------
-// Centraliza, em tempo real, os itens dropados que AINDA NÃO FORAM VENDIDOS
-// nas PTs da categoria "Aguardando Pagamento" às quais o usuário atual tem
-// acesso.
+// Centraliza, em tempo real, os itens dropados — pendentes E já vendidos —
+// das PTs da categoria "Aguardando Pagamento" às quais o usuário atual tem
+// acesso, e permite registrar a venda ("Vendido") sem sair do modal.
 //
 // FONTE DE DADOS — 100% local, nenhuma consulta nova ao Firestore:
 //   • O PartyManager já escuta as PTs em tempo real; este modal recebe por
@@ -19,22 +28,26 @@ import { resolveSplitRecipient, type ExtendedPartySlotData } from "./PartyPanel"
 //     Como cada usuário só recebe documentos que pode ver (reforçado pelas
 //     Security Rules), a lista é individual por usuário — nunca global.
 //   • Toda alteração nas PTs reflete aqui automaticamente (props -> useMemo).
+//   • A GRAVAÇÃO da venda usa `onUpdateParty` — o MESMO `updateParty` do App
+//     (optimistic update + debounce): a PT reflete a mudança imediatamente
+//     e o Firestore recebe UMA escrita consolidada. Nenhum listener novo.
 //
-// CRITÉRIO "AINDA NÃO VENDIDO" — estado real do dado, não aparência:
-//   itemDropado preenchido E itemVendido <= 0 E sem registro de venda do
-//   modal "Item Vendido" (itemSale.resultRC). É o MESMO critério canônico já
-//   usado pelo PartyPanel no status do Copiar (WA) e no aviso de divisão
-//   ("splitMembersWithUnsoldItems"). Registrou a venda -> some do modal.
+// LÓGICA REUTILIZADA (fonte única no PartyPanel — nada é reimplementado):
+//   • getVendidoButtonState  — regras EXATAS do botão "Vendido" da coluna
+//     ITEM VENDIDO/SERVICE (item dropado, quest concluída, sem travas/PG);
+//   • buildItemSaleCommitPatch — patch EXATO gravado pelo commit do modal
+//     "Item Vendido" na PT (registro completo + espelhos legados);
+//   • buildPartyWhatsAppSummaryText — texto OFICIAL do "Copiar (WA)" da PT
+//     (o painel usa a mesma função, então futuras mudanças valem nos dois);
+//   • ItemSoldModal — o MESMO componente do fluxo da PT.
 //
-// PARTICIPANTE POR ITEM — o dono do personagem NÃO importa aqui: o que
-// identifica o item é o USUÁRIO PARTICIPANTE DA DIVISÃO daquele slot, ou
-// seja, o destinatário real resolvido por `resolveSplitRecipient` (a mesma
-// precedência do painel e do Copiar (WA) da PT: splitTarget explícito ->
-// jogador; ausente -> dono). Slots fora da divisão são marcados como tal.
+// CRITÉRIO "VENDIDO" — estado real do dado, não aparência:
+//   itemVendido > 0 OU itemSale.resultRC > 0 (mesmo critério canônico do
+//   status do Copiar (WA) e do aviso de divisão do PartyPanel).
 // ============================================================================
 
-/** Um item dropado e ainda não vendido, com contexto do slot. */
-export interface UnsoldSaleItem {
+/** Um item dropado (pendente ou vendido), com contexto do slot. */
+export interface SaleModalItem {
   slotId: string;
   itemName: string;
   /** Nome do personagem que dropou (snapshot -> fonte viva -> lista -> externo). */
@@ -46,9 +59,15 @@ export interface UnsoldSaleItem {
   splitRecipient: string;
   /** O slot participa da divisão? */
   inSplit: boolean;
+  /** Já vendido? (estado real: itemVendido > 0 ou itemSale.resultRC > 0). */
+  sold: boolean;
+  /** Valor registrado da venda, em RC (0 enquanto não vendido). */
+  soldValueRC: number;
+  /** Resumo da operação do modal "Item Vendido", quando registrado ("" sem). */
+  saleSummary: string;
 }
 
-/** Itens à venda agrupados por PT (com o contexto da PT e da divisão). */
+/** Itens agrupados por PT (com o contexto da PT e da divisão). */
 export interface PartySaleGroup {
   partyId: string;
   partyName: string;
@@ -58,7 +77,7 @@ export interface PartySaleGroup {
   serverName: string;
   /** Quem recebe a divisão (destinatário resolvido por slot, sem repetição). */
   splitParticipants: string[];
-  items: UnsoldSaleItem[];
+  items: SaleModalItem[];
 }
 
 /** Nome do participante de um slot: snapshot da PT é a fonte primária
@@ -83,10 +102,11 @@ function resolveMemberName(
 
 /**
  * Extrai, das PTs recebidas (já filtradas por estágio "aguardando" + acesso
- * do usuário), os itens dropados ainda não vendidos — agrupados por PT.
- * Função pura: usada pelo modal e pelo contador do botão no PartyManager.
+ * do usuário), TODOS os itens dropados — pendentes e vendidos — agrupados
+ * por PT. Função pura: usada pelo modal e pelo contador do PartyManager
+ * (que soma apenas os NÃO vendidos).
  */
-export function collectUnsoldSaleGroups(
+export function collectSaleGroups(
   parties: PartyTab[],
   characters: Character[],
   waitingList: WaitingService[],
@@ -102,15 +122,15 @@ export function collectUnsoldSaleGroups(
       ...(party.customMembers || []).map(m => m.id),
     ];
 
-    const items: UnsoldSaleItem[] = [];
+    const items: SaleModalItem[] = [];
     for (const id of memberIds) {
       const slot = sd[id] as ExtendedPartySlotData | undefined;
       const itemName = String(slot?.itemDropado || "").trim();
       if (!itemName) continue;
       // Estado REAL da venda: valor em RC gravado (campo canônico) ou
-      // registro completo do modal "Item Vendido" -> item já vendido.
-      const sold = (slot?.itemVendido || 0) > 0 || (slot?.itemSale?.resultRC || 0) > 0;
-      if (sold) continue;
+      // registro completo do modal "Item Vendido".
+      const soldValueRC = Math.max(slot?.itemVendido || 0, slot?.itemSale?.resultRC || 0);
+      const sold = soldValueRC > 0;
 
       const characterName = resolveMemberName(party, id, characters, waitingList);
       const inSplit = !!slot?.split;
@@ -126,6 +146,11 @@ export function collectUnsoldSaleGroups(
         characterName: characterName || fallback || "?",
         splitRecipient,
         inSplit,
+        sold,
+        soldValueRC,
+        saleSummary: slot?.itemSale && (slot.itemSale.resultRC || 0) > 0
+          ? formatItemSaleSummary(slot.itemSale)
+          : "",
       });
     }
 
@@ -160,6 +185,11 @@ export function collectUnsoldSaleGroups(
   return groups;
 }
 
+/** Total de itens AINDA NÃO VENDIDOS (contador do botão no PartyManager). */
+export function countUnsoldItems(groups: PartySaleGroup[]): number {
+  return groups.reduce((s, g) => s + g.items.filter(i => !i.sold).length, 0);
+}
+
 /** Cópia p/ clipboard no MESMO padrão do PartyPanel (textarea + execCommand,
  *  com fallback assíncrono para navigator.clipboard). */
 function copyText(texto: string) {
@@ -188,38 +218,50 @@ interface Props {
   parties: PartyTab[];
   characters: Character[];
   waitingList: WaitingService[];
+  /** MESMO canal de persistência da PT (updateParty do App: optimistic
+   *  update + debounce -> uma escrita consolidada no Firestore). */
+  onUpdateParty: (party: PartyTab) => void;
   onClose: () => void;
 }
 
-export default function ItemsForSaleModal({ parties, characters, waitingList, onClose }: Props) {
+export default function ItemsForSaleModal({ parties, characters, waitingList, onUpdateParty, onClose }: Props) {
   // Recalculado a cada mudança nas PTs (props vivas do listener) — tempo real.
   const groups = useMemo(
-    () => collectUnsoldSaleGroups(parties, characters, waitingList),
+    () => collectSaleGroups(parties, characters, waitingList),
     [parties, characters, waitingList],
   );
-  const totalItems = groups.reduce((s, g) => s + g.items.length, 0);
+  const unsoldCount = countUnsoldItems(groups);
+  const soldCount = groups.reduce((s, g) => s + g.items.filter(i => i.sold).length, 0);
 
   const [copied, setCopied] = useState<"resumo" | "completo" | null>(null);
+  const [copiedPartyId, setCopiedPartyId] = useState<string | null>(null);
+  // Item com o modal "Item Vendido" aberto (dados derivados das props vivas).
+  const [saleTarget, setSaleTarget] = useState<{ partyId: string; slotId: string } | null>(null);
 
-  // Esc fecha (padrão dos demais modais do app).
+  // Esc fecha (padrão dos demais modais do app) — mas NÃO enquanto o modal
+  // "Item Vendido" está aberto por cima (ele mesmo trata o próprio Esc).
   useEffect(() => {
+    if (saleTarget) return;
     function onKey(e: KeyboardEvent) { if (e.key === "Escape") onClose(); }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  }, [onClose, saleTarget]);
 
   function flagCopied(kind: "resumo" | "completo") {
     setCopied(kind);
     setTimeout(() => setCopied(c => (c === kind ? null : c)), 2500);
   }
 
-  // ── Copiar Resumo (WA): somente servidor + item, agrupado por servidor ────
+  // ── Copiar Resumo (WA): somente servidor + item, SÓ itens não vendidos ────
+  // (estrutura anterior preservada; vendidos são excluídos automaticamente).
   function copySummary() {
     const byServer = new Map<string, string[]>();
     groups.forEach(g => {
+      const pendentes = g.items.filter(it => !it.sold);
+      if (pendentes.length === 0) return;
       const key = g.serverName || "Sem servidor";
       const list = byServer.get(key) || [];
-      g.items.forEach(it => list.push(it.itemName));
+      pendentes.forEach(it => list.push(it.itemName));
       byServer.set(key, list);
     });
 
@@ -234,9 +276,7 @@ export default function ItemsForSaleModal({ parties, characters, waitingList, on
     flagCopied("resumo");
   }
 
-  // ── Copiar Completo (WA): item + servidor + PT + divisão, por PT ──────────
-  // Cada item nomeia o USUÁRIO PARTICIPANTE DA DIVISÃO (destinatário real da
-  // cota) — o dono do personagem não é citado.
+  // ── Copiar Completo (WA): pendentes E vendidos (com valores), por PT ──────
   function copyFull() {
     const fmtDateHH = (ts: number) => {
       const dt = new Date(ts);
@@ -247,7 +287,9 @@ export default function ItemsForSaleModal({ parties, characters, waitingList, on
       return `${dia}/${mes}, ${hh}:${mm}`;
     };
 
-    const linhas: string[] = [`🏷️ *Itens a Venda* (${totalItems} ite${totalItems === 1 ? "m" : "ns"})`];
+    const linhas: string[] = [
+      `🏷️ *Itens a Venda* (${unsoldCount} pendente${unsoldCount === 1 ? "" : "s"} · ${soldCount} vendido${soldCount === 1 ? "" : "s"})`,
+    ];
     groups.forEach(g => {
       linhas.push("");
       linhas.push(`📋 *PT: ${g.partyName}*${g.questSigla ? ` (${g.questSigla})` : ""}`);
@@ -256,12 +298,14 @@ export default function ItemsForSaleModal({ parties, characters, waitingList, on
         linhas.push(`👥 Divisão entre ${g.splitParticipants.length}: ${g.splitParticipants.join(", ")}`);
       }
       g.items.forEach(it => {
-        // Linha enxuta: item + usuário participante da divisão (sem nome do
-        // personagem e sem o rótulo "Participante").
-        const participante = it.inSplit && it.splitRecipient
-          ? ` — ${it.splitRecipient}`
-          : " — fora da divisão";
-        linhas.push(`• 🗡️ ${it.itemName}${participante}`);
+        const participante = it.inSplit && it.splitRecipient ? ` — ${it.splitRecipient}` : " — fora da divisão";
+        if (it.sold) {
+          // Vendido: valor registrado (e a operação do modal, quando existir).
+          const operacao = it.saleSummary ? ` (${it.saleSummary})` : "";
+          linhas.push(`• ✅ ${it.itemName}${participante} — Vendido: ${formatRC(it.soldValueRC)}${operacao}`);
+        } else {
+          linhas.push(`• 🗡️ ${it.itemName}${participante}`);
+        }
       });
     });
     linhas.push("");
@@ -270,6 +314,47 @@ export default function ItemsForSaleModal({ parties, characters, waitingList, on
     copyText(linhas.join("\n"));
     flagCopied("completo");
   }
+
+  // ── Copiar (WA) de UMA PT: o texto OFICIAL do botão da própria PT ─────────
+  // (buildPartyWhatsAppSummaryText é a MESMA função usada pelo PartyPanel —
+  // mudanças futuras no texto oficial valem automaticamente aqui).
+  function copyPartySummary(partyId: string) {
+    const party = parties.find(p => p.id === partyId);
+    if (!party) return;
+    copyText(buildPartyWhatsAppSummaryText(party, characters, waitingList));
+    setCopiedPartyId(partyId);
+    setTimeout(() => setCopiedPartyId(c => (c === partyId ? null : c)), 2500);
+  }
+
+  // ── Salvar venda do modal "Item Vendido" ──────────────────────────────────
+  // MESMO patch do commit da PT (buildItemSaleCommitPatch) gravado pelo MESMO
+  // canal (onUpdateParty = updateParty do App): a PT reflete na hora
+  // (optimistic update) e o Firestore recebe uma única escrita debounced.
+  function commitSaleFromModal(sale: ItemSaleRecord) {
+    if (!saleTarget) return;
+    const party = parties.find(p => p.id === saleTarget.partyId);
+    const sd = party?.slotData || {};
+    const cur = sd[saleTarget.slotId];
+    if (!party || !cur) { setSaleTarget(null); return; }
+    onUpdateParty({
+      ...party,
+      slotData: { ...sd, [saleTarget.slotId]: { ...cur, ...buildItemSaleCommitPatch(sale) } },
+    });
+    setSaleTarget(null);
+  }
+
+  // Dados vivos do item em edição (deriva das props para o ItemSoldModal).
+  const saleTargetData = useMemo(() => {
+    if (!saleTarget) return null;
+    const party = parties.find(p => p.id === saleTarget.partyId);
+    const slot = (party?.slotData || {})[saleTarget.slotId] as ExtendedPartySlotData | undefined;
+    if (!party || !slot) return null;
+    return {
+      itemName: slot.itemDropado || "Item",
+      contextLabel: resolveMemberName(party, saleTarget.slotId, characters, waitingList) || party.name,
+      initial: slot.itemSale || null,
+    };
+  }, [saleTarget, parties, characters, waitingList]);
 
   return createPortal(
     <div
@@ -287,14 +372,19 @@ export default function ItemsForSaleModal({ parties, characters, waitingList, on
               <div>
                 <div className="flex items-center gap-2">
                   <h3 className="text-[15px] font-black text-amber-200 leading-tight tracking-tight">Itens a Venda</h3>
-                  {totalItems > 0 && (
+                  {unsoldCount > 0 && (
                     <span className="text-[10px] font-black px-1.5 py-px rounded-md bg-amber-500/20 border border-amber-500/40 text-amber-300 tabular-nums">
-                      {totalItems} ite{totalItems === 1 ? "m" : "ns"}
+                      {unsoldCount} pendente{unsoldCount === 1 ? "" : "s"}
+                    </span>
+                  )}
+                  {soldCount > 0 && (
+                    <span className="text-[10px] font-black px-1.5 py-px rounded-md bg-emerald-500/15 border border-emerald-500/40 text-emerald-300 tabular-nums">
+                      {soldCount} vendido{soldCount === 1 ? "" : "s"}
                     </span>
                   )}
                 </div>
                 <p className="text-[10px] text-slate-400 leading-tight mt-0.5">
-                  PTs em <span className="text-amber-400/90 font-semibold">Aguardando Pagamento</span> com itens ainda não vendidos
+                  PTs em <span className="text-amber-400/90 font-semibold">Aguardando Pagamento</span> — itens pendentes e vendidos
                 </p>
               </div>
             </div>
@@ -310,7 +400,7 @@ export default function ItemsForSaleModal({ parties, characters, waitingList, on
         </div>
 
         {/* Corpo */}
-        <div className="flex-1 overflow-y-auto px-4 py-3.5 space-y-3">
+        <div className="flex-1 overflow-y-auto px-4 py-3 space-y-2.5">
           {groups.length === 0 ? (
             // Estado vazio elegante — o modal nunca fica em branco.
             <div className="flex flex-col items-center justify-center text-center py-12 gap-3.5">
@@ -321,77 +411,131 @@ export default function ItemsForSaleModal({ parties, characters, waitingList, on
                 Você não tem acesso a nenhum item à venda no momento.
               </p>
               <p className="text-[11px] text-slate-500 max-w-[320px] leading-relaxed">
-                Itens aparecem aqui quando uma PT sua entra em <span className="text-amber-400/80">Aguardando Pagamento</span> com itens dropados ainda não vendidos.
+                Itens aparecem aqui quando uma PT sua entra em <span className="text-amber-400/80">Aguardando Pagamento</span> com itens dropados.
               </p>
             </div>
           ) : (
-            groups.map(g => (
-              <div
-                key={g.partyId}
-                className="rounded-xl border border-amber-500/25 bg-gradient-to-b from-amber-500/[0.07] to-transparent overflow-hidden"
-              >
-                {/* Contexto da PT — faixa própria do card */}
-                <div className="flex items-center gap-2 flex-wrap px-3 py-2 bg-amber-500/[0.07] border-b border-amber-500/15">
-                  <span className="text-[13px] font-black text-amber-200 truncate max-w-[220px]">{g.partyName}</span>
-                  {g.questSigla && (
-                    <span className={`text-[9px] font-bold px-1.5 py-px rounded-md border flex-shrink-0 ${
-                      g.questSigla === "SG"
-                        ? "border-rose-500/40 bg-rose-500/15 text-rose-300"
-                        : "border-slate-400/30 bg-slate-500/15 text-slate-300"
-                    }`}>
-                      {g.questSigla}
-                    </span>
-                  )}
-                  {g.serverName && (
-                    <span className="inline-flex items-center gap-1 text-[10px] font-bold px-1.5 py-px rounded-md border border-sky-500/35 bg-sky-500/15 text-sky-300 flex-shrink-0">
-                      <Globe size={9} className="flex-shrink-0" />
-                      {g.serverName}
-                    </span>
-                  )}
-                  <span className="ml-auto text-[9px] font-bold text-amber-400/70 tabular-nums flex-shrink-0">
-                    {g.items.length} ite{g.items.length === 1 ? "m" : "ns"}
-                  </span>
-                </div>
-
-                {/* Itens ainda não vendidos — o que identifica cada item é o
-                    PARTICIPANTE DA DIVISÃO (destinatário real da cota). */}
-                <div className="px-3 py-2 space-y-1.5">
-                  {g.items.map(it => (
-                    <div
-                      key={it.slotId}
-                      className="flex items-center gap-2 rounded-lg border border-white/[0.06] bg-black/25 px-2.5 py-1.5"
-                    >
-                      <Swords size={12} className="text-amber-400/80 flex-shrink-0" />
-                      <div className="min-w-0 flex-1">
-                        <div className="text-[12px] font-bold text-slate-100 leading-tight truncate">{it.itemName}</div>
-                        <div className="text-[10px] text-slate-500 leading-tight truncate">{it.characterName}</div>
-                      </div>
-                      {it.inSplit && it.splitRecipient ? (
-                        <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-md border border-emerald-500/35 bg-emerald-500/12 text-emerald-300 flex-shrink-0 max-w-[45%]">
-                          <Users size={10} className="flex-shrink-0" />
-                          <span className="truncate">{it.splitRecipient}</span>
-                        </span>
-                      ) : (
-                        <span className="text-[9px] font-semibold px-2 py-0.5 rounded-md border border-slate-500/25 bg-slate-500/10 text-slate-400 flex-shrink-0">
-                          fora da divisão
-                        </span>
-                      )}
-                    </div>
-                  ))}
-                </div>
-
-                {/* Participantes da divisão da PT */}
-                {g.splitParticipants.length > 0 && (
-                  <div className="px-3 pb-2.5 pt-0.5 flex items-start gap-1.5 text-[10px] text-slate-400">
-                    <Users size={11} className="text-emerald-400/70 flex-shrink-0 mt-px" />
-                    <span className="leading-snug">
-                      <span className="font-bold text-emerald-300/90">Divisão ({g.splitParticipants.length}):</span>{" "}
-                      {g.splitParticipants.join(", ")}
-                    </span>
+            groups.map(g => {
+              const party = parties.find(p => p.id === g.partyId);
+              // "Copiar (WA)" da PT: MESMA condição de visibilidade do botão
+              // no painel (quest finalizada e não falhada).
+              const canCopyParty = !!party && !!party.questConcluida && !party.questFalha;
+              return (
+                <div
+                  key={g.partyId}
+                  className="rounded-xl border border-amber-500/25 bg-gradient-to-b from-amber-500/[0.07] to-transparent overflow-hidden"
+                >
+                  {/* Contexto da PT — faixa própria do card */}
+                  <div className="flex items-center gap-2 flex-wrap px-3 py-1.5 bg-amber-500/[0.07] border-b border-amber-500/15">
+                    <span className="text-[13px] font-black text-amber-200 truncate max-w-[190px]">{g.partyName}</span>
+                    {g.questSigla && (
+                      <span className={`text-[9px] font-bold px-1.5 py-px rounded-md border flex-shrink-0 ${
+                        g.questSigla === "SG"
+                          ? "border-rose-500/40 bg-rose-500/15 text-rose-300"
+                          : "border-slate-400/30 bg-slate-500/15 text-slate-300"
+                      }`}>
+                        {g.questSigla}
+                      </span>
+                    )}
+                    {g.serverName && (
+                      <span className="inline-flex items-center gap-1 text-[10px] font-bold px-1.5 py-px rounded-md border border-sky-500/35 bg-sky-500/15 text-sky-300 flex-shrink-0">
+                        <Globe size={9} className="flex-shrink-0" />
+                        {g.serverName}
+                      </span>
+                    )}
+                    {/* Copiar (WA) da PT — mesmo texto/comportamento do botão da PT */}
+                    {canCopyParty && (
+                      <button
+                        type="button"
+                        onClick={() => copyPartySummary(g.partyId)}
+                        className={`ml-auto inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold border transition-colors whitespace-nowrap cursor-pointer flex-shrink-0 ${
+                          copiedPartyId === g.partyId
+                            ? "bg-emerald-500/30 border-emerald-500/50 text-emerald-200"
+                            : "bg-sky-500/15 border-sky-500/40 text-sky-300 hover:bg-sky-500/25 hover:text-sky-200"
+                        }`}
+                        title={copiedPartyId === g.partyId ? "Texto copiado!" : "Copiar resumo da PT para o WhatsApp"}
+                      >
+                        {copiedPartyId === g.partyId ? <Check size={11} /> : <ExternalLink size={11} />}
+                        {copiedPartyId === g.partyId ? "Copiado!" : "Copiar (WA)"}
+                      </button>
+                    )}
                   </div>
-                )}
-              </div>
-            ))
+
+                  {/* Itens — pendentes e vendidos, diferenciados visualmente. */}
+                  <div className="px-2.5 py-1.5 space-y-1">
+                    {g.items.map(it => {
+                      const slot = (party?.slotData || {})[it.slotId] as ExtendedPartySlotData | undefined;
+                      // MESMAS regras do botão "Vendido" da PT (fonte única).
+                      const vendidoEnabled = !!party && getVendidoButtonState(party, slot).enabled;
+                      return (
+                        <div
+                          key={it.slotId}
+                          className={`flex items-center gap-2 rounded-lg border px-2 py-1 ${
+                            it.sold
+                              ? "border-emerald-500/20 bg-emerald-500/[0.05]"
+                              : "border-white/[0.06] bg-black/25"
+                          }`}
+                        >
+                          {it.sold
+                            ? <Check size={12} className="text-emerald-400 flex-shrink-0" />
+                            : <Swords size={12} className="text-amber-400/80 flex-shrink-0" />}
+                          <div className="min-w-0 flex-1">
+                            <div className={`text-[12px] font-bold leading-tight truncate ${it.sold ? "text-emerald-200" : "text-slate-100"}`}>
+                              {it.itemName}
+                            </div>
+                            <div className="text-[10px] text-slate-500 leading-tight truncate" title={it.saleSummary || undefined}>
+                              {it.characterName}
+                              {it.sold && it.saleSummary && <span className="text-slate-600"> · {it.saleSummary}</span>}
+                            </div>
+                          </div>
+                          {it.sold && (
+                            <span className="text-[11px] font-black tabular-nums text-emerald-300 flex-shrink-0" title="Valor registrado da venda">
+                              {formatRC(it.soldValueRC)}
+                            </span>
+                          )}
+                          {it.inSplit && it.splitRecipient ? (
+                            <span className={`inline-flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded-md border flex-shrink-0 max-w-[32%] ${
+                              it.sold
+                                ? "border-emerald-500/25 bg-emerald-500/[0.08] text-emerald-300/80"
+                                : "border-emerald-500/35 bg-emerald-500/12 text-emerald-300"
+                            }`}>
+                              <Users size={10} className="flex-shrink-0" />
+                              <span className="truncate">{it.splitRecipient}</span>
+                            </span>
+                          ) : (
+                            <span className="text-[9px] font-semibold px-1.5 py-0.5 rounded-md border border-slate-500/25 bg-slate-500/10 text-slate-400 flex-shrink-0">
+                              fora da divisão
+                            </span>
+                          )}
+                          {/* Botão "Vendido" — só quando as regras da PT permitem. */}
+                          {!it.sold && vendidoEnabled && (
+                            <button
+                              type="button"
+                              onClick={() => setSaleTarget({ partyId: g.partyId, slotId: it.slotId })}
+                              title="Registrar a venda deste item (valor, cotação do RC e Taxa Market)"
+                              className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded border text-[10px] font-bold transition-colors whitespace-nowrap border-amber-500/40 bg-amber-500/10 text-amber-300 hover:bg-amber-500/25 cursor-pointer flex-shrink-0"
+                            >
+                              <Coins size={10} /> Vendido
+                            </button>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {/* Participantes da divisão da PT */}
+                  {g.splitParticipants.length > 0 && (
+                    <div className="px-3 pb-2 pt-0.5 flex items-start gap-1.5 text-[10px] text-slate-400">
+                      <Users size={11} className="text-emerald-400/70 flex-shrink-0 mt-px" />
+                      <span className="leading-snug">
+                        <span className="font-bold text-emerald-300/90">Divisão ({g.splitParticipants.length}):</span>{" "}
+                        {g.splitParticipants.join(", ")}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              );
+            })
           )}
         </div>
 
@@ -400,7 +544,7 @@ export default function ItemsForSaleModal({ parties, characters, waitingList, on
           <button
             type="button"
             onClick={copySummary}
-            disabled={totalItems === 0}
+            disabled={unsoldCount === 0}
             className="flex-1 py-2 rounded-lg border border-emerald-500/40 bg-emerald-500/12 text-emerald-300 text-[11px] font-bold hover:bg-emerald-500/22 hover:border-emerald-500/60 transition-colors cursor-pointer inline-flex items-center justify-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
           >
             {copied === "resumo" ? <Check size={12} /> : <Copy size={12} />}
@@ -409,7 +553,7 @@ export default function ItemsForSaleModal({ parties, characters, waitingList, on
           <button
             type="button"
             onClick={copyFull}
-            disabled={totalItems === 0}
+            disabled={unsoldCount === 0 && soldCount === 0}
             className="flex-1 py-2 rounded-lg border border-sky-500/40 bg-sky-500/12 text-sky-300 text-[11px] font-bold hover:bg-sky-500/22 hover:border-sky-500/60 transition-colors cursor-pointer inline-flex items-center justify-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
           >
             {copied === "completo" ? <Check size={12} /> : <Copy size={12} />}
@@ -424,6 +568,18 @@ export default function ItemsForSaleModal({ parties, characters, waitingList, on
           </button>
         </div>
       </div>
+
+      {/* Modal "Item Vendido" — o MESMO componente do fluxo da PT, aberto por
+          cima deste modal com os dados vivos do slot. */}
+      {saleTarget && saleTargetData && (
+        <ItemSoldModal
+          itemName={saleTargetData.itemName}
+          contextLabel={saleTargetData.contextLabel}
+          initial={saleTargetData.initial}
+          onCancel={() => setSaleTarget(null)}
+          onSave={commitSaleFromModal}
+        />
+      )}
     </div>,
     document.body,
   );

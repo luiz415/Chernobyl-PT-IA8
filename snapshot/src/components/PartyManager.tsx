@@ -7,7 +7,7 @@ import { countPartiesAwaitingPaymentForUser } from "../utils/partyPendingPayment
 import { getPartyParticipation, isPartyVisibleToViewer } from "../utils/partyPermissions";
 import { VOCATIONS } from "../types";
 import PartyPanel from "./PartyPanel";
-import ItemsForSaleModal, { collectUnsoldSaleGroups } from "./ItemsForSaleModal";
+import ItemsForSaleModal, { collectSaleGroups, countUnsoldItems } from "./ItemsForSaleModal";
 import AvailableCharacter, { type OtherPartyInfo } from "./AvailableCharacter";
 import RefreshButton from "./RefreshButton";
 import ServersPyramidChart from "./ServerGraphic";
@@ -637,8 +637,7 @@ export default function PartyManager({ parties, characters, waitingList, userNam
     });
   }, [parties, currentUser?.uid, userName, userProfile?.role, isNormalUser, characters]);
   const unsoldItemsCount = useMemo(
-    () => collectUnsoldSaleGroups(itemsForSaleParties, characters, waitingList)
-      .reduce((s, g) => s + g.items.length, 0),
+    () => countUnsoldItems(collectSaleGroups(itemsForSaleParties, characters, waitingList)),
     [itemsForSaleParties, characters, waitingList],
   );
 
@@ -1502,12 +1501,16 @@ export default function PartyManager({ parties, characters, waitingList, userNam
       {/* Modal "Itens a Venda" — independente da PT selecionada; recebe as
           PTs "Aguardando Pagamento" já filtradas pelas regras de ACESSO do
           usuário atual (itemsForSaleParties). Props vivas do listener de
-          parties -> conteúdo em tempo real, sem nenhuma consulta extra. */}
+          parties -> conteúdo em tempo real, sem nenhuma consulta extra.
+          `onUpdate` é o MESMO updateParty do App usado pelo PartyPanel
+          (optimistic update + debounce) — a venda registrada pelo modal
+          persiste pelo canal existente, sem escrita nova. */}
       {showItemsForSale && (
         <ItemsForSaleModal
           parties={itemsForSaleParties}
           characters={characters}
           waitingList={waitingList}
+          onUpdateParty={onUpdate}
           onClose={() => setShowItemsForSale(false)}
         />
       )}
