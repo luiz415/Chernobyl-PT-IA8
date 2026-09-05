@@ -341,9 +341,10 @@ export default function ItemsForSaleModal({ parties, characters, waitingList, on
       g.items.forEach(it => {
         const participante = it.inSplit && it.splitRecipient ? ` — ${it.splitRecipient}` : " — fora da divisão";
         if (it.sold) {
-          // Vendido: valor registrado (e a operação do modal, quando existir).
+          // Vendido: 🗡️ no item (como todos) + ✅ antes de "Vendido" com o
+          // valor registrado (e a operação do modal, quando existir).
           const operacao = it.saleSummary ? ` (${it.saleSummary})` : "";
-          linhas.push(`• ✅ ${it.itemName}${participante} — Vendido: ${formatRC(it.soldValueRC)}${operacao}`);
+          linhas.push(`• 🗡️ ${it.itemName}${participante} — ✅ Vendido: ${formatRC(it.soldValueRC)}${operacao}`);
         } else {
           // Pendente: estado explícito após o nome do usuário.
           linhas.push(`• 🗡️ ${it.itemName}${participante} — Não vendido`);
