@@ -1,6 +1,6 @@
 import { useMemo, useState, useEffect } from "react";
 import { createPortal } from "react-dom";
-import { X, Coins, Copy, Check, PackageOpen, Users } from "lucide-react";
+import { X, Coins, Copy, Check, PackageOpen, Users, Swords, Globe } from "lucide-react";
 import type { Character, PartyTab, WaitingService } from "../types";
 import { serverLabel } from "../constants/servers";
 import { resolveSplitRecipient, type ExtendedPartySlotData } from "./PartyPanel";
@@ -25,6 +25,12 @@ import { resolveSplitRecipient, type ExtendedPartySlotData } from "./PartyPanel"
 //   modal "Item Vendido" (itemSale.resultRC). É o MESMO critério canônico já
 //   usado pelo PartyPanel no status do Copiar (WA) e no aviso de divisão
 //   ("splitMembersWithUnsoldItems"). Registrou a venda -> some do modal.
+//
+// PARTICIPANTE POR ITEM — o dono do personagem NÃO importa aqui: o que
+// identifica o item é o USUÁRIO PARTICIPANTE DA DIVISÃO daquele slot, ou
+// seja, o destinatário real resolvido por `resolveSplitRecipient` (a mesma
+// precedência do painel e do Copiar (WA) da PT: splitTarget explícito ->
+// jogador; ausente -> dono). Slots fora da divisão são marcados como tal.
 // ============================================================================
 
 /** Um item dropado e ainda não vendido, com contexto do slot. */
@@ -33,10 +39,11 @@ export interface UnsoldSaleItem {
   itemName: string;
   /** Nome do personagem que dropou (snapshot -> fonte viva -> lista -> externo). */
   characterName: string;
-  /** DONO do slot (coluna DONO). */
-  ownerName: string;
-  /** JOGADOR do slot, quando difere do dono. Vazio = mesmo que o dono. */
-  playerName: string;
+  /**
+   * USUÁRIO PARTICIPANTE DA DIVISÃO deste item — o destinatário real da cota
+   * (resolveSplitRecipient). Vazio apenas quando o slot está fora da divisão.
+   */
+  splitRecipient: string;
   /** O slot participa da divisão? */
   inSplit: boolean;
 }
@@ -106,18 +113,19 @@ export function collectUnsoldSaleGroups(
       if (sold) continue;
 
       const characterName = resolveMemberName(party, id, characters, waitingList);
-      const ownerName = String(slot?.owner || "").trim();
-      const playerRaw = String(slot?.player || "").trim();
-      const playerName =
-        playerRaw && playerRaw.toLowerCase() !== ownerName.toLowerCase() ? playerRaw : "";
+      const inSplit = !!slot?.split;
+      // O que importa é o PARTICIPANTE DA DIVISÃO do item — destinatário
+      // real da cota, resolvido exatamente como o painel resolve
+      // (splitTarget explícito -> jogador; ausente -> dono).
+      const fallback = String(slot?.owner || "").trim() || characterName;
+      const splitRecipient = inSplit ? resolveSplitRecipient(slot, fallback || "?") : "";
 
       items.push({
         slotId: id,
         itemName,
-        characterName: characterName || ownerName || "?",
-        ownerName,
-        playerName,
-        inSplit: !!slot?.split,
+        characterName: characterName || fallback || "?",
+        splitRecipient,
+        inSplit,
       });
     }
 
@@ -227,6 +235,8 @@ export default function ItemsForSaleModal({ parties, characters, waitingList, on
   }
 
   // ── Copiar Completo (WA): item + servidor + PT + divisão, por PT ──────────
+  // Cada item nomeia o USUÁRIO PARTICIPANTE DA DIVISÃO (destinatário real da
+  // cota) — o dono do personagem não é citado.
   function copyFull() {
     const fmtDateHH = (ts: number) => {
       const dt = new Date(ts);
@@ -246,8 +256,10 @@ export default function ItemsForSaleModal({ parties, characters, waitingList, on
         linhas.push(`👥 Divisão entre ${g.splitParticipants.length}: ${g.splitParticipants.join(", ")}`);
       }
       g.items.forEach(it => {
-        const donoInfo = it.ownerName ? ` (Dono: ${it.ownerName}${it.playerName ? ` / Jogador: ${it.playerName}` : ""})` : "";
-        linhas.push(`• 🗡️ ${it.itemName} — ${it.characterName}${donoInfo}${it.inSplit ? "" : " — fora da divisão"}`);
+        const participante = it.inSplit && it.splitRecipient
+          ? ` — Participante: ${it.splitRecipient}`
+          : " — fora da divisão";
+        linhas.push(`• 🗡️ ${it.itemName} (${it.characterName})${participante}`);
       });
     });
     linhas.push("");
@@ -259,94 +271,119 @@ export default function ItemsForSaleModal({ parties, characters, waitingList, on
 
   return createPortal(
     <div
-      className="fixed inset-0 z-[500] flex items-center justify-center bg-black/75 backdrop-blur-sm p-4"
+      className="fixed inset-0 z-[500] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4"
       onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}
     >
-      <div className="w-full max-w-lg rounded-2xl border border-amber-500/30 bg-[var(--th-bg-base,#0b0b10)] shadow-2xl shadow-black/60 flex flex-col max-h-[82vh]">
-        {/* Cabeçalho */}
-        <div className="flex items-center justify-between px-4 py-3 border-b border-white/5 flex-shrink-0">
-          <div className="flex items-center gap-2">
-            <span className="w-7 h-7 rounded-lg bg-amber-500/15 border border-amber-500/30 flex items-center justify-center">
-              <Coins size={14} className="text-amber-300" />
-            </span>
-            <div>
-              <h3 className="text-sm font-black text-amber-200 leading-tight">Itens a Venda</h3>
-              <p className="text-[10px] text-slate-500 leading-tight">
-                PTs em Aguardando Pagamento com itens ainda não vendidos
-              </p>
+      <div className="w-full max-w-xl rounded-2xl border border-amber-500/40 bg-gradient-to-b from-[#141017] to-[#0b0a10] shadow-[0_0_60px_rgba(245,158,11,0.08)] shadow-black/70 flex flex-col max-h-[84vh] overflow-hidden">
+        {/* Cabeçalho — faixa com identidade âmbar (Aguardando Pagamento) */}
+        <div className="relative px-4 py-3.5 border-b border-amber-500/20 bg-gradient-to-r from-amber-500/[0.12] via-amber-500/[0.05] to-transparent flex-shrink-0">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2.5">
+              <span className="w-9 h-9 rounded-xl bg-amber-500/15 border border-amber-500/40 flex items-center justify-center shadow-[0_0_12px_rgba(245,158,11,0.15)]">
+                <Coins size={17} className="text-amber-300" />
+              </span>
+              <div>
+                <div className="flex items-center gap-2">
+                  <h3 className="text-[15px] font-black text-amber-200 leading-tight tracking-tight">Itens a Venda</h3>
+                  {totalItems > 0 && (
+                    <span className="text-[10px] font-black px-1.5 py-px rounded-md bg-amber-500/20 border border-amber-500/40 text-amber-300 tabular-nums">
+                      {totalItems} ite{totalItems === 1 ? "m" : "ns"}
+                    </span>
+                  )}
+                </div>
+                <p className="text-[10px] text-slate-400 leading-tight mt-0.5">
+                  PTs em <span className="text-amber-400/90 font-semibold">Aguardando Pagamento</span> com itens ainda não vendidos
+                </p>
+              </div>
             </div>
+            <button
+              type="button"
+              onClick={onClose}
+              className="w-7 h-7 rounded-lg border border-white/10 bg-white/5 text-slate-400 hover:text-white hover:bg-white/10 flex items-center justify-center transition-colors cursor-pointer"
+              title="Fechar"
+            >
+              <X size={14} />
+            </button>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="w-7 h-7 rounded-lg border border-white/10 bg-white/5 text-slate-400 hover:text-white hover:bg-white/10 flex items-center justify-center transition-colors cursor-pointer"
-            title="Fechar"
-          >
-            <X size={14} />
-          </button>
         </div>
 
         {/* Corpo */}
-        <div className="flex-1 overflow-y-auto px-4 py-3 space-y-2.5">
+        <div className="flex-1 overflow-y-auto px-4 py-3.5 space-y-3">
           {groups.length === 0 ? (
             // Estado vazio elegante — o modal nunca fica em branco.
-            <div className="flex flex-col items-center justify-center text-center py-10 gap-3">
-              <span className="w-12 h-12 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-center">
-                <PackageOpen size={22} className="text-slate-500" />
+            <div className="flex flex-col items-center justify-center text-center py-12 gap-3.5">
+              <span className="w-14 h-14 rounded-2xl bg-amber-500/[0.06] border border-amber-500/20 flex items-center justify-center">
+                <PackageOpen size={26} className="text-amber-400/50" />
               </span>
-              <p className="text-sm font-semibold text-slate-300">
+              <p className="text-sm font-bold text-slate-200">
                 Você não tem acesso a nenhum item à venda no momento.
               </p>
-              <p className="text-[11px] text-slate-500 max-w-[300px]">
-                Itens aparecem aqui quando uma PT sua entra em Aguardando Pagamento com itens dropados ainda não vendidos.
+              <p className="text-[11px] text-slate-500 max-w-[320px] leading-relaxed">
+                Itens aparecem aqui quando uma PT sua entra em <span className="text-amber-400/80">Aguardando Pagamento</span> com itens dropados ainda não vendidos.
               </p>
             </div>
           ) : (
             groups.map(g => (
               <div
                 key={g.partyId}
-                className="rounded-xl border border-amber-500/20 bg-amber-500/[0.04] px-3 py-2.5"
+                className="rounded-xl border border-amber-500/25 bg-gradient-to-b from-amber-500/[0.07] to-transparent overflow-hidden"
               >
-                {/* Contexto da PT */}
-                <div className="flex items-center gap-1.5 flex-wrap">
-                  <span className="text-xs font-black text-amber-200 truncate max-w-[200px]">{g.partyName}</span>
+                {/* Contexto da PT — faixa própria do card */}
+                <div className="flex items-center gap-2 flex-wrap px-3 py-2 bg-amber-500/[0.07] border-b border-amber-500/15">
+                  <span className="text-[13px] font-black text-amber-200 truncate max-w-[220px]">{g.partyName}</span>
                   {g.questSigla && (
-                    <span className={`text-[8px] font-bold px-1 py-px rounded border flex-shrink-0 ${
+                    <span className={`text-[9px] font-bold px-1.5 py-px rounded-md border flex-shrink-0 ${
                       g.questSigla === "SG"
-                        ? "border-rose-500/30 bg-rose-500/10 text-rose-400"
-                        : "border-slate-500/30 bg-slate-500/10 text-slate-400"
+                        ? "border-rose-500/40 bg-rose-500/15 text-rose-300"
+                        : "border-slate-400/30 bg-slate-500/15 text-slate-300"
                     }`}>
                       {g.questSigla}
                     </span>
                   )}
                   {g.serverName && (
-                    <span className="text-[9px] font-bold px-1.5 py-px rounded border border-sky-500/25 bg-sky-500/10 text-sky-300 flex-shrink-0">
+                    <span className="inline-flex items-center gap-1 text-[10px] font-bold px-1.5 py-px rounded-md border border-sky-500/35 bg-sky-500/15 text-sky-300 flex-shrink-0">
+                      <Globe size={9} className="flex-shrink-0" />
                       {g.serverName}
                     </span>
                   )}
+                  <span className="ml-auto text-[9px] font-bold text-amber-400/70 tabular-nums flex-shrink-0">
+                    {g.items.length} ite{g.items.length === 1 ? "m" : "ns"}
+                  </span>
                 </div>
 
-                {/* Itens ainda não vendidos */}
-                <div className="mt-1.5 space-y-1">
+                {/* Itens ainda não vendidos — o que identifica cada item é o
+                    PARTICIPANTE DA DIVISÃO (destinatário real da cota). */}
+                <div className="px-3 py-2 space-y-1.5">
                   {g.items.map(it => (
-                    <div key={it.slotId} className="flex items-baseline gap-1.5 text-[11px] leading-snug">
-                      <span className="text-amber-400/70 flex-shrink-0">•</span>
-                      <span className="font-bold text-slate-200">{it.itemName}</span>
-                      <span className="text-slate-500 truncate">
-                        — {it.characterName}
-                        {it.ownerName && ` (${it.ownerName}${it.playerName ? ` / ${it.playerName}` : ""})`}
-                        {!it.inSplit && <span className="text-slate-600"> · fora da divisão</span>}
-                      </span>
+                    <div
+                      key={it.slotId}
+                      className="flex items-center gap-2 rounded-lg border border-white/[0.06] bg-black/25 px-2.5 py-1.5"
+                    >
+                      <Swords size={12} className="text-amber-400/80 flex-shrink-0" />
+                      <div className="min-w-0 flex-1">
+                        <div className="text-[12px] font-bold text-slate-100 leading-tight truncate">{it.itemName}</div>
+                        <div className="text-[10px] text-slate-500 leading-tight truncate">{it.characterName}</div>
+                      </div>
+                      {it.inSplit && it.splitRecipient ? (
+                        <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-md border border-emerald-500/35 bg-emerald-500/12 text-emerald-300 flex-shrink-0 max-w-[45%]">
+                          <Users size={10} className="flex-shrink-0" />
+                          <span className="truncate">{it.splitRecipient}</span>
+                        </span>
+                      ) : (
+                        <span className="text-[9px] font-semibold px-2 py-0.5 rounded-md border border-slate-500/25 bg-slate-500/10 text-slate-400 flex-shrink-0">
+                          fora da divisão
+                        </span>
+                      )}
                     </div>
                   ))}
                 </div>
 
-                {/* Participantes da divisão */}
+                {/* Participantes da divisão da PT */}
                 {g.splitParticipants.length > 0 && (
-                  <div className="mt-1.5 pt-1.5 border-t border-white/5 flex items-start gap-1.5 text-[10px] text-slate-400">
-                    <Users size={11} className="text-amber-400/60 flex-shrink-0 mt-px" />
+                  <div className="px-3 pb-2.5 pt-0.5 flex items-start gap-1.5 text-[10px] text-slate-400">
+                    <Users size={11} className="text-emerald-400/70 flex-shrink-0 mt-px" />
                     <span className="leading-snug">
-                      <span className="font-bold text-slate-300">Divisão ({g.splitParticipants.length}):</span>{" "}
+                      <span className="font-bold text-emerald-300/90">Divisão ({g.splitParticipants.length}):</span>{" "}
                       {g.splitParticipants.join(", ")}
                     </span>
                   </div>
@@ -357,12 +394,12 @@ export default function ItemsForSaleModal({ parties, characters, waitingList, on
         </div>
 
         {/* Rodapé */}
-        <div className="flex items-center gap-2 px-4 py-3 border-t border-white/5 flex-shrink-0">
+        <div className="flex items-center gap-2 px-4 py-3 border-t border-amber-500/15 bg-black/30 flex-shrink-0">
           <button
             type="button"
             onClick={copySummary}
             disabled={totalItems === 0}
-            className="flex-1 py-1.5 rounded-lg border border-emerald-500/30 bg-emerald-500/10 text-emerald-300 text-[11px] font-bold hover:bg-emerald-500/20 transition-colors cursor-pointer inline-flex items-center justify-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+            className="flex-1 py-2 rounded-lg border border-emerald-500/40 bg-emerald-500/12 text-emerald-300 text-[11px] font-bold hover:bg-emerald-500/22 hover:border-emerald-500/60 transition-colors cursor-pointer inline-flex items-center justify-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
           >
             {copied === "resumo" ? <Check size={12} /> : <Copy size={12} />}
             {copied === "resumo" ? "Copiado!" : "Copiar Resumo (WA)"}
@@ -371,7 +408,7 @@ export default function ItemsForSaleModal({ parties, characters, waitingList, on
             type="button"
             onClick={copyFull}
             disabled={totalItems === 0}
-            className="flex-1 py-1.5 rounded-lg border border-sky-500/30 bg-sky-500/10 text-sky-300 text-[11px] font-bold hover:bg-sky-500/20 transition-colors cursor-pointer inline-flex items-center justify-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+            className="flex-1 py-2 rounded-lg border border-sky-500/40 bg-sky-500/12 text-sky-300 text-[11px] font-bold hover:bg-sky-500/22 hover:border-sky-500/60 transition-colors cursor-pointer inline-flex items-center justify-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
           >
             {copied === "completo" ? <Check size={12} /> : <Copy size={12} />}
             {copied === "completo" ? "Copiado!" : "Copiar Completo (WA)"}
@@ -379,7 +416,7 @@ export default function ItemsForSaleModal({ parties, characters, waitingList, on
           <button
             type="button"
             onClick={onClose}
-            className="px-3 py-1.5 rounded-lg border border-white/10 bg-white/5 text-slate-300 text-[11px] font-bold hover:bg-white/10 transition-colors cursor-pointer"
+            className="px-3.5 py-2 rounded-lg border border-white/10 bg-white/5 text-slate-300 text-[11px] font-bold hover:bg-white/10 transition-colors cursor-pointer"
           >
             Fechar
           </button>
