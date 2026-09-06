@@ -10,6 +10,7 @@ import VipAccessButton from "./VipAccessButton";
 import { getEffectiveUserRole } from "../utils/vipAccess";
 import { SERVER_OPTIONS, isOfficialServer } from "../constants/servers";
 import WhatsappMessagePicker from "./WhatsappMessagePicker";
+import FirstMessageMarker from "./FirstMessageMarker";
 import WhatsappTemplateModal from "./WhatsappTemplateModal";
 import {
   DEFAULT_WHATSAPP_TEMPLATES,
@@ -416,6 +417,22 @@ export default function WaitingListPanel({ items, onAdd, onUpdate, onDelete, use
     setWaTarget(item);
   }
 
+  /**
+   * GATILHO OFICIAL da primeira mensagem ao cliente: a confirmação de
+   * "Abrir conversa" no modal "Enviar WhatsApp" (WhatsappMessagePicker →
+   * `onOpenLink`). Abre o link normalmente e, se este Service ainda não tem
+   * `firstMessageSentAt`, registra o momento — persistido via `onUpdate`
+   * (mesmo caminho otimista + Firestore das edições da Lista de Espera).
+   * Abertura do modal, seleção de mensagem ou o botão de WhatsApp da linha
+   * NÃO marcam nada; apenas esta confirmação.
+   */
+  function handleWaOpenLink(link: string) {
+    openExternalUrl(link);
+    if (waTarget && !(waTarget.firstMessageSentAt && waTarget.firstMessageSentAt > 0)) {
+      onUpdate({ ...waTarget, firstMessageSentAt: Date.now() });
+    }
+  }
+
   function SI({ col }: { col: SortKey }) {
     if (sortKey === col && sortDir === "asc") return <ArrowUp size={11} className="text-emerald-400" />;
     if (sortKey === col && sortDir === "desc") return <ArrowDown size={11} className="text-emerald-400" />;
@@ -796,15 +813,20 @@ export default function WaitingListPanel({ items, onAdd, onUpdate, onDelete, use
                       ) : <span className="text-slate-600">—</span>}
                     </td>
                     <td className="px-2 py-1 text-center font-medium whitespace-nowrap">
-                      <button
-                        type="button"
-                        onClick={() => handleCopyPersonagem(item.id, item.personagem)}
-                        className="inline-flex items-center gap-1 text-slate-100 hover:text-cyan-300 transition-colors cursor-pointer"
-                        title="Clique para copiar o nome do personagem"
-                      >
-                        <span>{item.personagem}</span>
-                        {copiedCharId === item.id && <Check size={12} className="text-emerald-400" />}
-                      </button>
+                      <span className="inline-flex items-center gap-1.5">
+                        {/* Marcador: primeira mensagem ao cliente já enviada?
+                            (gravado pela confirmação "Abrir conversa"). */}
+                        <FirstMessageMarker sentAt={item.firstMessageSentAt} />
+                        <button
+                          type="button"
+                          onClick={() => handleCopyPersonagem(item.id, item.personagem)}
+                          className="inline-flex items-center gap-1 text-slate-100 hover:text-cyan-300 transition-colors cursor-pointer"
+                          title="Clique para copiar o nome do personagem"
+                        >
+                          <span>{item.personagem}</span>
+                          {copiedCharId === item.id && <Check size={12} className="text-emerald-400" />}
+                        </button>
+                      </span>
                     </td>
                     <td className="px-2 py-1 text-center text-slate-300 whitespace-nowrap">{item.servidor || "—"}</td>
                     <td className="px-2 py-1 text-center whitespace-nowrap"><span className="font-bold" style={{ color: VOC_COLORS[item.voc] }}>{item.voc}</span></td>
@@ -909,7 +931,7 @@ export default function WaitingListPanel({ items, onAdd, onUpdate, onDelete, use
         context={waContext}
         onClose={() => setWaTarget(null)}
         onOpenSettings={() => setWaTemplatesOpen(true)}
-        onOpenLink={openExternalUrl}
+        onOpenLink={handleWaOpenLink}
       />
 
       {/* Configuração das mensagens padrão (título/conteúdo), por usuário. */}

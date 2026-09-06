@@ -70,6 +70,9 @@ function normalizeService(raw: any, fallbackUid: string, fallbackNome: string): 
     createdAt: toNumber(raw?.createdAt) || Date.now(),
     updatedAt: toNumber(raw?.updatedAt) || toNumber(raw?.createdAt) || Date.now(),
     ...(status === "realizado" && toNumber(raw?.completedAt) ? { completedAt: toNumber(raw.completedAt) } : {}),
+    // Marcador de primeira mensagem ao cliente ("Abrir conversa" confirmado
+    // no modal Enviar WhatsApp). Preservado apenas quando presente e válido.
+    ...(toNumber(raw?.firstMessageSentAt) ? { firstMessageSentAt: toNumber(raw.firstMessageSentAt) } : {}),
   };
 }
 

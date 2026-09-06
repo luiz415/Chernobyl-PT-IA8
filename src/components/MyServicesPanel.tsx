@@ -20,6 +20,7 @@ import ConfirmModal from "./ConfirmModal";
 import ServiceFormLinkButton from "./ServiceFormLinkButton";
 import WhatsappMessagePicker from "./WhatsappMessagePicker";
 import WhatsappTemplateModal from "./WhatsappTemplateModal";
+import FirstMessageMarker from "./FirstMessageMarker";
 import {
   DEFAULT_WHATSAPP_TEMPLATES,
   cleanWhatsappPhone,
@@ -257,6 +258,27 @@ export default function MyServicesPanel({
     () => serviceToWhatsappContext(waTarget, userProfile?.nome || "", userProfile?.twitchChannel || ""),
     [waTarget, userProfile?.nome, userProfile?.twitchChannel],
   );
+
+  /**
+   * GATILHO OFICIAL da primeira mensagem ao cliente: a confirmação de
+   * "Abrir conversa" no modal "Enviar WhatsApp" (WhatsappMessagePicker →
+   * `onOpenLink`). Abre o link normalmente e, se este Service ainda não tem
+   * `firstMessageSentAt`, registra o momento — persistido pelo mesmo fluxo
+   * otimista (`commit` → cache local → Firestore) das demais edições, com
+   * flush imediato por ser uma ação explícita do usuário. Abertura do modal,
+   * seleção de mensagem ou o botão de WhatsApp da linha NÃO marcam nada.
+   */
+  function handleWaOpenLink(link: string) {
+    openExternalUrl(link);
+    if (waTarget && !(waTarget.firstMessageSentAt && waTarget.firstMessageSentAt > 0)) {
+      const stampedId = waTarget.id;
+      const sentAt = Date.now();
+      commit(
+        services.map(item => (item.id === stampedId ? { ...item, firstMessageSentAt: sentAt } : item)),
+        { flushImmediately: true },
+      );
+    }
+  }
   // Feedback de "copiado" no nome do personagem (mesmo padrão do CharTable).
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
@@ -1504,17 +1526,22 @@ export default function MyServicesPanel({
                       </button>
                     ) : <span className="text-slate-600 text-xs">—</span>}
                   </td>
-                  {/* Nome copiável — mesmo padrão do CharTable. */}
+                  {/* Nome copiável — mesmo padrão do CharTable. O marcador à
+                      esquerda indica se a PRIMEIRA mensagem ao cliente já foi
+                      enviada (confirmação "Abrir conversa" no Enviar WhatsApp). */}
                   <td className="px-1 py-1 text-center">
-                    <button
-                      type="button"
-                      onClick={() => copyCharacterName(service.personagem, service.id)}
-                      className="w-full flex items-center justify-center gap-1 min-w-0 rounded px-1 py-0.5 hover:bg-white/5 transition-colors cursor-pointer"
-                      title="Clique para copiar o nome — duas vezes para editar"
-                    >
-                      <span className="text-xs font-bold text-slate-100 truncate">{service.personagem || "—"}</span>
-                      {copiedId === service.id && <Check size={11} className="text-emerald-400 flex-shrink-0" />}
-                    </button>
+                    <span className="w-full flex items-center justify-center gap-1.5 min-w-0">
+                      <FirstMessageMarker sentAt={service.firstMessageSentAt} />
+                      <button
+                        type="button"
+                        onClick={() => copyCharacterName(service.personagem, service.id)}
+                        className="flex items-center justify-center gap-1 min-w-0 rounded px-1 py-0.5 hover:bg-white/5 transition-colors cursor-pointer"
+                        title="Clique para copiar o nome — duas vezes para editar"
+                      >
+                        <span className="text-xs font-bold text-slate-100 truncate">{service.personagem || "—"}</span>
+                        {copiedId === service.id && <Check size={11} className="text-emerald-400 flex-shrink-0" />}
+                      </button>
+                    </span>
                   </td>
                   {/* Cliente — azul */}
                   <td className="px-1 py-1.5 text-center text-xs text-sky-300 truncate" title={service.ownerName}>
@@ -1718,7 +1745,7 @@ export default function MyServicesPanel({
         context={waContext}
         onClose={() => setWaTarget(null)}
         onOpenSettings={() => setWaTemplatesOpen(true)}
-        onOpenLink={openExternalUrl}
+        onOpenLink={handleWaOpenLink}
       />
 
       {/* Configuração das mensagens padrão (título/conteúdo), por usuário. */}

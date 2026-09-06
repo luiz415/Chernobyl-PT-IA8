@@ -470,6 +470,12 @@ export interface WaitingService {
   status?: "disponivel" | "realizado";
   /** Momento (ms) da entrega — conclusão da Quest da PT que levou o personagem. */
   realizadoAt?: number;
+  /**
+   * Momento (ms) em que a PRIMEIRA mensagem foi enviada ao cliente — gravado
+   * quando o usuário confirma "Abrir conversa" no modal "Enviar WhatsApp"
+   * (guia Services). Ausente = primeira mensagem ainda não enviada.
+   */
+  firstMessageSentAt?: number;
   createdBy?: string;
   createdByName?: string;
 }
@@ -519,6 +525,12 @@ export interface SharedService {
   updatedAt: number;
   /** Preenchido apenas quando `status === "realizado"`. */
   completedAt?: number;
+  /**
+   * Momento (ms) em que a PRIMEIRA mensagem foi enviada ao cliente — gravado
+   * quando o usuário confirma "Abrir conversa" no modal "Enviar WhatsApp"
+   * (guia Meus Services). Ausente = primeira mensagem ainda não enviada.
+   */
+  firstMessageSentAt?: number;
 }
 
 export type SharedServiceStatus = "disponivel" | "realizado";
