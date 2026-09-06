@@ -594,7 +594,9 @@ export default function CharTable({ characters, activeParties = [], readOnly, sh
                       : "border-white/10 bg-white/[0.03] text-slate-600 opacity-50 cursor-not-allowed"
                 }`}
               >
-                {hasSale ? <Check size={8} /> : <Coins size={8} />} Vendido
+                {/* Texto pelo ESTADO PERSISTIDO (itemSaleSW.resultRC):
+                    "Vender" (âmbar) antes da confirmação; "Vendido" (verde) depois. */}
+                {hasSale ? <Check size={8} /> : <Coins size={8} />} {hasSale ? "Vendido" : "Vender"}
               </button>
             )}
             {displayRC(c.dropSW)}
@@ -628,7 +630,9 @@ export default function CharTable({ characters, activeParties = [], readOnly, sh
                       : "border-white/10 bg-white/[0.03] text-slate-600 opacity-50 cursor-not-allowed"
                 }`}
               >
-                {hasSale ? <Check size={8} /> : <Coins size={8} />} Vendido
+                {/* Texto pelo ESTADO PERSISTIDO (itemSaleSG.resultRC):
+                    "Vender" (âmbar) antes da confirmação; "Vendido" (verde) depois. */}
+                {hasSale ? <Check size={8} /> : <Coins size={8} />} {hasSale ? "Vendido" : "Vender"}
               </button>
             )}
             {displayRC(c.dropBakra)}

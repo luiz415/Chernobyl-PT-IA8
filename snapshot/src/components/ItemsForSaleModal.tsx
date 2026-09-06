@@ -581,7 +581,7 @@ export default function ItemsForSaleModal({ parties, characters, waitingList, on
                               title="Registrar a venda deste item (valor, cotação do RC e Taxa Market)"
                               className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded border text-[10px] font-bold transition-colors whitespace-nowrap border-amber-500/40 bg-amber-500/10 text-amber-300 hover:bg-amber-500/25 cursor-pointer flex-shrink-0"
                             >
-                              <Coins size={10} /> Vendido
+                              <Coins size={10} /> Vender
                             </button>
                           )}
                         </div>

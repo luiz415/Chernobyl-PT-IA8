@@ -4118,7 +4118,9 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
                                     : "border-white/10 bg-white/[0.03] text-slate-500 opacity-50 cursor-not-allowed"
                               }`}
                             >
-                              {hasSaleData ? <Check size={10} /> : <Coins size={10} />} Vendido
+                              {/* Texto pelo ESTADO PERSISTIDO da venda (itemSale.resultRC):
+                                  "Vender" (âmbar) antes da confirmação; "Vendido" (verde) depois. */}
+                              {hasSaleData ? <Check size={10} /> : <Coins size={10} />} {hasSaleData ? "Vendido" : "Vender"}
                               {hasSaleData && (extSlot.itemSale?.taxCount || 0) > 0 && (
                                 <span className="text-[8px] font-mono text-amber-300/80">{extSlot.itemSale?.taxCount}x</span>
                               )}
