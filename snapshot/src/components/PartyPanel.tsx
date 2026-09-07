@@ -3796,34 +3796,47 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
                 })();
                 // WhatsApp do proprietário original do personagem:
                 //   - Personagem normal → DONO (ownerPhone)
-                //   - Personagem da Lista de Espera (Service) → WhatsApp do Service
+                //   - Personagem de Service → WhatsApp do CLIENTE, resolvido no
+                //     registro VIVO da waitingList (projetada pelo App).
+                //
+                // IMPORTANTE: o slot de um Service com snapshot é resolvido como
+                // `type: "char"` (snapshot = fonte primária), então `isWaiting`
+                // quase nunca é true. A origem Service correta é
+                // `isServiceMember` (slotData.isService, dado da própria PT), e
+                // o número NUNCA está no snapshot (privacidade) — vem do
+                // registro vivo, que já chega com os campos de WhatsApp
+                // esvaziados pela projeção (projectServiceForViewer) para quem
+                // não é o Serviceiro dono nem Boss.
+                const liveService = isServiceMember
+                  ? (isWaiting ? slot.waiting : waitingList.find(w => w.id === id))
+                  : undefined;
                 const waitingPhone = (() => {
-                  if (!isWaiting) return null;
-                  const phone = `${slot.waiting.whatsappCountry || ""}${slot.waiting.whatsappArea || ""}${slot.waiting.whatsappNumber || ""}`.replace(/\D/g, "");
+                  if (!liveService) return null;
+                  const phone = `${liveService.whatsappCountry || ""}${liveService.whatsappArea || ""}${liveService.whatsappNumber || ""}`.replace(/\D/g, "");
                   return phone || null;
                 })();
                 const ownerPhone = d.ownerUid ? (ownerPhoneMap[d.ownerUid] || null) : null;
-                const donoPhone = isWaiting ? waitingPhone : ownerPhone;
-                const donoLabel = isWaiting ? `${charName || "—"} (Service)` : `${d.owner || "—"} (Dono)`;
+                const donoPhone = isServiceMember ? waitingPhone : ownerPhone;
+                const donoLabel = isServiceMember ? `${charName || "—"} (Service)` : `${d.owner || "—"} (Dono)`;
                 // Permissão para visualizar o WhatsApp do CLIENTE (apenas para Services):
-                // Baseada no Serviceiro ORIGINALMENTE designado (slot.waiting.addedBy),
-                // NÃO no jogador atualmente selecionado na coluna JOGADOR.
+                // Baseada no Serviceiro ORIGINALMENTE designado (addedBy do registro
+                // vivo), NÃO no jogador atualmente selecionado na coluna JOGADOR.
                 // Regra: Boss vê sempre; Serviceiro específico vê; "Qualquer um" → só Boss.
                 const canViewServiceClientWhats = (() => {
-                  if (!isWaiting) return true;
+                  if (!isServiceMember) return true;
                   if (userProfile?.role === "Boss") return true;
-                  const assignedServiceiro = (slot.waiting.addedBy || "").trim().toLowerCase();
+                  const assignedServiceiro = (liveService?.addedBy || "").trim().toLowerCase();
                   if (!assignedServiceiro || assignedServiceiro === "qualquer um") return false;
                   const viewerName = (userProfile?.nome || userName || "").trim().toLowerCase();
                   return assignedServiceiro === viewerName;
                 })();
                 const visibleDonoPhone = canViewServiceClientWhats ? donoPhone : null;
-                const donoWhatsRestricted = isWaiting && !!donoPhone && !canViewServiceClientWhats;
+                const donoWhatsRestricted = isServiceMember && !!donoPhone && !canViewServiceClientWhats;
                 // WhatsApp do JOGADOR (usuário selecionado na coluna JOGADOR)
                 const playerPhone = playerUid ? (ownerPhoneMap[playerUid] || null) : null;
                 const playerLabel = `${d.player || "—"} (Jogador)`;
                 // Verificar se DONO e JOGADOR são o mesmo UID
-                const donoUid = isWaiting ? null : d.ownerUid;
+                const donoUid = isServiceMember ? null : d.ownerUid;
                 const isSamePerson = !!d.player && (
                   (donoUid && playerUid === donoUid) ||
                   (d.player.toLowerCase() === (d.owner || "").toLowerCase())
@@ -4259,7 +4272,7 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
                             - caso contrário → usuário do próprio app → wa.me direto,
                               exatamente como antes (fluxo preservado). */}
                         {visibleDonoPhone ? (
-                          isWaiting ? (
+                          isServiceMember && liveService ? (
                             // ── WHATSAPP DO CLIENTE (Service) ──────────────────
                             // Visual PRÓPRIO, distinto do WhatsApp de usuários do
                             // app (balão de mensagem âmbar com borda vs. link
@@ -4272,7 +4285,7 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
                               type="button"
                               onClick={(e) => {
                                 e.stopPropagation();
-                                setWaTarget(slot.waiting);
+                                setWaTarget(liveService);
                               }}
                               className="inline-flex items-center justify-center w-5 h-5 rounded border border-amber-500/45 bg-amber-500/15 hover:bg-amber-500/30 text-amber-400 hover:text-amber-300 transition-colors cursor-pointer"
                               title={`Enviar mensagem ao CLIENTE do Service ${charName || ""} (abre o seletor de mensagens)`.trim()}
