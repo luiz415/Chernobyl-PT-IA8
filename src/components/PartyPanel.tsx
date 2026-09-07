@@ -10,7 +10,7 @@ import {
   questBossLabel,
 } from "../constants/questBosses";
 import type { QuestBoss } from "../constants/questBosses";
-import { ArrowDown, ArrowUp, ArrowUpDown, Plus, Minus, X, UserPlus, ExternalLink, Play, Clock, Pencil, Check, Lock, Users, Tv, Handshake, Coins } from "lucide-react";
+import { ArrowDown, ArrowUp, ArrowUpDown, Plus, Minus, X, UserPlus, ExternalLink, Play, Clock, Pencil, Check, Lock, Users, Tv, Handshake, Coins, MessageCircle } from "lucide-react";
 import type { Character, CharacterAcquisition, PartyFinalizationReason, PartyTab, PartyCustomMember, PartySlotData, Vocation, WaitingService } from "../types";
 import { getCharacterAccountKey, hasAccountConflictWith } from "../utils/accountIdentity";
 import { resolveSplitBeneficiaryCandidate, buildResolvedUidPatch, type SplitBeneficiaryContext } from "../utils/splitBeneficiary";
@@ -4259,28 +4259,40 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
                             - caso contrário → usuário do próprio app → wa.me direto,
                               exatamente como antes (fluxo preservado). */}
                         {visibleDonoPhone ? (
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              if (isWaiting) {
-                                // Cliente de Service: abre o seletor de mensagens
-                                // pré-programadas (o link é gerado pelo próprio modal,
-                                // com a mensagem escolhida já preenchida).
+                          isWaiting ? (
+                            // ── WHATSAPP DO CLIENTE (Service) ──────────────────
+                            // Visual PRÓPRIO, distinto do WhatsApp de usuários do
+                            // app (balão de mensagem âmbar com borda vs. link
+                            // externo esmeralda): identifica de imediato que o
+                            // contato é com o CLIENTE. O clique NÃO abre o
+                            // WhatsApp — abre o modal "Enviar Mensagem" (seletor
+                            // de mensagens pré-programadas, mesmo fluxo das guias
+                            // Services/Meus Services).
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
                                 setWaTarget(slot.waiting);
-                              } else {
-                                openExternalUrl(`https://wa.me/${visibleDonoPhone}`);
-                              }
-                            }}
-                            className="inline-flex items-center justify-center w-5 h-5 rounded bg-emerald-500/15 hover:bg-emerald-500/30 text-emerald-400 hover:text-emerald-300 transition-colors cursor-pointer"
-                            title={isWaiting
-                              ? `Enviar mensagem ao cliente do Service ${charName || ""}`.trim()
-                              : `Abrir WhatsApp de ${donoLabel}`}
-                          >
-                            <ExternalLink size={10} />
-                          </button>
+                              }}
+                              className="inline-flex items-center justify-center w-5 h-5 rounded border border-amber-500/45 bg-amber-500/15 hover:bg-amber-500/30 text-amber-400 hover:text-amber-300 transition-colors cursor-pointer"
+                              title={`Enviar mensagem ao CLIENTE do Service ${charName || ""} (abre o seletor de mensagens)`.trim()}
+                            >
+                              <MessageCircle size={10} />
+                            </button>
+                          ) : (
+                            // WhatsApp de USUÁRIO do app (DONO): fluxo original
+                            // preservado — wa.me direto, ícone esmeralda.
+                            <button
+                              type="button"
+                              onClick={(e) => { e.stopPropagation(); openExternalUrl(`https://wa.me/${visibleDonoPhone}`); }}
+                              className="inline-flex items-center justify-center w-5 h-5 rounded bg-emerald-500/15 hover:bg-emerald-500/30 text-emerald-400 hover:text-emerald-300 transition-colors cursor-pointer"
+                              title={`Abrir WhatsApp de ${donoLabel}`}
+                            >
+                              <ExternalLink size={10} />
+                            </button>
+                          )
                         ) : donoWhatsRestricted ? (
-                          <span className="text-slate-600 text-[11px]" title="WhatsApp do cliente visível apenas para o Serviceiro designado">🔒</span>
+                          <span className="text-slate-600 text-[11px]" title="WhatsApp do cliente visível apenas para o Serviceiro designado (ou Boss, quando o Serviceiro é 'Qualquer um')">🔒</span>
                         ) : playerPhone ? null : (
                           <span className="text-slate-600 text-[10px]">—</span>
                         )}
