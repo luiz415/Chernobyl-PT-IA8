@@ -6,7 +6,8 @@ import { FilterSelect, FilterInline, FilterNumber } from "./FilterTypes";
 import { useAuth } from "../context/AuthContext";
 import { openExternalUrl } from "../utils/openExternal";
 import { rubinotCharacterUrl } from "../utils/rubinotLinks";
-export default function WaitingServiceAvailableList({ items, selectedIds, isFull, onAdd, filters, setFilters, swLocked = false, sgLocked = false, serverLocked = false }: {
+import type { OtherPartyInfo } from "./AvailableCharacter";
+export default function WaitingServiceAvailableList({ items, selectedIds, isFull, onAdd, filters, setFilters, swLocked = false, sgLocked = false, serverLocked = false, idsInOtherParties, otherPartiesInfoFor }: {
   items: WaitingService[];
   selectedIds: Set<string>;
   isFull: boolean;
@@ -16,6 +17,15 @@ export default function WaitingServiceAvailableList({ items, selectedIds, isFull
   swLocked?: boolean;
   sgLocked?: boolean;
   serverLocked?: boolean;
+  /**
+   * MESMO monitoramento de PT da lista PERSONAGENS DISPONÍVEIS: ids (de
+   * personagens OU Services) que já participam de alguma PT — derivados das
+   * PTs em memória pelo chamador (PartyPanel/PartyManager), sem leitura
+   * adicional. Opcional: sem o Set, nenhum indicador é exibido.
+   */
+  idsInOtherParties?: Set<string>;
+  /** Tooltip do ⚠ — nome da PT + Quest, mesmo formato de AvailableCharacter. */
+  otherPartiesInfoFor?: (id: string) => OtherPartyInfo[] | undefined;
 }) {
   const { userProfile } = useAuth();
   // ── ORDENAÇÃO ──────────────────────────────────────────────────────────
@@ -262,6 +272,13 @@ export default function WaitingServiceAvailableList({ items, selectedIds, isFull
             const canViewWhats = canViewServiceWhats(w);
             const hasVisibleWhats = canViewWhats && !!cleanPhone(w);
             const whatsappRestricted = !!cleanPhone(w) && !canViewWhats;
+            // MESMO indicador ⚠ "em outra PT" de PERSONAGENS DISPONÍVEIS
+            // (AvailableCharacter): flag + tooltip com nome da PT e Quest.
+            const isInOther = idsInOtherParties?.has(w.id) === true;
+            const otherPartyInfos = isInOther ? otherPartiesInfoFor?.(w.id) : undefined;
+            const otherPartyTooltipTitle = otherPartyInfos?.length
+              ? `Este personagem faz parte de ${otherPartyInfos.length > 1 ? "PT's" : "uma PT"}:\n\n${otherPartyInfos.map(info => `• ${info.name} — ${info.questLabel === "Quest não definida" ? info.questLabel : `Quest: ${info.questLabel}`}${info.statusNote ? ` (${info.statusNote})` : ""}`).join("\n")}`
+              : "Este personagem já está em outra PT";
             return (
               <tr
                 key={w.id}
@@ -274,8 +291,8 @@ export default function WaitingServiceAvailableList({ items, selectedIds, isFull
                   }
                   onAdd(w.id);
                 }}
-                className={`transition-colors ${idx % 2 === 0 ? "bg-[var(--th-bg-base)]" : "bg-[var(--th-bg-raised)]"} ${isFull ? "opacity-40 cursor-not-allowed" : "cursor-pointer hover:bg-[var(--th-bg-overlay)]"}`}
-                title={!canAddServiceToPT(w) ? `Somente o Serviceiro "${w.addedBy}" pode adicionar este personagem` : ""}
+                className={`transition-colors ${idx % 2 === 0 ? "bg-[var(--th-bg-base)]" : "bg-[var(--th-bg-raised)]"} ${isFull ? "opacity-40 cursor-not-allowed" : "cursor-pointer hover:bg-[var(--th-bg-overlay)]"} ${isInOther ? "ring-1 ring-inset ring-amber-500/20" : ""}`}
+                title={!canAddServiceToPT(w) ? `Somente o Serviceiro "${w.addedBy}" pode adicionar este personagem` : isInOther ? otherPartyTooltipTitle : ""}
               >
                 <td className="px-2 py-1.5 text-center font-mono text-slate-500 font-bold whitespace-nowrap">{idx + 1}</td>
                 <td className="px-2 py-1.5 text-center whitespace-nowrap">
@@ -292,23 +309,27 @@ export default function WaitingServiceAvailableList({ items, selectedIds, isFull
                   ) : <span className="text-slate-600">—</span>}
                 </td>
                 <td className="px-2 py-1.5 text-center whitespace-nowrap">
-                  <button
-                    type="button"
-                    onClick={event => copyCharacterName(event, w.id, w.personagem)}
-                    onMouseDown={event => event.stopPropagation()}
-                    className={`group inline-flex max-w-[180px] items-center gap-1 rounded px-1 py-0.5 font-medium transition-colors cursor-copy ${
-                      copiedCharacterId === w.id
-                        ? "bg-emerald-500/20 text-emerald-300"
-                        : "text-slate-100 hover:bg-white/10 hover:text-white"
-                    }`}
-                    title={copiedCharacterId === w.id ? "Nome copiado" : `Copiar "${w.personagem || ""}" para a área de transferência`}
-                  >
-                    {copiedCharacterId === w.id ? (
-                      <><Check size={12} className="flex-shrink-0 text-emerald-400" /><span>Copiado!</span></>
-                    ) : (
-                      <><span className="truncate">{w.personagem || "—"}</span><Copy size={11} className="flex-shrink-0 opacity-0 group-hover:opacity-70 transition-opacity" /></>
-                    )}
-                  </button>
+                  <span className="inline-flex items-center gap-1">
+                    {/* ⚠ idêntico ao de PERSONAGENS DISPONÍVEIS (AvailableCharacter). */}
+                    {isInOther && <span className="text-amber-400" title={otherPartyTooltipTitle}>⚠</span>}
+                    <button
+                      type="button"
+                      onClick={event => copyCharacterName(event, w.id, w.personagem)}
+                      onMouseDown={event => event.stopPropagation()}
+                      className={`group inline-flex max-w-[180px] items-center gap-1 rounded px-1 py-0.5 font-medium transition-colors cursor-copy ${
+                        copiedCharacterId === w.id
+                          ? "bg-emerald-500/20 text-emerald-300"
+                          : "text-slate-100 hover:bg-white/10 hover:text-white"
+                      }`}
+                      title={copiedCharacterId === w.id ? "Nome copiado" : `Copiar "${w.personagem || ""}" para a área de transferência`}
+                    >
+                      {copiedCharacterId === w.id ? (
+                        <><Check size={12} className="flex-shrink-0 text-emerald-400" /><span>Copiado!</span></>
+                      ) : (
+                        <><span className="truncate">{w.personagem || "—"}</span><Copy size={11} className="flex-shrink-0 opacity-0 group-hover:opacity-70 transition-opacity" /></>
+                      )}
+                    </button>
+                  </span>
                 </td>
                 <td className="px-2 py-1.5 text-center whitespace-nowrap">{w.servidor || "—"}</td>
                 <td className="px-2 py-1.5 text-center whitespace-nowrap"><span className="font-bold" style={{ color: VOC_COLORS[w.voc!] }}>{w.voc}</span></td>

@@ -4477,7 +4477,7 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
             <div className="flex flex-col border border-[var(--th-brand-mid)]/40 rounded-xl bg-[var(--th-n-abyss)] self-stretch overflow-hidden min-w-0 flex-1">
               <div className="px-3 py-1 bg-[var(--th-bg-raised)] border-b border-[var(--th-brand-mid)]/40 text-[10px] uppercase tracking-wider text-amber-600 font-bold truncate flex-shrink-0">Lista de Espera (Services)</div>
               <div className="flex-1 min-h-0 overflow-y-auto" onWheel={e => e.stopPropagation()}>
-                <WaitingServiceAvailableList items={visibleWaitingList} selectedIds={selectedSet} isFull={isFull} onAdd={addToParty} filters={wlFilters} setFilters={setWlFilters} swLocked={swLocked} sgLocked={sgLocked} serverLocked={serverFilterLocked} />
+                <WaitingServiceAvailableList items={visibleWaitingList} selectedIds={selectedSet} isFull={isFull} onAdd={addToParty} filters={wlFilters} setFilters={setWlFilters} swLocked={swLocked} sgLocked={sgLocked} serverLocked={serverFilterLocked} idsInOtherParties={idsInOtherParties} otherPartiesInfoFor={otherPartiesInfoFor} />
               </div>
             </div>
           </>

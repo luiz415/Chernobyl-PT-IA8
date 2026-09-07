@@ -1457,7 +1457,7 @@ export default function PartyManager({ parties, characters, waitingList, userNam
                         )}
                       </div>
                       <div className="flex-1 min-h-0 overflow-y-auto" onWheel={e => e.stopPropagation()}>
-                        <WaitingServiceAvailableList items={standaloneVisibleWaitingList} selectedIds={new Set()} isFull={false} onAdd={() => {}} filters={standaloneWlFilters} setFilters={setStandaloneWlFilters} />
+                        <WaitingServiceAvailableList items={standaloneVisibleWaitingList} selectedIds={new Set()} isFull={false} onAdd={() => {}} filters={standaloneWlFilters} setFilters={setStandaloneWlFilters} idsInOtherParties={standaloneIdsInOtherParties} otherPartiesInfoFor={standaloneOtherPartiesInfoFor} />
                       </div>
                     </div>
                   );

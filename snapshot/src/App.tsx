@@ -4964,6 +4964,7 @@ export default function App() {
             onCountChange={setMyServicesCount}
             onServicesChanged={handleOwnSharedServicesChanged}
             probableMarkers={probableMarkers}
+            activeParties={activeParties}
           />
         ) : tab === "pts" ? (
           <PartyManager
@@ -5022,7 +5023,7 @@ export default function App() {
             </div>
           </div>
         ) : tab === "waitlist" && isBossUser ? (
-          <WaitingListPanel items={cloudWaitingListForDisplay} onAdd={handleAddWaiting} onUpdate={handleUpdateWaiting} onDelete={handleDeleteWaiting} userName={displayUserName} highlightId={highlightedWaitingServiceId} />
+          <WaitingListPanel items={cloudWaitingListForDisplay} onAdd={handleAddWaiting} onUpdate={handleUpdateWaiting} onDelete={handleDeleteWaiting} userName={displayUserName} highlightId={highlightedWaitingServiceId} activeParties={activeParties} />
         ) : null}
       </div>
     </div>

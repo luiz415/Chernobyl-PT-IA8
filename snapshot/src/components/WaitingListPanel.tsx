@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useMemo } from "react";
 import { Plus, Pencil, Trash2, X, Save, Ban, Clock, MessageCircle, ArrowDown, ArrowUp, ArrowUpDown, RotateCcw, Check, CheckCircle2, ExternalLink, Crown, Star, Shield, Zap, ChevronRight } from "lucide-react";
-import type { ServicePaymentMethod, WaitingService, Vocation } from "../types";
+import type { PartyTab, ServicePaymentMethod, WaitingService, Vocation } from "../types";
 import { VOCATIONS, VOC_COLORS, VOC_LABEL, formatRC, todayISO, formatDateBR, formatDateTimeBR, SERVICE_PAYMENT_LABELS, customAlert, customConfirm } from "../types";
 import { useAuth } from "../context/AuthContext";
 import { openExternalUrl } from "../utils/openExternal";
@@ -11,6 +11,8 @@ import { getEffectiveUserRole } from "../utils/vipAccess";
 import { SERVER_OPTIONS, isOfficialServer } from "../constants/servers";
 import WhatsappMessagePicker from "./WhatsappMessagePicker";
 import FirstMessageMarker from "./FirstMessageMarker";
+import PartyMembershipBadge from "./PartyMembershipBadge";
+import { buildPartyMembershipNames } from "../utils/partyMembership";
 import WhatsappTemplateModal from "./WhatsappTemplateModal";
 import {
   DEFAULT_WHATSAPP_TEMPLATES,
@@ -33,6 +35,12 @@ interface Props {
    * notificação). Mesmo padrão visual do destaque de PT no Meu Histórico.
    */
   highlightId?: string | null;
+  /**
+   * PTs ativas do App (mesma prop `activeParties` do CharTable): alimentam o
+   * indicador "Em PT" dos personagens de Service — MESMO mecanismo de "Meus
+   * Personagens", derivado das PTs já em memória, sem leitura adicional.
+   */
+  activeParties?: PartyTab[];
 }
 
 type SortKey = "personagem" | "servidor" | "voc" | "level" | "ownerName" | "valor" | "data" | "quest" | "addedBy" | "createdAt" | null;
@@ -106,8 +114,12 @@ function formatWhatsDisplay(item: WaitingService): string {
   return `+${c} ${a} ${n}`.trim();
 }
 
-export default function WaitingListPanel({ items, onAdd, onUpdate, onDelete, userName, highlightId }: Props) {
+export default function WaitingListPanel({ items, onAdd, onUpdate, onDelete, userName, highlightId, activeParties = [] }: Props) {
   const { currentUser, userProfile, allUsers } = useAuth();
+
+  // Indicador "Em PT" — mesma derivação do memo `characterInParty` de Meus
+  // Personagens (CharTable), compartilhada em buildPartyMembershipNames.
+  const partyMembershipNames = useMemo(() => buildPartyMembershipNames(activeParties), [activeParties]);
 
   // ── Mensagens padrão do WhatsApp ──────────────────────────────────────────
   // Mesma preferência individual do Meus Services (localStorage por UID):
@@ -814,6 +826,9 @@ export default function WaitingListPanel({ items, onAdd, onUpdate, onDelete, use
                     </td>
                     <td className="px-2 py-1 text-center font-medium whitespace-nowrap">
                       <span className="inline-flex items-center gap-1.5">
+                        {/* Indicador "Em PT" — mesmo escudo violeta da coluna
+                            PT de Meus Personagens (CharTable). */}
+                        <PartyMembershipBadge partyNames={partyMembershipNames.get(item.id)} />
                         {/* Marcador: primeira mensagem ao cliente já enviada?
                             (gravado pela confirmação "Abrir conversa"). */}
                         <FirstMessageMarker sentAt={item.firstMessageSentAt} />

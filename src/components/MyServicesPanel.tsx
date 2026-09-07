@@ -4,7 +4,7 @@ import {
   MessageCircle, ChevronRight, CheckCircle2, Clock, History as HistoryIcon, Check, X, ThumbsUp, ThumbsDown,
   ArrowUp, ArrowDown, ArrowUpDown, RotateCcw, ExternalLink,
 } from "lucide-react";
-import type { ProbableMarkersMap, ServiceRequest, SharedService, Vocation } from "../types";
+import type { PartyTab, ProbableMarkersMap, ServiceRequest, SharedService, Vocation } from "../types";
 import { VOC_COLORS, formatRC, resolveServiceValue, SERVICE_PAYMENT_LABELS } from "../types";
 import { useAuth } from "../context/AuthContext";
 import { isVipActive } from "../utils/vipAccess";
@@ -21,6 +21,8 @@ import ServiceFormLinkButton from "./ServiceFormLinkButton";
 import WhatsappMessagePicker from "./WhatsappMessagePicker";
 import WhatsappTemplateModal from "./WhatsappTemplateModal";
 import FirstMessageMarker from "./FirstMessageMarker";
+import PartyMembershipBadge from "./PartyMembershipBadge";
+import { buildPartyMembershipNames } from "../utils/partyMembership";
 import {
   DEFAULT_WHATSAPP_TEMPLATES,
   cleanWhatsappPhone,
@@ -167,6 +169,7 @@ export default function MyServicesPanel({
   onCountChange,
   onServicesChanged,
   probableMarkers = {},
+  activeParties = [],
 }: {
   onCountChange?: (total: number) => void;
   /** Atualiza a projeção local do App após persistir sharedServices com sucesso. */
@@ -178,8 +181,18 @@ export default function MyServicesPanel({
    * Compartilhando reagir na hora em que a Quest é concluída.
    */
   probableMarkers?: ProbableMarkersMap;
+  /**
+   * PTs ativas do App (mesma prop `activeParties` do CharTable): alimentam o
+   * indicador "Em PT" dos Services — MESMO mecanismo de "Meus Personagens",
+   * derivado das PTs já em memória, sem leitura adicional.
+   */
+  activeParties?: PartyTab[];
 } = {}) {
   const { currentUser, userProfile, allUsers } = useAuth();
+
+  // Indicador "Em PT" — mesma derivação do memo `characterInParty` de Meus
+  // Personagens (CharTable), compartilhada em buildPartyMembershipNames.
+  const partyMembershipNames = useMemo(() => buildPartyMembershipNames(activeParties), [activeParties]);
 
   // ── Controle de acesso: VIP ATIVO **e** serviceiro === true ─────────────
   // Exceção: o Boss é administrador da plataforma e não possui dias de VIP
@@ -1531,6 +1544,9 @@ export default function MyServicesPanel({
                       enviada (confirmação "Abrir conversa" no Enviar WhatsApp). */}
                   <td className="px-1 py-1 text-center">
                     <span className="w-full flex items-center justify-center gap-1.5 min-w-0">
+                      {/* Indicador "Em PT" — mesmo escudo violeta da coluna PT
+                          de Meus Personagens (CharTable). */}
+                      <PartyMembershipBadge partyNames={partyMembershipNames.get(service.id)} />
                       <FirstMessageMarker sentAt={service.firstMessageSentAt} />
                       <button
                         type="button"
