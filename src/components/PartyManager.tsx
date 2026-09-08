@@ -1,9 +1,9 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { createPortal } from "react-dom";
-import { Plus, Users, X, Lock, LockOpen, RotateCcw, ChevronDown, UserCheck, ArrowDown, ArrowUp, ArrowUpDown, Sparkles, RefreshCw, BarChart3, Eye, EyeOff, MousePointerClick, Coins } from "lucide-react";
+import { Plus, Users, X, Lock, LockOpen, RotateCcw, ChevronDown, UserCheck, ArrowDown, ArrowUp, ArrowUpDown, Sparkles, RefreshCw, BarChart3, Eye, EyeOff, MousePointerClick, Coins, Globe, Crown, CalendarClock, Timer, PauseCircle, CheckCircle2 } from "lucide-react";
 import type { Character, CharacterAcquisition, PartyFinalizationReason, PartyTab, WaitingService } from "../types";
 import { getCharacterAccountKey } from "../utils/accountIdentity";
-import { countPartiesAwaitingPaymentForUser } from "../utils/partyPendingPayment";
+import { countPartiesAwaitingPaymentForUser, isPartyAwaitingPaymentForUser } from "../utils/partyPendingPayment";
 import { getPartyParticipation, isPartyVisibleToViewer } from "../utils/partyPermissions";
 import { VOCATIONS } from "../types";
 import PartyPanel from "./PartyPanel";
@@ -111,6 +111,10 @@ const STAGE_THEME: Record<PartyStage, {
   /** Selo do contador de slots (apenas Com Vagas) — aberto/fechado. */
   counterOpened: string;
   counterClosed: string;
+  /** Card do painel de seleção rápida (nenhuma PT aberta) — mesma paleta. */
+  card: string;
+  /** Cor do texto de destaque no card (títulos/valores). */
+  cardAccent: string;
 }> = {
   comVagas: {
     label: "Com Vagas",
@@ -123,6 +127,8 @@ const STAGE_THEME: Record<PartyStage, {
     tabClosed: "border border-violet-500/15 text-violet-400/60 hover:text-violet-300 hover:border-violet-500/30 hover:bg-violet-500/[0.06] bg-transparent",
     counterOpened: "bg-violet-500/25 text-violet-200",
     counterClosed: "bg-violet-500/10 text-violet-400/60",
+    card: "border border-violet-500/30 bg-gradient-to-b from-violet-500/[0.07] to-black/20 hover:border-violet-500/60 hover:from-violet-500/[0.12] hover:shadow-[0_0_14px_rgba(139,92,246,0.18)]",
+    cardAccent: "text-violet-300",
   },
   prontas: {
     label: "Prontas",
@@ -133,6 +139,8 @@ const STAGE_THEME: Record<PartyStage, {
     tabClosed: "border border-emerald-500/15 text-emerald-400/60 hover:text-emerald-300 hover:border-emerald-500/30 hover:bg-emerald-500/[0.06] bg-transparent",
     counterOpened: "bg-emerald-500/25 text-emerald-200",
     counterClosed: "bg-emerald-500/10 text-emerald-400/60",
+    card: "border border-emerald-500/30 bg-gradient-to-b from-emerald-500/[0.07] to-black/20 hover:border-emerald-500/60 hover:from-emerald-500/[0.12] hover:shadow-[0_0_14px_rgba(16,185,129,0.18)]",
+    cardAccent: "text-emerald-300",
   },
   iniciadas: {
     label: "Iniciadas",
@@ -143,6 +151,8 @@ const STAGE_THEME: Record<PartyStage, {
     tabClosed: "border border-sky-500/15 text-sky-400/60 hover:text-sky-300 hover:border-sky-500/30 hover:bg-sky-500/[0.06] bg-transparent",
     counterOpened: "bg-sky-500/25 text-sky-200",
     counterClosed: "bg-sky-500/10 text-sky-400/60",
+    card: "border border-sky-500/30 bg-gradient-to-b from-sky-500/[0.07] to-black/20 hover:border-sky-500/60 hover:from-sky-500/[0.12] hover:shadow-[0_0_14px_rgba(14,165,233,0.18)]",
+    cardAccent: "text-sky-300",
   },
   aguardando: {
     label: "Aguardando Pagamento",
@@ -153,10 +163,44 @@ const STAGE_THEME: Record<PartyStage, {
     tabClosed: "border border-amber-500/15 text-amber-400/60 hover:text-amber-300 hover:border-amber-500/30 hover:bg-amber-500/[0.05] bg-transparent",
     counterOpened: "bg-amber-600/25 text-amber-300",
     counterClosed: "bg-amber-500/10 text-amber-400/50",
+    card: "border border-amber-500/30 bg-gradient-to-b from-amber-500/[0.07] to-black/20 hover:border-amber-500/60 hover:from-amber-500/[0.12] hover:shadow-[0_0_14px_color-mix(in_oklab,var(--color-amber-500)_18%,transparent)]",
+    cardAccent: "text-amber-300",
   },
 };
 
 const STAGE_ORDER: PartyStage[] = ["comVagas", "prontas", "iniciadas", "aguardando"];
+
+// ────────────────────────────────────────────────────────────────────────────
+// Painel de seleção rápida (nenhuma PT aberta): helpers puros dos cards.
+// Mesmas convenções do PartyPanel: horário via toLocaleString pt-BR e duração
+// efetiva = accumulatedMs + (agora - ptStartedAt) quando rodando (pausada ou
+// não iniciada → apenas o acumulado). Nenhuma consulta extra: tudo deriva dos
+// documentos que o painel JÁ escuta.
+// ────────────────────────────────────────────────────────────────────────────
+function formatStageCardHorario(p: PartyTab): string {
+  if (!p.horarioTimestamp) return "Sem hora marcada";
+  return new Date(p.horarioTimestamp).toLocaleString("pt-BR", {
+    day: "2-digit",
+    month: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+  });
+}
+
+function computeStageCardElapsedMs(p: PartyTab, nowMs: number): number {
+  const accumulated = p.accumulatedMs || 0;
+  if (p.isPaused || !p.ptStartedAt) return accumulated;
+  return accumulated + Math.max(0, nowMs - p.ptStartedAt);
+}
+
+function formatStageCardDuration(ms: number): string {
+  const totalSec = Math.max(0, Math.floor(ms / 1000));
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  if (h <= 0) return `${m}m`;
+  return `${h}h${m}m`;
+}
 
 export default function PartyManager({ parties, characters, waitingList, userName, onUpdate, onPersistPartyNow, onDelete, onCreate, onSaveParty, activePt, setActivePt, minimized, setMinimized, onPaymentMarked, onNotifyMembers, onRequestFinalization, onRefresh, characterAcquisitions = [], onCreateCharacterAcquisition, onConfirmCharacterAcquisitionPayment, onTabChange, publicPartiesEnabled = true }: Props) {
   const { currentUser, userProfile, allUsers, acceptedFriendUids } = useAuth();
@@ -271,6 +315,17 @@ export default function PartyManager({ parties, characters, waitingList, userNam
   useEffect(() => {
     if (activePt) setStandaloneView("selectPrompt");
   }, [activePt]);
+  // Relógio do painel de seleção rápida: só corre quando a guia "Iniciadas"
+  // está visível SEM PT aberta (é o único card que exibe duração em tempo
+  // real). Granularidade de minutos → atualizar a cada 30s é suficiente e
+  // não gera custo perceptível.
+  const [stageCardsNow, setStageCardsNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (activePt || standaloneView !== "selectPrompt" || ptStatusView !== "iniciadas") return;
+    setStageCardsNow(Date.now());
+    const timer = setInterval(() => setStageCardsNow(Date.now()), 30_000);
+    return () => clearInterval(timer);
+  }, [activePt, standaloneView, ptStatusView]);
   // ── VISIBILIDADE INDIVIDUAL DOS 3 PAINÉIS (guia "Todos Personagens") ───
   // Persistida por usuário; cada painel liga/desliga de forma independente
   // e os visíveis reaproveitam o espaço liberado.
@@ -1476,25 +1531,173 @@ export default function PartyManager({ parties, characters, waitingList, userNam
             )}
           </div>
         ) : (
-          /* ── NENHUMA PT SELECIONADA: tela "Selecione uma PT". ────────── */
-          <div className="flex flex-col h-full items-center justify-center bg-[var(--th-n-deep)] rounded-xl border border-[var(--th-line)]/80 relative overflow-hidden">
-            <div className="absolute inset-0 overflow-hidden pointer-events-none">
-              <div className="absolute top-1/4 left-1/3 w-72 h-72 bg-emerald-950/20 blur-[120px] rounded-full" />
-              <div className="absolute bottom-1/4 right-1/3 w-72 h-72 bg-red-950/15 blur-[120px] rounded-full" />
-            </div>
-            <div className="relative z-10 flex flex-col items-center gap-3 px-6 text-center">
-              <div className="w-16 h-16 rounded-2xl border border-[var(--th-brand-mid)]/40 bg-[var(--th-bg-raised)]/80 flex items-center justify-center shadow-lg">
-                <MousePointerClick size={28} className="text-amber-400" />
+          /* ── NENHUMA PT SELECIONADA: painel de seleção rápida por estágio.
+                Exibe TODAS as PTs da categoria selecionada nos seletores
+                (mesma fonte `filteredParties` das abas — a classificação e as
+                regras de acesso são as EXISTENTES: getPartyStage +
+                baseFilteredParties, sem segunda lógica). Clicar num card abre
+                a PT exatamente como clicar na aba do cabeçalho. ──────────── */
+          (() => {
+            const theme = STAGE_THEME[ptStatusView];
+            const stageParties = [...filteredParties].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+            return (
+              <div className="flex flex-col h-full bg-[var(--th-n-deep)] rounded-xl border border-[var(--th-line)]/80 relative overflow-hidden">
+                <div className="absolute inset-0 overflow-hidden pointer-events-none">
+                  <div className="absolute top-1/4 left-1/3 w-72 h-72 bg-emerald-950/20 blur-[120px] rounded-full" />
+                  <div className="absolute bottom-1/4 right-1/3 w-72 h-72 bg-red-950/15 blur-[120px] rounded-full" />
+                </div>
+                {stageParties.length === 0 ? (
+                  /* Estado vazio por guia — mesmo padrão visual da antiga
+                     tela "Selecione uma PT". */
+                  <div className="relative z-10 flex-1 flex flex-col items-center justify-center gap-3 px-6 text-center">
+                    <div className="w-16 h-16 rounded-2xl border border-[var(--th-brand-mid)]/40 bg-[var(--th-bg-raised)]/80 flex items-center justify-center shadow-lg">
+                      <MousePointerClick size={28} className={theme.cardAccent} />
+                    </div>
+                    <h2 className="text-lg font-black text-white tracking-wide">Nenhuma PT "{theme.label}"</h2>
+                    <p className="text-xs text-slate-400 max-w-sm leading-relaxed">
+                      Não há PTs nesta categoria no momento. Use os seletores acima para
+                      ver outros estágios, ou os botões <span className="font-bold text-amber-300">Visão Geral</span> e{" "}
+                      <span className="font-bold text-sky-300">Todos Personagens</span> para explorar
+                      as estatísticas e os personagens disponíveis.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="relative z-10 flex flex-col h-full min-h-0">
+                    <div className="flex items-center gap-2 px-3 py-2 border-b border-[var(--th-line)]/60 bg-[var(--th-bg-raised)]/50 flex-shrink-0">
+                      <span className={`text-[10px] uppercase tracking-widest font-black ${theme.cardAccent}`}>PTs {theme.label}</span>
+                      <span className="text-[10px] font-bold text-slate-500">({stageParties.length})</span>
+                      <span className="text-[9px] text-slate-600 ml-auto hidden sm:inline">Clique em um card para abrir a PT</span>
+                    </div>
+                    <div className="flex-1 min-h-0 overflow-y-auto p-2">
+                      <div className="grid gap-2" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))" }}>
+                        {stageParties.map(p => {
+                          const total = p.selectedIds.length + (p.customMembers?.length || 0);
+                          const vagas = Math.max(0, p.slots - total);
+                          const leaderName = p.LeaderPT || p.createdByName || "—";
+                          // Participantes: nomes resolvidos com os dados JÁ
+                          // carregados (personagem vivo → snapshot congelado →
+                          // Lista de Espera) + membros externos. Mesma ordem
+                          // de fallback usada no restante do painel.
+                          const memberNames: string[] = [
+                            ...p.selectedIds.map(id =>
+                              characters.find(c => c.id === id)?.personagem
+                              || p.memberSnapshots?.[id]?.personagem
+                              || waitingList.find(w => w.id === id)?.personagem
+                              || "—"),
+                            ...(p.customMembers || []).map(m => m.label),
+                          ];
+                          const shownNames = memberNames.slice(0, 6);
+                          const hiddenCount = memberNames.length - shownNames.length;
+                          // Infos específicas do estágio (dados já presentes
+                          // no documento da PT — nenhuma consulta extra):
+                          const slotEntries = Object.values(p.slotData || {});
+                          const splitSlots = slotEntries.filter(s => s?.split === true);
+                          const paidSplitSlots = splitSlots.filter(s => s?.pago === true);
+                          const awaitingForMe = ptStatusView === "aguardando" && isPartyAwaitingPaymentForUser(p, currentUser?.uid);
+                          const allSold = allItemsSoldPartyIds.has(p.id);
+                          return (
+                            <button
+                              key={p.id}
+                              type="button"
+                              onClick={() => {
+                                // MESMO fluxo da aba do cabeçalho: ativa a PT
+                                // e garante que ela não está minimizada.
+                                setActivePt(p.id);
+                                setMinimized(m => ({ ...m, [p.id]: false }));
+                              }}
+                              title={`Abrir PT ${p.name}`}
+                              className={`text-left rounded-xl p-2.5 flex flex-col gap-1.5 transition-all duration-200 cursor-pointer ${theme.card}`}
+                            >
+                              {/* Cabeçalho: nome + Quest + servidor */}
+                              <div className="flex items-center gap-1.5 min-w-0">
+                                <Users size={13} className={`flex-shrink-0 ${theme.cardAccent}`} />
+                                <span className="text-[13px] font-black text-white truncate">{p.name}</span>
+                                {p.ptType === "sanguine" ? (
+                                  <span className="text-[8px] font-bold px-1 py-px rounded border border-rose-500/30 bg-rose-500/10 text-rose-400 flex-shrink-0">SG</span>
+                                ) : p.ptType === "soulwar" ? (
+                                  <span className="text-[8px] font-bold px-1 py-px rounded border border-slate-500/30 bg-slate-500/10 text-slate-400 flex-shrink-0">SW</span>
+                                ) : null}
+                                <span className="ml-auto inline-flex items-center gap-1 text-[9px] font-bold text-slate-400 flex-shrink-0">
+                                  <Globe size={9} className="text-slate-500" />
+                                  {serverLabel(p.servidor) || "—"}
+                                </span>
+                              </div>
+                              {/* Líder + status do estágio */}
+                              <div className="flex items-center gap-2 flex-wrap text-[10px]">
+                                <span className="inline-flex items-center gap-1 text-slate-400 min-w-0">
+                                  <Crown size={10} className="text-amber-400/80 flex-shrink-0" />
+                                  <span className="truncate max-w-[110px] font-semibold text-slate-300">{leaderName}</span>
+                                </span>
+                                {ptStatusView === "comVagas" && (
+                                  <>
+                                    <span className={`font-bold px-1.5 py-px rounded ${theme.counterOpened}`}>{total}/{p.slots}</span>
+                                    <span className="font-bold text-violet-300/90">{vagas} {vagas === 1 ? "vaga" : "vagas"}</span>
+                                  </>
+                                )}
+                                {ptStatusView === "prontas" && (
+                                  <span className={`font-bold px-1.5 py-px rounded ${theme.counterOpened}`}>{total}/{p.slots} completa</span>
+                                )}
+                                {ptStatusView === "iniciadas" && (
+                                  p.isPaused ? (
+                                    <span className="inline-flex items-center gap-1 font-bold text-amber-300">
+                                      <PauseCircle size={10} /> Pausada · {formatStageCardDuration(computeStageCardElapsedMs(p, stageCardsNow))}
+                                    </span>
+                                  ) : (
+                                    <span className={`inline-flex items-center gap-1 font-bold ${theme.cardAccent}`}>
+                                      <Timer size={10} /> Em andamento · {formatStageCardDuration(computeStageCardElapsedMs(p, stageCardsNow))}
+                                    </span>
+                                  )
+                                )}
+                                {ptStatusView === "aguardando" && splitSlots.length > 0 && (
+                                  <span className={`font-bold px-1.5 py-px rounded ${theme.counterOpened}`}>
+                                    Pagos {paidSplitSlots.length}/{splitSlots.length}
+                                  </span>
+                                )}
+                              </div>
+                              {/* Linha contextual extra do estágio */}
+                              {(ptStatusView === "comVagas" || ptStatusView === "prontas") && (
+                                <div className="inline-flex items-center gap-1 text-[10px] text-slate-400">
+                                  <CalendarClock size={10} className={theme.cardAccent} />
+                                  <span className="font-semibold">{formatStageCardHorario(p)}</span>
+                                </div>
+                              )}
+                              {ptStatusView === "aguardando" && (awaitingForMe || allSold) && (
+                                <div className="flex items-center gap-2 flex-wrap text-[9px]">
+                                  {awaitingForMe && (
+                                    <span className={`inline-flex items-center gap-1 font-bold px-1.5 py-px rounded border border-amber-500/40 bg-amber-500/10 text-amber-300 ${STAGE_THEME.aguardando.pulse}`}>
+                                      Pagamento pendente com você
+                                    </span>
+                                  )}
+                                  {allSold && (
+                                    <span className="inline-flex items-center gap-1 font-bold text-emerald-300">
+                                      <CheckCircle2 size={10} /> Todos os itens vendidos
+                                    </span>
+                                  )}
+                                </div>
+                              )}
+                              {/* Participantes */}
+                              {memberNames.length > 0 && (
+                                <div className="flex items-center gap-1 flex-wrap pt-1 border-t border-white/[0.06]">
+                                  {shownNames.map((n, i) => (
+                                    <span key={`${p.id}-m-${i}`} className="text-[9px] font-semibold px-1.5 py-px rounded bg-white/[0.05] border border-white/[0.08] text-slate-300 truncate max-w-[96px]">
+                                      {n}
+                                    </span>
+                                  ))}
+                                  {hiddenCount > 0 && (
+                                    <span className={`text-[9px] font-bold px-1.5 py-px rounded bg-white/[0.04] border border-white/[0.08] ${theme.cardAccent}`}>+{hiddenCount}</span>
+                                  )}
+                                </div>
+                              )}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
-              <h2 className="text-lg font-black text-white tracking-wide">Selecione uma PT</h2>
-              <p className="text-xs text-slate-400 max-w-sm leading-relaxed">
-                Clique em uma das PTs na barra acima para abrir seu painel completo,
-                ou utilize os botões <span className="font-bold text-amber-300">Visão Geral</span> e{" "}
-                <span className="font-bold text-sky-300">Todos Personagens</span> para explorar
-                as estatísticas e os personagens disponíveis.
-              </p>
-            </div>
-          </div>
+            );
+          })()
         )}
       </div>
 
