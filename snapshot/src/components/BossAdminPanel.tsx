@@ -21,7 +21,9 @@ import {
   PlayCircle,
   Crown,
   Star,
+  MessageCircle,
 } from "lucide-react";
+import { openExternalUrl } from "../utils/openExternal";
 import type { Donation } from "../types/donations";
 import { formatRC, type ManualVipCreditNotification, type VipCreditRequest } from "../types";
 import { db, isSimulationMode, onSnapshot, updateDoc, setDoc, deleteDoc, getDoc, getDocs } from "../firebase/config";
@@ -1313,6 +1315,26 @@ export default function BossAdminPanel({ open, onClose, presenceMap = {}, minAve
                                       }`}>
                                         {effectiveRole}
                                       </span>
+                                    );
+                                  })()}
+                                  {/* Badge WhatsApp: link DIRETO wa.me com o número
+                                      cadastrado no perfil (país+DDD+número, só
+                                      dígitos — mesma composição usada no
+                                      PartyPanel). Sem modal e sem etapas
+                                      intermediárias; oculto quando o usuário
+                                      não tem WhatsApp cadastrado. */}
+                                  {(() => {
+                                    const phone = `${user.whatsappCountry || ""}${user.whatsappRegion || ""}${user.whatsappNumber || ""}`.replace(/\D/g, "");
+                                    if (!phone) return null;
+                                    return (
+                                      <button
+                                        type="button"
+                                        onClick={(e) => { e.stopPropagation(); openExternalUrl(`https://wa.me/${phone}`); }}
+                                        className="inline-flex items-center justify-center w-5 h-5 rounded border border-emerald-500/30 bg-emerald-500/10 hover:bg-emerald-500/25 hover:border-emerald-500/50 text-emerald-400 hover:text-emerald-300 transition-colors cursor-pointer flex-shrink-0"
+                                        title={`Abrir WhatsApp de ${user.nome} (+${phone})`}
+                                      >
+                                        <MessageCircle size={11} />
+                                      </button>
                                     );
                                   })()}
                                 </div>
