@@ -43,7 +43,9 @@ import AutoBidEngine from "./components/AutoBidEngine";
 import FriendsModal from "./components/FriendsModal";
 import VipAccessButton from "./components/VipAccessButton";
 import HubHelpTooltip from "./components/HubHelpTooltip";
-import { Shield, HelpCircle, Tv } from "lucide-react";
+import { Shield, HelpCircle, Tv, GraduationCap } from "lucide-react";
+import { useTutorial } from "./tutorial/TutorialContext";
+import { registerTourCommands } from "./tutorial/commands";
 import { setLoggerPaused, setLoggerRemoteConfig } from "./utils/firestoreLogger";
 import { setPresenceGovernance } from "./utils/presenceGovernance";
 import { setIdleGovernance } from "./utils/idleGovernance";
@@ -593,6 +595,16 @@ export default function App() {
   const [activePt, setActivePt] = useState<string | null>(null);
   const [minimized, setMinimized] = useState<Record<string, boolean>>({});
   const [activeWindow, setActiveWindow] = useState<WindowKey | null>(null);
+  // ── TUTORIAL INTERATIVO ───────────────────────────────────────────────────
+  // O App registra os comandos de navegação de alto nível ("window" e "tab")
+  // no barramento do tutorial — as cenas os usam para trocar de janela/guia
+  // exatamente como o usuário faria clicando. O botão do rodapé abre o menu
+  // de tópicos via openTutorialMenu.
+  const { openMenu: openTutorialMenu } = useTutorial();
+  useEffect(() => registerTourCommands({
+    window: (arg) => setActiveWindow((arg ?? null) as WindowKey | null),
+    tab: (arg) => setTab(arg as Tab),
+  }), []);
   const [headerZoomLevel, setHeaderZoomLevel] = useState(() => loadUIState("tibia_header_zoom_level", 100));
   const [contentZoomLevel, setContentZoomLevel] = useState(() => loadUIState("tibia_content_zoom_level", 100));
 
@@ -4846,7 +4858,7 @@ export default function App() {
   const topContent = (
     <div className="flex flex-col h-full w-full bg-[var(--th-bg-base)]">
       <div className="flex flex-wrap items-center justify-between gap-1 px-1.5 flex-shrink-0 border-b border-[var(--th-line)]/80 bg-gradient-to-r from-[var(--th-bg-raised)] to-[var(--th-bg-base)] overflow-x-auto" style={{ minHeight: "clamp(12px, 1.67vh, 16px)", padding: "clamp(1.33px, 0.23vh, 2px) clamp(2px, 0.33vw, 3.33px)", zoom: `${headerZoomLevel}%` }}>
-        <div className="flex items-center gap-0.5 sm:gap-1">
+        <div data-tour="hub-tabs-private" className="flex items-center gap-0.5 sm:gap-1">
           <span className="font-bold uppercase tracking-wider text-amber-600/80 mr-0.5 select-none whitespace-nowrap" style={{ fontSize: "clamp(8px, 1.3vh, 10px)" }}>PRIVADO:</span>
           <button
             onClick={(e) => openTooltip('privado', e)}
@@ -4865,7 +4877,7 @@ export default function App() {
           </div>
         </div>
 
-        <div className="flex items-center gap-0.5 sm:gap-1">
+        <div data-tour="hub-tabs-public" className="flex items-center gap-0.5 sm:gap-1">
           <span className="font-bold uppercase tracking-wider text-amber-600/80 mr-0.5 select-none whitespace-nowrap" style={{ fontSize: "clamp(8px, 1.3vh, 10px)" }}>PÚBLICO:</span>
           <button
             onClick={(e) => openTooltip('publico', e)}
@@ -5080,11 +5092,11 @@ export default function App() {
         <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-transparent via-[var(--th-bg-deep)]/50 to-[var(--th-bg-deep)]" />
       </div>
 
-      <header ref={appHeaderRef} className="flex items-center justify-between gap-1 px-1.5 sm:px-3 bg-[var(--th-bg-raised)]/95 backdrop-blur-md border-b border-[var(--th-line)]/60 flex-shrink-0 relative z-20" style={{ minHeight: "clamp(12.67px, 2vh, 17.33px)", padding: "clamp(1.33px, 0.27vh, 2.67px) clamp(2.67px, 0.33vw, 4px)", zoom: `${headerZoomLevel}%` }}>
+      <header ref={appHeaderRef} data-tour="app-header" className="flex items-center justify-between gap-1 px-1.5 sm:px-3 bg-[var(--th-bg-raised)]/95 backdrop-blur-md border-b border-[var(--th-line)]/60 flex-shrink-0 relative z-20" style={{ minHeight: "clamp(12.67px, 2vh, 17.33px)", padding: "clamp(1.33px, 0.27vh, 2.67px) clamp(2.67px, 0.33vw, 4px)", zoom: `${headerZoomLevel}%` }}>
         {/* ESQUERDA: Logo + Painel */}
         <div className="flex items-center gap-1.5 sm:gap-3 min-w-0 flex-1">
           <div className="flex items-center gap-1.5 sm:gap-4 min-w-0">
-            <div className="flex items-center justify-center flex-shrink-0 relative group" style={{ width: "clamp(28px, 5vh, 40px)", height: "clamp(28px, 5vh, 40px)" }}>
+            <div data-tour="app-logo-notif" className="flex items-center justify-center flex-shrink-0 relative group" style={{ width: "clamp(28px, 5vh, 40px)", height: "clamp(28px, 5vh, 40px)" }}>
               <ExoriLogo size={28} onClick={() => setNotificationOpen(v => !v)} notificationCount={pendingCount} isNotificationOpen={notificationOpen} className="drop-shadow-[0_0_8px_color-mix(in_oklab,var(--color-red-600)_55%,transparent)] group-hover:drop-shadow-[0_0_14px_color-mix(in_oklab,var(--color-red-600)_85%,transparent)] transition-all" />
             </div>
             <div className="min-w-0">
@@ -5092,7 +5104,7 @@ export default function App() {
               <p className="text-emerald-400 leading-none tracking-wide truncate" style={{ fontSize: "clamp(6px, 0.9vh, 8px)" }}>By Exori Coins</p>
             </div>
           </div>
-          <div className="hidden lg:flex items-center gap-1.5 flex-shrink-0">
+          <div data-tour="app-window-toggles" className="hidden lg:flex items-center gap-1.5 flex-shrink-0">
             <span className="uppercase tracking-widest text-slate-500 mr-0.5 whitespace-nowrap" style={{ fontSize: "clamp(8px, 1.3vh, 10px)" }}></span>
             <WindowToggle active={activeWindow === "characters"} icon={<Swords size={11} />} label="Hub Principal" onClick={() => toggleWindow("characters")} hero />
             <WindowToggle active={activeWindow === "stats"} icon={<BarChart3 size={11} />} label="Stats" onClick={() => toggleWindow("stats")} />
@@ -5176,7 +5188,7 @@ export default function App() {
         />
       )}
 
-      <div className="lg:hidden flex items-center gap-1.5 px-1.5 sm:px-2 bg-[var(--th-bg-base)] border-b border-[var(--th-line)]/60 flex-shrink-0 overflow-x-auto [overflow-y:visible]" style={{ padding: "clamp(3px, 0.5vh, 6px) clamp(6px, 1vw, 8px)", zoom: `${headerZoomLevel}%` }}>
+      <div data-tour="app-window-toggles" className="lg:hidden flex items-center gap-1.5 px-1.5 sm:px-2 bg-[var(--th-bg-base)] border-b border-[var(--th-line)]/60 flex-shrink-0 overflow-x-auto [overflow-y:visible]" style={{ padding: "clamp(3px, 0.5vh, 6px) clamp(6px, 1vw, 8px)", zoom: `${headerZoomLevel}%` }}>
         <span className="uppercase tracking-widest text-slate-500 mr-0.5 whitespace-nowrap" style={{ fontSize: "clamp(9px, 1.4vh, 11px)" }}>Painel</span>
         <WindowToggle active={activeWindow === "characters"} icon={<Swords size={11} />} label="Hub Principal" onClick={() => toggleWindow("characters")} hero />
         <WindowToggle active={activeWindow === "stats"} icon={<BarChart3 size={11} />} label="Stats" onClick={() => toggleWindow("stats")} />
@@ -5304,7 +5316,17 @@ export default function App() {
           </div>
 
           {/* BOX 2 — Ações do rodapé */}
-          <div className="nav-frame footer-pulse flex items-center gap-2 flex-wrap bg-[var(--th-bg-deep)]/60 rounded-lg px-2.5 py-1">
+          <div data-tour="footer-actions" className="nav-frame footer-pulse flex items-center gap-2 flex-wrap bg-[var(--th-bg-deep)]/60 rounded-lg px-2.5 py-1">
+            <button
+              type="button"
+              onClick={openTutorialMenu}
+              className="pt-stage-pulse pt-stage-pulse--amber-600 inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[9px] font-medium border border-amber-600/35 bg-[var(--th-bg-base)] text-slate-300 hover:text-slate-100 hover:bg-[var(--th-bg-raised)] hover:border-amber-500/60 hover:shadow-[0_0_12px_color-mix(in_oklab,var(--color-amber-500)_15%,transparent)] shadow-[0_0_6px_color-mix(in_oklab,var(--color-amber-500)_6%,transparent)] transition-all duration-200 cursor-pointer"
+              title="Abrir o tutorial interativo do aplicativo"
+            >
+              <GraduationCap size={10} className="text-amber-500/80" />
+              Tutorial
+            </button>
+
             <button
               type="button"
               onClick={() => setFeedbackOpen(true)}

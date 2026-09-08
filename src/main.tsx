@@ -6,6 +6,7 @@ import { AuthProvider } from "./context/AuthContext";
 import { GlobalDataProvider } from "./context/GlobalDataContext";
 import { UserStatsProvider } from "./context/UserStatsContext";
 import { ThemeProvider } from "./theme/ThemeContext";
+import TutorialRoot from "./tutorial/TutorialRoot";
 import PublicServiceForm from "./components/PublicServiceForm";
 import { installGlobalPulseSync } from "./utils/pulseSync";
 
@@ -32,7 +33,12 @@ createRoot(document.getElementById("root")!).render(
         <AuthProvider>
           <GlobalDataProvider>
             <UserStatsProvider>
-              <App />
+              {/* TutorialRoot: provê o estado do tutorial interativo e monta
+                  o overlay/menu em portais — precisa ficar ACIMA do App para
+                  o botão do rodapé e os painéis usarem useTutorial(). */}
+              <TutorialRoot>
+                <App />
+              </TutorialRoot>
             </UserStatsProvider>
           </GlobalDataProvider>
         </AuthProvider>

@@ -17,6 +17,7 @@ import OverviewPanel from "./OverviewPanel";
 import { type ToggleState } from "./FilterTypes";
 import { useAuth } from "../context/AuthContext";
 import { SERVER_OPTIONS, isOfficialServer, isSameServer, serverLabel } from "../constants/servers";
+import { registerTourCommands } from "../tutorial/commands";
 // Mesmo hook de persistência utilizado no PartyPanel (reutilização da mesma lógica
 // e do mesmo sistema de armazenamento das larguras dos painéis).
 function usePersistedState<T>(key: string, initial: T) {
@@ -315,6 +316,16 @@ export default function PartyManager({ parties, characters, waitingList, userNam
   useEffect(() => {
     if (activePt) setStandaloneView("selectPrompt");
   }, [activePt]);
+  // ── TUTORIAL INTERATIVO ─────────────────────────────────────────────────
+  // Comandos de navegação deste painel para o barramento do tutorial: as
+  // cenas do tópico "Gerenciador de PTs" trocam o estágio/guia usando os
+  // MESMOS setters dos botões reais. Registrados na montagem e removidos na
+  // desmontagem — cena executada com o painel fechado degrada para fallback.
+  useEffect(() => registerTourCommands({
+    ptStage: (arg) => setPtStatusView(arg as PartyStage),
+    ptStandalone: (arg) => setStandaloneView(arg as "selectPrompt" | "overview" | "allChars"),
+    ptClose: () => setActivePt(null),
+  }), [setActivePt]);
   // Relógio do painel de seleção rápida: só corre quando a guia "Iniciadas"
   // está visível SEM PT aberta (é o único card que exibe duração em tempo
   // real). Granularidade de minutos → atualizar a cada 30s é suficiente e
@@ -856,10 +867,10 @@ export default function PartyManager({ parties, characters, waitingList, userNam
   }
 
   return (
-    <div className="flex flex-col h-full w-full bg-[var(--th-bg-base)]">
+    <div data-tour="pm-root" className="flex flex-col h-full w-full bg-[var(--th-bg-base)]">
       {/* Sub-tabs bar */}
       <div className="flex items-center gap-0.5 px-1 bg-gradient-to-r from-[var(--th-bg-raised)] to-[var(--th-bg-base)] border-b border-[var(--th-line)]/60 flex-shrink-0 overflow-x-auto" style={{ minHeight: "clamp(28px, 3.2vh, 34px)", padding: "clamp(2px, 0.25vh, 4px) clamp(3px, 0.4vw, 6px)" }}>
-        <div ref={tabsContainerRef} onWheel={handleWheel} className="flex gap-0.5 bg-[var(--th-bg-base)] p-0.5 rounded-xl border border-[var(--th-brand)]/60 overflow-x-auto max-w-full flex-1">
+        <div ref={tabsContainerRef} onWheel={handleWheel} data-tour="pm-tabs-bar" className="flex gap-0.5 bg-[var(--th-bg-base)] p-0.5 rounded-xl border border-[var(--th-brand)]/60 overflow-x-auto max-w-full flex-1">
           {[...filteredParties].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)).map(p => {
             const total = p.selectedIds.length + (p.customMembers?.length || 0);
             // Card/aba com a MESMA cor do botão seletor do estágio atual da
@@ -917,7 +928,7 @@ export default function PartyManager({ parties, characters, waitingList, userNam
           })}
         </div>
 
-        <div className="flex items-center gap-0.5 bg-[var(--th-bg-base)] p-0.5 rounded-xl border border-[var(--th-brand)]/60 flex-shrink-0">
+        <div data-tour="pm-stage-selectors" className="flex items-center gap-0.5 bg-[var(--th-bg-base)] p-0.5 rounded-xl border border-[var(--th-brand)]/60 flex-shrink-0">
           {STAGE_ORDER.map(stage => {
             const theme = STAGE_THEME[stage];
             const isCurrent = ptStatusView === stage;
@@ -970,6 +981,7 @@ export default function PartyManager({ parties, characters, waitingList, userNam
           <button
             type="button"
             onClick={() => setShowItemsForSale(true)}
+            data-tour="pm-items-for-sale"
             className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border text-[10px] font-bold transition-all duration-200 cursor-pointer whitespace-nowrap bg-black/20 border-amber-500/30 text-slate-500 hover:text-amber-300 hover:bg-amber-500/10 hover:border-amber-500/40${unsoldItemsCount > 0 ? " pt-stage-pulse pt-stage-pulse--amber" : ""}`}
             title={unsoldItemsCount > 0
               ? `Ver itens ainda não vendidos nas PTs em Aguardando Pagamento — ${unsoldItemsCount} item${unsoldItemsCount === 1 ? "" : "s"} à venda`
@@ -980,7 +992,7 @@ export default function PartyManager({ parties, characters, waitingList, userNam
           </button>
         </div>
 
-        <div className="relative flex items-center gap-0.5 bg-[var(--th-bg-base)] p-0.5 rounded-xl border border-[var(--th-brand)]/60 flex-shrink-0">
+        <div data-tour="pm-filters" className="relative flex items-center gap-0.5 bg-[var(--th-bg-base)] p-0.5 rounded-xl border border-[var(--th-brand)]/60 flex-shrink-0">
           <button
             type="button"
             onClick={() => setFilterPrivate(v => !v)}
@@ -1081,6 +1093,7 @@ export default function PartyManager({ parties, characters, waitingList, userNam
         <button
           type="button"
           onClick={() => { setActivePt(null); setStandaloneView("overview"); }}
+          data-tour="pm-overview-btn"
           data-active={standaloneView === "overview" && (activePt === null || !filteredParties.find(p => p.id === activePt) || !!minimized[activePt])}
           className="nav-pill nav-pill--action inline-flex items-center gap-1 px-2.5 py-1 text-[10px] cursor-pointer whitespace-nowrap flex-shrink-0"
           style={{ ["--pill-accent" as string]: "var(--color-red-500)" }}
@@ -1093,6 +1106,7 @@ export default function PartyManager({ parties, characters, waitingList, userNam
         <button
           type="button"
           onClick={() => { setActivePt(null); setStandaloneView("allChars"); }}
+          data-tour="pm-allchars-btn"
           data-active={standaloneView === "allChars" && (activePt === null || !filteredParties.find(p => p.id === activePt) || !!minimized[activePt])}
           className="nav-pill nav-pill--action inline-flex items-center gap-1 px-2.5 py-1 text-[10px] cursor-pointer whitespace-nowrap flex-shrink-0"
           style={{ ["--pill-accent" as string]: "var(--color-sky-500)" }}
@@ -1104,6 +1118,7 @@ export default function PartyManager({ parties, characters, waitingList, userNam
 
         <button
           onClick={() => { setShowSuggestModal(true); }}
+          data-tour="pm-suggest-btn"
           className="nav-pill nav-pill--action inline-flex items-center gap-1 px-2.5 py-1 text-[10px] cursor-pointer whitespace-nowrap flex-shrink-0"
           style={{ ["--pill-accent" as string]: "var(--color-amber-500)" }}
           title="Montar PT automaticamente com algoritmo inteligente"
@@ -1112,6 +1127,7 @@ export default function PartyManager({ parties, characters, waitingList, userNam
         </button>
         <button
           onClick={() => { setShowCreate(true); }}
+          data-tour="pm-create-btn"
           className="nav-pill nav-pill--action inline-flex items-center gap-1 px-2.5 py-1 text-[10px] cursor-pointer whitespace-nowrap flex-shrink-0"
           style={{ ["--pill-accent" as string]: "var(--color-emerald-500)" }}
         >
@@ -1541,7 +1557,7 @@ export default function PartyManager({ parties, characters, waitingList, userNam
             const theme = STAGE_THEME[ptStatusView];
             const stageParties = [...filteredParties].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
             return (
-              <div className="flex flex-col h-full bg-[var(--th-n-deep)] rounded-xl border border-[var(--th-line)]/80 relative overflow-hidden">
+              <div data-tour="pm-cards-panel" className="flex flex-col h-full bg-[var(--th-n-deep)] rounded-xl border border-[var(--th-line)]/80 relative overflow-hidden">
                 <div className="absolute inset-0 overflow-hidden pointer-events-none">
                   <div className="absolute top-1/4 left-1/3 w-72 h-72 bg-emerald-950/20 blur-[120px] rounded-full" />
                   <div className="absolute bottom-1/4 right-1/3 w-72 h-72 bg-red-950/15 blur-[120px] rounded-full" />
