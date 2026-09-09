@@ -5513,6 +5513,7 @@ export default function App() {
         onClose={() => setModalOpen(false)}
         mode={characterModalMode}
         lockedQuestFinancialFields={!!editing && negotiatedOriginalCharacterIds.has(editing.id)}
+        negotiatedToOtherUser={!!editing && negotiatedOriginalCharacterIds.has(editing.id)}
       />
       <CurrencyCalculator open={calcOpen} onClose={() => setCalcOpen(false)} focusSignal={calcFocusSignal} />
       <ImbuementsModal open={imbueOpen} onClose={() => setImbueOpen(false)} />
