@@ -17,6 +17,7 @@ const stats: TourTopic = {
   scenes: [
     {
       id: "visao-geral",
+      demo: true,
       title: "Suas estatísticas",
       anchor: "stats-root",
       nav: NAV_ST,
@@ -26,6 +27,7 @@ const stats: TourTopic = {
     },
     {
       id: "indicadores",
+      demo: true,
       title: "O que você encontra aqui",
       anchor: "stats-root",
       nav: NAV_ST,
@@ -35,6 +37,7 @@ const stats: TourTopic = {
     },
     {
       id: "conclusao",
+      demo: true,
       title: "Tópico concluído!",
       body: "Acompanhe suas estatísticas para medir a evolução — e compare-se com os demais no [[amber:Ranking]], tema do próximo tópico.",
     },

@@ -10,11 +10,19 @@
 import { ClipboardList } from "lucide-react";
 import type { TourTopic } from "../types";
 
-/** Navegação: Hub → Gerenciador → tenta abrir a primeira PT visível. */
+/** Navegação: Hub → Gerenciador → tenta abrir a primeira PT visível.
+ *  Nas cenas demonstrativas as PTs fictícias garantem que sempre exista uma
+ *  PT em cada estágio; NAV_OPEN_PT_PAGA abre a "Aguardando Pagamento" (com
+ *  drops/valores lançados) para as cenas de vendas, totais e pagamentos. */
 const NAV_OPEN_PT = [
   { cmd: "window", arg: "characters" },
   { cmd: "tab", arg: "pts" },
   { cmd: "ptOpenFirst" },
+];
+const NAV_OPEN_PT_PAGA = [
+  { cmd: "window", arg: "characters" },
+  { cmd: "tab", arg: "pts" },
+  { cmd: "ptOpenFirst", arg: "aguardando" },
 ];
 
 const painelPt: TourTopic = {
@@ -26,6 +34,7 @@ const painelPt: TourTopic = {
   scenes: [
     {
       id: "visao-geral",
+      demo: true,
       title: "Dentro de uma PT",
       anchor: "pp-root",
       nav: NAV_OPEN_PT,
@@ -35,6 +44,7 @@ const painelPt: TourTopic = {
     },
     {
       id: "cabecalho",
+      demo: true,
       title: "Cabeçalho e ações da PT",
       anchor: "pp-header",
       nav: NAV_OPEN_PT,
@@ -43,6 +53,7 @@ const painelPt: TourTopic = {
     },
     {
       id: "slots",
+      demo: true,
       title: "Tabela de slots",
       anchor: "pp-slots-table",
       nav: NAV_OPEN_PT,
@@ -52,6 +63,7 @@ const painelPt: TourTopic = {
     },
     {
       id: "divisao",
+      demo: true,
       title: "DIVIDIR — a divisão financeira",
       anchor: "pp-slots-table",
       nav: NAV_OPEN_PT,
@@ -61,23 +73,26 @@ const painelPt: TourTopic = {
     },
     {
       id: "drops",
+      demo: true,
       title: "Itens dropados e vendas",
       anchor: "pp-slots-table",
-      nav: NAV_OPEN_PT,
+      nav: NAV_OPEN_PT_PAGA,
       padding: 0,
       body: "Durante e após a quest, registre os resultados:\n\n• [[amber:Item Dropado]] — o que cada personagem dropou;\n• [[emerald:Item Vendido/Service (RC)]] — valor de venda do item (com taxa e conversão automática para RC) ou o valor do service;\n• com [[emerald:todos os itens vendidos]], a divisão fica completa e a PT pode ser finalizada.",
       fallbackBody: "As colunas [[amber:Item Dropado]] e [[emerald:Item Vendido/Service (RC)]] registram os drops e as vendas que alimentam a divisão.",
     },
     {
       id: "totais",
+      demo: true,
       title: "Linha de TOTAIS e pagamentos",
       anchor: "pp-totals-row",
-      nav: NAV_OPEN_PT,
+      nav: NAV_OPEN_PT_PAGA,
       body: "A última linha consolida a PT:\n\n• [[amber:⚡ TOTAL]] — soma de mortes, participantes na divisão e valores;\n• a coluna [[emerald:PG]] de cada slot marca os pagamentos individuais realizados;\n• o botão [[amber:PAGAMENTO REALIZADO / FINALIZAR PT]] conclui a PT quando a quest terminou, os itens da divisão foram vendidos e todos receberam — a PT é então arquivada e vira [[sky:histórico]].",
       fallbackBody: "Na base da tabela, a linha ⚡ TOTAL consolida os valores e o botão [[amber:FINALIZAR PT]] arquiva a PT quando todos os pagamentos foram concluídos.",
     },
     {
       id: "paineis-inferiores",
+      demo: true,
       title: "Painéis de apoio",
       anchor: "pp-bottom-panels",
       nav: NAV_OPEN_PT,
@@ -87,6 +102,7 @@ const painelPt: TourTopic = {
     },
     {
       id: "whatsapp-twitch",
+      demo: true,
       title: "Contato: WhatsApp e Twitch",
       anchor: "pp-slots-table",
       nav: NAV_OPEN_PT,
@@ -96,6 +112,7 @@ const painelPt: TourTopic = {
     },
     {
       id: "conclusao",
+      demo: true,
       title: "Tópico concluído!",
       body: "Você domina o ciclo completo de uma PT: montar a equipe, [[emerald:iniciar]], registrar [[amber:drops]] e [[rose:mortes]], [[sky:concluir]], vender itens, dividir e [[amber:finalizar]].\n\nA PT finalizada vira registro permanente em [[amber:\"Meu Histórico de PT's\"]] — tema de outro tópico da lista.",
     },

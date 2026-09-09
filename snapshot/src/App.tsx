@@ -46,6 +46,7 @@ import HubHelpTooltip from "./components/HubHelpTooltip";
 import { Shield, HelpCircle, Tv, GraduationCap } from "lucide-react";
 import { useTutorial } from "./tutorial/TutorialContext";
 import { registerTourCommands } from "./tutorial/commands";
+import { isDemoId } from "./tutorial/demo";
 import { setLoggerPaused, setLoggerRemoteConfig } from "./utils/firestoreLogger";
 import { setPresenceGovernance } from "./utils/presenceGovernance";
 import { setIdleGovernance } from "./utils/idleGovernance";
@@ -600,7 +601,25 @@ export default function App() {
   // no barramento do tutorial — as cenas os usam para trocar de janela/guia
   // exatamente como o usuário faria clicando. O botão do rodapé abre o menu
   // de tópicos via openTutorialMenu.
-  const { openMenu: openTutorialMenu } = useTutorial();
+  const { openMenu: openTutorialMenu, demo: tutorialDemo } = useTutorial();
+  // ── MODO DEMONSTRATIVO DO TUTORIAL ────────────────────────────────────────
+  // Enquanto uma cena com `demo: true` está aberta, os painéis recebem os
+  // datasets fictícios de src/tutorial/demo no LUGAR dos dados reais — a
+  // substituição acontece só aqui, na expressão de render: os estados reais
+  // (data.characters, cloudParties etc.) permanecem intocados. Callbacks de
+  // persistência viram no-op (demoNoop*), e as funções reais ainda contam
+  // com a guarda por prefixo "demo-" (isDemoId) como barreira final.
+  const demoActive = tutorialDemo.active && !!tutorialDemo.data;
+  const demoData = demoActive ? tutorialDemo.data : null;
+  const demoNoop = useCallback(() => {}, []);
+  const demoNoopAsyncTrue = useCallback(async () => true, []);
+  // Estado de PT aberta exclusivo do modo demo: não polui activePt/minimized
+  // reais — ao sair do demo, a seleção real do usuário reaparece intacta.
+  const [demoActivePt, setDemoActivePt] = useState<string | null>(null);
+  const [demoMinimized, setDemoMinimized] = useState<Record<string, boolean>>({});
+  useEffect(() => {
+    if (!demoActive) { setDemoActivePt(null); setDemoMinimized({}); }
+  }, [demoActive]);
   useEffect(() => registerTourCommands({
     window: (arg) => setActiveWindow((arg ?? null) as WindowKey | null),
     tab: (arg) => setTab(arg as Tab),
@@ -2912,6 +2931,7 @@ export default function App() {
 
 
   async function handleRequestPartyFinalization(party: PartyTab, reason: PartyFinalizationReason): Promise<{ ok: boolean; error?: string }> {
+    if (isDemoId(party.id)) return { ok: false, error: "Esta PT é demonstrativa (tutorial) — a ação não é executada." };
     if (!currentUser?.uid) return { ok: false, error: "Entre na sua conta para finalizar a PT." };
     if (party.leaderUid !== currentUser.uid && userProfile?.role !== "Boss") {
       return { ok: false, error: "Somente o Líder ou Boss pode solicitar a finalização." };
@@ -3480,6 +3500,7 @@ export default function App() {
    * mais novo, e deixar o timer antigo disparar depois reescreveria por cima.
    */
   async function persistPartyNow(updated: PartyTab): Promise<boolean> {
+    if (isDemoId(updated.id)) return true; // dados demonstrativos: nunca persistem
     if (!currentUser || !db) return false;
 
     const pending = updatePartyDebouncedRef.current[updated.id];
@@ -3535,6 +3556,7 @@ export default function App() {
   }
 
   function updateParty(updated: PartyTab) {
+    if (isDemoId(updated.id)) return; // dados demonstrativos: nunca persistem
     if (!currentUser) return;
     const previous = cloudParties.find(p => p.id === updated.id);
     const shouldPersistQuestNotification = !!updated.questConcluida && !updated.questFalha && !previous?.questConcluida;
@@ -3572,6 +3594,7 @@ export default function App() {
   }, []);
 
   async function saveParty(party: PartyTab) {
+    if (isDemoId(party.id)) return; // dados demonstrativos: nunca persistem
     if (!currentUser) return;
 
     const ptType = party.ptType;
@@ -3736,6 +3759,7 @@ export default function App() {
   }
 
   async function deleteParty(id: string) {
+    if (isDemoId(id)) return; // dados demonstrativos: nunca persistem
     if (!currentUser) return;
     customConfirm("Excluir esta PT permanentemente?", async () => {
       // Optimistic update local: remove de TODAS as listas imediatamente
@@ -4329,6 +4353,7 @@ export default function App() {
   // FIRESTORE WRITE OPERATIONS - Waiting List
   // ============================================================================
   async function handleAddWaiting(item: WaitingService) {
+    if (isDemoId(item.id)) return; // dados demonstrativos: nunca persistem
     if (!currentUser) return;
     try {
       setIsSyncing(true);
@@ -4346,6 +4371,7 @@ export default function App() {
   }
 
   async function handleUpdateWaiting(item: WaitingService) {
+    if (isDemoId(item.id)) return; // dados demonstrativos: nunca persistem
     if (!currentUser) return;
     const original = cloudWaitingList.find((waitingItem) => waitingItem.id === item.id);
     // A Lista de Espera é carregada por getDocs() (leitura pontual), e não por
@@ -4386,6 +4412,7 @@ export default function App() {
   }
 
   async function handleDeleteWaiting(id: string) {
+    if (isDemoId(id)) return; // dados demonstrativos: nunca persistem
     if (!currentUser) return;
     // Mesmo motivo do update: sem onSnapshot, a remoção só apareceria na
     // próxima leitura. Reflete no estado local na hora.
@@ -4918,7 +4945,7 @@ export default function App() {
                 title="Exibir personagens disponíveis"
               >
                 <Swords size={11} /> DISPONÍVEIS
-                <span className="font-bold font-mono">({ativos.length})</span>
+                <span className="font-bold font-mono">({demoData ? demoData.characters.length : ativos.length})</span>
               </button>
               <button
                 type="button"
@@ -4930,7 +4957,7 @@ export default function App() {
                 title="Exibir personagens vendidos (histórico)"
               >
                 <HistoryIcon size={11} /> VENDIDOS
-                <span className="font-bold font-mono">({vendidos.length})</span>
+                <span className="font-bold font-mono">({demoData ? demoData.soldCharacters.length : vendidos.length})</span>
               </button>
               <button
                 type="button"
@@ -4942,11 +4969,20 @@ export default function App() {
                 title="Exibir negociados entre usuários"
               >
                 <Briefcase size={11} /> NEGOCIADOS ENTRE USUÁRIOS
-                <span className="font-bold font-mono">({characterAcquisitions.length})</span>
+                <span className="font-bold font-mono">({demoData ? demoData.acquisitions.length : characterAcquisitions.length})</span>
               </button>
             </div>
             <div data-tour="chars-table" className="flex-1 min-h-0 overflow-hidden">
-              {charsView === "disponiveis" ? (
+              {/* MODO DEMO do tutorial: tabelas somente leitura com dados fictícios. */}
+              {demoData ? (
+                charsView === "disponiveis" ? (
+                  <CharTable key="chars-demo-active" characters={demoData.characters} activeParties={demoData.parties} readOnly />
+                ) : charsView === "vendidos" ? (
+                  <CharTable key="chars-demo-history" characters={demoData.soldCharacters} showSaleDate readOnly />
+                ) : (
+                  <AcquiredCharactersPanel acquisitions={demoData.acquisitions} buyerDetails={demoData.acquisitionBuyerDetails} originalCharacters={demoData.characters} currentUserUid={currentUser?.uid || ""} />
+                )
+              ) : charsView === "disponiveis" ? (
                 <CharTable key="chars-active" characters={ativos} activeParties={activeParties} onAdd={openAdd} onEdit={openEdit} onDelete={handleDelete} onToggleShare={handleToggleShare} onToggleShareAll={handleToggleShareAll} onNoteChange={handleNoteChange} onCharacterInlineChange={handleCharacterInlineChange} probableMarkers={probableMarkers} negotiatedCharacterIds={negotiatedOriginalCharacterIds} lockedQuestFinancialIds={negotiatedOriginalCharacterIds} />
               ) : charsView === "vendidos" ? (
                 <CharTable key="chars-history" characters={vendidos} showSaleDate onEdit={openEdit} onDelete={handleDelete} onNoteChange={handleNoteChange} onCharacterInlineChange={handleCharacterInlineChange} negotiatedCharacterIds={negotiatedOriginalCharacterIds} lockedQuestFinancialIds={negotiatedOriginalCharacterIds} />
@@ -4974,44 +5010,60 @@ export default function App() {
           </div>
         ) : tab === "meus_services" ? (
           <div data-tour="myservices-root" className="h-full w-full">
-          <MyServicesPanel
-            onCountChange={setMyServicesCount}
-            onServicesChanged={handleOwnSharedServicesChanged}
-            probableMarkers={probableMarkers}
-            activeParties={activeParties}
-          />
+          {/* key força a remontagem ao entrar/sair do modo demo (efeitos de
+              carga/flush sempre rodam no modo correto, sem estados mistos). */}
+          {demoData ? (
+            <MyServicesPanel
+              key="myservices-demo"
+              demoServices={demoData.sharedServices}
+              demoRequests={demoData.serviceRequests}
+              activeParties={demoData.parties}
+            />
+          ) : (
+            <MyServicesPanel
+              key="myservices-real"
+              onCountChange={setMyServicesCount}
+              onServicesChanged={handleOwnSharedServicesChanged}
+              probableMarkers={probableMarkers}
+              activeParties={activeParties}
+            />
+          )}
           </div>
         ) : tab === "pts" ? (
           <PartyManager
-            parties={activeParties}
-            characters={availableCharactersForParty}
-            waitingList={availableWaitingListForParty}
+            /* MODO DEMO do tutorial: PTs/personagens/services fictícios no
+               lugar dos reais + callbacks de persistência neutralizados. A
+               PT aberta em demo usa estado próprio (demoActivePt) para não
+               poluir a seleção real do usuário. */
+            parties={demoData ? demoData.parties : activeParties}
+            characters={demoData ? demoData.characters : availableCharactersForParty}
+            waitingList={demoData ? demoData.waitingList : availableWaitingListForParty}
             userName={displayUserName}
-            onUpdate={updateParty}
-            onDelete={deleteParty}
-            onCreate={createParty}
-            onSaveParty={saveParty}
-            onPersistPartyNow={persistPartyNow}
-            activePt={activePt}
-            setActivePt={setActivePt}
-            minimized={minimized}
-            setMinimized={setMinimized}
+            onUpdate={demoData ? demoNoop : updateParty}
+            onDelete={demoData ? demoNoop : deleteParty}
+            onCreate={demoData ? demoNoop : createParty}
+            onSaveParty={demoData ? demoNoop : saveParty}
+            onPersistPartyNow={demoData ? demoNoopAsyncTrue : persistPartyNow}
+            activePt={demoData ? demoActivePt : activePt}
+            setActivePt={demoData ? setDemoActivePt : setActivePt}
+            minimized={demoData ? demoMinimized : minimized}
+            setMinimized={demoData ? setDemoMinimized : setMinimized}
             onNotifyMembers={() => {
               // A notificação persistente de "Quest Concluída" é criada no fluxo
               // de updateParty quando questConcluida muda para true. Mantido apenas
               // para compatibilidade com a assinatura do PartyManager/PartyPanel.
             }}
-            onRequestFinalization={handleRequestPartyFinalization}
+            onRequestFinalization={demoData ? undefined : handleRequestPartyFinalization}
             onPaymentMarked={(_info) => {
               // A notificação de pagamento agora é tratada de forma reativa
               // pelo hook useNotifications ao detectar a mudança no Firestore.
               // Isso garante que apenas o DONO (ownerUid) receba a mensagem,
               // independente de quem clicou no botão.
             }}
-            onRefresh={handleRefreshCharacters}
-            characterAcquisitions={partyCharacterAcquisitions}
-            onCreateCharacterAcquisition={createCharacterAcquisitionFromParty}
-            onConfirmCharacterAcquisitionPayment={confirmCharacterAcquisitionPaymentFromParty}
+            onRefresh={demoData ? undefined : handleRefreshCharacters}
+            characterAcquisitions={demoData ? demoData.acquisitions : partyCharacterAcquisitions}
+            onCreateCharacterAcquisition={demoData ? undefined : createCharacterAcquisitionFromParty}
+            onConfirmCharacterAcquisitionPayment={demoData ? undefined : confirmCharacterAcquisitionPaymentFromParty}
             publicPartiesEnabled={globalSettings.publicPartiesEnabled}
             onTabChange={() => {
               // Ao abrir a aba "Gerenciador de PT's": carrega PTs públicas e personagens
@@ -5028,10 +5080,10 @@ export default function App() {
               {/* Único histórico oficial: projeção privada users/{uid}/partyHistory,
                   materializada pelo backend na conclusão/finalização da PT. */}
               <PersonalPartyHistoryList
-                entries={personalPartyHistory}
+                entries={demoData ? demoData.history : personalPartyHistory}
                 uid={currentUser?.uid}
                 userName={displayUserName}
-                readOnly={isSimulation || !db}
+                readOnly={!!demoData || isSimulation || !db}
                 highlightedPartyId={highlightedHistoryPartyId}
                 onClearHighlight={clearHistoryHighlight}
               />
@@ -5039,7 +5091,7 @@ export default function App() {
           </div>
         ) : tab === "waitlist" && isBossUser ? (
           <div data-tour="services-root" className="h-full w-full">
-            <WaitingListPanel items={cloudWaitingListForDisplay} onAdd={handleAddWaiting} onUpdate={handleUpdateWaiting} onDelete={handleDeleteWaiting} userName={displayUserName} highlightId={highlightedWaitingServiceId} activeParties={activeParties} />
+            <WaitingListPanel items={demoData ? demoData.waitingList : cloudWaitingListForDisplay} onAdd={demoData ? demoNoop : handleAddWaiting} onUpdate={demoData ? demoNoop : handleUpdateWaiting} onDelete={demoData ? demoNoop : handleDeleteWaiting} userName={displayUserName} highlightId={highlightedWaitingServiceId} activeParties={demoData ? demoData.parties : activeParties} />
           </div>
         ) : null}
       </div>
@@ -5219,7 +5271,11 @@ export default function App() {
               <button onClick={() => setActiveWindow(null)} className="text-slate-500 hover:text-white text-xs cursor-pointer">✕</button>
             </div>
             <div className="flex-1 min-h-0 overflow-auto p-3">
-              <StatsPanel characters={data.characters} parties={cloudParties} userName={displayUserName} userStats={userStatsDoc} userNames={statsUserNames} services={statsUserServices} characterAcquisitions={characterAcquisitions} characterAcquisitionBuyerDetails={characterAcquisitionBuyerDetails} currentUserUid={currentUser?.uid || ""} />
+              {demoData ? (
+                <StatsPanel characters={[...demoData.characters, ...demoData.soldCharacters]} parties={demoData.parties} userName={displayUserName} userStats={demoData.userStats} userNames={demoData.userNames} services={demoData.sharedServices} characterAcquisitions={demoData.acquisitions} characterAcquisitionBuyerDetails={demoData.acquisitionBuyerDetails} currentUserUid={currentUser?.uid || ""} />
+              ) : (
+                <StatsPanel characters={data.characters} parties={cloudParties} userName={displayUserName} userStats={userStatsDoc} userNames={statsUserNames} services={statsUserServices} characterAcquisitions={characterAcquisitions} characterAcquisitionBuyerDetails={characterAcquisitionBuyerDetails} currentUserUid={currentUser?.uid || ""} />
+              )}
             </div>
           </div>
         ) : activeWindow === "notes" ? (
@@ -5237,16 +5293,28 @@ export default function App() {
           </div>
         ) : activeWindow === "ranking" ? (
           <div data-tour="ranking-root" className="h-full rounded-xl border border-red-800/50 overflow-hidden">
+            {/* key remonta o painel ao entrar/sair do modo demo — os refs de
+                sessão (modo mensal, verificação de reset) sempre começam
+                corretos e o quadro real recarrega do cache ao voltar. */}
             <RankingPanel
+              key={demoData ? "ranking-demo" : "ranking-real"}
               currentUserUid={currentUser?.uid || ""}
-              userNames={statsUserNames}
-              userStatsDoc={userStatsDoc}
+              userNames={demoData ? demoData.userNames : statsUserNames}
+              userStatsDoc={demoData ? demoData.userStats : userStatsDoc}
               displayUserName={displayUserName}
+              demoEntries={demoData ? (demoData.ranking as any) : undefined}
             />
           </div>
         ) : activeWindow === "bazar" ? (
           <div data-tour="bazar-root" className="h-full rounded-xl border border-red-800/50 overflow-hidden">
-            <BazarPanel sharedCharacters={availableCharactersForParty} waitingList={availableWaitingListForParty} activeParties={cloudParties} personalCharacters={data.characters} accounts={accounts} onAddCharacterFromBazaar={addCharacterFromBazaar} />
+            {/* key força a remontagem ao entrar/sair do modo demo: os efeitos
+                de montagem do painel (caches/sincronizações) rodam sempre no
+                modo correto e nenhum estado real/fictício se mistura. */}
+            {demoData ? (
+              <BazarPanel key="bazar-demo" sharedCharacters={demoData.characters} waitingList={demoData.waitingList} activeParties={demoData.parties} personalCharacters={demoData.characters} accounts={["Conta 1", "Conta 2", "Conta 3"]} demoBazaar={demoData.bazaar} />
+            ) : (
+              <BazarPanel key="bazar-real" sharedCharacters={availableCharactersForParty} waitingList={availableWaitingListForParty} activeParties={cloudParties} personalCharacters={data.characters} accounts={accounts} onAddCharacterFromBazaar={addCharacterFromBazaar} />
+            )}
           </div>
         ) : null}
         </div>

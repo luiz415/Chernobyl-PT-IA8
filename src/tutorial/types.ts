@@ -46,6 +46,21 @@ export interface TourScene {
   fallbackBody?: string;
   /** Folga do spotlight ao redor do elemento, em px (padrão 6). */
   padding?: number;
+  /**
+   * MODO DEMONSTRATIVO: enquanto esta cena está aberta, os painéis exibem os
+   * dados fictícios de src/tutorial/demo (personagens, PTs, leilões...) no
+   * lugar dos dados reais — e todos os callbacks de persistência viram no-op.
+   * Permite ensinar qualquer funcionalidade mesmo para usuários sem dados
+   * reais e sem VIP, com isolamento total (nada é lido/gravado no Firestore).
+   */
+  demo?: boolean;
+  /**
+   * CENA INTERATIVA: libera cliques APENAS dentro do spotlight (o resto da
+   * tela continua bloqueado). Usar somente em cenas cujo alvo executa apenas
+   * estado local de interface (trocar seletor, alternar filtro) — nunca em
+   * elementos com efeitos externos (Firestore, WhatsApp, consultas).
+   */
+  interactive?: boolean;
 }
 
 /** Paleta do tópico — chaves do mapa TONE_THEME (classes literais completas,

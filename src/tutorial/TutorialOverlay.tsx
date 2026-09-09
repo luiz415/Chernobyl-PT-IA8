@@ -69,7 +69,15 @@ function renderColoredText(text: string): ReactNode[] {
 }
 
 const ANCHOR_TIMEOUT_MS = 2000;
+// Cenas demonstrativas: prazo maior — a navegação delas espera o import
+// dinâmico dos datasets fictícios (gate demoReadyRef, até 5s) ANTES de
+// executar os comandos, então o anchor pode legitimamente demorar mais.
+const ANCHOR_TIMEOUT_DEMO_MS = 6500;
 const ANCHOR_POLL_MS = 100;
+// Após degradar para o modo informativo, um poll lento continua procurando o
+// anchor: se o painel terminar de montar depois do prazo (rede lenta, guia
+// pesada), a cena é PROMOVIDA ao spotlight em vez de ficar presa no fallback.
+const ANCHOR_RECOVER_POLL_MS = 500;
 const REMEASURE_MS = 500;
 const BALLOON_W = 380; // largura alvo do balão em telas normais
 
@@ -88,7 +96,7 @@ function findVisibleTourEl(anchor: string): HTMLElement | null {
 }
 
 export default function TutorialOverlay() {
-  const { activeTopic, sceneIndex, nextScene, prevScene, skipTopic, exitTour, backToMenu, fullTourQueue, topics } = useTutorial();
+  const { activeTopic, sceneIndex, nextScene, prevScene, skipTopic, exitTour, backToMenu, fullTourQueue, topics, demo } = useTutorial();
   const scene = activeTopic?.scenes[sceneIndex];
   // rect: undefined = medindo; null = anchor ausente (modo informativo).
   const [rect, setRect] = useState<Rect | null | undefined>(undefined);
@@ -107,6 +115,7 @@ export default function TutorialOverlay() {
     setRect(undefined);
     let cancelled = false;
     const started = Date.now();
+    const timeoutMs = scene.demo ? ANCHOR_TIMEOUT_DEMO_MS : ANCHOR_TIMEOUT_MS;
     function locate() {
       if (cancelled) return;
       const el = findVisibleTourEl(scene!.anchor!);
@@ -121,7 +130,13 @@ export default function TutorialOverlay() {
         });
         return;
       }
-      if (Date.now() - started >= ANCHOR_TIMEOUT_MS) { setRect(null); return; }
+      if (Date.now() - started >= timeoutMs) {
+        // Degrada para o modo informativo, mas SEGUE procurando em ritmo
+        // lento: se o anchor montar depois, a cena recupera o spotlight.
+        setRect(null);
+        setTimeout(locate, ANCHOR_RECOVER_POLL_MS);
+        return;
+      }
       setTimeout(locate, ANCHOR_POLL_MS);
     }
     // Primeiro tick após um frame — dá tempo de a navegação da cena renderizar.
@@ -212,11 +227,28 @@ export default function TutorialOverlay() {
   const topicPos = topics.findIndex(t => t.id === activeTopic.id) + 1;
   const bodyText = (rect === null && scene.anchor && scene.fallbackBody) ? scene.fallbackBody : scene.body;
   const isMobileSheet = typeof window !== "undefined" && window.innerWidth < 640;
+  // CENA INTERATIVA: o contêiner raiz deixa de capturar eventos e o bloqueio
+  // é feito por QUATRO faixas ao redor do spotlight — o interior vira um
+  // "buraco" também para o mouse, permitindo interagir com o elemento real.
+  const interactive = !!scene.interactive && !informational && !!rect;
+  const holeRect = interactive && rect
+    ? { top: rect.top - pad, left: rect.left - pad, width: rect.width + pad * 2, height: rect.height + pad * 2 }
+    : null;
 
   return createPortal(
-    <div className="fixed inset-0" style={{ zIndex: 10000 }} data-tutorial-overlay>
-      {/* Bloqueador de cliques em toda a tela (transparente). */}
-      <div className="absolute inset-0" style={{ background: informational ? "rgba(2,6,14,0.78)" : "transparent" }} />
+    <div className="fixed inset-0" style={{ zIndex: 10000, pointerEvents: interactive ? "none" : undefined }} data-tutorial-overlay>
+      {/* Bloqueador de cliques: tela inteira nas cenas normais; nas cenas
+          interativas, quatro faixas que preservam o buraco do spotlight. */}
+      {interactive && holeRect ? (
+        <>
+          <div className="absolute" style={{ pointerEvents: "auto", top: 0, left: 0, right: 0, height: Math.max(0, holeRect.top) }} />
+          <div className="absolute" style={{ pointerEvents: "auto", top: holeRect.top + holeRect.height, left: 0, right: 0, bottom: 0 }} />
+          <div className="absolute" style={{ pointerEvents: "auto", top: holeRect.top, left: 0, width: Math.max(0, holeRect.left), height: holeRect.height }} />
+          <div className="absolute" style={{ pointerEvents: "auto", top: holeRect.top, left: holeRect.left + holeRect.width, right: 0, height: holeRect.height }} />
+        </>
+      ) : (
+        <div className="absolute inset-0" style={{ background: informational ? "rgba(2,6,14,0.78)" : "transparent" }} />
+      )}
       {/* Spotlight: interior transparente + escurecimento por box-shadow. */}
       {!informational && rect && (
         <div
@@ -240,8 +272,8 @@ export default function TutorialOverlay() {
         ref={balloonRef}
         className={`absolute bg-[var(--th-bg-raised,#0d1117)] border border-white/12 rounded-2xl shadow-2xl flex flex-col overflow-hidden ${isMobileSheet ? "left-2 right-2 bottom-2" : ""}`}
         style={isMobileSheet
-          ? { maxHeight: "55vh" }
-          : { top: balloonPos?.top ?? -9999, left: balloonPos?.left ?? -9999, width: Math.min(BALLOON_W, window.innerWidth - 24), maxHeight: "70vh", transition: balloonPos ? "top 300ms ease, left 300ms ease" : undefined }}
+          ? { maxHeight: "55vh", pointerEvents: "auto" }
+          : { top: balloonPos?.top ?? -9999, left: balloonPos?.left ?? -9999, width: Math.min(BALLOON_W, window.innerWidth - 24), maxHeight: "70vh", transition: balloonPos ? "top 300ms ease, left 300ms ease" : undefined, pointerEvents: "auto" }}
       >
         {/* Cabeçalho: tópico + progresso + fechar */}
         <div className="flex items-center gap-2 px-3.5 pt-3 pb-2 border-b border-white/8 flex-shrink-0">
@@ -262,6 +294,14 @@ export default function TutorialOverlay() {
 
         {/* Conteúdo */}
         <div className="px-3.5 py-2.5 overflow-y-auto min-h-0">
+          {/* Selo do modo demonstrativo: deixa explícito que os dados na tela
+              são fictícios e não pertencem à conta do usuário. */}
+          {scene.demo && demo.active && (
+            <div className="inline-flex items-center gap-1 mb-1.5 px-1.5 py-0.5 rounded border border-fuchsia-500/40 bg-fuchsia-500/10">
+              <span className="w-1.5 h-1.5 rounded-full bg-fuchsia-400 animate-pulse" />
+              <span className="text-[8px] font-black uppercase tracking-widest text-fuchsia-300">Dados demonstrativos — nada disto é real</span>
+            </div>
+          )}
           <h3 className="text-[13px] font-black text-white mb-1.5">{scene.title}</h3>
           {bodyText.split("\n\n").map((paragraph, i) => (
             <p key={i} className="text-[11px] text-slate-300 leading-relaxed mb-1.5 last:mb-0">{renderColoredText(paragraph)}</p>

@@ -21,7 +21,7 @@ export default function TutorialRoot({ children }: { children: ReactNode }) {
   // boas-vindas nunca abre por cima da tela de login/aprovação pendente.
   const approvedUid = currentUser?.uid && userProfile?.status === "aprovado" ? currentUser.uid : "";
   return (
-    <TutorialProvider isBoss={userProfile?.role === "Boss"} uid={approvedUid}>
+    <TutorialProvider isBoss={userProfile?.role === "Boss"} uid={approvedUid} userName={userProfile?.nome || currentUser?.displayName || ""}>
       {children}
       <TutorialOverlay />
       <TutorialMenu />

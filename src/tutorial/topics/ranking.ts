@@ -17,6 +17,7 @@ const ranking: TourTopic = {
   scenes: [
     {
       id: "visao-geral",
+      demo: true,
       title: "O Ranking universal",
       anchor: "ranking-root",
       nav: NAV_RK,
@@ -26,6 +27,7 @@ const ranking: TourTopic = {
     },
     {
       id: "cards",
+      demo: true,
       title: "Cards e ordenação",
       anchor: "ranking-root",
       nav: NAV_RK,
@@ -35,6 +37,7 @@ const ranking: TourTopic = {
     },
     {
       id: "conclusao",
+      demo: true,
       title: "Tópico concluído!",
       body: "Agora é competir: conclua PTs, evite [[rose:mortes]] e suba no quadro do [[emerald:Mês Atual]].\n\nSeus números individuais completos estão na janela [[sky:Stats]].",
     },

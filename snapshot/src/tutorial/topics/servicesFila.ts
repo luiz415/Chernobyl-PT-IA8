@@ -24,6 +24,7 @@ const servicesFila: TourTopic = {
   scenes: [
     {
       id: "visao-geral",
+      demo: true,
       title: "A fila de Services",
       anchor: "services-root",
       nav: NAV_SV,
@@ -33,6 +34,7 @@ const servicesFila: TourTopic = {
     },
     {
       id: "cadastro",
+      demo: true,
       title: "Cadastro e edição",
       anchor: "services-root",
       nav: NAV_SV,
@@ -42,6 +44,7 @@ const servicesFila: TourTopic = {
     },
     {
       id: "filtros-status",
+      demo: true,
       title: "Filtros e acompanhamento",
       anchor: "services-root",
       nav: NAV_SV,
@@ -51,6 +54,7 @@ const servicesFila: TourTopic = {
     },
     {
       id: "conclusao",
+      demo: true,
       title: "Tópico concluído!",
       body: "Você conhece a gestão da fila de Services: cadastro, filtros, contato e o vínculo com as PTs.\n\nO fluxo do ponto de vista do Serviceiro está no tópico [[sky:\"Meus Services\"]].",
     },

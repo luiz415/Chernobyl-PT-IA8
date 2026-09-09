@@ -329,11 +329,17 @@ export default function PartyManager({ parties, characters, waitingList, userNam
     ptStage: (arg) => setPtStatusView(arg as PartyStage),
     ptStandalone: (arg) => setStandaloneView(arg as "selectPrompt" | "overview" | "allChars"),
     ptClose: () => setActivePt(null),
-    // Tópico "Painel da PT": abre a primeira PT visível do usuário (qualquer
-    // estágio, priorizando a ordem dos seletores). Sem PT visível, não faz
-    // nada — as cenas degradam para o modo informativo via fallbackBody.
-    ptOpenFirst: () => {
-      const stages: PartyStage[] = ["comVagas", "prontas", "iniciadas", "aguardando"];
+    // Tópico "Painel da PT": abre a primeira PT visível do usuário. O arg
+    // opcional indica o ESTÁGIO PREFERIDO (ex.: "aguardando" para a cena de
+    // totais/pagamentos, que precisa de uma PT com valores lançados); sem
+    // arg, segue a ordem dos seletores. Sem PT visível, não faz nada — as
+    // cenas degradam para o modo informativo via fallbackBody.
+    ptOpenFirst: (arg) => {
+      const prefer = typeof arg === "string" ? (arg as PartyStage) : null;
+      const base: PartyStage[] = ["comVagas", "prontas", "iniciadas", "aguardando"];
+      const stages: PartyStage[] = prefer && base.includes(prefer)
+        ? [prefer, ...base.filter(s => s !== prefer)]
+        : base;
       for (const stage of stages) {
         const list = [...partiesByStageRef.current[stage]].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
         if (list.length > 0) {

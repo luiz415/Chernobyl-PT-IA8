@@ -20,6 +20,7 @@ const meuHistorico: TourTopic = {
   scenes: [
     {
       id: "visao-geral",
+      demo: true,
       title: "Seu registro permanente",
       anchor: "history-root",
       nav: NAV_HIST,
@@ -29,6 +30,7 @@ const meuHistorico: TourTopic = {
     },
     {
       id: "detalhes",
+      demo: true,
       title: "O que cada entrada guarda",
       anchor: "history-root",
       nav: NAV_HIST,
@@ -38,11 +40,13 @@ const meuHistorico: TourTopic = {
     },
     {
       id: "origem",
+      demo: true,
       title: "Como o histórico é gerado",
       body: "O histórico é [[emerald:automático]]: quando uma PT é concluída e finalizada no [[emerald:Gerenciador de PTs]], o registro é materializado para cada participante — ninguém precisa anotar nada.\n\nEle também alimenta as suas [[sky:Estatísticas]] e o [[amber:Ranking]]: PTs concluídas, mortes, duração média e parceiros frequentes saem daqui.",
     },
     {
       id: "conclusao",
+      demo: true,
       title: "Tópico concluído!",
       body: "Seu histórico funciona sozinho: conclua PTs e consulte aqui os registros completos com valores e resumo para WhatsApp.\n\nVeja também os tópicos [[sky:\"Stats\"]] e [[amber:\"Ranking\"]] — os números deles nascem deste histórico.",
     },

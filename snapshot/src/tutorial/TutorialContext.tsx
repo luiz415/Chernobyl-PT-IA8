@@ -14,6 +14,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { runTourCommand } from "./commands";
+import { loadDemoData, type TutorialDemoData } from "./demo";
 import { getTourTopics } from "./registry";
 import type { TourProgressMap, TourTopic } from "./types";
 
@@ -32,6 +33,8 @@ interface TutorialState {
   progress: TourProgressMap;
   /** Tópicos disponíveis para o papel atual. */
   topics: TourTopic[];
+  /** Modo demonstrativo (cena atual com `demo: true` + dados carregados). */
+  demo: TutorialDemoState;
   openMenu: () => void;
   closeMenu: () => void;
   startTopic: (topicId: string, fromScene?: number) => void;
@@ -44,6 +47,20 @@ interface TutorialState {
   resetProgress: () => void;
 }
 
+/**
+ * MODO DEMONSTRATIVO — estado consumido pelos painéis (via useTutorialDemo).
+ *
+ * `active` fica true enquanto a cena atual do tour declara `demo: true` E o
+ * conjunto de dados fictícios já foi carregado (import dinâmico). Os painéis
+ * então substituem SOMENTE as props/estados de renderização pelos datasets
+ * de `data` — os estados reais do App permanecem intocados, e todos os
+ * callbacks de persistência viram no-op enquanto o modo está ativo.
+ */
+export interface TutorialDemoState {
+  active: boolean;
+  data: TutorialDemoData | null;
+}
+
 const TutorialCtx = createContext<TutorialState | null>(null);
 
 function loadProgress(uid: string): TourProgressMap {
@@ -53,7 +70,7 @@ function loadProgress(uid: string): TourProgressMap {
   } catch { return {}; }
 }
 
-export function TutorialProvider({ children, isBoss, uid }: { children: ReactNode; isBoss: boolean; uid: string }) {
+export function TutorialProvider({ children, isBoss, uid, userName = "" }: { children: ReactNode; isBoss: boolean; uid: string; userName?: string }) {
   const [menuOpen, setMenuOpen] = useState(false);
   // ── MODAL DE BOAS-VINDAS OBRIGATÓRIO NO LOGIN ───────────────────────────
   // Ao entrar no aplicativo (uid definido), o modal que recomenda o tutorial
@@ -93,26 +110,69 @@ export function TutorialProvider({ children, isBoss, uid }: { children: ReactNod
     [topics, activeTopicId],
   );
 
+  // ── MODO DEMONSTRATIVO ───────────────────────────────────────────────────
+  // Ativo enquanto a cena atual declara `demo: true`. Os datasets fictícios
+  // são carregados por import dinâmico UMA vez por sessão (cache no módulo
+  // demo/index.ts); até a promessa resolver, `active` permanece false e a
+  // cena se comporta como as demais (o anchor pode degradar para fallback).
+  // Sair do tour ou navegar para uma cena sem `demo` desativa na hora.
+  const demoReadyRef = useRef(false);
+  const [demoData, setDemoData] = useState<TutorialDemoData | null>(null);
+  const currentScene = activeTopic?.scenes[sceneIndex] || null;
+  const demoWanted = !!currentScene?.demo;
+  useEffect(() => {
+    if (!demoWanted || demoData) return;
+    let cancelled = false;
+    loadDemoData(uid, userName).then(data => { if (!cancelled) setDemoData(data); }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [demoWanted, demoData, uid, userName]);
+  const demo = useMemo<TutorialDemoState>(
+    () => ({ active: demoWanted && !!demoData, data: demoWanted ? demoData : null }),
+    [demoWanted, demoData],
+  );
+  // Marca "demo pronto" APÓS o commit em que os consumidores (App/painéis) já
+  // renderizaram com os dados fictícios — os comandos de navegação das cenas
+  // demo (ex.: ptOpenFirst) então operam sobre as listas certas.
+  useEffect(() => { demoReadyRef.current = demo.active; }, [demo.active]);
+
   // Executa os comandos de navegação da cena EM ORDEM, com retry curto:
   // um comando pode depender de um componente que só monta depois do comando
   // anterior renderizar (ex.: "tab: pts" monta o PartyManager, e só então
   // "ptStage" tem handler registrado). Comandos que continuam sem handler ao
   // fim da janela são descartados — a cena degrada para o fallback.
   const navRunRef = useRef(0);
+  // O loop abaixo consulta demoReadyRef (declarado junto do bloco demo):
+  // cenas demonstrativas só navegam DEPOIS que os dados fictícios chegaram
+  // aos painéis — senão comandos como ptOpenFirst rodariam sobre a lista
+  // real (possivelmente vazia) e a cena degradaria à toa.
   const runSceneNav = useCallback((topic: TourTopic, idx: number) => {
     const scene = topic.scenes[idx];
     const pending = [...(scene?.nav || [])];
     if (pending.length === 0) return;
     const runId = ++navRunRef.current;
-    const deadline = Date.now() + 2500;
+    // Cena demo: prazo maior — inclui o import dinâmico dos datasets.
+    const deadline = Date.now() + (scene?.demo ? 6000 : 2500);
+    // Prazo EXTRA além do gate: comandos que dependem de componentes recém-
+    // montados pela própria navegação (ex.: "tab pts" monta o PartyManager e
+    // só então "ptOpenFirst" tem handler) precisam de janela de retry DEPOIS
+    // que o gate liberar — senão a cena abre na tela errada e o usuário vê o
+    // "Avançar" falhar.
+    const execDeadline = deadline + 3000;
     function tick() {
       if (navRunRef.current !== runId) return; // outra cena assumiu
+      if (scene?.demo && !demoReadyRef.current && Date.now() < deadline) {
+        // Aguarda os dados fictícios chegarem aos painéis. Se o gate expirar
+        // (import falhou/rede lenta), os comandos executam mesmo assim —
+        // navegar para a tela certa é sempre melhor do que ficar parado.
+        setTimeout(tick, 100);
+        return;
+      }
       while (pending.length > 0) {
         const { cmd, arg } = pending[0];
         if (!runTourCommand(cmd, arg)) break; // handler ainda não registrado
         pending.shift();
       }
-      if (pending.length > 0 && Date.now() < deadline) setTimeout(tick, 100);
+      if (pending.length > 0 && Date.now() < execDeadline) setTimeout(tick, 100);
     }
     tick();
   }, []);
@@ -224,11 +284,11 @@ export function TutorialProvider({ children, isBoss, uid }: { children: ReactNod
 
   const value = useMemo<TutorialState>(() => ({
     welcomeOpen, dismissWelcome,
-    menuOpen, activeTopic, sceneIndex, fullTourQueue, progress, topics,
+    menuOpen, activeTopic, sceneIndex, fullTourQueue, progress, topics, demo,
     openMenu: () => setMenuOpen(true),
     closeMenu: () => setMenuOpen(false),
     startTopic, startFullTour, nextScene, prevScene, skipTopic, exitTour, backToMenu, resetProgress,
-  }), [welcomeOpen, dismissWelcome, menuOpen, activeTopic, sceneIndex, fullTourQueue, progress, topics, startTopic, startFullTour, nextScene, prevScene, skipTopic, exitTour, backToMenu, resetProgress]);
+  }), [welcomeOpen, dismissWelcome, menuOpen, activeTopic, sceneIndex, fullTourQueue, progress, topics, demo, startTopic, startFullTour, nextScene, prevScene, skipTopic, exitTour, backToMenu, resetProgress]);
 
   return <TutorialCtx.Provider value={value}>{children}</TutorialCtx.Provider>;
 }
@@ -237,4 +297,9 @@ export function useTutorial(): TutorialState {
   const ctx = useContext(TutorialCtx);
   if (!ctx) throw new Error("useTutorial deve ser usado dentro de TutorialProvider");
   return ctx;
+}
+
+/** Atalho para os painéis: apenas o estado do modo demonstrativo. */
+export function useTutorialDemo(): TutorialDemoState {
+  return useTutorial().demo;
 }

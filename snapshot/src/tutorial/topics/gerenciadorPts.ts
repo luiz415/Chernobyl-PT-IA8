@@ -28,6 +28,7 @@ const gerenciadorPts: TourTopic = {
   scenes: [
     {
       id: "visao-geral",
+      demo: true,
       title: "O coração do aplicativo",
       anchor: "pm-root",
       nav: NAV_PTS,
@@ -37,6 +38,7 @@ const gerenciadorPts: TourTopic = {
     },
     {
       id: "abas",
+      demo: true,
       title: "Barra de abas de PTs",
       anchor: "pm-tabs-bar",
       nav: NAV_PTS,
@@ -45,14 +47,19 @@ const gerenciadorPts: TourTopic = {
     },
     {
       id: "seletores",
+      demo: true,
+      // Interativa: o clique nos seletores só troca estado local de UI
+      // (setPtStatusView) — seguro liberar dentro do spotlight.
+      interactive: true,
       title: "Seletores de estágio",
       anchor: "pm-stage-selectors",
       nav: NAV_PTS,
-      body: "Estes quatro botões filtram as PTs por estágio — cada um com sua cor e um contador.\n\nQuando uma categoria tem novidades, a borda do seletor [[amber:pulsa]]: nos três primeiros, ao existir qualquer PT; em [[amber:\"Aguardando Pagamento\"]], apenas quando há pagamento pendente [[rose:COM VOCÊ]].\n\nNas próximas cenas vamos visitar cada estágio de verdade.",
+      body: "Estes quatro botões filtram as PTs por estágio — cada um com sua cor e um contador.\n\nQuando uma categoria tem novidades, a borda do seletor [[amber:pulsa]]: nos três primeiros, ao existir qualquer PT; em [[amber:\"Aguardando Pagamento\"]], apenas quando há pagamento pendente [[rose:COM VOCÊ]].\n\nNas próximas cenas vamos visitar cada estágio de verdade.\n\n[[emerald:Experimente]]: nesta cena os seletores estão liberados — clique neles para alternar os estágios ao vivo.",
       fallbackBody: "Os seletores [[violet:Com Vagas]] / [[emerald:Prontas]] / [[sky:Iniciadas]] / [[amber:Aguardando Pagamento]] ficam à direita da barra de abas e filtram as PTs por estágio.",
     },
     {
       id: "com-vagas",
+      demo: true,
       title: "Estágio 1 — Com Vagas",
       anchor: "pm-cards-panel",
       nav: [...NAV_PTS, { cmd: "ptStage", arg: "comVagas" }],
@@ -62,6 +69,7 @@ const gerenciadorPts: TourTopic = {
     },
     {
       id: "prontas",
+      demo: true,
       title: "Estágio 2 — Prontas",
       anchor: "pm-cards-panel",
       nav: [...NAV_PTS, { cmd: "ptStage", arg: "prontas" }],
@@ -71,6 +79,7 @@ const gerenciadorPts: TourTopic = {
     },
     {
       id: "iniciadas",
+      demo: true,
       title: "Estágio 3 — Iniciadas",
       anchor: "pm-cards-panel",
       nav: [...NAV_PTS, { cmd: "ptStage", arg: "iniciadas" }],
@@ -80,6 +89,7 @@ const gerenciadorPts: TourTopic = {
     },
     {
       id: "aguardando",
+      demo: true,
       title: "Estágio 4 — Aguardando Pagamento",
       anchor: "pm-cards-panel",
       nav: [...NAV_PTS, { cmd: "ptStage", arg: "aguardando" }],
@@ -89,6 +99,7 @@ const gerenciadorPts: TourTopic = {
     },
     {
       id: "itens-a-venda",
+      demo: true,
       title: "Itens a Venda",
       anchor: "pm-items-for-sale",
       nav: [...NAV_PTS, { cmd: "ptStage", arg: "aguardando" }],
@@ -97,6 +108,7 @@ const gerenciadorPts: TourTopic = {
     },
     {
       id: "filtros",
+      demo: true,
       title: "Filtros de visualização",
       anchor: "pm-filters",
       nav: NAV_PTS,
@@ -105,6 +117,7 @@ const gerenciadorPts: TourTopic = {
     },
     {
       id: "visao-geral-btn",
+      demo: true,
       title: "Guia \"Visão Geral\"",
       anchor: "pm-overview-btn",
       nav: NAV_PTS,
@@ -113,6 +126,7 @@ const gerenciadorPts: TourTopic = {
     },
     {
       id: "todos-personagens-btn",
+      demo: true,
       title: "Guia \"Todos Personagens\"",
       anchor: "pm-allchars-btn",
       nav: NAV_PTS,
@@ -121,6 +135,7 @@ const gerenciadorPts: TourTopic = {
     },
     {
       id: "sugerir-pt",
+      demo: true,
       title: "Sugerir PT (IA)",
       anchor: "pm-suggest-btn",
       nav: NAV_PTS,
@@ -129,6 +144,7 @@ const gerenciadorPts: TourTopic = {
     },
     {
       id: "criar-pt",
+      demo: true,
       title: "Criar PT manualmente",
       anchor: "pm-create-btn",
       nav: NAV_PTS,
@@ -137,6 +153,7 @@ const gerenciadorPts: TourTopic = {
     },
     {
       id: "conclusao",
+      demo: true,
       title: "Tópico concluído!",
       body: "Você conhece agora o fluxo completo do Gerenciador: os [[amber:quatro estágios]], os cards de seleção rápida, os filtros e as duas formas de criar PTs.\n\nPara aprender a operar DENTRO de uma PT (slots, DONO/JOGADOR, divisão, drops, pagamentos), siga para o tópico [[sky:\"Painel da PT\"]].",
     },

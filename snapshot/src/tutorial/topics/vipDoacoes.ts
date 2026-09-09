@@ -24,7 +24,7 @@ const vipDoacoes: TourTopic = {
     {
       id: "beneficios",
       title: "Benefícios exclusivos VIP",
-      body: "O que o [[vip:VIP]] libera:\n\n• [[rose:Painel Bazaar]] completo — lista oficial, filtros, interesses, alertas de encerramento e [[amber:Auto Bid]];\n• atuação como [[sky:Serviceiro]] em \"Meus Services\" (com o perfil habilitado), incluindo o [[emerald:formulário público]] de clientes;\n• demais vantagens listadas em [[amber:Benefícios VIP]] dentro do painel.\n\nOs dias VIP são [[emerald:cumulativos]]: novas contratações somam ao saldo atual.",
+      body: "O que o [[vip:VIP]] libera:\n\n• [[rose:Painel Bazaar]] completo — lista oficial, filtros, interesses e alertas de encerramento;\n• atuação como [[sky:Serviceiro]] em \"Meus Services\" (com o perfil habilitado), incluindo o [[emerald:formulário público]] de clientes;\n• demais vantagens listadas em [[amber:Benefícios VIP]] dentro do painel.\n\nOs dias VIP são [[emerald:cumulativos]]: novas contratações somam ao saldo atual.",
     },
     {
       id: "doacoes",

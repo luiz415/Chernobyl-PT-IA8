@@ -170,6 +170,8 @@ export default function MyServicesPanel({
   onServicesChanged,
   probableMarkers = {},
   activeParties = [],
+  demoServices,
+  demoRequests,
 }: {
   onCountChange?: (total: number) => void;
   /** Atualiza a projeção local do App após persistir sharedServices com sucesso. */
@@ -187,6 +189,15 @@ export default function MyServicesPanel({
    * derivado das PTs já em memória, sem leitura adicional.
    */
   activeParties?: PartyTab[];
+  /**
+   * MODO DEMONSTRATIVO DO TUTORIAL: quando presentes, o painel renderiza
+   * estes Services/solicitações fictícios no lugar dos reais, IGNORA o gate
+   * de acesso (VIP+Serviceiro) — para que qualquer usuário veja o painel por
+   * dentro durante o tutorial — e desliga TODA a persistência (cargas,
+   * listener de solicitações, commits e flushes). Nada é lido nem gravado.
+   */
+  demoServices?: SharedService[];
+  demoRequests?: ServiceRequest[];
 } = {}) {
   const { currentUser, userProfile, allUsers } = useAuth();
 
@@ -200,7 +211,10 @@ export default function MyServicesPanel({
   const isBoss = userProfile?.role === "Boss";
   const hasActiveVip = isVipActive(userProfile);
   const isServiceiro = userProfile?.serviceiro === true;
-  const hasAccess = isBoss || (hasActiveVip && isServiceiro);
+  // MODO DEMO (tutorial): pula o gate de acesso — o usuário precisa ver o
+  // painel por dentro para aprender — e desliga toda a persistência abaixo.
+  const demoMode = !!demoServices;
+  const hasAccess = demoMode || isBoss || (hasActiveVip && isServiceiro);
 
   const bosses = useMemo(
     () => (allUsers || []).filter(user => user.role === "Boss" && user.status === "aprovado"),
@@ -384,6 +398,7 @@ export default function MyServicesPanel({
 
   // Carga dos SERVICES (leitura pontual + cache; sem listener).
   useEffect(() => {
+    if (demoMode) return; // demo: sem carga do Firestore
     const uid = currentUser?.uid || "";
     if (!uid || !hasAccess) return;
     if (loadedForUidRef.current === uid) return;
@@ -407,6 +422,7 @@ export default function MyServicesPanel({
    * leituras extras. O retorno cancela a inscrição ao desmontar.
    */
   useEffect(() => {
+    if (demoMode) return; // demo: sem listener de solicitações
     const uid = currentUser?.uid || "";
     if (!uid || !hasAccess) return;
 
@@ -481,6 +497,7 @@ export default function MyServicesPanel({
    * voltar à aba mostra o estado novo mesmo antes de o Firestore receber.
    */
   function commit(next: SharedService[], options: { flushImmediately?: boolean } = {}) {
+    if (demoMode) return; // demo: nada é gravado (nem cache, nem Firestore)
     const previous = services;
     setServices(next);
     setError("");
@@ -745,6 +762,7 @@ export default function MyServicesPanel({
   const autoHandledRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
+    if (demoMode) return; // demo: nunca aprova solicitações automaticamente
     if (!autoApprove || !hasAccess) return;
     const uid = currentUser?.uid || "";
     if (!uid) return;
@@ -788,10 +806,15 @@ export default function MyServicesPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoApprove, requests, hasAccess, currentUser?.uid]);
 
-  const disponiveis = useMemo(() => services.filter(s => s.status === "disponivel"), [services]);
-  const realizados = useMemo(() => services.filter(s => s.status === "realizado"), [services]);
+  // Fontes de EXIBIÇÃO: no modo demo, os registros fictícios do tutorial;
+  // fora dele, os estados reais. Os handlers de escrita continuam operando
+  // sobre `services`/`requests` reais — e são no-op em demo (commit).
+  const viewServices = demoMode ? (demoServices || []) : services;
+  const viewRequests = demoMode ? (demoRequests || []) : requests;
+  const disponiveis = useMemo(() => viewServices.filter(s => s.status === "disponivel"), [viewServices]);
+  const realizados = useMemo(() => viewServices.filter(s => s.status === "realizado"), [viewServices]);
   // Só as pendentes contam no badge — decididas ficam no histórico da aba.
-  const pendentes = useMemo(() => requests.filter(r => r.status === "pendente"), [requests]);
+  const pendentes = useMemo(() => viewRequests.filter(r => r.status === "pendente"), [viewRequests]);
 
   /**
    * Linha da tabela: uma solicitação pendente OU um Service já aprovado.

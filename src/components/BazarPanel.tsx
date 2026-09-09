@@ -986,9 +986,24 @@ interface BazarPanelProps {
   /** Contas existentes do usuário atual; derivadas em App.tsx de data.characters. */
   accounts?: string[];
   onAddCharacterFromBazaar?: (character: BazaarCharacterPurchase) => { ok: boolean; error?: string };
+  /**
+   * MODO DEMONSTRATIVO DO TUTORIAL: leilões/interesses/notificações fictícios
+   * exibidos no lugar dos caches reais. Quando presente, o gate VIP é
+   * ignorado (o tutorial precisa mostrar o painel por dentro para qualquer
+   * usuário), consultas/sincronizações ficam desativadas e NADA é lido ou
+   * gravado (Firestore, localStorage ou site do Rubinot).
+   */
+  demoBazaar?: {
+    fetchedAt: number;
+    auctions: BazaarAuction[];
+    interests: BazaarInterestMap;
+    notifications: LocalBazaarNotification[];
+  };
 }
 
-function BazarPanelContent({ sharedCharacters = [], waitingList = [], activeParties = [], personalCharacters = [], accounts = [], onAddCharacterFromBazaar }: BazarPanelProps) {
+function BazarPanelContent({ sharedCharacters = [], waitingList = [], activeParties = [], personalCharacters = [], accounts = [], onAddCharacterFromBazaar, demoBazaar }: BazarPanelProps) {
+  // MODO DEMO (tutorial): dados fictícios, sem consultas nem persistência.
+  const demoMode = !!demoBazaar;
   const savedFiltersRef = useRef<BazarSavedFilters>(readSavedBazarFilters());
   const [isLoading, setIsLoading] = useState(false);
   const [isCheckingDetails, setIsCheckingDetails] = useState(false);
@@ -1159,6 +1174,30 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
   }, [isInlineAccountMenuOpen]);
 
   useEffect(() => {
+    // MODO DEMO: alimenta a lista com os leilões fictícios do tutorial e
+    // ignora os caches reais — nada é lido nem sobrescrito. A metadata
+    // fictícia (version "demo") faz o quadro "Última Consulta" e os botões
+    // de interesse renderizarem; as ações continuam bloqueadas (demoMode).
+    if (demoMode && demoBazaar) {
+      setResult({ ok: true, fetchedAt: demoBazaar.fetchedAt, total: demoBazaar.auctions.length, auctions: demoBazaar.auctions });
+      setBazaarInterests(demoBazaar.interests);
+      setLocalBazaarNotifications(demoBazaar.notifications);
+      // Detalhes de quests (contadores SW x/6 e SG x/5) hidratados dos
+      // próprios leilões fictícios — memória apenas, nunca localStorage.
+      setDetailsCache(hydrateDetailsFromAuctions(demoBazaar.auctions));
+      setOfficialMetadata({
+        schemaVersion: 1,
+        version: "demo",
+        generatedAtMs: demoBazaar.fetchedAt,
+        durationMs: 45000,
+        totalCharacters: demoBazaar.auctions.length,
+        generatedByUid: "demo",
+        generatedByName: "Tutorial (demonstração)",
+        status: "ready",
+        filters: {},
+      });
+      return;
+    }
     const officialCache = readOfficialBazaarCache();
     if (officialCache) {
       const embeddedDetails = hydrateDetailsFromAuctions(officialCache.characters);
@@ -1174,7 +1213,8 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
       return;
     }
     setDetailsCache(readDetailsCache());
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [demoMode]);
 
   useEffect(() => {
     const updateCurrentTime = () => setCurrentUnixTs(Math.floor(Date.now() / 1000));
@@ -1304,6 +1344,7 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
   }, [isElectron]);
 
   useEffect(() => {
+    if (demoMode) return; // demo: nenhuma sincronização com o Firestore
     syncOfficialBazaarList({ force: false }).then(response => {
       if (response.cache) {
         setOfficialMetadata(response.cache.metadata);
@@ -1327,6 +1368,7 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
   }, []);
 
   useEffect(() => {
+    if (demoMode) return; // demo: chips fictícios já semeados; sem listener real
     const handleLocalNotification = (event: Event) => {
       const detail = (event as CustomEvent).detail || {};
       const notification: LocalBazaarNotification = {
@@ -1722,6 +1764,7 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
   }
 
   async function handleSyncOfficialBazaar(force = true) {
+    if (demoMode) return; // demo: sem sincronização real
     const remaining = getManualSyncCooldownRemainingMs();
     if (force && remaining > 0) {
       setError(`Aguarde ${Math.ceil(remaining / 1000)}s para atualizar novamente.`);
@@ -1774,6 +1817,10 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
    * iniciar direto. A consulta só começa quando o usuário confirma.
    */
   function requestBazaarQuery() {
+    if (demoMode) {
+      setError("Modo demonstrativo do tutorial: a consulta real ao Bazaar está desativada.");
+      return;
+    }
     if (!isBossUser) {
       setError("Apenas usuários Boss podem iniciar uma nova consulta do Bazaar.");
       return;
@@ -2430,7 +2477,7 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
             Painel Bazaar
           </h2>
 
-          {isBossUser && (
+          {isBossUser && !demoMode && (
             <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1.5">
               <button type="button" onClick={openSearchFiltersModal} disabled={isLoading || isCheckingDetails} className="inline-flex h-7 items-center gap-1 px-2.5 rounded-lg border border-amber-500/25 bg-amber-500/10 text-amber-300 text-[10px] font-black transition-all cursor-pointer hover:bg-amber-500/20 disabled:opacity-50 disabled:cursor-not-allowed">
                 <Filter size={12} /> Filtros Consulta
@@ -2921,7 +2968,7 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
                 <button type="button" onClick={() => setIsFriendsSummaryOpen(true)} className="inline-flex h-7 items-center justify-center gap-1 rounded-md border border-amber-500/25 bg-amber-500/10 px-2.5 text-[10px] font-black text-amber-300 hover:bg-amber-500/20 transition-colors cursor-pointer">
                   Resumo de Amigos
                 </button>
-                {isBossUser && isElectron && (
+                {isBossUser && isElectron && !demoMode && (
                   <button
                     type="button"
                     onClick={() => setIsAutoBidOpen(true)}
@@ -3382,6 +3429,7 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
                             <button
                               type="button"
                               onClick={async () => {
+                                if (demoMode) return; // demo: interesse fictício, sem gravação
                                 const previous = bazaarInterests;
                                 try {
                                   // Atualização otimista: a tela responde na hora.
@@ -3752,8 +3800,10 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
         onOpenFilters={() => setIsFriendsSummaryFiltersOpen(true)}
       />
 
-      {/* Auto Bid — somente Boss + Electron. Nenhum efeito na versão Web. */}
-      {isBossUser && isElectron && (
+      {/* Auto Bid — somente Boss + Electron. Nenhum efeito na versão Web.
+          Oculto no modo demonstrativo do tutorial: o tour mostra apenas a
+          experiência do usuário comum. */}
+      {isBossUser && isElectron && !demoMode && (
         <AutoBidModal
           open={isAutoBidOpen}
           onClose={() => setIsAutoBidOpen(false)}
@@ -3900,7 +3950,10 @@ function BazarVipAccessPanel() {
 
 export default function BazarPanel(props: BazarPanelProps) {
   const { userProfile } = useAuth();
-  const hasAccess = userProfile?.role === "Boss" || userProfile?.role === "VIP";
+  // MODO DEMO (tutorial): o gate VIP é ignorado para que QUALQUER usuário
+  // veja o painel por dentro com os dados fictícios — a permissão real do
+  // usuário não muda em nada (fora do tutorial o gate segue idêntico).
+  const hasAccess = !!props.demoBazaar || userProfile?.role === "Boss" || userProfile?.role === "VIP";
   if (!hasAccess) return <BazarVipAccessPanel />;
   return <BazarPanelContent {...props} />;
 }

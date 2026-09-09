@@ -22,6 +22,7 @@ const meusPersonagens: TourTopic = {
   scenes: [
     {
       id: "visao-geral",
+      demo: true,
       title: "Sua base de personagens",
       anchor: "chars-table",
       nav: [...NAV_CHARS, { cmd: "charsView", arg: "disponiveis" }],
@@ -31,14 +32,19 @@ const meusPersonagens: TourTopic = {
     },
     {
       id: "sub-visoes",
+      demo: true,
+      // Interativa: alternar DISPONÍVEIS/VENDIDOS/NEGOCIADOS é estado local
+      // (setCharsView) e, em demo, as tabelas são somente leitura.
+      interactive: true,
       title: "Disponíveis · Vendidos · Negociados",
       anchor: "chars-view-toggle",
       nav: NAV_CHARS,
-      body: "Três sub-visões organizam seus personagens:\n\n• [[emerald:DISPONÍVEIS]] — os personagens ativos, prontos para PTs;\n• [[amber:VENDIDOS]] — histórico de vendas com datas, valores e resultado financeiro;\n• [[violet:NEGOCIADOS ENTRE USUÁRIOS]] — personagens com uso financeiro negociado com outros usuários (aquisições).",
+      body: "Três sub-visões organizam seus personagens:\n\n• [[emerald:DISPONÍVEIS]] — os personagens ativos, prontos para PTs;\n• [[amber:VENDIDOS]] — histórico de vendas com datas, valores e resultado financeiro;\n• [[violet:NEGOCIADOS ENTRE USUÁRIOS]] — personagens com uso financeiro negociado com outros usuários (aquisições).\n\n[[emerald:Experimente]]: nesta cena os botões estão liberados — clique neles para alternar as sub-visões ao vivo.",
       fallbackBody: "No topo da guia \"Meus Personagens\" ficam os botões [[emerald:DISPONÍVEIS]], [[amber:VENDIDOS]] e [[violet:NEGOCIADOS ENTRE USUÁRIOS]].",
     },
     {
       id: "cadastro",
+      demo: true,
       title: "Cadastrar e editar",
       anchor: "chars-table",
       nav: [...NAV_CHARS, { cmd: "charsView", arg: "disponiveis" }],
@@ -48,6 +54,7 @@ const meusPersonagens: TourTopic = {
     },
     {
       id: "quests",
+      demo: true,
       title: "Controle de Quests",
       anchor: "chars-table",
       nav: [...NAV_CHARS, { cmd: "charsView", arg: "disponiveis" }],
@@ -57,6 +64,7 @@ const meusPersonagens: TourTopic = {
     },
     {
       id: "compartilhar",
+      demo: true,
       title: "Compartilhamento",
       anchor: "chars-table",
       nav: [...NAV_CHARS, { cmd: "charsView", arg: "disponiveis" }],
@@ -66,6 +74,7 @@ const meusPersonagens: TourTopic = {
     },
     {
       id: "vendidos",
+      demo: true,
       title: "Histórico de vendas",
       anchor: "chars-table",
       nav: [...NAV_CHARS, { cmd: "charsView", arg: "vendidos" }],
@@ -75,6 +84,7 @@ const meusPersonagens: TourTopic = {
     },
     {
       id: "negociados",
+      demo: true,
       title: "Negociados entre usuários",
       anchor: "chars-table",
       nav: [...NAV_CHARS, { cmd: "charsView", arg: "adquiridos" }],
@@ -84,6 +94,7 @@ const meusPersonagens: TourTopic = {
     },
     {
       id: "conclusao",
+      demo: true,
       title: "Tópico concluído!",
       body: "Você já sabe gerenciar seus personagens: cadastro, quests, compartilhamento, vendas e negociações.\n\nPróximo passo recomendado: o tópico [[emerald:\"Gerenciador de PTs\"]] para colocar seus personagens em equipe — ou [[sky:\"Painel da PT\"]] para dominar a operação de uma PT aberta.",
     },
