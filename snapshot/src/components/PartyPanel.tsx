@@ -2880,7 +2880,9 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
               )}
             </>
           )}
-          {party.createdAt && (
+          {/* `!!` obrigatório: createdAt é NUMÉRICO — `{0 && <JSX/>}` faria o
+              React imprimir o literal "0" no cabeçalho em vez de omitir. */}
+          {!!party.createdAt && (
             <>
               <span className="h-5 w-px bg-white/10" />
               <span className="text-xs font-semibold text-slate-400 whitespace-nowrap">
@@ -2991,7 +2993,9 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
             </>
           )}
           {/* Botões Falha e Pausar - visíveis apenas para líder durante quest ativa */}
-          {isLeaderPT && party.ptStartedAt && !party.questConcluida && !party.questFalha && !isPausedActive && (
+          {/* `!!` obrigatório: ptStartedAt numérico (0 = não iniciada) —
+              sem a coerção o React imprimiria "0" no cabeçalho. */}
+          {isLeaderPT && !!party.ptStartedAt && !party.questConcluida && !party.questFalha && !isPausedActive && (
             <>
               <span className="h-5 w-px bg-white/10" />
               <button
@@ -3132,12 +3136,17 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
                 </button>
               )}
             </span>
-            {party.ptStartedAt && <span className="h-4 w-px bg-white/10" />}
-            {party.ptStartedAt && (
+            {/* `!!` obrigatório nos 4 guards abaixo: `ptStartedAt` é NUMÉRICO
+                e as PTs são criadas com `ptStartedAt: 0` explícito (exigência
+                da query de PTs públicas). Sem a coerção, `{0 && <JSX/>}`
+                imprime o literal "0" no cabeçalho das PTs "Com Vagas" e
+                "Prontas" — o dado inexistente deve simplesmente sumir. */}
+            {!!party.ptStartedAt && <span className="h-4 w-px bg-white/10" />}
+            {!!party.ptStartedAt && (
               <span className="whitespace-nowrap">Iniciada as: <span className="text-white">{new Date(party.ptStartedAt).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}</span></span>
             )}
-            {party.ptStartedAt && <span className="h-4 w-px bg-white/10" />}
-            {party.ptStartedAt && (
+            {!!party.ptStartedAt && <span className="h-4 w-px bg-white/10" />}
+            {!!party.ptStartedAt && (
               <span className="whitespace-nowrap">
                 Duração: <span className="text-sky-300 font-semibold tabular-nums">{formatDuration(party.questConcluida && party.ptDuration ? party.ptDuration : elapsedMs)}</span>
                 {/* Pausada: deixa explícito que o relógio parou. */}
@@ -3174,8 +3183,11 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
                 </span>
               </>
             )}
-            {party.questConcluida && party.ptStartedAt && party.ptDuration && <span className="h-4 w-px bg-white/10" />}
-            {party.questConcluida && party.ptStartedAt && party.ptDuration && (
+            {/* `!!` também aqui: ptStartedAt/ptDuration são numéricos — com
+                qualquer um deles em 0 a cadeia `a && b && c && <JSX/>`
+                imprimiria "0" em vez de omitir a informação. */}
+            {party.questConcluida && !!party.ptStartedAt && !!party.ptDuration && <span className="h-4 w-px bg-white/10" />}
+            {party.questConcluida && !!party.ptStartedAt && !!party.ptDuration && (
               <span className="whitespace-nowrap">Concluída as: <span className="text-white">{new Date(party.ptStartedAt + party.ptDuration).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}</span></span>
             )}
           </div>
