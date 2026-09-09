@@ -20,6 +20,7 @@
 // centralizado com `fallbackBody` (ou o próprio body). O tutorial nunca trava.
 // ============================================================================
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import type { ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { ChevronLeft, ChevronRight, ListChecks, SkipForward, X, Check } from "lucide-react";
 import { useTutorial } from "./TutorialContext";
@@ -35,6 +36,37 @@ const TONE_THEME: Record<TourTone, { ring: string; text: string; badge: string; 
 };
 
 interface Rect { top: number; left: number; width: number; height: number }
+
+// ── CORES NOS TEXTOS DAS CENAS ──────────────────────────────────────────────
+// Mini-markup nos bodies dos tópicos: [[tom:texto]] vira um <span> colorido.
+// Tons disponíveis (classes literais completas — Tailwind JIT):
+//   emerald, violet, sky, amber, rose, slate — e "vip" (selo âmbar destacado
+//   usado para marcar funcionalidades exclusivas de usuários VIP).
+const INLINE_TONE: Record<string, string> = {
+  emerald: "text-emerald-300 font-bold",
+  violet: "text-violet-300 font-bold",
+  sky: "text-sky-300 font-bold",
+  amber: "text-amber-300 font-bold",
+  rose: "text-rose-300 font-bold",
+  slate: "text-slate-200 font-bold",
+  vip: "text-amber-300 font-black px-1 py-px rounded border border-amber-500/40 bg-amber-500/10 text-[10px] uppercase tracking-wide",
+};
+
+/** Converte um parágrafo com [[tom:texto]] em nós React. */
+function renderColoredText(text: string): ReactNode[] {
+  const out: ReactNode[] = [];
+  const re = /\[\[(emerald|violet|sky|amber|rose|slate|vip):([^\]]+)\]\]/g;
+  let last = 0;
+  let m: RegExpExecArray | null;
+  let key = 0;
+  while ((m = re.exec(text)) !== null) {
+    if (m.index > last) out.push(text.slice(last, m.index));
+    out.push(<span key={key++} className={INLINE_TONE[m[1]]}>{m[2]}</span>);
+    last = m.index + m[0].length;
+  }
+  if (last < text.length) out.push(text.slice(last));
+  return out;
+}
 
 const ANCHOR_TIMEOUT_MS = 2000;
 const ANCHOR_POLL_MS = 100;
@@ -232,7 +264,7 @@ export default function TutorialOverlay() {
         <div className="px-3.5 py-2.5 overflow-y-auto min-h-0">
           <h3 className="text-[13px] font-black text-white mb-1.5">{scene.title}</h3>
           {bodyText.split("\n\n").map((paragraph, i) => (
-            <p key={i} className="text-[11px] text-slate-300 leading-relaxed mb-1.5 last:mb-0">{paragraph}</p>
+            <p key={i} className="text-[11px] text-slate-300 leading-relaxed mb-1.5 last:mb-0">{renderColoredText(paragraph)}</p>
           ))}
           {rect === null && scene.anchor && (
             <p className="text-[9px] text-slate-500 italic mt-1.5">

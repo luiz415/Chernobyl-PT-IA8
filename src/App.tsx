@@ -604,6 +604,7 @@ export default function App() {
   useEffect(() => registerTourCommands({
     window: (arg) => setActiveWindow((arg ?? null) as WindowKey | null),
     tab: (arg) => setTab(arg as Tab),
+    charsView: (arg) => setCharsView(arg as CharsView),
   }), []);
   const [headerZoomLevel, setHeaderZoomLevel] = useState(() => loadUIState("tibia_header_zoom_level", 100));
   const [contentZoomLevel, setContentZoomLevel] = useState(() => loadUIState("tibia_content_zoom_level", 100));
@@ -4906,7 +4907,7 @@ export default function App() {
             {/* Alternância DISPONÍVEIS / VENDIDOS — substitui a antiga aba
                 "Histórico Meus Personagens". Só troca qual tabela é exibida;
                 ambas continuam sendo o mesmo componente CharTable de antes. */}
-            <div className="flex items-center gap-1.5 px-1 pb-1 flex-shrink-0">
+            <div data-tour="chars-view-toggle" className="flex items-center gap-1.5 px-1 pb-1 flex-shrink-0">
               <button
                 type="button"
                 onClick={() => setCharsView("disponiveis")}
@@ -4944,7 +4945,7 @@ export default function App() {
                 <span className="font-bold font-mono">({characterAcquisitions.length})</span>
               </button>
             </div>
-            <div className="flex-1 min-h-0 overflow-hidden">
+            <div data-tour="chars-table" className="flex-1 min-h-0 overflow-hidden">
               {charsView === "disponiveis" ? (
                 <CharTable key="chars-active" characters={ativos} activeParties={activeParties} onAdd={openAdd} onEdit={openEdit} onDelete={handleDelete} onToggleShare={handleToggleShare} onToggleShareAll={handleToggleShareAll} onNoteChange={handleNoteChange} onCharacterInlineChange={handleCharacterInlineChange} probableMarkers={probableMarkers} negotiatedCharacterIds={negotiatedOriginalCharacterIds} lockedQuestFinancialIds={negotiatedOriginalCharacterIds} />
               ) : charsView === "vendidos" ? (
@@ -4972,12 +4973,14 @@ export default function App() {
             </div>
           </div>
         ) : tab === "meus_services" ? (
+          <div data-tour="myservices-root" className="h-full w-full">
           <MyServicesPanel
             onCountChange={setMyServicesCount}
             onServicesChanged={handleOwnSharedServicesChanged}
             probableMarkers={probableMarkers}
             activeParties={activeParties}
           />
+          </div>
         ) : tab === "pts" ? (
           <PartyManager
             parties={activeParties}
@@ -5020,7 +5023,7 @@ export default function App() {
             }}
           />
         ) : tab === "meu_historico" ? (
-          <div className="flex h-full min-h-0 flex-col gap-2">
+          <div data-tour="history-root" className="flex h-full min-h-0 flex-col gap-2">
             <div className="min-h-0 flex-1">
               {/* Único histórico oficial: projeção privada users/{uid}/partyHistory,
                   materializada pelo backend na conclusão/finalização da PT. */}
@@ -5035,7 +5038,9 @@ export default function App() {
             </div>
           </div>
         ) : tab === "waitlist" && isBossUser ? (
-          <WaitingListPanel items={cloudWaitingListForDisplay} onAdd={handleAddWaiting} onUpdate={handleUpdateWaiting} onDelete={handleDeleteWaiting} userName={displayUserName} highlightId={highlightedWaitingServiceId} activeParties={activeParties} />
+          <div data-tour="services-root" className="h-full w-full">
+            <WaitingListPanel items={cloudWaitingListForDisplay} onAdd={handleAddWaiting} onUpdate={handleUpdateWaiting} onDelete={handleDeleteWaiting} userName={displayUserName} highlightId={highlightedWaitingServiceId} activeParties={activeParties} />
+          </div>
         ) : null}
       </div>
     </div>
@@ -5205,7 +5210,7 @@ export default function App() {
         {activeWindow === null ? (
           <LandingPage onOpenHub={() => setActiveWindow("characters")} onOpenNotif={toggleNotificationMenu} pendingCount={pendingCount} notificationOpen={notificationOpen} setActiveWindow={setActiveWindow} setTab={setTab} />
         ) : activeWindow === "stats" ? (
-          <div className="h-full bg-[var(--th-n-raised)]/90 backdrop-blur-sm rounded-xl border border-red-800/50 overflow-hidden flex flex-col">
+          <div data-tour="stats-root" className="h-full bg-[var(--th-n-raised)]/90 backdrop-blur-sm rounded-xl border border-red-800/50 overflow-hidden flex flex-col">
             <div className="flex items-center justify-between px-3 py-2 border-b border-[var(--th-line)]/50 bg-[var(--th-bg-overlay)] flex-shrink-0" style={{ zoom: `${headerZoomLevel}%` }}>
               <div className="flex items-center gap-2 text-slate-300">
                 <BarChart3 size={13} />
@@ -5218,7 +5223,7 @@ export default function App() {
             </div>
           </div>
         ) : activeWindow === "notes" ? (
-          <div className="h-full bg-[var(--th-n-raised)]/90 backdrop-blur-sm rounded-xl border border-red-800/50 overflow-hidden flex flex-col">
+          <div data-tour="notes-root" className="h-full bg-[var(--th-n-raised)]/90 backdrop-blur-sm rounded-xl border border-red-800/50 overflow-hidden flex flex-col">
             <div className="flex items-center justify-between px-3 py-2 border-b border-[var(--th-line)]/50 bg-[var(--th-bg-overlay)] flex-shrink-0" style={{ zoom: `${headerZoomLevel}%` }}>
               <div className="flex items-center gap-2 text-slate-300">
                 <StickyNote size={13} />
@@ -5231,7 +5236,7 @@ export default function App() {
             </div>
           </div>
         ) : activeWindow === "ranking" ? (
-          <div className="h-full rounded-xl border border-red-800/50 overflow-hidden">
+          <div data-tour="ranking-root" className="h-full rounded-xl border border-red-800/50 overflow-hidden">
             <RankingPanel
               currentUserUid={currentUser?.uid || ""}
               userNames={statsUserNames}
@@ -5240,7 +5245,7 @@ export default function App() {
             />
           </div>
         ) : activeWindow === "bazar" ? (
-          <div className="h-full rounded-xl border border-red-800/50 overflow-hidden">
+          <div data-tour="bazar-root" className="h-full rounded-xl border border-red-800/50 overflow-hidden">
             <BazarPanel sharedCharacters={availableCharactersForParty} waitingList={availableWaitingListForParty} activeParties={cloudParties} personalCharacters={data.characters} accounts={accounts} onAddCharacterFromBazaar={addCharacterFromBazaar} />
           </div>
         ) : null}
@@ -5256,7 +5261,9 @@ export default function App() {
       <footer ref={appFooterRef} className="px-2 sm:px-4 py-1 sm:py-1.5 text-[9px] bg-[var(--th-bg-raised)]/95 backdrop-blur-md border-t border-[var(--th-line)]/60 flex flex-wrap gap-2 sm:gap-3 items-center justify-between flex-shrink-0 relative z-10" style={{ minHeight: "clamp(20px, 3vh, 30px)", padding: "clamp(2px, 0.1vh, 5px) clamp(5px, 1vw, 10px)" }}>
         <div className="flex items-center gap-4 flex-wrap">
           {/* Acesso VIP modularizado: Painel VIP ou Seja VIP */}
-          <VipAccessButton userProfile={userProfile} />
+          <span data-tour="vip-access-btn" className="inline-flex">
+            <VipAccessButton userProfile={userProfile} />
+          </span>
 
           {/* Status de conexão */}
           <div className="flex items-center gap-2">

@@ -18,6 +18,10 @@ import { getTourTopics } from "./registry";
 import type { TourProgressMap, TourTopic } from "./types";
 
 interface TutorialState {
+  /** Modal de boas-vindas (recomendação do tutorial no login) visível? */
+  welcomeOpen: boolean;
+  /** Fecha o modal de boas-vindas; opcionalmente grava "nunca mais exibir". */
+  dismissWelcome: (neverShowAgain: boolean) => void;
   /** Menu de tópicos visível? */
   menuOpen: boolean;
   /** Tópico em execução (null = nenhum tour ativo). */
@@ -51,6 +55,27 @@ function loadProgress(uid: string): TourProgressMap {
 
 export function TutorialProvider({ children, isBoss, uid }: { children: ReactNode; isBoss: boolean; uid: string }) {
   const [menuOpen, setMenuOpen] = useState(false);
+  // ── MODAL DE BOAS-VINDAS OBRIGATÓRIO NO LOGIN ───────────────────────────
+  // Ao entrar no aplicativo (uid definido), o modal que recomenda o tutorial
+  // abre automaticamente — exceto se o usuário marcou "Nunca mais exibir"
+  // (flag local tutorial_welcome_dismissed_{uid}). Abre apenas UMA vez por
+  // sessão (welcomeShownRef) para não reaparecer em re-renders/idle.
+  const [welcomeOpen, setWelcomeOpen] = useState(false);
+  const welcomeShownRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!uid || welcomeShownRef.current === uid) return;
+    welcomeShownRef.current = uid;
+    try {
+      if (localStorage.getItem(`tutorial_welcome_dismissed_${uid}`) === "1") return;
+    } catch {}
+    setWelcomeOpen(true);
+  }, [uid]);
+  const dismissWelcome = useCallback((neverShowAgain: boolean) => {
+    setWelcomeOpen(false);
+    if (neverShowAgain && uid) {
+      try { localStorage.setItem(`tutorial_welcome_dismissed_${uid}`, "1"); } catch {}
+    }
+  }, [uid]);
   const [activeTopicId, setActiveTopicId] = useState<string | null>(null);
   const [sceneIndex, setSceneIndex] = useState(0);
   const [fullTourQueue, setFullTourQueue] = useState<string[]>([]);
@@ -198,11 +223,12 @@ export function TutorialProvider({ children, isBoss, uid }: { children: ReactNod
   }, []);
 
   const value = useMemo<TutorialState>(() => ({
+    welcomeOpen, dismissWelcome,
     menuOpen, activeTopic, sceneIndex, fullTourQueue, progress, topics,
     openMenu: () => setMenuOpen(true),
     closeMenu: () => setMenuOpen(false),
     startTopic, startFullTour, nextScene, prevScene, skipTopic, exitTour, backToMenu, resetProgress,
-  }), [menuOpen, activeTopic, sceneIndex, fullTourQueue, progress, topics, startTopic, startFullTour, nextScene, prevScene, skipTopic, exitTour, backToMenu, resetProgress]);
+  }), [welcomeOpen, dismissWelcome, menuOpen, activeTopic, sceneIndex, fullTourQueue, progress, topics, startTopic, startFullTour, nextScene, prevScene, skipTopic, exitTour, backToMenu, resetProgress]);
 
   return <TutorialCtx.Provider value={value}>{children}</TutorialCtx.Provider>;
 }

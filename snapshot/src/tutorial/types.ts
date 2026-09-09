@@ -28,7 +28,12 @@ export interface TourScene {
   /** Id estável da cena (progresso/depuração). */
   id: string;
   title: string;
-  /** Texto detalhado. Parágrafos separados por "\n\n". */
+  /**
+   * Texto detalhado. Parágrafos separados por "\n\n".
+   * Suporta cores inline via [[tom:texto]] — tons: emerald, violet, sky,
+   * amber, rose, slate e "vip" (selo para funcionalidades exclusivas VIP).
+   * Renderizado por renderColoredText no TutorialOverlay.
+   */
   body: string;
   /**
    * Id do elemento real destacado: casa com `[data-tour="<anchor>"]`.

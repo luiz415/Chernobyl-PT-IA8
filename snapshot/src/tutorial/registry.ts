@@ -10,11 +10,33 @@
 // ============================================================================
 import type { TourTopic } from "./types";
 import primeirosPassos from "./topics/primeirosPassos";
+import meusPersonagens from "./topics/meusPersonagens";
 import gerenciadorPts from "./topics/gerenciadorPts";
+import painelPt from "./topics/painelPt";
+import meusServices from "./topics/meusServices";
+import servicesFila from "./topics/servicesFila";
+import meuHistorico from "./topics/meuHistorico";
+import bazaar from "./topics/bazaar";
+import stats from "./topics/stats";
+import ranking from "./topics/ranking";
+import notas from "./topics/notas";
+import vipDoacoes from "./topics/vipDoacoes";
+import utilitarios from "./topics/utilitarios";
 
 const ALL_TOPICS: TourTopic[] = [
   primeirosPassos,
+  meusPersonagens,
   gerenciadorPts,
+  painelPt,
+  meusServices,
+  servicesFila,
+  meuHistorico,
+  bazaar,
+  stats,
+  ranking,
+  notas,
+  vipDoacoes,
+  utilitarios,
 ];
 
 export function getTourTopics(isBoss: boolean): TourTopic[] {

@@ -81,9 +81,6 @@ export default function TutorialMenu() {
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-1.5">
                     <span className="text-[11px] font-black text-white truncate">{topic.title}</span>
-                    {topic.bossOnly && (
-                      <span className="text-[8px] font-black px-1 py-px rounded border border-violet-500/30 bg-violet-500/10 text-violet-300 uppercase flex-shrink-0">Boss</span>
-                    )}
                   </div>
                   <p className="text-[9px] text-slate-500 truncate">{topic.description}</p>
                   {inProgress && (

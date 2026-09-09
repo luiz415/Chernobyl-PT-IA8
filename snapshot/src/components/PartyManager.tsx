@@ -321,11 +321,31 @@ export default function PartyManager({ parties, characters, waitingList, userNam
   // cenas do tópico "Gerenciador de PTs" trocam o estágio/guia usando os
   // MESMOS setters dos botões reais. Registrados na montagem e removidos na
   // desmontagem — cena executada com o painel fechado degrada para fallback.
+  // partiesByStageRef: espelho vivo de partiesByStage (declarado mais abaixo)
+  // para o comando ptOpenFirst ler o agrupamento atual sem re-registrar o
+  // handler a cada mudança de dados.
+  const partiesByStageRef = useRef<Record<PartyStage, PartyTab[]>>({ comVagas: [], prontas: [], iniciadas: [], aguardando: [] });
   useEffect(() => registerTourCommands({
     ptStage: (arg) => setPtStatusView(arg as PartyStage),
     ptStandalone: (arg) => setStandaloneView(arg as "selectPrompt" | "overview" | "allChars"),
     ptClose: () => setActivePt(null),
-  }), [setActivePt]);
+    // Tópico "Painel da PT": abre a primeira PT visível do usuário (qualquer
+    // estágio, priorizando a ordem dos seletores). Sem PT visível, não faz
+    // nada — as cenas degradam para o modo informativo via fallbackBody.
+    ptOpenFirst: () => {
+      const stages: PartyStage[] = ["comVagas", "prontas", "iniciadas", "aguardando"];
+      for (const stage of stages) {
+        const list = [...partiesByStageRef.current[stage]].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+        if (list.length > 0) {
+          const p = list[0];
+          setPtStatusView(stage);
+          setActivePt(p.id);
+          setMinimized(m => ({ ...m, [p.id]: false }));
+          return;
+        }
+      }
+    },
+  }), [setActivePt, setMinimized]);
   // Relógio do painel de seleção rápida: só corre quando a guia "Iniciadas"
   // está visível SEM PT aberta (é o único card que exibe duração em tempo
   // real). Granularidade de minutos → atualizar a cada 30s é suficiente e
@@ -672,6 +692,9 @@ export default function PartyManager({ parties, characters, waitingList, userNam
     baseFilteredParties.forEach(p => { groups[getPartyStage(p)].push(p); });
     return groups;
   }, [baseFilteredParties]);
+  // Espelho vivo para o comando ptOpenFirst do tutorial (registrado antes da
+  // declaração deste memo — o ref evita reordenar/reregistrar handlers).
+  partiesByStageRef.current = partiesByStage;
   const pendentesParties = partiesByStage.aguardando;
 
   // ── ITENS A VENDA ───────────────────────────────────────────────────────

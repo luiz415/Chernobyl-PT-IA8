@@ -2811,9 +2811,9 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
       : null;
 
   return (
-    <div className="flex flex-col h-full bg-[var(--th-n-deep)] text-sm overflow-hidden rounded-xl border border-[var(--th-line)]/80">
+    <div data-tour="pp-root" className="flex flex-col h-full bg-[var(--th-n-deep)] text-sm overflow-hidden rounded-xl border border-[var(--th-line)]/80">
       {/* Header */}
-      <div className="flex items-center justify-between px-3 py-1 bg-gradient-to-r from-[var(--th-bg-raised)] to-[var(--th-bg-base)] border-b border-[var(--th-line)]/60 flex-shrink-0">
+      <div data-tour="pp-header" className="flex items-center justify-between px-3 py-1 bg-gradient-to-r from-[var(--th-bg-raised)] to-[var(--th-bg-base)] border-b border-[var(--th-line)]/60 flex-shrink-0">
         <div className="flex flex-wrap items-center gap-2 min-w-0">
           {ptTypeBadge && (
             <div>{ptTypeBadge}</div>
@@ -3737,7 +3737,7 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
 
       {/* Quadro fixo da PT */}
       <div className="flex-shrink-0 overflow-x-auto">
-        <div className={`border-b-2 ${isFull ? "border-emerald-500/40 bg-emerald-500/[0.02]" : "border-amber-500/30 bg-amber-500/[0.02]"} ${isLocked ? "relative" : ""}`}>
+        <div data-tour="pp-slots-table" className={`border-b-2 ${isFull ? "border-emerald-500/40 bg-emerald-500/[0.02]" : "border-amber-500/30 bg-amber-500/[0.02]"} ${isLocked ? "relative" : ""}`}>
           {isLocked && (
             <div className="absolute inset-0 z-30 bg-black/30 pointer-events-auto cursor-not-allowed" title="PT finalizada" />
           )}
@@ -4386,7 +4386,7 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
                 );
               })}
               {/* Footer totals */}
-              <tr className="bg-[var(--th-n-base)] border-t-2 border-[var(--th-line)]/50 relative z-40">
+              <tr data-tour="pp-totals-row" className="bg-[var(--th-n-base)] border-t-2 border-[var(--th-line)]/50 relative z-40">
                 <td colSpan={4} className="px-2 py-0.5 whitespace-nowrap relative z-40">
                   <div className="flex items-center gap-1 flex-shrink-0 relative z-40">
                     <button
@@ -4435,7 +4435,7 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
       </div>
 
       {/* Área inferior com os 3 painéis redimensionáveis */}
-      <div ref={panelsRef} className="flex flex-col xl:flex-row gap-2 items-stretch px-2 pt-1 pb-0 w-full relative box-border flex-1 min-h-0" style={{ minHeight: "40px" }}>
+      <div ref={panelsRef} data-tour="pp-bottom-panels" className="flex flex-col xl:flex-row gap-2 items-stretch px-2 pt-1 pb-0 w-full relative box-border flex-1 min-h-0" style={{ minHeight: "40px" }}>
         <div className="flex flex-col border border-[var(--th-brand-mid)]/40 rounded-xl bg-[var(--th-n-abyss)] self-stretch overflow-hidden min-w-0" style={{ flex: `0 0 calc(${panelWidths.p1}% - 14px)` }}>
           <AvailableCharacter
             onRefresh={onRefresh}

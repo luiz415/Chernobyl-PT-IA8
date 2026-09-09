@@ -13,14 +13,19 @@ import { useAuth } from "../context/AuthContext";
 import { TutorialProvider } from "./TutorialContext";
 import TutorialOverlay from "./TutorialOverlay";
 import TutorialMenu from "./TutorialMenu";
+import TutorialWelcome from "./TutorialWelcome";
 
 export default function TutorialRoot({ children }: { children: ReactNode }) {
   const { currentUser, userProfile } = useAuth();
+  // O uid só é repassado com o perfil APROVADO — garante que o modal de
+  // boas-vindas nunca abre por cima da tela de login/aprovação pendente.
+  const approvedUid = currentUser?.uid && userProfile?.status === "aprovado" ? currentUser.uid : "";
   return (
-    <TutorialProvider isBoss={userProfile?.role === "Boss"} uid={currentUser?.uid || ""}>
+    <TutorialProvider isBoss={userProfile?.role === "Boss"} uid={approvedUid}>
       {children}
       <TutorialOverlay />
       <TutorialMenu />
+      <TutorialWelcome />
     </TutorialProvider>
   );
 }
