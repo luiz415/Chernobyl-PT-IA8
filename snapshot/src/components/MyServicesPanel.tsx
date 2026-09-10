@@ -17,7 +17,7 @@ import VipAccessButton from "./VipAccessButton";
 import MyServiceModal, { type MyServiceSavePayload } from "./MyServiceModal";
 import ServiceValueModal from "./ServiceValueModal";
 import ConfirmModal from "./ConfirmModal";
-import ServiceFormLinkButton from "./ServiceFormLinkButton";
+import ServiceFormLinkButton, { ExclusiveServiceFormLinkButton } from "./ServiceFormLinkButton";
 import WhatsappMessagePicker from "./WhatsappMessagePicker";
 import WhatsappTemplateModal from "./WhatsappTemplateModal";
 import FirstMessageMarker from "./FirstMessageMarker";
@@ -1232,13 +1232,18 @@ export default function MyServicesPanel({
           </button>
         </div>
 
-        {/* Lado direito: total (leitura) + link do formulário público.
-            O botão é o MESMO componente usado na aba "Services" — mesmo
-            estilo, ícone, link e feedback, sem duplicar a lógica de cópia. */}
+        {/* Lado direito: total (leitura) + links do formulário público.
+            O botão genérico é o MESMO componente usado na aba "Services" —
+            mesmo estilo, ícone, link e feedback, sem duplicar a lógica de
+            cópia. O botão "Gerar link do formulário" copia o link EXCLUSIVO
+            do usuário (#/servico/{slug}): cadastros por ele chegam direto
+            para o dono do link, sem o cliente escolher o Serviceiro (o
+            próprio componente só renderiza para elegíveis). */}
         <div className="flex flex-shrink-0 items-center gap-2">
           <span className="hidden sm:inline text-[10px] font-bold uppercase tracking-wider text-slate-500 whitespace-nowrap">
             Total realizado: <span className="text-emerald-400 font-mono">{formatRC(totalRealizado)}</span>
           </span>
+          <ExclusiveServiceFormLinkButton />
           <ServiceFormLinkButton />
         </div>
       </div>

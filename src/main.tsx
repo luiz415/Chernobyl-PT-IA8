@@ -17,11 +17,22 @@ import { installGlobalPulseSync } from "./utils/pulseSync";
 installGlobalPulseSync();
 
 //   https://SEU-DOMINIO.web.app/#/servico
+//   https://SEU-DOMINIO.web.app/#/servico/{serviceiro}   ← link exclusivo
+//
+// O link exclusivo (com identificador após a barra) pré-define o Serviceiro
+// destinatário — o PublicServiceForm resolve o identificador e oculta o
+// seletor. Aceita também a grafia com cedilha ("#/serviço/...", que os
+// navegadores enviam percent-encoded) e o modo query (?servico=).
 //
 // Qualquer outra URL renderiza o aplicativo normal (com Auth Gate).
 // ============================================================================
+const normalizedHash = (() => {
+  try { return decodeURIComponent(window.location.hash).toLowerCase(); }
+  catch { return window.location.hash.toLowerCase(); }
+})();
 const isPublicServicePage =
-  window.location.hash.toLowerCase().startsWith("#/servico") ||
+  normalizedHash.startsWith("#/servico") ||
+  normalizedHash.startsWith("#/serviço") ||
   new URLSearchParams(window.location.search).has("servico");
 
 createRoot(document.getElementById("root")!).render(

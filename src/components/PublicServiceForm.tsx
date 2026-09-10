@@ -12,6 +12,7 @@ import { FilterSelect } from "./FilterTypes";
 import { getEffectiveUserRole } from "../utils/vipAccess";
 import { SERVER_OPTIONS } from "../constants/servers";
 import { createServiceRequest } from "../services/sharedServicesService";
+import { getServiceFormIdFromLocation, resolveServiceFormTarget } from "../utils/serviceFormSlug";
 
 // ============================================================================
 // CONFIGURAÇÕES — PREENCHA ANTES DE PUBLICAR
@@ -129,6 +130,20 @@ export default function PublicServiceForm() {
   const [serviceiro, setServiceiro] = useState("Qualquer um");
   const [eligibleServiceiros, setEligibleServiceiros] = useState<Array<{ uid: string; nome: string }>>([]);
 
+  // ── LINK EXCLUSIVO (#/servico/{id}) ────────────────────────────────────
+  // Identificador capturado da URL uma única vez na montagem. A resolução
+  // para um usuário real acontece DEPOIS que a lista de elegíveis carrega
+  // (mesma consulta que o formulário já fazia — zero leituras extras).
+  //   • lockedTarget      → usuário exclusivo resolvido; o seletor de
+  //                         Serviceiro é OCULTADO e o vínculo é fixo.
+  //   • lockedLinkInvalid → o link tinha identificador mas ele não resolveu
+  //                         para UM único elegível; o formulário avisa e cai
+  //                         no modo normal (nunca associa "no chute").
+  const [exclusiveId] = useState(() => getServiceFormIdFromLocation(window.location.hash, window.location.search));
+  const [lockedTarget, setLockedTarget] = useState<{ uid: string; nome: string } | null>(null);
+  const [lockedLinkInvalid, setLockedLinkInvalid] = useState(false);
+  const [eligiblesLoaded, setEligiblesLoaded] = useState(false);
+
   const firstFieldRef = useRef<HTMLInputElement>(null);
 
   // Carregar lista de serviceiros elegíveis (VIP + Boss aprovados).
@@ -153,6 +168,7 @@ export default function PublicServiceForm() {
               .map((u: any) => ({ uid: u.uid, nome: u.nome || u.email || "Anônimo" }))
           );
         } catch { if (!cancelled) setEligibleServiceiros([]); }
+        if (!cancelled) setEligiblesLoaded(true);
         return;
       }
 
@@ -181,6 +197,7 @@ export default function PublicServiceForm() {
         });
         setEligibleServiceiros(list);
       } catch { if (!cancelled) setEligibleServiceiros([]); }
+      if (!cancelled) setEligiblesLoaded(true);
     }
 
     loadServiceiros();
@@ -189,6 +206,26 @@ export default function PublicServiceForm() {
       cancelled = true;
     };
   }, []);
+
+  // ── Resolução do link exclusivo ──────────────────────────────────────────
+  // Roda quando a lista de elegíveis termina de carregar. A resolução é
+  // resiliente e NUNCA ambígua (ver resolveServiceFormTarget): UID completo,
+  // slug único do nome ou slug+sufixo de UID. Sem correspondência única, o
+  // formulário exibe um aviso e volta ao modo normal com seleção manual.
+  useEffect(() => {
+    if (!exclusiveId || !eligiblesLoaded) return;
+    const target = resolveServiceFormTarget(exclusiveId, eligibleServiceiros);
+    if (target) {
+      setLockedTarget(target);
+      setLockedLinkInvalid(false);
+      // Espelha no estado do seletor por consistência interna (o campo fica
+      // oculto; o envio usa lockedTarget.uid DIRETO, nunca este texto).
+      setServiceiro(target.nome);
+    } else {
+      setLockedTarget(null);
+      setLockedLinkInvalid(true);
+    }
+  }, [exclusiveId, eligiblesLoaded, eligibleServiceiros]);
 
   // Carregar reCAPTCHA ao montar
   useEffect(() => {
@@ -288,7 +325,7 @@ export default function PublicServiceForm() {
         whatsappCountry: whatsCountry.replace(/\D/g, ""),
         whatsappArea: whatsArea.replace(/\D/g, ""),
         whatsappNumber: whatsNumber.replace(/\D/g, ""),
-        addedBy: serviceiro || "Qualquer um",
+        addedBy: lockedTarget ? lockedTarget.nome : (serviceiro || "Qualquer um"),
         quest,
         createdAt: Date.now(),
         createdBy: uid,
@@ -306,7 +343,15 @@ export default function PublicServiceForm() {
       //
       // Os dois caminhos são exclusivos, então o personagem nunca é criado
       // nas duas estruturas.
-      const chosen = eligibleServiceiros.find(
+      //
+      // LINK EXCLUSIVO: quando a rota definiu o destinatário (lockedTarget),
+      // o UID dele tem prioridade ABSOLUTA — o estado do seletor (oculto
+      // neste modo) é ignorado por completo, então nada que o cliente faça
+      // no formulário altera o vínculo. A validação final de elegibilidade
+      // é do BACKEND: a regra de `serviceRequests` no Firestore só aceita a
+      // criação se o `serviceiroUid` for de usuário aprovado E (Boss ou
+      // serviceiro === true) — manipular a URL não contorna isso.
+      const chosen = lockedTarget || eligibleServiceiros.find(
         u => u.nome.trim().toLowerCase() === (serviceiro || "").trim().toLowerCase()
       );
       const targetUid = chosen?.uid || "";
@@ -369,7 +414,10 @@ export default function PublicServiceForm() {
     setPayment("");
     setNotes("");
     setFieldErrors({});
-    setServiceiro("Qualquer um");
+    // Link exclusivo: o vínculo do formulário permanece após "Adicionar
+    // outro personagem" — o cliente continua cadastrando para o MESMO
+    // Serviceiro do link. Só o modo normal volta para "Qualquer um".
+    setServiceiro(lockedTarget ? lockedTarget.nome : "Qualquer um");
     setFormState("filling");
   }
 
@@ -845,23 +893,48 @@ export default function PublicServiceForm() {
                   : <div className="text-[10px] text-slate-600 mt-1.5">Usaremos este número para combinar valor e horário do service.</div>
                 }
               </div>
-              {/* Serviceiro */}
-              <div>
-                <label className={labelCls}>Serviceiro</label>
-                <FilterSelect
-                  selected={serviceiro}
-                  onSelect={(v: string) => setServiceiro(v)}
-                  options={eligibleServiceiros.map(u => u.nome).sort((a, b) => a.localeCompare(b, "pt-BR", { sensitivity: "base" }))}
-                  placeholder="Selecione serviceiro"
-                  searchable
-                  searchPlaceholder="Buscar serviceiro..."
-                  allLabel="Qualquer um"
-                  allValue="Qualquer um"
-                  activeColor="cyan"
-                  className={`w-full flex items-center justify-between gap-2 px-3 py-2 rounded-md bg-[var(--th-n-elev)] border border-white/[0.07] hover:border-white/15 focus:border-cyan-500/50 focus:outline-none transition-colors text-sm ${!serviceiro ? "text-slate-500" : "text-slate-200"}`}
-                />
-                <div className="text-[10px] text-slate-600 mt-1.5">Deixe "Qualquer um" para qualquer serviceiro disponível, ou selecione um específico.</div>
-              </div>
+              {/* Serviceiro — três apresentações possíveis:
+                    • LINK EXCLUSIVO resolvido → seletor OCULTO; um cartão
+                      informativo mostra o atendente já definido pelo link
+                      (o cliente não pode alterar o vínculo);
+                    • link exclusivo INVÁLIDO → aviso discreto + seletor
+                      normal (fallback seguro, nunca associa "no chute");
+                    • acesso normal (#/servico) → seletor de sempre. */}
+              {lockedTarget ? (
+                <div>
+                  <label className={labelCls}>Serviceiro</label>
+                  <div className="flex items-center gap-3 rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-4 py-3">
+                    <ShieldCheck size={18} className="flex-shrink-0 text-emerald-400" />
+                    <div className="min-w-0">
+                      <div className="text-sm font-black text-emerald-300 truncate">{lockedTarget.nome}</div>
+                      <div className="text-[10px] text-slate-500">Atendente definido por este link exclusivo — seu pedido será enviado diretamente a ele.</div>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div>
+                  <label className={labelCls}>Serviceiro</label>
+                  {lockedLinkInvalid && (
+                    <div className="mb-2 flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-300">
+                      <AlertTriangle size={14} className="flex-shrink-0 mt-0.5" />
+                      <span>O link utilizado não corresponde a um atendente ativo. Selecione o serviceiro abaixo ou deixe "Qualquer um".</span>
+                    </div>
+                  )}
+                  <FilterSelect
+                    selected={serviceiro}
+                    onSelect={(v: string) => setServiceiro(v)}
+                    options={eligibleServiceiros.map(u => u.nome).sort((a, b) => a.localeCompare(b, "pt-BR", { sensitivity: "base" }))}
+                    placeholder="Selecione serviceiro"
+                    searchable
+                    searchPlaceholder="Buscar serviceiro..."
+                    allLabel="Qualquer um"
+                    allValue="Qualquer um"
+                    activeColor="cyan"
+                    className={`w-full flex items-center justify-between gap-2 px-3 py-2 rounded-md bg-[var(--th-n-elev)] border border-white/[0.07] hover:border-white/15 focus:border-cyan-500/50 focus:outline-none transition-colors text-sm ${!serviceiro ? "text-slate-500" : "text-slate-200"}`}
+                  />
+                  <div className="text-[10px] text-slate-600 mt-1.5">Deixe "Qualquer um" para qualquer serviceiro disponível, ou selecione um específico.</div>
+                </div>
+              )}
 
               {/* Pagamento */}
               <div>
