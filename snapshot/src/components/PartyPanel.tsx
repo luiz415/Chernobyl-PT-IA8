@@ -112,6 +112,12 @@ interface Props {
     personalFee: 0 | 25 | 50;
   }) => Promise<{ ok: boolean; error?: string }>;
   onConfirmCharacterAcquisitionPayment?: (acquisitionId: string) => Promise<{ ok: boolean; error?: string }>;
+  /**
+   * Cancela uma pré-venda AINDA NÃO aceita pelo comprador (status
+   * `pre_approved`). Exclusivo do dono original (ou Boss); depois do aceite
+   * (`payment_confirmed` em diante) o serviço/Rules negam o cancelamento.
+   */
+  onCancelCharacterAcquisitionPreApproval?: (acquisitionId: string) => Promise<{ ok: boolean; error?: string }>;
 }
 
 type SortDir = "asc" | "desc" | null;
@@ -643,7 +649,7 @@ function formatWhatsDisplay(service: WaitingService): string {
   return `+${country} ${area} ${number}`.trim();
 }
 
-export default function PartyPanel({ party, characters, waitingList, allParties, userName, onUpdate, onPersistPartyNow, onDelete, onSaveParty, onRequestFinalization, onRefresh, characterAcquisitions = [], onCreateCharacterAcquisition, onConfirmCharacterAcquisitionPayment }: Props) {
+export default function PartyPanel({ party, characters, waitingList, allParties, userName, onUpdate, onPersistPartyNow, onDelete, onSaveParty, onRequestFinalization, onRefresh, characterAcquisitions = [], onCreateCharacterAcquisition, onConfirmCharacterAcquisitionPayment, onCancelCharacterAcquisitionPreApproval }: Props) {
   const { currentUser, userProfile, allUsers, acceptedFriendUids } = useAuth();
   const [showAddCustom, setShowAddCustom] = useState(false);
   // Estado `showSuggestModal` removido junto com o botão "Sugerir PT" — esse
@@ -2158,6 +2164,28 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
    * pelo próprio snapshot, já que ele passou a ser a fonte primária.
    */
   function removeFromParty(id: string) {
+    // PRÉ-VENDA PENDENTE: remover o personagem da PT cancela e reseta a
+    // pré-aprovação automaticamente (ela nasce vinculada a esta PT e a este
+    // JOGADOR; sem o slot, não pode permanecer aceitável). Somente o estado
+    // `pre_approved` é afetado — compra já confirmada (`payment_confirmed`
+    // em diante) nunca é desfeita aqui (o slot dela nem permite remoção
+    // pós-início, e o serviço/Rules negariam o delete de qualquer forma).
+    // O cliente cancela imediatamente quando é o dono/Boss (feedback rápido);
+    // a Cloud Function `cleanupRemovedSlotPreApprovals` garante o mesmo
+    // cancelamento no backend quando quem removeu não tem essa permissão.
+    const slot = sd[id];
+    const pendingPreApproval = slot?.ownerUid
+      ? characterAcquisitions.find(acquisition =>
+          acquisition.characterId === id
+          && acquisition.originalOwnerUid === slot.ownerUid
+          && acquisition.status === "pre_approved"
+          && acquisition.partyId === party.id)
+      : undefined;
+    if (pendingPreApproval && onCancelCharacterAcquisitionPreApproval
+      && (currentUser?.uid === pendingPreApproval.originalOwnerUid || userProfile?.role === "Boss")) {
+      void onCancelCharacterAcquisitionPreApproval(pendingPreApproval.id);
+    }
+
     const newSd = { ...sd }; delete newSd[id];
     const newSnapshots = { ...(party.memberSnapshots || {}) };
     delete newSnapshots[id];
@@ -3883,6 +3911,17 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
                   && !isLocked
                   && !party.isLocked
                   && !isPausedActive;
+                // CANCELAR PRÉ-VENDA: exclusivo do DONO original (ou Boss) e
+                // somente enquanto o comprador não confirmou a compra
+                // (`pre_approved`). Após o aceite, o "X" desaparece — a
+                // negociação confirmada não é cancelável (o serviço e as
+                // Rules validam de novo no servidor).
+                const canCancelPreApproval = !!onCancelCharacterAcquisitionPreApproval
+                  && !!existingAcquisition
+                  && existingAcquisition.status === "pre_approved"
+                  && (currentUser?.uid === existingAcquisition.originalOwnerUid || userProfile?.role === "Boss")
+                  && !party.isLocked
+                  && !isPausedActive;
                 // Troca do JOGADOR continua travada pós-Quest/trava/pausa —
                 // apenas o SELETOR fica desabilitado; os botões de negociação
                 // dentro da célula obedecem exclusivamente aos flags acima.
@@ -4070,6 +4109,26 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
                             aria-label="Aceitar aquisição"
                           >
                             <Check size={11} />
+                          </button>
+                        )}
+                        {canCancelPreApproval && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              customConfirm(
+                                `Cancelar a pré-venda de ${existingAcquisition!.characterName || charName || "este personagem"} para ${existingAcquisition!.acquirerName || "o jogador"}? O personagem voltará ao estado anterior e poderá ser negociado novamente.`,
+                                async () => {
+                                  const result = await onCancelCharacterAcquisitionPreApproval!(existingAcquisition!.id);
+                                  if (!result.ok) customAlert(result.error || "Não foi possível cancelar a pré-venda.", "Cancelamento não realizado");
+                                },
+                                "Cancelar pré-venda",
+                              );
+                            }}
+                            className="inline-flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-md border border-rose-500/40 bg-rose-500/12 text-rose-300 transition-colors hover:bg-rose-500/25 cursor-pointer"
+                            title="Cancelar pré-venda (disponível apenas antes de o comprador confirmar a compra)"
+                            aria-label="Cancelar pré-venda"
+                          >
+                            <X size={11} />
                           </button>
                         )}
                         </div>

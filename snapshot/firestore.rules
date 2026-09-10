@@ -767,7 +767,15 @@ service cloud.firestore {
         && (!request.resource.data.keys().hasAll(['soldAt']) || (request.resource.data.soldAt is timestamp || request.resource.data.soldAt is number))
         && (!request.resource.data.keys().hasAll(['salePayoutStatus']) || request.resource.data.salePayoutStatus in ['pending', 'confirmed'])
         && (!request.resource.data.keys().hasAll(['salePayoutConfirmedAt']) || (request.resource.data.salePayoutConfirmedAt is timestamp || request.resource.data.salePayoutConfirmedAt is number));
-      allow delete: if false;
+      // CANCELAMENTO DA PRÉ-VENDA: somente o DONO original (ou Boss) e
+      // exclusivamente enquanto o comprador ainda não confirmou a compra
+      // (status `pre_approved`). Depois do aceite (`payment_confirmed` em
+      // diante) o documento volta a ser INDELÉVEL — a negociação confirmada
+      // nunca pode ser desfeita por delete.
+      allow delete: if isAuth()
+        && isApproved()
+        && isOriginalOwnerOrBoss()
+        && resource.data.status == 'pre_approved';
     }
     // Dados exclusivamente financeiros da Quest (drop/lucro) pertencem ao
     // ADQUIRENTE. O DONO original não pode ler nem atualizar esta coleção.

@@ -43,3 +43,7 @@ export { scheduledPtReminderWatch, onPartyUpdated } from "./ptWatch.js";
 // Líder/Boss), então o reflexo da negociação no slot é materializado pelo
 // backend a partir do documento canônico da aquisição.
 export { materializeAcquisitionAcceptance } from "./acquisitionAcceptance.js";
+// Remoção de personagem da PT com pré-venda pendente: cancela e reseta a
+// pré-aprovação automaticamente. Centralizado no backend porque quem remove
+// pode não ser o dono da pré-venda (Rules só permitem o delete ao dono/Boss).
+export { cleanupRemovedSlotPreApprovals } from "./acquisitionCleanup.js";

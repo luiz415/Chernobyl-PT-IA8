@@ -11,7 +11,7 @@ import { setGlobalDialogHandler, customAlert, customConfirm } from "./types";
 import { loadData, saveData, exportCSV, exportJSON, importJSON, buildPersonalBackup, normalizeImportedBackup, saveAutoSaveHandle, loadAutoSaveHandle, loadUIState, saveUIState, saveCloseTray, saveStartWithWindows, saveLowCpuUsage, loadSharedCharsCache, saveSharedCharsCache, isSharedCharsCacheFresh, invalidateSharedCharsCache } from "./storage";
 import { canViewServiceEntry, canViewServiceForViewer, projectServiceForViewer } from "./utils/serviceVisibility";
 import { applyPartyProfitToCharacters, buildCharacterProfitPatch, computePartyProfitMap } from "./utils/partyProfit";
-import { calculateAcquiredQuestDrops, calculateAcquiredQuestProfit, confirmCharacterAcquisitionPayment, confirmCharacterAcquisitionSalePayout, createCharacterAcquisition, getCharacterAcquisition, isPaymentConfirmed, subscribeCharacterAcquisitionBuyerDetails, subscribeCharacterAcquisitions, updateCharacterAcquisitionLifecycle, upsertCharacterAcquisitionBuyerDetails } from "./services/characterAcquisitionService";
+import { calculateAcquiredQuestDrops, calculateAcquiredQuestProfit, cancelCharacterAcquisitionPreApproval, confirmCharacterAcquisitionPayment, confirmCharacterAcquisitionSalePayout, createCharacterAcquisition, getCharacterAcquisition, isPaymentConfirmed, subscribeCharacterAcquisitionBuyerDetails, subscribeCharacterAcquisitions, updateCharacterAcquisitionLifecycle, upsertCharacterAcquisitionBuyerDetails } from "./services/characterAcquisitionService";
 import { toFirestoreMillis } from "./utils/firestoreTimestamp";
 import { getPersonalPartyHistoryEntry, readPersonalPartyHistoryCache, requestPartyFinalization, subscribePersonalPartyHistory } from "./services/partyHistoryService";
 import initialBgUrl from "./assets/initial-bg.png";
@@ -3929,6 +3929,22 @@ export default function App() {
     return result;
   }
 
+  /**
+   * O DONO original cancela uma pré-venda ainda não aceita pelo comprador.
+   * O serviço valida (dono/Boss + status `pre_approved`) dentro da transação;
+   * aqui apenas removemos o registro dos estados locais após o sucesso, para
+   * o selo/aceite sumirem de imediato sem esperar o snapshot do listener.
+   */
+  async function cancelCharacterAcquisitionPreApprovalFromParty(acquisitionId: string): Promise<{ ok: boolean; error?: string }> {
+    if (!currentUser?.uid) return { ok: false, error: "Entre na sua conta para cancelar a pré-venda." };
+    const result = await cancelCharacterAcquisitionPreApproval(acquisitionId, currentUser.uid, userProfile?.role);
+    if (result.ok) {
+      setPendingCharacterAcquisitions(previous => previous.filter(record => record.id !== acquisitionId));
+      setCharacterAcquisitions(previous => previous.filter(record => record.id !== acquisitionId));
+    }
+    return result;
+  }
+
   /** O JOGADOR confirma o pagamento ao Main Character do vendedor. */
   async function confirmCharacterAcquisitionPaymentFromParty(acquisitionId: string): Promise<{ ok: boolean; error?: string }> {
     if (!currentUser?.uid) return { ok: false, error: "Entre na sua conta para confirmar o pagamento." };
@@ -5064,6 +5080,7 @@ export default function App() {
             characterAcquisitions={demoData ? demoData.acquisitions : partyCharacterAcquisitions}
             onCreateCharacterAcquisition={demoData ? undefined : createCharacterAcquisitionFromParty}
             onConfirmCharacterAcquisitionPayment={demoData ? undefined : confirmCharacterAcquisitionPaymentFromParty}
+            onCancelCharacterAcquisitionPreApproval={demoData ? undefined : cancelCharacterAcquisitionPreApprovalFromParty}
             publicPartiesEnabled={globalSettings.publicPartiesEnabled}
             onTabChange={() => {
               // Ao abrir a aba "Gerenciador de PT's": carrega PTs públicas e personagens
