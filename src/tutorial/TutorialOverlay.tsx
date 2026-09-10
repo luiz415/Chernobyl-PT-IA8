@@ -177,10 +177,27 @@ export default function TutorialOverlay() {
   // ── POSICIONAMENTO DO BALÃO ──────────────────────────────────────────────
   // Flip automático: tenta abaixo → acima → direita → esquerda; clampa no
   // viewport. Em telas estreitas (<640px) vira folha fixa na base.
+  //
+  // CORREÇÃO DE TRAVAMENTO ENTRE CENAS: o efeito de localização do anchor
+  // (acima) zera `balloonPos` a cada troca de cena — mas ele roda DEPOIS
+  // deste layout effect no mesmo commit. Quando a transição não altera
+  // `rect` (ex.: cena informativa → cena informativa, ambas com rect=null,
+  // já que setRect(null) sobre null é no-op), nenhuma dependência antiga
+  // ([rect, scene, sceneIndex]) mudava no re-render seguinte e o balão
+  // ficava permanentemente em -9999px: tela esmaecida sem conteúdo até o
+  // usuário apertar Esc. Incluir `balloonPos` nas dependências garante que
+  // o reset para null SEMPRE dispare um novo posicionamento; o `place()`
+  // abaixo faz bailout por VALOR (retorna o estado anterior quando top/left
+  // não mudam), então o efeito converge em uma passada — sem loop.
   useLayoutEffect(() => {
     if (!scene) return;
     const balloon = balloonRef.current;
     if (!balloon) return;
+    // Atualiza apenas quando a posição muda de fato — evita re-render em
+    // cascata agora que `balloonPos` é dependência deste efeito.
+    const place = (top: number, left: number) => {
+      setBalloonPos(prev => (prev && Math.abs(prev.top - top) < 0.5 && Math.abs(prev.left - left) < 0.5) ? prev : { top, left });
+    };
     const vw = window.innerWidth;
     const vh = window.innerHeight;
     if (vw < 640) { setBalloonPos(null); return; } // modo folha (CSS cuida)
@@ -188,7 +205,7 @@ export default function TutorialOverlay() {
     const bh = balloon.offsetHeight || 220;
     const gap = 14;
     if (!rect) {
-      setBalloonPos({ top: Math.max(12, (vh - bh) / 2), left: Math.max(12, (vw - bw) / 2) });
+      place(Math.max(12, (vh - bh) / 2), Math.max(12, (vw - bw) / 2));
       return;
     }
     const pad = scene.padding ?? 6;
@@ -210,11 +227,14 @@ export default function TutorialOverlay() {
       top = (vh - bh) / 2;
       left = (vw - bw) / 2;
     }
-    setBalloonPos({
-      top: Math.min(Math.max(12, top), Math.max(12, vh - bh - 12)),
-      left: Math.min(Math.max(12, left), Math.max(12, vw - bw - 12)),
-    });
-  }, [rect, scene, sceneIndex]);
+    place(
+      Math.min(Math.max(12, top), Math.max(12, vh - bh - 12)),
+      Math.min(Math.max(12, left), Math.max(12, vw - bw - 12)),
+    );
+    // `balloonPos` é dependência DELIBERADA: quando a troca de cena o zera
+    // sem alterar `rect` (cena informativa → informativa), este efeito
+    // precisa rodar de novo para reposicionar — ver comentário acima.
+  }, [rect, scene, sceneIndex, balloonPos]);
 
   if (!activeTopic || !scene) return null;
 

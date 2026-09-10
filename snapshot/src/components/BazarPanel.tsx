@@ -12,7 +12,7 @@ import FriendsSummaryModal, { buildServerSummaries, buildVocationCountsByServer 
 import AutoBidModal from "./AutoBidModal";
 import OverviewFiltersModal from "./OverviewFiltersModal";
 import UserFilterModal from "./UserFilterModal";
-import { useOverviewFilters } from "../hooks/useOverviewFilters";
+import { DEFAULT_OVERVIEW_FILTERS, useOverviewFilters } from "../hooks/useOverviewFilters";
 import { FilterDateMax, FilterInline, FilterMulti, FilterNumber } from "./FilterTypes";
 import type { Character, PartyTab, WaitingService, Vocation } from "../types";
 import { useAuth } from "../context/AuthContext";
@@ -1005,15 +1005,20 @@ interface BazarPanelProps {
 function BazarPanelContent({ sharedCharacters = [], waitingList = [], activeParties = [], personalCharacters = [], accounts = [], onAddCharacterFromBazaar, demoBazaar }: BazarPanelProps) {
   // MODO DEMO (tutorial): dados fictícios, sem consultas nem persistência.
   const demoMode = !!demoBazaar;
-  const savedFiltersRef = useRef<BazarSavedFilters>(readSavedBazarFilters());
+  // demo: ref inicia VAZIA — os filtros de consulta persistidos do usuário
+  // real não devem vazar para a interface demonstrativa (e os efeitos de
+  // persistência abaixo já estão suspensos, então nada é sobrescrito).
+  const savedFiltersRef = useRef<BazarSavedFilters>(demoBazaar ? {} : readSavedBazarFilters());
   const [isLoading, setIsLoading] = useState(false);
   const [isCheckingDetails, setIsCheckingDetails] = useState(false);
   // "Concluir agora": modal aberto e pedido já enviado ao processo principal.
   // `stopRequested` desabilita o botão para não enviar o pedido duas vezes.
   const [isStopConfirmOpen, setIsStopConfirmOpen] = useState(false);
   const [stopRequested, setStopRequested] = useState(false);
-  const [result, setResult] = useState<BazaarFetchResult | null>(() => readBazarCache());
-  const [detailsCache, setDetailsCache] = useState<Record<string, BazaarDetails>>(() => readDetailsCache());
+  // demo: inicia VAZIO — o efeito de montagem injeta os leilões fictícios;
+  // sem o guard, o cache REAL do usuário piscaria na tabela antes disso.
+  const [result, setResult] = useState<BazaarFetchResult | null>(() => demoMode ? null : readBazarCache());
+  const [detailsCache, setDetailsCache] = useState<Record<string, BazaarDetails>>(() => demoMode ? {} : readDetailsCache());
   const [error, setError] = useState<string | null>(null);
   // Seleção de navegador (somente Electron): o modal abre ao clicar em
   // "Consultar Bazaar" e a consulta só começa após a confirmação.
@@ -1073,8 +1078,15 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
   });
   const defaultBidActive = defaultBid.enabled && defaultBid.amount !== null;
   const [isOfficialSyncing, setIsOfficialSyncing] = useState(false);
-  const [tableFilters, setTableFilters] = useState<BazaarTableFilters>(() => readBazarTableFilters());
-  const [hideEndedAuctions, setHideEndedAuctions] = useState(() => readHideEndedAuctionsPreference());
+  // MODO DEMO (tutorial): filtros de tabela NEUTROS. Os filtros persistidos
+  // do usuário real (servidor/level/bid/encerramento/"Meus") foram feitos
+  // para a lista oficial e eliminariam os leilões fictícios — a tabela do
+  // tutorial apareceria vazia. Os efeitos de persistência abaixo também são
+  // suspensos em demo, para nunca sobrescrever as preferências reais.
+  const [tableFilters, setTableFilters] = useState<BazaarTableFilters>(() => demoMode ? defaultBazarTableFilters() : readBazarTableFilters());
+  // demo: `false` para o leilão "Encerrado" fictício aparecer na tabela —
+  // ele existe justamente para demonstrar esse estado.
+  const [hideEndedAuctions, setHideEndedAuctions] = useState(() => demoMode ? false : readHideEndedAuctionsPreference());
   const [isFiltersModalOpen, setIsFiltersModalOpen] = useState(false);
   const [isUsedFiltersOpen, setIsUsedFiltersOpen] = useState(false);
   const [isFriendsSummaryOpen, setIsFriendsSummaryOpen] = useState(false);
@@ -1096,6 +1108,21 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
     useWaitingList: friendsSummaryUseWaitingList, setUseWaitingList: setFriendsSummaryUseWaitingList,
     resetFilters: resetFriendsSummaryFilters,
   } = useOverviewFilters();
+  // MODO DEMO: os filtros do Resumo de Amigos vivem num estado GLOBAL
+  // persistido (useOverviewFilters), compartilhado com a Visão Geral. Os
+  // destaques demonstrativos de prioridade não podem depender do que o
+  // usuário real configurou lá (usuários selecionados/levels alterados
+  // apagariam os destaques do tutorial) — em demo, usa-se SEMPRE o padrão.
+  // Os dados demo (demoCharacters/demoBazaar) foram calibrados para esses
+  // padrões. Nada é escrito de volta no store.
+  const effFriendsFilters = useMemo(
+    () => demoMode ? { ...DEFAULT_OVERVIEW_FILTERS } : friendsSummaryFilters,
+    [demoMode, friendsSummaryFilters],
+  );
+  const effQuestFilter = demoMode ? DEFAULT_OVERVIEW_FILTERS.questFilter : friendsSummaryQuestFilter;
+  const effMinLevels = demoMode ? DEFAULT_OVERVIEW_FILTERS.minLevels : friendsSummaryMinLevels;
+  const effUserMode = demoMode ? DEFAULT_OVERVIEW_FILTERS.userMode : friendsSummaryUserMode;
+  const effSelectedUsers = demoMode ? DEFAULT_OVERVIEW_FILTERS.selectedUsers : friendsSummarySelectedUsers;
   const [serverSelectionMode, setServerSelectionMode] = useState<ServerSelectionMode>(() => savedFiltersRef.current.serverSelectionMode || (savedFiltersRef.current.serverFilter ? "custom" : "all"));
   const [selectedServers, setSelectedServers] = useState<string[]>(() => savedFiltersRef.current.selectedServers || (savedFiltersRef.current.serverFilter ? [savedFiltersRef.current.serverFilter] : []));
   const [vocationLevels, setVocationLevels] = useState<VocationLevelFilters>(() => mergeVocationFilters(savedFiltersRef.current.vocationLevels));
@@ -1235,6 +1262,7 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
   }, [queryStartMs]);
 
   useEffect(() => {
+    if (demoMode) return; // demo: filtros de consulta reais intocados
     saveBazarFilters({
       serverSelectionMode,
       selectedServers,
@@ -1252,10 +1280,13 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
       endUntilMode,
       endUntilAutoTime,
     });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [serverSelectionMode, selectedServers, vocationLevels, maxValue, soulwarFilter, sanguineFilter, endUntil, timezoneOffsetMinutes, notifyBeforeMinutes, endUntilMode, endUntilAutoTime]);
 
   useEffect(() => {
+    if (demoMode) return; // demo: nunca sobrescrever os filtros reais salvos
     saveBazarTableFilters(tableFilters);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tableFilters]);
 
   // Esconde a confirmação discreta de "Aplicar" após alguns segundos.
@@ -1287,7 +1318,9 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
   }, [timezoneOffsetMinutes, currentUser?.uid]);
 
   useEffect(() => {
+    if (demoMode) return; // demo: preferência real intocada
     saveHideEndedAuctionsPreference(hideEndedAuctions);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hideEndedAuctions]);
 
   
@@ -1483,13 +1516,13 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
   // Resumo de Amigos) e é sempre isolado por servidor.
   const priorityVocationsByServer = useMemo(() => {
     const map = new Map<string, { max: Set<Vocation>; normal: Set<Vocation> }>();
-    buildServerSummaries(sharedCharacters, waitingList, activeParties, friendsSummaryFilters).forEach(summary => {
+    buildServerSummaries(sharedCharacters, waitingList, activeParties, effFriendsFilters).forEach(summary => {
       const max = new Set<Vocation>(summary.maxPriorityVocations);
       const normal = new Set<Vocation>(summary.priorityVocations);
       if (max.size > 0 || normal.size > 0) map.set(summary.server, { max, normal });
     });
     return map;
-  }, [sharedCharacters, waitingList, activeParties, friendsSummaryFilters]);
+  }, [sharedCharacters, waitingList, activeParties, effFriendsFilters]);
 
   // ============================================================================
   // CONTAGEM POR SERVIDOR + VOCAÇÃO (badge "xN" na coluna VOC)
@@ -1514,7 +1547,7 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
   // ============================================================================
   const vocationCountByServer = useMemo(() => {
     const map = new Map<string, number>();
-    const { counts } = buildVocationCountsByServer(sharedCharacters, waitingList, activeParties, friendsSummaryFilters);
+    const { counts } = buildVocationCountsByServer(sharedCharacters, waitingList, activeParties, effFriendsFilters);
     counts.forEach((vocationCounts, server) => {
       const key = serverKey(server);
       if (!key) return;
@@ -1523,7 +1556,7 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
       });
     });
     return map;
-  }, [sharedCharacters, waitingList, activeParties, friendsSummaryFilters]);
+  }, [sharedCharacters, waitingList, activeParties, effFriendsFilters]);
 
   /** Quantos personagens daquela vocação existem NAQUELE servidor, com os filtros atuais. */
   function getVocationCountForAuction(server: string, vocation: Vocation | null): number {
@@ -1556,8 +1589,8 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
   // `friendsSummaryQuestFilter` usado logo abaixo. Estar em PT de Sanguine
   // não "cobre" nem bloqueia o servidor para o alvo Soul War (e vice-versa).
   const activeBusyIds = useMemo(
-    () => collectBusyIdsForQuest(activeParties, friendsSummaryQuestFilter),
-    [activeParties, friendsSummaryQuestFilter],
+    () => collectBusyIdsForQuest(activeParties, effQuestFilter),
+    [activeParties, effQuestFilter],
   );
 
   const currentUserName = userProfile?.nome || "Anônimo";
@@ -1565,8 +1598,8 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
 
   // Candidatos do Resumo de Amigos — mesma fonte/coleta que alimenta o resumo.
   const friendsSummaryCandidates = useMemo(() => {
-    return buildVocationCountsByServer(sharedCharacters, waitingList, activeParties, friendsSummaryFilters).candidates;
-  }, [sharedCharacters, waitingList, activeParties, friendsSummaryFilters]);
+    return buildVocationCountsByServer(sharedCharacters, waitingList, activeParties, effFriendsFilters).candidates;
+  }, [sharedCharacters, waitingList, activeParties, effFriendsFilters]);
 
   // Servidores onde o usuário ATUAL tem personagem válido sob os MESMOS filtros
   // do Resumo de Amigos (Quest + level + vendido + indisponível). É passado à
@@ -1590,14 +1623,14 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
       if (character.vendido || activeBusyIds.has(character.id)) return;
       // Personagem À VENDA não conta como "disponível" para cobrir o servidor.
       if (character.aVenda === true) return;
-      if (friendsSummaryQuestFilter === "soulwar" && !character.soulwar) return;
-      if (friendsSummaryQuestFilter === "sanguine" && !character.sanguine) return;
-      if ((character.level || 0) < (friendsSummaryMinLevels[character.voc] || 0)) return;
+      if (effQuestFilter === "soulwar" && !character.soulwar) return;
+      if (effQuestFilter === "sanguine" && !character.sanguine) return;
+      if ((character.level || 0) < (effMinLevels[character.voc] || 0)) return;
       const key = serverKey(character.servidor);
       if (key) set.add(key);
     });
     return set;
-  }, [sharedCharacters, currentUserUid, currentUserName, activeBusyIds, friendsSummaryQuestFilter, friendsSummaryMinLevels]);
+  }, [sharedCharacters, currentUserUid, currentUserName, activeBusyIds, effQuestFilter, effMinLevels]);
 
   // Resultado pré-derivado: servidores em destaque + vocações prioritárias.
   // A decisão de destaque é baseada apenas nos personagens PRÓPRIOS do usuário:
@@ -1610,30 +1643,16 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
       const sk = serverKey(auction.server);
       if (sk) bazaarServerKeys.add(sk);
     });
-    const resultPriority = computeUserPriority({
+    return computeUserPriority({
       candidates: friendsSummaryCandidates,
       currentUserName,
       currentUserUid,
-      userMode: friendsSummaryUserMode,
-      selectedUsers: friendsSummarySelectedUsers,
+      userMode: effUserMode,
+      selectedUsers: effSelectedUsers,
       currentUserServerKeys,
       bazaarServerKeys,
     });
-    // DIAGNÓSTICO TEMPORÁRIO
-    if (typeof window !== "undefined") {
-      try {
-        console.log("[UserPriority] diagnostic", {
-          uid: currentUserUid,
-          currentUserName,
-          currentUserServerKeys: [...currentUserServerKeys],
-          bazaarServerKeys: [...bazaarServerKeys],
-          friendDonesEmBellum: friendsSummaryCandidates.filter(c => serverKey(c.servidor) === "bellum").map(c => c.dono),
-          highlighted: [...resultPriority.highlightedServers],
-        });
-      } catch {}
-    }
-    return resultPriority;
-  }, [friendsSummaryCandidates, currentUserName, currentUserUid, friendsSummaryUserMode, friendsSummarySelectedUsers, currentUserServerKeys, result?.auctions]);
+  }, [friendsSummaryCandidates, currentUserName, currentUserUid, effUserMode, effSelectedUsers, currentUserServerKeys, result?.auctions]);
 
   const baseFilteredAuctions = useMemo(() => {
     const list = result?.auctions || [];
@@ -3822,7 +3841,7 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
         characters={sharedCharacters}
         waitingList={waitingList}
         activeParties={activeParties}
-        filters={friendsSummaryFilters}
+        filters={effFriendsFilters}
         onOpenFilters={() => setIsFriendsSummaryFiltersOpen(true)}
       />
 

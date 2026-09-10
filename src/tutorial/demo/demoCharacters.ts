@@ -34,7 +34,9 @@ export function buildDemoCharacters(now: number): Character[] {
     { ...base, id: "demo-char-3", account: "Conta 2", personagem: "Demo Sorcerer", servidor: "Elysian", voc: "MS", level: 356, soulwar: true, sanguine: true, sanguineDone: true, valorPago: 250, dropSW: 0, dropBakra: 1900, valorVenda: 0, itemDropadoSG: "Sanguine Rod", dataCompra: dayISO(now, 22), notes: "Drop da Sanguine já vendido.", shared: true },
     { ...base, id: "demo-char-4", account: "Conta 2", personagem: "Demo Druid", servidor: "Lunarian", voc: "ED", level: 341, soulwar: true, sanguine: true, soulwarDone: true, valorPago: 230, dropSW: 975, dropBakra: 0, valorVenda: 0, itemDropadoSW: "Soulshanks", dataCompra: dayISO(now, 20), notes: "" },
     { ...base, id: "demo-char-5", account: "Conta 1", personagem: "Demo Blocker", servidor: "Solarian", voc: "EK", level: 297, soulwar: true, sanguine: true, sanguineDone: true, valorPago: 200, dropSW: 0, dropBakra: 1225, valorVenda: 0, itemDropadoSG: "Sanguine Coil", dataCompra: dayISO(now, 19), notes: "" },
-    { ...base, id: "demo-char-6", account: "Conta 2", personagem: "Demo Ranger", servidor: "Lunarian", voc: "RP", level: 364, soulwar: true, sanguine: true, soulwarDone: true, valorPago: 310, dropSW: 1650, dropBakra: 0, valorVenda: 0, itemDropadoSW: "Soulbleeder", dataCompra: dayISO(now, 17), notes: "", shared: true },
+    // level 490 (≥ RP 480): cobre Lunarian nos filtros padrão do Resumo de
+    // Amigos — Lunarian NÃO recebe "Prioridade para você" no Bazaar demo.
+    { ...base, id: "demo-char-6", account: "Conta 2", personagem: "Demo Ranger", servidor: "Lunarian", voc: "RP", level: 490, soulwar: true, sanguine: true, soulwarDone: true, valorPago: 310, dropSW: 1650, dropBakra: 0, valorVenda: 0, itemDropadoSW: "Soulbleeder", dataCompra: dayISO(now, 17), notes: "", shared: true },
     { ...base, id: "demo-char-7", account: "Conta 3", personagem: "Demo Warlock", servidor: "Solarian", voc: "MS", level: 402, soulwar: true, sanguine: true, sanguineDone: true, valorPago: 260, dropSW: 0, dropBakra: 2325, valorVenda: 0, itemDropadoSG: "Grand Sanguine Rod", dataCompra: dayISO(now, 15), notes: "Grand drop na Sanguine!" },
     { ...base, id: "demo-char-8", account: "Conta 3", personagem: "Demo Scout", servidor: "Auroria", voc: "RP", level: 305, soulwar: true, sanguine: false, soulwarDone: true, valorPago: 240, dropSW: 550, dropBakra: 0, valorVenda: 0, itemDropadoSW: "Soulsoles", dataCompra: dayISO(now, 14), notes: "" },
     { ...base, id: "demo-char-9", account: "Conta 1", personagem: "Demo Templar", servidor: "Mystian", voc: "EK", level: 375, soulwar: true, sanguine: true, soulwarDone: true, valorPago: 335, dropSW: 1225, dropBakra: 0, valorVenda: 0, itemDropadoSW: "Soulshell", dataCompra: dayISO(now, 12), notes: "" },
@@ -46,6 +48,39 @@ export function buildDemoCharacters(now: number): Character[] {
     // ── Incompletos (sem drop ainda) — fora do Stats com o filtro padrão ──
     { ...base, id: "demo-char-15", account: "Conta 3", personagem: "Demo Monk", servidor: "Elysian", voc: "MK", level: 305, soulwar: true, sanguine: false, valorPago: 180, dropSW: 0, dropBakra: 0, valorVenda: 0, dataCompra: dayISO(now, 3), notes: "Ainda sem quests concluídas." },
     { ...base, id: "demo-char-16", account: "Conta 1", personagem: "Demo Guardian", servidor: "Elysian", voc: "EK", level: 331, soulwar: true, sanguine: true, valorPago: 350, dropSW: 0, dropBakra: 0, valorVenda: 0, dataCompra: dayISO(now, 2), notes: "Comprado esta semana." },
+  ];
+}
+
+// ============================================================================
+// PERSONAGENS DE AMIGOS (exclusivos do Bazaar demonstrativo)
+// ----------------------------------------------------------------------------
+// Usados SOMENTE como reforço de `sharedCharacters` do BazarPanel em modo
+// demo — nunca entram em "Meus Personagens" nem no Stats (a matemática
+// validada acima não os considera). Existem para os DESTAQUES DE PRIORIDADE
+// da tabela do Bazaar acenderem de verdade no tutorial, sob os filtros
+// padrão do Resumo de Amigos (EK 480 / ED 360 / MS 360 / RP 480 / MK 500,
+// Quest Alvo "Todas" = exige Soul War E Sanguine disponíveis):
+//
+//   • ELYSIAN — 3 amigos válidos (EK/ED/MS), usuário SEM personagem válido
+//     (os demo-chars de Elysian ficam abaixo dos levels mínimos): linhas RP
+//     = Prioridade Máxima + servidor inteiro em "Prioridade para você".
+//   • LUNARIAN — usuário COBERTO (Demo Ranger RP 490) + 2 amigos (ED/MS):
+//     EK vira Prioridade Máxima SEM o glow "para você" (contraste didático).
+//   • MYSTIAN — 1 amigo (EK 510), usuário sem personagem válido lá:
+//     servidor em "Prioridade para você".
+//   • AURORIA/SOLARIAN — sem amigos válidos: linhas neutras (contraste).
+//
+// Nenhum deles participa de PT demo (não podem contar como "ocupados").
+// ============================================================================
+export function buildDemoFriendCharacters(now: number): Character[] {
+  const base = { vendido: false, aVenda: false, shared: true, soulwar: true, sanguine: true, valorPago: 0, dropSW: 0, dropBakra: 0, valorVenda: 0, createdAt: now - 30 * 86400000, updatedAt: now - 2 * 86400000 };
+  return [
+    { ...base, id: "demo-friend-1", account: "•••", personagem: "Ana Soulblade", servidor: "Elysian", voc: "EK", level: 495, ownerUid: "demo-uid-ana", ownerName: "Demo Ana" },
+    { ...base, id: "demo-friend-2", account: "•••", personagem: "Bruno Wildheart", servidor: "Elysian", voc: "ED", level: 400, ownerUid: "demo-uid-bruno", ownerName: "Demo Bruno" },
+    { ...base, id: "demo-friend-3", account: "•••", personagem: "Carla Spellweaver", servidor: "Elysian", voc: "MS", level: 385, ownerUid: "demo-uid-carla", ownerName: "Demo Carla" },
+    { ...base, id: "demo-friend-4", account: "•••", personagem: "Ana Thornroot", servidor: "Lunarian", voc: "ED", level: 385, ownerUid: "demo-uid-ana", ownerName: "Demo Ana" },
+    { ...base, id: "demo-friend-5", account: "•••", personagem: "Sofia Frostcall", servidor: "Lunarian", voc: "MS", level: 370, ownerUid: "demo-uid-sofia", ownerName: "Demo Sofia" },
+    { ...base, id: "demo-friend-6", account: "•••", personagem: "Bruno Ironwall", servidor: "Mystian", voc: "EK", level: 510, ownerUid: "demo-uid-bruno", ownerName: "Demo Bruno" },
   ];
 }
 

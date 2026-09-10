@@ -19,6 +19,15 @@ export interface TutorialDemoData {
   /** Instante em que o conjunto foi instanciado (referência dos cronômetros). */
   builtAt: number;
   characters: Character[];
+  /**
+   * Personagens dos AMIGOS fictícios (demo-friend-*): entram SOMENTE como
+   * `sharedCharacters` do Bazaar demonstrativo, para os destaques de
+   * prioridade (Máxima/comum/"para você") acenderem no tutorial. Nunca vão
+   * para "Meus Personagens" nem para o Stats.
+   */
+  friendCharacters: Character[];
+  /** characters + friendCharacters — lista compartilhada do Bazaar demo. */
+  bazaarSharedCharacters: Character[];
   soldCharacters: Character[];
   acquisitions: CharacterAcquisition[];
   acquisitionBuyerDetails: CharacterAcquisitionBuyerDetails[];
@@ -91,9 +100,13 @@ export async function loadDemoData(uid = "", userName = ""): Promise<TutorialDem
     import("./demoStats"),
     import("./demoAcquisitions"),
   ]);
+  const ownCharacters = chars.buildDemoCharacters(now);
+  const friendCharacters = chars.buildDemoFriendCharacters(now);
   const raw: TutorialDemoData = {
     builtAt: now,
-    characters: chars.buildDemoCharacters(now),
+    characters: ownCharacters,
+    friendCharacters,
+    bazaarSharedCharacters: [...ownCharacters, ...friendCharacters],
     soldCharacters: chars.buildDemoSoldCharacters(now),
     acquisitions: acquisitions.buildDemoAcquisitions(now),
     acquisitionBuyerDetails: acquisitions.buildDemoAcquisitionBuyerDetails(now),
