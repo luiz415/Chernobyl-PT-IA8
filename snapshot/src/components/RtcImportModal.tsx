@@ -41,11 +41,16 @@ import {
 //     ImbuementsModal/ConfirmModal).
 //   • Listeners assinados SÓ com o modal aberto: 1 leitura por doc + deltas.
 //   • Cores de vocação: exclusivamente `VOC_COLORS` (identidade oficial).
-//   • CÓDIGO LITERAL: textarea sem transformação; copiar usa o valor
-//     armazenado byte a byte.
-//   • IDENTIDADE POR CÓDIGO: botões de copiar coloridos por hash do código
+//   • CÓDIGO LITERAL: textarea sem transformação; o botão "Importar" copia
+//     o valor armazenado byte a byte (é a MESMA função de copiar de sempre,
+//     apenas com rótulo "Importar").
+//   • IDENTIDADE POR CÓDIGO: botões "Importar" coloridos por hash do código
 //     (rtcCodeHue) — códigos IGUAIS têm botões IGUAIS em qualquer lugar do
 //     modal; códigos diferentes tendem a cores diferentes.
+//   • LAYOUT DOS CARDS: uma caixa por divisão; dentro, só tipografia e
+//     alinhamento em colunas (rótulo fixo | nome flexível | ações à
+//     direita), com "Recomendado" e "Meu perfil" empilhados e tabulados
+//     para comparação imediata — sem caixas aninhadas.
 //   • Esc fecha (mas primeiro cancela uma edição aberta, se houver).
 // ============================================================================
 
@@ -208,32 +213,51 @@ export default function RtcImportModal({ open, onClose }: Props) {
 
   if (!open) return null;
 
-  // ── Linha de um perfil (recomendado OU pessoal) dentro de um slot ────────
+  // ── Linha de um perfil (recomendado OU pessoal) dentro de uma seção ──────
+  // Layout em colunas alinhadas para leitura rápida e comparação direta
+  // entre "Recomendado" e "Meu perfil":
+  //
+  //   [rótulo fixo]  [nome do perfil ................]  [✎] [Importar]
+  //
+  // O rótulo tem largura fixa (as linhas ficam tabuladas), o nome ocupa o
+  // espaço restante e as ações ficam SEMPRE à direita — os botões
+  // "Importar" das duas linhas se alinham verticalmente. Sem pills nem
+  // caixas: só texto colorido (âmbar = recomendado, azul = pessoal).
   function renderProfileRow(scope: "recommended" | "personal", key: string, entry: RtcEntry | undefined) {
     const isRecommended = scope === "recommended";
     const canEdit = isRecommended ? isBoss : true;
     const uniqueKey = `${scope}:${key}`;
     const isCopied = copiedKey === uniqueKey;
-    const tagLabel = isRecommended ? "Recomendado" : "Meu";
-    const tagClass = isRecommended
-      ? "border-amber-500/40 bg-amber-500/10 text-amber-300"
-      : "border-sky-500/40 bg-sky-500/10 text-sky-300";
+    const rowLabel = isRecommended ? "Recomendado" : "Meu perfil";
+    const labelClass = isRecommended ? "text-amber-400/90" : "text-sky-400/90";
 
     return (
-      <div className="flex items-center gap-1.5 min-w-0">
-        <span className={`flex-shrink-0 rounded border px-1 py-px text-[8px] font-black uppercase tracking-wide ${tagClass}`}>
-          {tagLabel}
+      <div className="flex h-7 items-center gap-2 min-w-0">
+        <span className={`w-[84px] flex-shrink-0 text-[9px] font-black uppercase tracking-wide ${labelClass}`}>
+          {rowLabel}
         </span>
         {entry ? (
           <>
             <span className="min-w-0 flex-1 truncate text-[11px] font-bold text-slate-200" title={entry.profileName}>
               {entry.profileName}
             </span>
-            {/* Botão copiar — identidade visual POR CÓDIGO (mesmo código = mesma cor). */}
+            {canEdit && (
+              <button
+                type="button"
+                onClick={() => startEdit(scope, key, entry)}
+                className="flex-shrink-0 inline-flex h-6 w-6 items-center justify-center rounded-md border border-transparent text-slate-500 hover:text-slate-200 hover:border-[var(--th-line)] transition-colors cursor-pointer"
+                title={isRecommended ? "Editar perfil recomendado (Boss)" : "Editar meu perfil"}
+              >
+                <Pencil size={11} />
+              </button>
+            )}
+            {/* Botão IMPORTAR — copia o código literal (mesma função de
+                sempre); identidade visual POR CÓDIGO (mesmo código = mesma
+                cor de botão em qualquer lugar do modal). */}
             <button
               type="button"
               onClick={() => copyCode(uniqueKey, entry.code)}
-              className="flex-shrink-0 inline-flex h-6 w-6 items-center justify-center rounded-md border transition-all duration-150 cursor-pointer hover:scale-110 active:scale-95"
+              className="flex-shrink-0 inline-flex h-6 w-[86px] items-center justify-center gap-1 rounded-md border text-[10px] font-black tracking-wide transition-all duration-150 cursor-pointer hover:brightness-125 active:scale-95"
               style={isCopied
                 ? { borderColor: "rgba(16,185,129,0.6)", background: "rgba(16,185,129,0.18)", color: "#6ee7b7" }
                 : {
@@ -242,20 +266,12 @@ export default function RtcImportModal({ open, onClose }: Props) {
                     color: `color-mix(in oklab, ${rtcCodeHue(entry.code)} 80%, white)`,
                     boxShadow: `0 0 8px color-mix(in oklab, ${rtcCodeHue(entry.code)} 25%, transparent)`,
                   }}
-              title={isCopied ? "Copiado!" : `Copiar código do perfil "${entry.profileName}"`}
+              title={isCopied ? "Código copiado!" : `Importar (copiar) o código do perfil "${entry.profileName}"`}
             >
-              {isCopied ? <Check size={12} strokeWidth={3} /> : <Copy size={11} strokeWidth={2.5} />}
+              {isCopied
+                ? <><Check size={11} strokeWidth={3} /> Copiado</>
+                : <><Copy size={10} strokeWidth={2.5} /> Importar</>}
             </button>
-            {canEdit && (
-              <button
-                type="button"
-                onClick={() => startEdit(scope, key, entry)}
-                className="flex-shrink-0 inline-flex h-6 w-6 items-center justify-center rounded-md border border-[var(--th-line)]/70 bg-[var(--th-bg-raised)] text-slate-400 hover:text-slate-200 hover:border-slate-500/60 transition-colors cursor-pointer"
-                title={isRecommended ? "Editar perfil recomendado (Boss)" : "Editar meu perfil"}
-              >
-                <Pencil size={11} />
-              </button>
-            )}
           </>
         ) : (
           <>
@@ -266,7 +282,7 @@ export default function RtcImportModal({ open, onClose }: Props) {
               <button
                 type="button"
                 onClick={() => startEdit(scope, key, undefined)}
-                className="flex-shrink-0 inline-flex h-6 items-center gap-1 rounded-md border border-dashed border-[var(--th-line)] px-1.5 text-[9px] font-bold text-slate-500 hover:text-slate-300 hover:border-slate-500/70 transition-colors cursor-pointer"
+                className="flex-shrink-0 inline-flex h-6 w-[86px] items-center justify-center gap-1 rounded-md border border-dashed border-[var(--th-line)] text-[9px] font-bold text-slate-500 hover:text-slate-300 hover:border-slate-500/70 transition-colors cursor-pointer"
                 title={isRecommended ? "Configurar recomendação (Boss)" : "Adicionar meu perfil"}
               >
                 <Plus size={10} /> Adicionar
@@ -337,24 +353,23 @@ export default function RtcImportModal({ open, onClose }: Props) {
     );
   }
 
-  // ── Slot (Acesso ou Boss) de uma divisão ─────────────────────────────────
+  // ── Seção (Acesso ou Boss) de uma divisão ────────────────────────────────
+  // Sem caixa própria: apenas o título da seção (na cor da vocação) seguido
+  // das duas linhas tabuladas (Recomendado / Meu perfil). A hierarquia fica
+  // por tipografia e alinhamento, não por bordas aninhadas.
   function renderSlot(divisionId: string, slot: RtcSlotType) {
     const key = buildRtcKey(quest, voc, divisionId, slot);
     const isEditingHere = editing?.key === key;
     return (
-      <div key={slot} className="rounded-lg border border-[var(--th-line)]/50 bg-[var(--th-bg-raised)]/60 px-2 py-1.5">
-        <div className="mb-1 flex items-center gap-1.5">
-          <span
-            className="rounded px-1.5 py-px text-[9px] font-black uppercase tracking-widest"
-            style={{ background: vs.fill, color: vs.text, border: `1px solid ${vs.border}` }}
-          >
+      <div key={slot} className="min-w-0">
+        <div className="mb-0.5 flex items-center gap-1.5">
+          <span className="text-[9px] font-black uppercase tracking-widest" style={{ color: vs.text }}>
             {RTC_SLOT_LABELS[slot]}
           </span>
+          <span className="h-px flex-1" style={{ background: `color-mix(in oklab, ${vs.hue} 22%, transparent)` }} />
         </div>
-        <div className="space-y-1">
-          {renderProfileRow("recommended", key, recommended[key])}
-          {renderProfileRow("personal", key, personal[key])}
-        </div>
+        {renderProfileRow("recommended", key, recommended[key])}
+        {renderProfileRow("personal", key, personal[key])}
         {isEditingHere && renderEditor()}
       </div>
     );
@@ -456,19 +471,22 @@ export default function RtcImportModal({ open, onClose }: Props) {
             <span className="hidden sm:inline">Cada vocação possui códigos próprios e independentes.</span>
           </div>
 
+          {/* Cards de divisão — UMA caixa por divisão; dentro dela apenas
+              tipografia e alinhamento (nenhuma caixa aninhada). Hierarquia:
+              Divisão → Acesso/Boss → Recomendado/Meu perfil → Importar. */}
           <div className="grid grid-cols-1 gap-2.5 md:grid-cols-2">
             {divisions.map((division, index) => (
               <div
                 key={division.id}
-                className="rounded-xl border border-[var(--th-line)]/70 bg-[var(--th-bg-raised)]/40 p-2.5"
+                className="rounded-xl border border-[var(--th-line)]/70 bg-[var(--th-bg-raised)]/40 px-3 py-2"
                 style={{ borderLeft: `3px solid ${vs.border}` }}
               >
-                <div className="mb-1.5 flex items-baseline gap-1.5">
+                <div className="flex items-baseline gap-1.5 border-b border-[var(--th-line)]/50 pb-1">
                   <span className="font-mono text-[9px] font-black text-slate-600">{index + 1}.</span>
                   <h3 className="text-[12px] font-black uppercase tracking-wider text-slate-100">{division.label}</h3>
                   {division.sublabel && <span className="text-[10px] font-bold text-slate-500">— {division.sublabel}</span>}
                 </div>
-                <div className="space-y-1.5">
+                <div className="mt-1.5 space-y-2">
                   {RTC_SLOT_TYPES.map(slot => renderSlot(division.id, slot))}
                 </div>
               </div>
@@ -478,8 +496,8 @@ export default function RtcImportModal({ open, onClose }: Props) {
           {/* Legenda compacta. */}
           <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-[var(--th-line)]/40 pt-2 text-[9px] text-slate-600">
             <span><span className="font-black text-amber-400/80">Recomendado</span> — configuração oficial do app{isBoss ? " (você pode editar por ser Boss)" : ""}.</span>
-            <span><span className="font-black text-sky-400/80">Meu</span> — seus perfis, disponíveis em todos os seus dispositivos.</span>
-            <span>Botões de copiar com a <span className="font-bold text-slate-400">mesma cor</span> indicam códigos idênticos.</span>
+            <span><span className="font-black text-sky-400/80">Meu perfil</span> — seus perfis, disponíveis em todos os seus dispositivos.</span>
+            <span>Botões <span className="font-bold text-slate-400">Importar</span> com a mesma cor indicam códigos idênticos.</span>
           </div>
         </div>
       </div>
