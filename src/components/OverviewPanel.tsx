@@ -1,13 +1,14 @@
 import { useState, useMemo } from "react";
 import { 
   BarChart3, 
-  Swords, Filter, RotateCcw
+  Swords, Filter, RotateCcw, Users
 } from "lucide-react";
 import type { Character, PartyTab, WaitingService } from "../types";
 import { VOC_COLORS } from "../types";
 import { analyzeServerPotential, type ServerAnalysis } from "../utils/suggestionAlgorithm";
 import { useAuth } from "../context/AuthContext";
 import OverviewFiltersModal from "./OverviewFiltersModal";
+import UserFilterModal from "./UserFilterModal";
 import { useOverviewFilters } from "../hooks/useOverviewFilters";
 import { SERVER_OPTIONS, serverLabel } from "../constants/servers";
 import { collectBusyIdsForQuest } from "../utils/questEligibility";
@@ -29,12 +30,15 @@ export default function OverviewPanel({ characters, waitingList, activeParties }
   // Estado compartilhado com o Resumo de Amigos (Bazaar). Alterar aqui reflete
   // imediatamente lá, e vice-versa — ver src/hooks/useOverviewFilters.ts.
   const [showFilters, setShowFilters] = useState(false);
+  // Modal dedicado de seleção de usuários (botão "Filtrar Usuários").
+  // Mesmo estado unificado — ver UserFilterModal.tsx.
+  const [showUserFilter, setShowUserFilter] = useState(false);
   const {
     questFilter, setQuestFilter,
     templateType, setTemplateType,
     minLevels, setMinLevels,
-    userMode, setUserMode,
-    selectedUsers, setSelectedUsers,
+    userMode,
+    selectedUsers,
     useCharacters, setUseCharacters,
     useWaitingList, setUseWaitingList,
     resetFilters,
@@ -143,9 +147,10 @@ export default function OverviewPanel({ characters, waitingList, activeParties }
     );
   }
 
+  // O filtro de usuários saiu do modal "Filtros" (agora tem botão e badge
+  // próprios — "Filtrar Usuários"), então não entra mais neste contador.
   const activeFiltersCount = (questFilter !== "all" ? 1 : 0) + 
                              (templateType !== "inteligente" ? 1 : 0) + 
-                             (userMode === "filter" && selectedUsers.length > 0 ? 1 : 0) +
                              (!useCharacters || !useWaitingList ? 1 : 0);
 
   const filterSummary = useMemo(() => {
@@ -207,6 +212,25 @@ export default function OverviewPanel({ characters, waitingList, activeParties }
 
           <button
             type="button"
+            onClick={() => setShowUserFilter(true)}
+            className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-lg text-[10px] font-extrabold border transition-all cursor-pointer shadow-sm ${
+              userMode === "filter" && selectedUsers.length > 0
+                ? "bg-gradient-to-r from-red-800 to-red-900 border-red-500/80 text-white shadow-red-950/50"
+                : "bg-[var(--th-bg-base)] border-[var(--th-brand)] text-amber-500 hover:text-amber-300 hover:border-red-600/70"
+            }`}
+            title="Selecionar quais usuários têm os personagens considerados no Bazaar e na Visão Geral"
+          >
+            <Users size={11} className={userMode === "filter" && selectedUsers.length > 0 ? "text-amber-300" : ""} />
+            <span>Filtrar Usuários</span>
+            {userMode === "filter" && selectedUsers.length > 0 && (
+              <span className="w-4 h-4 rounded-full bg-amber-500 text-black font-mono font-black flex items-center justify-center text-[9px] leading-none">
+                {selectedUsers.length}
+              </span>
+            )}
+          </button>
+
+          <button
+            type="button"
             onClick={() => setShowFilters(v => !v)}
             className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-lg text-[10px] font-extrabold border transition-all cursor-pointer shadow-sm ${
               showFilters || activeFiltersCount > 0
@@ -235,16 +259,16 @@ export default function OverviewPanel({ characters, waitingList, activeParties }
         setTemplateType={setTemplateType}
         minLevels={minLevels}
         setMinLevels={setMinLevels}
-        userMode={userMode}
-        setUserMode={setUserMode}
-        selectedUsers={selectedUsers}
-        setSelectedUsers={setSelectedUsers}
         useCharacters={useCharacters}
         setUseCharacters={setUseCharacters}
         useWaitingList={useWaitingList}
         setUseWaitingList={setUseWaitingList}
         onReset={resetFilters}
       />
+
+      {/* Modal dedicado de seleção de usuários — mesmo estado unificado do
+          Bazaar (useOverviewFilters); alterações refletem lá na hora. */}
+      <UserFilterModal open={showUserFilter} onClose={() => setShowUserFilter(false)} />
 
       {/* Grade de Quadros de Servidores Ultra Compactos */}
       <div className="flex-1 overflow-y-auto pr-1 custom-scrollbar relative z-10">

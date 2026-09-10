@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import bazarBgUrl from "../assets/bazar-bg.png";
-import { AlertTriangle, ArrowDownUp, Check, CheckCircle2, ChevronDown, ChevronUp, Crown, ExternalLink, Filter, FlagTriangleRight, Flame, Plus, RefreshCw, RotateCcw, ShieldAlert, ShoppingBag, Sparkles, Star, Target, X } from "lucide-react";
+import { AlertTriangle, ArrowDownUp, Check, CheckCircle2, ChevronDown, ChevronUp, Crown, ExternalLink, Filter, FlagTriangleRight, Flame, Plus, RefreshCw, RotateCcw, ShieldAlert, ShoppingBag, Sparkles, Star, Target, Users, X } from "lucide-react";
 import BazaarSearchFiltersModal from "./BazaarSearchFiltersModal";
 import BazaarUsedFiltersModal from "./BazaarUsedFiltersModal";
 import BazaarBrowserModal, { BAZAAR_BROWSER_KEY, BAZAAR_BROWSER_ORDER_KEY, BAZAAR_METHOD_KEY, BAZAAR_RETRY_BROWSERS_KEY, BAZAAR_RETRY_COUNTS_KEY, BAZAAR_SPEED_MODE_KEY, DEFAULT_BAZAAR_METHOD, DEFAULT_BROWSER_ORDER, normalizeBazaarMethod, normalizeRetryCounts } from "./BazaarBrowserModal";
@@ -11,6 +11,7 @@ import ConfirmModal from "./ConfirmModal";
 import FriendsSummaryModal, { buildServerSummaries, buildVocationCountsByServer } from "./FriendsSummaryModal";
 import AutoBidModal from "./AutoBidModal";
 import OverviewFiltersModal from "./OverviewFiltersModal";
+import UserFilterModal from "./UserFilterModal";
 import { useOverviewFilters } from "../hooks/useOverviewFilters";
 import { FilterDateMax, FilterInline, FilterMulti, FilterNumber } from "./FilterTypes";
 import type { Character, PartyTab, WaitingService, Vocation } from "../types";
@@ -1079,6 +1080,9 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
   const [isFriendsSummaryOpen, setIsFriendsSummaryOpen] = useState(false);
   const [isAutoBidOpen, setIsAutoBidOpen] = useState(false);
   const [isFriendsSummaryFiltersOpen, setIsFriendsSummaryFiltersOpen] = useState(false);
+  // Modal dedicado de seleção de usuários (botão "Filtrar Usuários" no quadro
+  // "Última consulta"). Mesmo estado unificado — ver UserFilterModal.tsx.
+  const [isUserFilterOpen, setIsUserFilterOpen] = useState(false);
   // Filtros compartilhados com a Visao Geral (OverviewPanel). Fonte unica em
   // src/hooks/useOverviewFilters.ts — alterar aqui reflete la na hora.
   const {
@@ -1086,8 +1090,8 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
     questFilter: friendsSummaryQuestFilter, setQuestFilter: setFriendsSummaryQuestFilter,
     templateType: friendsSummaryTemplateType, setTemplateType: setFriendsSummaryTemplateType,
     minLevels: friendsSummaryMinLevels, setMinLevels: setFriendsSummaryMinLevels,
-    userMode: friendsSummaryUserMode, setUserMode: setFriendsSummaryUserMode,
-    selectedUsers: friendsSummarySelectedUsers, setSelectedUsers: setFriendsSummarySelectedUsers,
+    userMode: friendsSummaryUserMode,
+    selectedUsers: friendsSummarySelectedUsers,
     useCharacters: friendsSummaryUseCharacters, setUseCharacters: setFriendsSummaryUseCharacters,
     useWaitingList: friendsSummaryUseWaitingList, setUseWaitingList: setFriendsSummaryUseWaitingList,
     resetFilters: resetFriendsSummaryFilters,
@@ -2641,8 +2645,30 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
         <div className="rounded-lg border border-[var(--th-line)]/60 bg-[var(--th-n-base)]/85 px-2.5 py-1 text-[11px] text-slate-400">
           <div className="flex flex-col gap-0.5 lg:flex-row lg:items-start lg:justify-between lg:gap-3">
             <div className="min-w-0 flex-1 space-y-0.5">
-              <div className="inline-flex items-center gap-1.5 font-black text-amber-300 uppercase tracking-wide">
-                <Sparkles size={12} /> Última consulta
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="inline-flex items-center gap-1.5 font-black text-amber-300 uppercase tracking-wide">
+                  <Sparkles size={12} /> Última consulta
+                </div>
+                {/* FILTRAR USUÁRIOS — abre o modal dedicado de seleção de
+                    usuários (mesmo estado unificado da Visão Geral). */}
+                <button
+                  type="button"
+                  onClick={() => setIsUserFilterOpen(true)}
+                  className={`inline-flex h-5 flex-shrink-0 items-center gap-1 rounded-md border px-1.5 text-[9px] font-black transition-colors cursor-pointer ${
+                    friendsSummaryUserMode === "filter" && friendsSummarySelectedUsers.length > 0
+                      ? "border-red-500/60 bg-red-900/30 text-amber-200 hover:bg-red-900/45"
+                      : "border-white/10 bg-white/5 text-slate-300 hover:bg-white/10 hover:text-white"
+                  }`}
+                  title="Selecionar quais usuários têm os personagens considerados no Bazaar e na Visão Geral"
+                >
+                  <Users size={10} />
+                  Filtrar Usuários
+                  {friendsSummaryUserMode === "filter" && friendsSummarySelectedUsers.length > 0 && (
+                    <span className="rounded-full bg-amber-500 px-1 font-mono text-[8px] font-black leading-[12px] text-black">
+                      {friendsSummarySelectedUsers.length}
+                    </span>
+                  )}
+                </button>
               </div>
               <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[10px] leading-tight">
                 {displayedLastSummary ? (
@@ -3833,15 +3859,21 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
         setTemplateType={setFriendsSummaryTemplateType}
         minLevels={friendsSummaryMinLevels}
         setMinLevels={setFriendsSummaryMinLevels}
-        userMode={friendsSummaryUserMode}
-        setUserMode={setFriendsSummaryUserMode}
-        selectedUsers={friendsSummarySelectedUsers}
-        setSelectedUsers={setFriendsSummarySelectedUsers}
         useCharacters={friendsSummaryUseCharacters}
         setUseCharacters={setFriendsSummaryUseCharacters}
         useWaitingList={friendsSummaryUseWaitingList}
         setUseWaitingList={setFriendsSummaryUseWaitingList}
         onReset={resetFriendsSummaryFilters}
+      />
+
+      {/* Modal dedicado de seleção de usuários — botão "Filtrar Usuários" do
+          quadro "Última consulta". Mesmo estado unificado da Visão Geral
+          (useOverviewFilters); alterações refletem lá na hora. Acima do
+          FriendsSummaryModal (z-[9999]) caso esteja aberto por trás. */}
+      <UserFilterModal
+        open={isUserFilterOpen}
+        zIndexClassName="z-[10000]"
+        onClose={() => setIsUserFilterOpen(false)}
       />
 
       <BazaarSearchFiltersModal
