@@ -1555,3 +1555,26 @@ body {
     color-mix(in oklab, var(--th-brand-deep) 90%, transparent)
   );
 }
+/* ============================================================================
+   BOTÃO "COPIAR LINK DO MEU FORMULÁRIO PESSOAL" (Meus Services)
+   ----------------------------------------------------------------------------
+   Pulso na BORDA para chamar a atenção do usuário elegível para o seu link
+   exclusivo do formulário de Services. Mesmo padrão visual dos pulsos de
+   borda já usados no app (pt-stage-border-pulse): a borda "respira" entre o
+   tom discreto e o esmeralda vivo, com halo suave e anel externo no pico —
+   sem alterar tamanho, fundo ou texto do botão. */
+@keyframes exclusive-form-link-border-pulse {
+  0%, 100% {
+    border-color: rgba(16, 185, 129, 0.3);
+    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0);
+  }
+  50% {
+    border-color: rgba(16, 185, 129, 0.95);
+    box-shadow:
+      0 0 12px 1px rgba(16, 185, 129, 0.28),
+      0 0 0 3px rgba(16, 185, 129, 0.14);
+  }
+}
+.exclusive-form-link-pulse {
+  animation: exclusive-form-link-border-pulse 1.8s ease-in-out infinite;
+}

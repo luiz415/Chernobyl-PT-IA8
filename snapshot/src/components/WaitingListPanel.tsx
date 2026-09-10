@@ -640,7 +640,7 @@ export default function WaitingListPanel({ items, onAdd, onUpdate, onDelete, use
             }}
             className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/50 text-amber-400 transition-colors whitespace-nowrap"
           >
-            <ExternalLink size={14} /> Link Formulário
+            <ExternalLink size={14} /> Copiar Link Formulário Geral
           </button>
           {/* Mensagens padrão do WhatsApp — configuração (título/conteúdo) das
               mensagens oferecidas no seletor ao clicar no WhatsApp do cliente. */}

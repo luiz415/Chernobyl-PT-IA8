@@ -1235,7 +1235,8 @@ export default function MyServicesPanel({
         {/* Lado direito: total (leitura) + links do formulário público.
             O botão genérico é o MESMO componente usado na aba "Services" —
             mesmo estilo, ícone, link e feedback, sem duplicar a lógica de
-            cópia. O botão "Gerar link do formulário" copia o link EXCLUSIVO
+            cópia. O botão "Copiar Link do Meu Formulário Pessoal" (com pulso
+            na borda) copia o link EXCLUSIVO
             do usuário (#/servico/{slug}): cadastros por ele chegam direto
             para o dono do link, sem o cliente escolher o Serviceiro (o
             próprio componente só renderiza para elegíveis). */}

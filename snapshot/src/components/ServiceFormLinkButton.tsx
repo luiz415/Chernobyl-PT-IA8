@@ -77,13 +77,15 @@ export default function ServiceFormLinkButton() {
       }}
       className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/50 text-amber-400 transition-colors whitespace-nowrap"
     >
-      <ExternalLink size={14} /> Link Formulário
+      <ExternalLink size={14} /> Copiar Link Formulário Geral
     </button>
   );
 }
 
 /**
- * Botão "Gerar link do formulário" — link EXCLUSIVO do usuário logado.
+ * Botão "Copiar Link do Meu Formulário Pessoal" — link EXCLUSIVO do usuário
+ * logado, com pulso esmeralda na borda (classe exclusive-form-link-pulse em
+ * src/index.css) para chamar a atenção.
  *
  * O slug é derivado do nome ("Luis" → "luis"); se OUTRO usuário elegível
  * tiver o mesmo slug, um sufixo do UID é anexado automaticamente — o link
@@ -135,10 +137,10 @@ export function ExclusiveServiceFormLinkButton() {
           customAlert(`Não foi possível copiar automaticamente. Copie manualmente:\n\n${url}`, "Copiar Link Exclusivo");
         }
       }}
-      className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/50 text-emerald-400 transition-colors whitespace-nowrap"
-      title="Gerar e copiar o seu link exclusivo: cadastros feitos por ele chegam direto para você, sem o cliente escolher o Serviceiro"
+      className="exclusive-form-link-pulse inline-flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/50 text-emerald-400 transition-colors whitespace-nowrap"
+      title="Copiar o seu link exclusivo: cadastros feitos por ele chegam direto para você, sem o cliente escolher o Serviceiro"
     >
-      <Link2 size={14} /> Gerar link do formulário
+      <Link2 size={14} /> Copiar Link do Meu Formulário Pessoal
     </button>
   );
 }
