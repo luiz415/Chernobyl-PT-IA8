@@ -419,6 +419,23 @@ export interface CharacterAcquisition {
   salePayoutStatus?: CharacterAcquisitionPayoutStatus;
   salePayoutConfirmedAt?: NegotiationTimestamp;
   salePayoutConfirmedByUid?: string;
+  /**
+   * PAGAMENTO POSTERIOR (opcional) — o DONO autorizou, na pré-aprovação, que o
+   * comprador pague somente após a venda do personagem. Imutável após criado.
+   */
+  deferredPaymentAllowed?: boolean;
+  /** O comprador optou pelo pagamento posterior no aceite da aquisição. */
+  deferredPaymentChosen?: boolean;
+  /**
+   * COMPENSAÇÃO FINAL do pagamento posterior, gravada no encerramento da
+   * pendência (salePayoutStatus: confirmed): diferença absoluta entre o valor
+   * obtido na venda posterior (saleValue) e o valor devido (finalPaid), com o
+   * pagador e o recebedor resolvidos pela regra determinística
+   * (venda >= devido → dono paga a diferença; venda < devido → comprador paga).
+   */
+  deferredSettlementAmount?: number;
+  deferredSettlementPayerUid?: string;
+  deferredSettlementReceiverUid?: string;
   updatedAt: NegotiationTimestamp;
 }
 

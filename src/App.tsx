@@ -3876,6 +3876,8 @@ export default function App() {
     characterId: string;
     originalCharacterCost: number;
     personalFee: 0 | 25 | 50;
+    /** DONO autoriza o comprador a pagar somente após a venda do personagem. */
+    deferredPaymentAllowed?: boolean;
   }): Promise<{ ok: boolean; error?: string }> {
     if (!currentUser?.uid) return { ok: false, error: "Entre na sua conta para pré-aprovar a venda." };
     const party = cloudParties.find(item => item.id === input.partyId);
@@ -3917,6 +3919,7 @@ export default function App() {
       originalCharacterCost: input.originalCharacterCost,
       personalFee: input.personalFee,
       bazaarFee: 50,
+      deferredPaymentAllowed: input.deferredPaymentAllowed === true,
       actorUid: currentUser.uid,
       actorName: displayUserName,
       actorRole: userProfile?.role,
@@ -3945,10 +3948,15 @@ export default function App() {
     return result;
   }
 
-  /** O JOGADOR confirma o pagamento ao Main Character do vendedor. */
-  async function confirmCharacterAcquisitionPaymentFromParty(acquisitionId: string): Promise<{ ok: boolean; error?: string }> {
+  /**
+   * O JOGADOR aceita a aquisição: confirma o pagamento ao Main Character do
+   * vendedor OU, quando o dono autorizou, opta pelo pagamento posterior
+   * (`deferPayment`) — nenhum valor agora; a pendência é quitada em uma única
+   * compensação após a venda do personagem.
+   */
+  async function confirmCharacterAcquisitionPaymentFromParty(acquisitionId: string, deferPayment = false): Promise<{ ok: boolean; error?: string }> {
     if (!currentUser?.uid) return { ok: false, error: "Entre na sua conta para confirmar o pagamento." };
-    const result = await confirmCharacterAcquisitionPayment(acquisitionId, currentUser.uid);
+    const result = await confirmCharacterAcquisitionPayment(acquisitionId, currentUser.uid, deferPayment);
     if (result.ok && result.record) {
       // O registro deixa o conjunto pendente e passa a compor a fonte
       // confirmada da guia/Stats imediatamente, antes do snapshot chegar.

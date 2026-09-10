@@ -110,8 +110,10 @@ interface Props {
     characterId: string;
     originalCharacterCost: number;
     personalFee: 0 | 25 | 50;
+    /** DONO autoriza o comprador a pagar somente após a venda do personagem. */
+    deferredPaymentAllowed: boolean;
   }) => Promise<{ ok: boolean; error?: string }>;
-  onConfirmCharacterAcquisitionPayment?: (acquisitionId: string) => Promise<{ ok: boolean; error?: string }>;
+  onConfirmCharacterAcquisitionPayment?: (acquisitionId: string, deferPayment?: boolean) => Promise<{ ok: boolean; error?: string }>;
   /**
    * Cancela uma pré-venda AINDA NÃO aceita pelo comprador (status
    * `pre_approved`). Exclusivo do dono original (ou Boss); depois do aceite
@@ -3504,7 +3506,7 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
         open={!!characterSalePrompt}
         context={characterSalePrompt as CharacterAcquisitionModalContext | null}
         onClose={() => setCharacterSalePrompt(null)}
-        onConfirm={async ({ originalCharacterCost, personalFee }) => {
+        onConfirm={async ({ originalCharacterCost, personalFee, deferredPaymentAllowed }) => {
           const prompt = characterSalePrompt;
           if (!prompt || !onCreateCharacterAcquisition) return { ok: false, error: "A negociação não está disponível neste momento." };
           const result = await onCreateCharacterAcquisition({
@@ -3512,6 +3514,7 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
             characterId: prompt.characterId,
             originalCharacterCost,
             personalFee,
+            deferredPaymentAllowed,
           });
           if (result.ok) setCharacterSalePrompt(null);
           return result;
@@ -3537,11 +3540,14 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
           },
           instruction: `O proprietário deste personagem pré-aprovou a venda por ${formatRC(acquisitionPaymentPrompt.finalPaid)}. Revise o cálculo acima: você pagará esse valor diretamente ao vendedor, que receberá o mesmo total. Após enviar ao Main Character dele, confirme abaixo.`,
           confirmLabel: "Confirmar pagamento",
+          // Pagamento posterior: habilita a opção do comprador somente quando
+          // o DONO autorizou na pré-aprovação (senão aparece desativada).
+          deferredPaymentAllowed: acquisitionPaymentPrompt.deferredPaymentAllowed === true,
         } as CharacterAcquisitionPaymentModalContext : null}
         onClose={() => setAcquisitionPaymentPrompt(null)}
-        onConfirm={async () => {
+        onConfirm={async options => {
           if (!acquisitionPaymentPrompt || !onConfirmCharacterAcquisitionPayment) return { ok: false, error: "A confirmação não está disponível neste momento." };
-          const result = await onConfirmCharacterAcquisitionPayment(acquisitionPaymentPrompt.id);
+          const result = await onConfirmCharacterAcquisitionPayment(acquisitionPaymentPrompt.id, options?.deferPayment === true);
           if (result.ok) setAcquisitionPaymentPrompt(null);
           return result;
         }}

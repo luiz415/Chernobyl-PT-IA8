@@ -38,6 +38,8 @@ export interface CreateCharacterAcquisitionInput {
   originalCharacterCost: number;
   personalFee: number;
   bazaarFee: number;
+  /** DONO autoriza o comprador a pagar somente após a venda do personagem. */
+  deferredPaymentAllowed?: boolean;
   actorUid: string;
   actorName: string;
   actorRole?: string;
@@ -209,6 +211,9 @@ function buildRecord(input: CreateCharacterAcquisitionInput): CharacterAcquisiti
     finalPaid,
     sellerReceived,
     status: "pre_approved",
+    // Autorização do DONO para pagamento posterior: gravada JÁ na criação e
+    // imutável depois (as Rules não permitem alterá-la em updates).
+    deferredPaymentAllowed: input.deferredPaymentAllowed === true,
     createdAt: now,
     createdByUid: normalizeText(input.actorUid, 80),
     createdByName: normalizeText(input.actorName),
@@ -461,17 +466,29 @@ export async function updateCharacterAcquisitionLifecycle(id: string, patch: Acq
   }
 }
 
-/** Comprador confirma que enviou o valor total ao Main Character do vendedor. */
-export async function confirmCharacterAcquisitionPayment(id: string, buyerUid?: string): Promise<{ ok: boolean; record?: CharacterAcquisition; error?: string }> {
+/**
+ * Comprador confirma o aceite da aquisição.
+ * `deferPayment: false` (padrão) — fluxo atual: o comprador declara ter
+ * enviado o valor total ao Main Character do vendedor.
+ * `deferPayment: true` — PAGAMENTO POSTERIOR: nenhum valor é transferido
+ * agora; o total devido vira pendência financeira quitada em uma única
+ * compensação após a venda do personagem. Só é aceito quando o DONO
+ * autorizou na pré-aprovação (`deferredPaymentAllowed`).
+ */
+export async function confirmCharacterAcquisitionPayment(id: string, buyerUid?: string, deferPayment = false): Promise<{ ok: boolean; record?: CharacterAcquisition; error?: string }> {
   const actor = normalizeText(buyerUid, 80);
   const update = (current: CharacterAcquisition): { next?: CharacterAcquisition; error?: string } => {
     if (actor !== current.acquirerUid) return { error: "Somente o comprador pode confirmar este pagamento." };
     const status = normalizeCharacterAcquisitionStatus(current.status);
     if (status !== "pre_approved") return { error: "Esta negociação não está aguardando pagamento do comprador." };
+    if (deferPayment && current.deferredPaymentAllowed !== true) {
+      return { error: "O vendedor não autorizou o pagamento após a venda para esta negociação." };
+    }
     return {
       next: {
         ...current,
         status: "payment_confirmed",
+        deferredPaymentChosen: deferPayment === true,
         paymentConfirmedAt: optimisticTimestamp(),
         paymentConfirmedByUid: actor,
         updatedAt: optimisticTimestamp(),
@@ -481,7 +498,52 @@ export async function confirmCharacterAcquisitionPayment(id: string, buyerUid?: 
   return mutateSharedRecord(id, update, ["paymentConfirmedAt"]);
 }
 
-/** Após a venda posterior, o dono confirma o repasse integral ao comprador. */
+// ============================================================================
+// COMPENSAÇÃO FINAL DO PAGAMENTO POSTERIOR
+// ----------------------------------------------------------------------------
+// Regra determinística (única transação entre comprador e vendedor):
+//   devido  = finalPaid (valor integral que o comprador pagaria na aquisição)
+//   venda   = saleValue (valor oficial obtido na venda posterior)
+//   venda > devido  → o DONO envia (venda − devido) ao comprador
+//   venda < devido  → o COMPRADOR envia (devido − venda) ao dono
+//   venda == devido → nenhum valor adicional a pagar
+// Equivale exatamente ao resultado líquido do fluxo normal (comprador paga
+// `devido` na aquisição e o dono repassa `venda` integral após vender).
+// ============================================================================
+export interface DeferredSettlement {
+  /** Diferença absoluta entre venda posterior e valor devido. */
+  amount: number;
+  direction: "owner_pays" | "buyer_pays" | "none";
+  payerUid: string;
+  payerName: string;
+  receiverUid: string;
+  receiverName: string;
+}
+
+export function computeDeferredSettlement(record: CharacterAcquisition, saleValue: number): DeferredSettlement {
+  const owed = getCharacterAcquisitionSellerReceived(record);
+  const diff = saleValue - owed;
+  if (diff > 0) {
+    return { amount: diff, direction: "owner_pays", payerUid: record.originalOwnerUid, payerName: record.originalOwnerName, receiverUid: record.acquirerUid, receiverName: record.acquirerName };
+  }
+  if (diff < 0) {
+    return { amount: -diff, direction: "buyer_pays", payerUid: record.acquirerUid, payerName: record.acquirerName, receiverUid: record.originalOwnerUid, receiverName: record.originalOwnerName };
+  }
+  return { amount: 0, direction: "none", payerUid: "", payerName: "", receiverUid: "", receiverName: "" };
+}
+
+/** Pendência financeira do pagamento posterior ainda em aberto. */
+export function isDeferredPaymentPending(record: CharacterAcquisition): boolean {
+  return record.deferredPaymentChosen === true && record.salePayoutStatus !== "confirmed";
+}
+
+/**
+ * Após a venda posterior, o dono confirma o encerramento financeiro.
+ * Fluxo normal: repasse integral do valor da venda ao comprador.
+ * Pagamento posterior: encerramento da pendência pela COMPENSAÇÃO ÚNICA —
+ * a diferença (e quem paga quem) é recalculada AQUI, dentro da transação,
+ * a partir de finalPaid/saleValue persistidos: nunca de valores do frontend.
+ */
 export async function confirmCharacterAcquisitionSalePayout(id: string, ownerUid?: string): Promise<{ ok: boolean; record?: CharacterAcquisition; error?: string }> {
   const actor = normalizeText(ownerUid, 80);
   const update = (current: CharacterAcquisition): { next?: CharacterAcquisition; error?: string } => {
@@ -490,15 +552,22 @@ export async function confirmCharacterAcquisitionSalePayout(id: string, ownerUid
       return { error: "O personagem ainda não possui uma venda registrada para repasse." };
     }
     if (current.salePayoutStatus === "confirmed") return { error: "O repasse da venda já foi confirmado." };
-    return {
-      next: {
-        ...current,
-        salePayoutStatus: "confirmed",
-        salePayoutConfirmedAt: optimisticTimestamp(),
-        salePayoutConfirmedByUid: actor,
-        updatedAt: optimisticTimestamp(),
-      },
+    const next: CharacterAcquisition = {
+      ...current,
+      salePayoutStatus: "confirmed",
+      salePayoutConfirmedAt: optimisticTimestamp(),
+      salePayoutConfirmedByUid: actor,
+      updatedAt: optimisticTimestamp(),
     };
+    if (current.deferredPaymentChosen === true) {
+      // Registro imutável do resultado da compensação, derivado dos valores
+      // persistidos no próprio documento (fonte canônica).
+      const settlement = computeDeferredSettlement(current, Number(current.saleValue || 0));
+      next.deferredSettlementAmount = settlement.amount;
+      next.deferredSettlementPayerUid = settlement.payerUid || "";
+      next.deferredSettlementReceiverUid = settlement.receiverUid || "";
+    }
+    return { next };
   };
   return mutateSharedRecord(id, update, ["salePayoutConfirmedAt"]);
 }
@@ -543,6 +612,13 @@ async function mutateSharedRecord(
         salePayoutStatus: next.salePayoutStatus,
         salePayoutConfirmedAt: next.salePayoutConfirmedAt,
         salePayoutConfirmedByUid: next.salePayoutConfirmedByUid,
+        // Pagamento posterior: escolha do comprador (aceite) e resultado da
+        // compensação (encerramento). `withoutUndefined` remove o que não
+        // pertence à mutação atual.
+        deferredPaymentChosen: next.deferredPaymentChosen,
+        deferredSettlementAmount: next.deferredSettlementAmount,
+        deferredSettlementPayerUid: next.deferredSettlementPayerUid,
+        deferredSettlementReceiverUid: next.deferredSettlementReceiverUid,
         updatedAt: serverTimestamp(),
       };
       serverTimestampFields.forEach(field => { writePatch[field] = serverTimestamp(); });

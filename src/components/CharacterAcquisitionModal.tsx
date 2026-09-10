@@ -17,7 +17,7 @@ interface Props {
   open: boolean;
   context: CharacterAcquisitionModalContext | null;
   onClose: () => void;
-  onConfirm: (input: { originalCharacterCost: number; personalFee: 0 | 25 | 50 }) => Promise<{ ok: boolean; error?: string }>;
+  onConfirm: (input: { originalCharacterCost: number; personalFee: 0 | 25 | 50; deferredPaymentAllowed: boolean }) => Promise<{ ok: boolean; error?: string }>;
 }
 
 function normalizeCostDraft(value: string): string {
@@ -60,6 +60,8 @@ function formatLocalDateTime(ts: number): string {
 export default function CharacterAcquisitionModal({ open, context, onClose, onConfirm }: Props) {
   const [costDraft, setCostDraft] = useState("");
   const [personalFee, setPersonalFee] = useState<0 | 25 | 50>(0);
+  // Pagamento posterior: autorização do DONO, sempre DESMARCADA por padrão.
+  const [deferredPaymentAllowed, setDeferredPaymentAllowed] = useState(false);
   const [error, setError] = useState("");
   const [isSaving, setIsSaving] = useState(false);
   const [waCopied, setWaCopied] = useState(false);
@@ -70,6 +72,7 @@ export default function CharacterAcquisitionModal({ open, context, onClose, onCo
     const detected = Number(context?.detectedOriginalCost || 0);
     setCostDraft(detected > 0 ? String(Math.floor(detected)) : "");
     setPersonalFee(0);
+    setDeferredPaymentAllowed(false);
     setError("");
     setIsSaving(false);
     setWaCopied(false);
@@ -119,6 +122,7 @@ export default function CharacterAcquisitionModal({ open, context, onClose, onCo
       `➕ Taxa pessoal: ${formatRC(personalFee)}`,
       `➕ Taxa Bazaar: ${formatRC(bazaarFee)}`,
       `✅ *Vendedor recebe: ${formatRC(sellerReceived)}*`,
+      ...(deferredPaymentAllowed ? ["", "⏳ Pagamento após a venda do personagem: *permitido pelo vendedor*"] : []),
       "",
       `🕒 Gerado em ${formatLocalDateTime(Date.now())}`,
     ];
@@ -137,7 +141,7 @@ export default function CharacterAcquisitionModal({ open, context, onClose, onCo
     setIsSaving(true);
     setError("");
     try {
-      const result = await onConfirm({ originalCharacterCost: originalCost, personalFee });
+      const result = await onConfirm({ originalCharacterCost: originalCost, personalFee, deferredPaymentAllowed });
       if (!result.ok) {
         setError(result.error || "Não foi possível registrar a negociação.");
         return;
@@ -245,6 +249,22 @@ export default function CharacterAcquisitionModal({ open, context, onClose, onCo
               <span className="block text-[9px] text-slate-500">{formatRC(bazaarFee)} · obrigatória nesta negociação.</span>
             </span>
             <input type="checkbox" checked disabled className="h-4 w-4 accent-sky-500" aria-label="Taxa Bazaar de 50 RC selecionada" />
+          </label>
+
+          {/* PAGAMENTO POSTERIOR — autorização exclusiva do DONO/vendedor.
+              Desmarcada por padrão; salva junto à negociação na pré-aprovação. */}
+          <label className={`flex cursor-pointer items-center justify-between gap-3 rounded-lg border px-3 py-2 transition-colors ${deferredPaymentAllowed ? "border-violet-400/45 bg-violet-500/[0.1]" : "border-violet-500/25 bg-violet-500/[0.05] hover:bg-violet-500/[0.08]"}`}>
+            <span>
+              <span className="text-xs font-bold text-slate-200">Permitir receber pagamento após a venda do personagem</span>
+              <span className="block text-[9px] text-slate-500">O comprador poderá optar por não pagar agora: uma única compensação da diferença encerra a pendência após a venda.</span>
+            </span>
+            <input
+              type="checkbox"
+              checked={deferredPaymentAllowed}
+              onChange={event => setDeferredPaymentAllowed(event.target.checked)}
+              className="h-4 w-4 flex-shrink-0 accent-violet-500"
+              aria-label="Permitir receber pagamento após a venda do personagem"
+            />
           </label>
 
           <section className="rounded-xl border border-emerald-400/35 bg-emerald-500/[0.09] p-3">

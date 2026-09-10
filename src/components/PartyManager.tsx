@@ -58,8 +58,10 @@ interface Props {
     characterId: string;
     originalCharacterCost: number;
     personalFee: 0 | 25 | 50;
+    /** DONO autoriza o comprador a pagar somente após a venda do personagem. */
+    deferredPaymentAllowed: boolean;
   }) => Promise<{ ok: boolean; error?: string }>;
-  onConfirmCharacterAcquisitionPayment?: (acquisitionId: string) => Promise<{ ok: boolean; error?: string }>;
+  onConfirmCharacterAcquisitionPayment?: (acquisitionId: string, deferPayment?: boolean) => Promise<{ ok: boolean; error?: string }>;
   /** Dono cancela pré-venda pendente (`pre_approved`); repassado ao PartyPanel. */
   onCancelCharacterAcquisitionPreApproval?: (acquisitionId: string) => Promise<{ ok: boolean; error?: string }>;
   // Chamado pelo PartyManager ao montar (aba "PT's" ativa).
