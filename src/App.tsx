@@ -3,7 +3,7 @@ import {
   Swords, History as HistoryIcon, BarChart3, StickyNote,
   Save, CheckCircle2, AlertTriangle, Calculator, AppWindow, Users, UserPlus, Archive, User, Clock, Sparkles,
   Lock, LockOpen, ArrowUp, ArrowDown, MessageSquareMore, Heart, Cloud, CloudCog, ShoppingBag, Bell, Trophy,
-  SlidersHorizontal, ChevronDown, FileSpreadsheet, Briefcase
+  SlidersHorizontal, ChevronDown, FileSpreadsheet, Briefcase, FileCode2
 } from "lucide-react";
 import ExoriLogo from "./components/ExoriLogo";
 import type { AppData, Character, CharacterAcquisition, CharacterAcquisitionBuyerDetails, PartyFinalizationReason, PartyTab, PersonalPartyHistory, PtType, WaitingService, SharedService, DialogOptions, ProbableMarkersMap, Vocation } from "./types";
@@ -20,6 +20,7 @@ import AcquiredCharactersPanel from "./components/AcquiredCharactersPanel";
 import CharacterModal from "./components/CharacterModal";
 import CurrencyCalculator from "./components/CurrencyCalculator";
 import ImbuementsModal from "./components/ImbuementsModal";
+import RtcImportModal from "./components/RtcImportModal";
 import PartyManager from "./components/PartyManager";
 import PersonalPartyHistoryList from "./components/PersonalPartyHistoryList";
 import StatsPanel from "./components/StatsPanel";
@@ -456,6 +457,8 @@ export default function App() {
   const [calcOpen, setCalcOpen] = useState(false);
   // Guia de Imbuements: modal somente-leitura, sem qualquer efeito nos dados.
   const [imbueOpen, setImbueOpen] = useState(false);
+  // Import RTC: gerenciador de códigos de importação (recomendados + pessoais).
+  const [rtcImportOpen, setRtcImportOpen] = useState(false);
   // Contador de cliques no botão "Câmbio". Só marcar `calcOpen` como `true`
   // não basta: se a janela já está aberta o valor não muda, nenhum efeito
   // roda e o clique se perde. Este contador é o sinal de "trazer para frente".
@@ -5224,6 +5227,11 @@ export default function App() {
           <button onClick={handleOpenCalc} className="inline-flex items-center gap-0.5 sm:gap-1 rounded-md border border-[var(--th-line)]/80 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20 hover:border-amber-600/50 hover:text-amber-200 transition-all duration-200 cursor-pointer" title="Câmbio" style={{ padding: "clamp(2.7px, 0.54vh, 5.4px) clamp(5.4px, 0.9vw, 9px)", fontSize: "clamp(8.1px, 1.35vh, 9.9px)" }}>
             <Calculator size={11} className="sm:w-[13px] sm:h-[13px]" /> <span className="hidden sm:inline">Câmbio</span>
           </button>
+          {/* Import RTC — cor ciano própria (destacada), sem conflitar com
+              Câmbio (âmbar) e Imbue (violeta). */}
+          <button onClick={() => setRtcImportOpen(true)} className="inline-flex items-center gap-0.5 sm:gap-1 rounded-md border border-cyan-500/40 bg-cyan-500/10 text-cyan-300 hover:bg-cyan-500/20 hover:border-cyan-400/60 hover:text-cyan-200 transition-all duration-200 cursor-pointer shadow-[0_0_8px_rgba(34,211,238,0.15)]" title="Import RTC — códigos de importação por Quest e vocação" style={{ padding: "clamp(2.7px, 0.54vh, 5.4px) clamp(5.4px, 0.9vw, 9px)", fontSize: "clamp(8.1px, 1.35vh, 9.9px)" }}>
+            <FileCode2 size={11} className="sm:w-[13px] sm:h-[13px]" /> <span className="hidden sm:inline">Import RTC</span>
+          </button>
           <button onClick={() => setImbueOpen(true)} className="inline-flex items-center gap-0.5 sm:gap-1 rounded-md border border-[var(--th-line)]/80 bg-violet-500/10 text-violet-300 hover:bg-violet-500/20 hover:border-violet-500/50 hover:text-violet-200 transition-all duration-200 cursor-pointer" title="Guia de Imbuements" style={{ padding: "clamp(2.7px, 0.54vh, 5.4px) clamp(5.4px, 0.9vw, 9px)", fontSize: "clamp(8.1px, 1.35vh, 9.9px)" }}>
             <Sparkles size={11} className="sm:w-[13px] sm:h-[13px]" /> <span className="hidden sm:inline">Imbue</span>
           </button>
@@ -5336,7 +5344,7 @@ export default function App() {
                 de montagem do painel (caches/sincronizações) rodam sempre no
                 modo correto e nenhum estado real/fictício se mistura. */}
             {demoData ? (
-              <BazarPanel key="bazar-demo" sharedCharacters={demoData.characters} waitingList={demoData.waitingList} activeParties={demoData.parties} personalCharacters={demoData.characters} accounts={["Conta 1", "Conta 2", "Conta 3"]} demoBazaar={demoData.bazaar} />
+              <BazarPanel key="bazar-demo" sharedCharacters={demoData.bazaarSharedCharacters} waitingList={demoData.waitingList} activeParties={demoData.parties} personalCharacters={demoData.characters} accounts={["Conta 1", "Conta 2", "Conta 3"]} demoBazaar={demoData.bazaar} />
             ) : (
               <BazarPanel key="bazar-real" sharedCharacters={availableCharactersForParty} waitingList={availableWaitingListForParty} activeParties={cloudParties} personalCharacters={data.characters} accounts={accounts} onAddCharacterFromBazaar={addCharacterFromBazaar} />
             )}
@@ -5542,6 +5550,7 @@ export default function App() {
       />
       <CurrencyCalculator open={calcOpen} onClose={() => setCalcOpen(false)} focusSignal={calcFocusSignal} />
       <ImbuementsModal open={imbueOpen} onClose={() => setImbueOpen(false)} />
+      <RtcImportModal open={rtcImportOpen} onClose={() => setRtcImportOpen(false)} />
       <FeedbackModal open={feedbackOpen} onClose={() => setFeedbackOpen(false)} userName={displayUserName} />
       <DonationModal open={donationOpen} onClose={() => setDonationOpen(false)} minAverage={globalSettings.minimumAverageDonation} />
       {(() => {

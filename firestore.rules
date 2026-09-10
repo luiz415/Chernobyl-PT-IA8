@@ -506,6 +506,31 @@ service cloud.firestore {
       allow create, update, delete: if isBoss()
         && docId in ['metadata', 'current'];
     }
+    // ── IMPORT RTC — perfis RECOMENDADOS (globais) ─────────────────────────
+    // Documento único `rtcImports/recommended` com o mapa `entries`
+    // (chave "quest|voc|divisão|tipo" → { profileName, code, updatedAtMs }).
+    // TODOS os usuários aprovados leem; SOMENTE Boss escreve. A regra vale
+    // para escrita direta no Firestore — não dependemos da UI esconder botões.
+    match /rtcImports/{docId} {
+      allow read: if isAuth() && isApproved();
+      allow create, update, delete: if isBoss()
+        && docId == 'recommended'
+        && request.resource.data.keys().hasOnly(['entries', 'updatedAt'])
+        && request.resource.data.entries is map;
+    }
+    // ── IMPORT RTC — perfis PESSOAIS (por usuário) ─────────────────────────
+    // Um documento por usuário (`userRtcImports/{uid}`), mesmo formato de
+    // `entries`. Vinculado à conta autenticada: só o dono lê e escreve —
+    // é o que garante a sincronização segura entre dispositivos.
+    match /userRtcImports/{userId} {
+      allow read: if isAuth() && isApproved() && request.auth.uid == userId;
+      allow create, update: if isAuth() && isApproved()
+        && request.auth.uid == userId
+        && request.resource.data.keys().hasOnly(['uid', 'entries', 'updatedAt'])
+        && request.resource.data.uid == userId
+        && request.resource.data.entries is map;
+      allow delete: if isAuth() && isApproved() && request.auth.uid == userId;
+    }
     match /serviceRequests/{requestId} {
       allow read: if isAuth() && isApproved() && (
         resource.data.serviceiroUid == request.auth.uid || isBoss()
