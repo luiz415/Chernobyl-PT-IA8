@@ -9,9 +9,9 @@ import {
   RTC_PROFILE_NAME_MAX,
   RTC_QUEST_LABELS,
   RTC_SLOT_LABELS,
-  RTC_SLOT_TYPES,
   buildRtcKey,
   rtcCodeHue,
+  rtcDivisionSlots,
   type RtcEntry,
   type RtcEntryMap,
   type RtcQuest,
@@ -229,21 +229,21 @@ export default function RtcImportModal({ open, onClose }: Props) {
     const isCopied = copiedKey === uniqueKey;
 
     return (
-      <div className="flex min-w-0 flex-col justify-center gap-1 px-1.5 py-1.5">
+      <div className="flex min-w-0 flex-col justify-center gap-0.5 px-1 py-1">
         {entry ? (
           <>
-            <div className="flex min-w-0 items-center gap-1">
-              <span className="min-w-0 flex-1 truncate text-[11px] font-bold leading-tight text-slate-200" title={entry.profileName}>
+            <div className="flex min-w-0 items-center gap-0.5">
+              <span className="min-w-0 flex-1 truncate text-[10px] font-bold leading-tight text-slate-200" title={entry.profileName}>
                 {entry.profileName}
               </span>
               {canEdit && (
                 <button
                   type="button"
                   onClick={() => startEdit(scope, key, entry)}
-                  className="flex-shrink-0 inline-flex h-5 w-5 items-center justify-center rounded border border-transparent text-slate-500 hover:text-slate-200 hover:border-[var(--th-line)] transition-colors cursor-pointer"
+                  className="flex-shrink-0 inline-flex h-4 w-4 items-center justify-center rounded border border-transparent text-slate-500 hover:text-slate-200 hover:border-[var(--th-line)] transition-colors cursor-pointer"
                   title={isRecommended ? "Editar perfil recomendado (Boss)" : "Editar meu perfil"}
                 >
-                  <Pencil size={10} />
+                  <Pencil size={9} />
                 </button>
               )}
             </div>
@@ -253,7 +253,7 @@ export default function RtcImportModal({ open, onClose }: Props) {
             <button
               type="button"
               onClick={() => copyCode(uniqueKey, entry.code)}
-              className="inline-flex h-6 w-full items-center justify-center gap-1 rounded-md border text-[10px] font-black tracking-wide transition-all duration-150 cursor-pointer hover:brightness-125 active:scale-95"
+              className="inline-flex h-5 w-full items-center justify-center gap-1 rounded border text-[9px] font-black tracking-wide transition-all duration-150 cursor-pointer hover:brightness-125 active:scale-95"
               style={isCopied
                 ? { borderColor: "rgba(16,185,129,0.6)", background: "rgba(16,185,129,0.18)", color: "#6ee7b7" }
                 : {
@@ -265,24 +265,23 @@ export default function RtcImportModal({ open, onClose }: Props) {
               title={isCopied ? "Código copiado!" : `Importar (copiar) o código do perfil "${entry.profileName}"`}
             >
               {isCopied
-                ? <><Check size={11} strokeWidth={3} /> Copiado</>
-                : <><Copy size={10} strokeWidth={2.5} /> Importar</>}
+                ? <><Check size={10} strokeWidth={3} /> Copiado</>
+                : <><Copy size={9} strokeWidth={2.5} /> Importar</>}
             </button>
           </>
         ) : (
           <>
-            <span className="truncate text-[10px] italic leading-tight text-slate-600">—</span>
             {canEdit ? (
               <button
                 type="button"
                 onClick={() => startEdit(scope, key, undefined)}
-                className="inline-flex h-6 w-full items-center justify-center gap-1 rounded-md border border-dashed border-[var(--th-line)] text-[9px] font-bold text-slate-500 hover:text-slate-300 hover:border-slate-500/70 transition-colors cursor-pointer"
+                className="inline-flex h-5 w-full items-center justify-center gap-1 rounded border border-dashed border-[var(--th-line)] text-[9px] font-bold text-slate-500 hover:text-slate-300 hover:border-slate-500/70 transition-colors cursor-pointer"
                 title={isRecommended ? "Configurar recomendação (Boss)" : "Adicionar meu perfil"}
               >
                 <Plus size={10} /> Adicionar
               </button>
             ) : (
-              <span className="inline-flex h-6 w-full items-center justify-center rounded-md border border-transparent text-[9px] italic text-slate-700">
+              <span className="inline-flex h-5 w-full items-center justify-center rounded border border-transparent text-[9px] italic text-slate-700">
                 {isRecommended ? "Sem recomendação" : "Não configurado"}
               </span>
             )}
@@ -361,9 +360,9 @@ export default function RtcImportModal({ open, onClose }: Props) {
     const isEditingHere = editing?.key === key;
     return (
       <div key={slot} className={isLast && !isEditingHere ? "" : "border-b border-[var(--th-line)]/40"}>
-        <div className="grid grid-cols-[52px_1fr_1fr]">
-          <div className="flex items-center border-r border-[var(--th-line)]/40 px-1.5">
-            <span className="text-[9px] font-black uppercase tracking-widest" style={{ color: vs.text }}>
+        <div className="grid grid-cols-[44px_1fr_1fr]">
+          <div className="flex items-center border-r border-[var(--th-line)]/40 px-1">
+            <span className="text-[8px] font-black uppercase tracking-wider" style={{ color: vs.text }}>
               {RTC_SLOT_LABELS[slot]}
             </span>
           </div>
@@ -476,34 +475,45 @@ export default function RtcImportModal({ open, onClose }: Props) {
           </div>
 
           {/* Cards de divisão — UMA caixa por divisão contendo a TABELA:
-              colunas Recomendado / Meu Perfil, linhas Acesso / Boss. Linhas
-              de grade finas garantem alinhamento perfeito entre células. */}
-          <div className="grid grid-cols-1 gap-2.5 md:grid-cols-2">
+              colunas Recomendado / Meu Perfil, linhas conforme os tipos que a
+              divisão realmente possui (rtcDivisionSlots — Last e Bakragore
+              não têm "Acesso", então a linha nem é renderizada). COMPACTO:
+              3 colunas em telas largas, espaçamentos reduzidos. DESTAQUE:
+              borda contínua na cor da vocação + faixa lateral, separando
+              claramente cada Boss sem decoração excessiva. */}
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
             {divisions.map((division, index) => (
               <div
                 key={division.id}
-                className="overflow-hidden rounded-xl border border-[var(--th-line)]/70 bg-[var(--th-bg-raised)]/40"
-                style={{ borderLeft: `3px solid ${vs.border}` }}
+                className="overflow-hidden rounded-lg bg-[var(--th-bg-raised)]/40"
+                style={{
+                  border: `1px solid ${vs.border}`,
+                  borderLeft: `3px solid ${vs.border}`,
+                  boxShadow: `0 0 0 1px color-mix(in oklab, ${vs.hue} 12%, transparent), 0 2px 10px rgba(0,0,0,0.35)`,
+                }}
               >
-                {/* Título da divisão */}
-                <div className="flex items-baseline gap-1.5 border-b border-[var(--th-line)]/60 bg-[var(--th-bg-raised)]/60 px-2.5 py-1.5">
-                  <span className="font-mono text-[9px] font-black text-slate-600">{index + 1}.</span>
-                  <h3 className="text-[12px] font-black uppercase tracking-wider text-slate-100">{division.label}</h3>
-                  {division.sublabel && <span className="text-[10px] font-bold text-slate-500">— {division.sublabel}</span>}
+                {/* Título da divisão — faixa levemente tingida pela vocação. */}
+                <div
+                  className="flex items-baseline gap-1 border-b px-2 py-1"
+                  style={{ borderColor: vs.border, background: `color-mix(in oklab, ${vs.hue} 8%, var(--th-bg-raised))` }}
+                >
+                  <span className="font-mono text-[8px] font-black text-slate-500">{index + 1}.</span>
+                  <h3 className="truncate text-[11px] font-black uppercase tracking-wider text-slate-100">{division.label}</h3>
+                  {division.sublabel && <span className="truncate text-[9px] font-bold text-slate-500">— {division.sublabel}</span>}
                 </div>
                 {/* Cabeçalho da tabela: coluna vazia (rótulos) + Recomendado + Meu Perfil */}
-                <div className="grid grid-cols-[52px_1fr_1fr] border-b border-[var(--th-line)]/40 bg-[var(--th-bg-base)]/40">
+                <div className="grid grid-cols-[44px_1fr_1fr] border-b border-[var(--th-line)]/40 bg-[var(--th-bg-base)]/40">
                   <div className="border-r border-[var(--th-line)]/40" />
-                  <div className="border-r border-[var(--th-line)]/40 px-1.5 py-1 text-center text-[9px] font-black uppercase tracking-wide text-amber-400/90">
+                  <div className="border-r border-[var(--th-line)]/40 px-1 py-0.5 text-center text-[8px] font-black uppercase tracking-wide text-amber-400/90">
                     Recomendado
                   </div>
-                  <div className="px-1.5 py-1 text-center text-[9px] font-black uppercase tracking-wide text-sky-400/90">
+                  <div className="px-1 py-0.5 text-center text-[8px] font-black uppercase tracking-wide text-sky-400/90">
                     Meu Perfil
                   </div>
                 </div>
-                {/* Linhas: Acesso e Boss */}
-                {RTC_SLOT_TYPES.map((slot, slotIndex) =>
-                  renderTableRow(division.id, slot, slotIndex === RTC_SLOT_TYPES.length - 1)
+                {/* Linhas: somente os tipos que a divisão possui. */}
+                {rtcDivisionSlots(division).map((slot, slotIndex, slots) =>
+                  renderTableRow(division.id, slot, slotIndex === slots.length - 1)
                 )}
               </div>
             ))}

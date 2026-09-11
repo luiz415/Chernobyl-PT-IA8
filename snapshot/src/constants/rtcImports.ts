@@ -43,6 +43,14 @@ export interface RtcDivision {
   label: string;
   /** Complemento/apelido da etapa (ex.: "Cogumelos"). */
   sublabel?: string;
+  /**
+   * Tipos de código que ESTA divisão realmente possui. Ausente = todos
+   * (`RTC_SLOT_TYPES`). Divisões finais (Last da Soul War e Bakragore da
+   * Sanguine) só têm configuração de Boss — a linha "Acesso" nem existe,
+   * então o card não a exibe (exigência do produto). É metadado de
+   * ESTRUTURA/EXIBIÇÃO: chaves, códigos e persistência não mudam.
+   */
+  slots?: RtcSlotType[];
 }
 
 /**
@@ -58,16 +66,23 @@ export const RTC_DIVISIONS: Record<RtcQuest, RtcDivision[]> = {
     { id: "sw_piranha", label: "Piranha" },
     { id: "sw_rotten", label: "Rotten" },
     { id: "sw_cloak", label: "Cloak" },
-    { id: "sw_last", label: "Last" },
+    // LAST só possui o próprio chefe — não existe código de Acesso.
+    { id: "sw_last", label: "Last", slots: ["boss"] },
   ],
   sanguine: [
     { id: "sg_murcion", label: "Murcion", sublabel: "Cogumelos" },
     { id: "sg_chagorz", label: "Chagorz", sublabel: "Pilar" },
     { id: "sg_vemiath", label: "Vemiath", sublabel: "DarkLight" },
     { id: "sg_ichgahal", label: "Ichgahal", sublabel: "Casulo" },
-    { id: "sg_bakragore", label: "Bakragore", sublabel: "Final" },
+    // Bakragore (Final) só possui o próprio chefe — sem código de Acesso.
+    { id: "sg_bakragore", label: "Bakragore", sublabel: "Final", slots: ["boss"] },
   ],
 };
+
+/** Tipos de código exibidos para uma divisão (ausente = todos). */
+export function rtcDivisionSlots(division: RtcDivision): RtcSlotType[] {
+  return division.slots && division.slots.length > 0 ? division.slots : RTC_SLOT_TYPES;
+}
 
 /** Rótulos das Quests no modal. */
 export const RTC_QUEST_LABELS: Record<RtcQuest, string> = {
