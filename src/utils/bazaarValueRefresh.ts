@@ -108,27 +108,33 @@ export function applyValueOverlay<T extends AuctionLike>(
 }
 
 /**
- * AUTO REMOVER INTERESSE — identifica os leilões afetados.
- * Critério EXATO do requisito: interesse marcado por alguém E novo valor
- * ESTRITAMENTE maior que o limite (`>`); valor igual ou abaixo mantém.
- * Retorna também a contagem de interesses (usuários) que serão removidos.
+ * AUTO REMOVER INTERESSE — identifica os leilões afetados PARA O USUÁRIO
+ * EXECUTOR. Critério EXATO do requisito: o PRÓPRIO usuário (`uid`) tem
+ * "Tenho Interesse" marcado E o novo valor é ESTRITAMENTE maior que o
+ * limite (`>`); valor igual ou abaixo mantém. Interesses de OUTROS usuários
+ * nunca entram na seleção — a remoção atinge somente a marcação de quem
+ * executou a função. O personagem permanece na lista; nada além da marcação
+ * do executor é afetado.
  */
 export function computeAutoRemoveAuctions(
   updatedAuctions: AuctionLike[],
   interests: Record<string, Array<{ uid: string }>>,
   limit: number,
+  uid: string,
 ): { auctionIds: string[]; removedInterestCount: number } {
   const auctionIds: string[] = [];
   let removedInterestCount = 0;
-  if (!Number.isFinite(limit)) return { auctionIds, removedInterestCount };
+  const executorUid = String(uid || "");
+  if (!Number.isFinite(limit) || !executorUid) return { auctionIds, removedInterestCount };
   (updatedAuctions || []).forEach(auction => {
     const key = bazaarValueAuctionKey(auction);
     if (!key) return;
     const users = interests?.[key] || [];
-    if (users.length === 0) return;
+    // Só leilões onde o PRÓPRIO executor está interessado.
+    if (!users.some(user => String(user?.uid || "") === executorUid)) return;
     if ((Number(auction.bid) || 0) > limit) {
       auctionIds.push(key);
-      removedInterestCount += users.length;
+      removedInterestCount += 1; // exatamente 1 marcação (a do executor) por leilão
     }
   });
   return { auctionIds, removedInterestCount };

@@ -1881,8 +1881,10 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
    *     mantêm os valores originais.
    *   • AUTO REMOVER INTERESSE (opcional): com o checkbox ligado e um limite
    *     definido, leilões cujo NOVO valor ficou ESTRITAMENTE ACIMA do limite
-   *     têm TODOS os interesses removidos em UMA única transação no doc
-   *     agregado (1 leitura + 1 escrita no total; nada a remover = 0 escrita).
+   *     têm APENAS a marcação "Tenho Interesse" DO EXECUTOR removida, em UMA
+   *     única transação no doc agregado (1 leitura + 1 escrita no total;
+   *     nada a remover = 0 escrita). Interesses de outros usuários e o
+   *     personagem na lista permanecem intactos.
    *
    * A consulta oficial (requestBazaarQuery/executeBazaarQuery) permanece
    * intocada — este fluxo nunca publica lista nem mexe nos filtros.
@@ -1948,25 +1950,29 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
       let statusMessage = `Valores atualizados localmente: ${matchedCount} de ${officialAuctions.length} leilões reencontrados.`;
 
       // ── AUTO REMOVER INTERESSE ────────────────────────────────────────────
+      // Remove SOMENTE a marcação "Tenho Interesse" do PRÓPRIO executor nos
+      // leilões cujo novo valor passou do limite. Interesses de outros
+      // usuários e o personagem na lista permanecem intactos.
       const limit = parseAutoRemoveLimit(autoRemoveInterestLimit);
-      if (autoRemoveInterestEnabled && limit !== null) {
+      const executorUid = currentUser?.uid || "";
+      if (autoRemoveInterestEnabled && limit !== null && executorUid) {
         const officialWithNewValues = applyValueOverlay(officialAuctions, values);
-        const { auctionIds, removedInterestCount } = computeAutoRemoveAuctions(officialWithNewValues, bazaarInterests, limit);
+        const { auctionIds, removedInterestCount } = computeAutoRemoveAuctions(officialWithNewValues, bazaarInterests, limit, executorUid);
         if (auctionIds.length > 0) {
-          setValueRefreshStatus("Removendo interesses acima do limite...");
-          // UMA transação no doc agregado remove todos de uma vez
-          // (1 leitura + 1 escrita, independente da quantidade).
-          const confirmed = await removeBazaarInterestsForAuctions({ auctionIds, bazaarVersion: officialVersion });
+          setValueRefreshStatus("Removendo os seus interesses acima do limite...");
+          // UMA transação no doc agregado remove só as marcações do executor
+          // (1 leitura + 1 escrita, independente da quantidade de leilões).
+          const confirmed = await removeBazaarInterestsForAuctions({ auctionIds, uid: executorUid, bazaarVersion: officialVersion });
           setBazaarInterests(confirmed);
           syncBazaarEndingAlerts({
             characters: autoBidCharacters,
             interestsByAuctionId: confirmed,
-            currentUserUid: currentUser?.uid || "",
+            currentUserUid: executorUid,
             bazaarVersion: officialVersion,
           });
-          statusMessage += ` Interesses removidos: ${removedInterestCount} (leilões acima de ${limit.toLocaleString("de-DE")}).`;
+          statusMessage += ` Seus interesses removidos: ${removedInterestCount} (leilões acima de ${limit.toLocaleString("de-DE")}).`;
         } else {
-          statusMessage += " Nenhum interesse acima do limite.";
+          statusMessage += " Nenhum interesse seu acima do limite.";
         }
       }
       setValueRefreshStatus(statusMessage);
@@ -3218,7 +3224,7 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
                   </button>
                   <label
                     className="inline-flex h-7 items-center justify-center gap-1.5 rounded-md border border-rose-500/25 bg-rose-500/10 px-2 text-[9px] font-black text-rose-300 cursor-pointer select-none"
-                    title="Ao atualizar valores, remove automaticamente o interesse (de qualquer usuário) dos leilões cujo NOVO valor ficou ACIMA do limite; valor igual ou abaixo mantém o interesse"
+                    title="Ao atualizar valores, remove automaticamente a SUA marcação 'Tenho Interesse' dos leilões cujo NOVO valor ficou ACIMA do limite; valor igual ou abaixo mantém. Interesses de outros usuários e o personagem na lista não são afetados"
                   >
                     <input
                       type="checkbox"

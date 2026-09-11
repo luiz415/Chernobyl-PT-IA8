@@ -667,20 +667,25 @@ export async function removeBazaarInterest(params: { auctionId: string | number;
 }
 
 /**
- * AUTO REMOVER INTERESSE (Boss) — remove TODOS os interessados dos leilões
- * indicados em UMA ÚNICA transação sobre o doc agregado
- * (`bazaarInterests/current`): 1 leitura + 1 escrita no total, independente
- * da quantidade de leilões/usuários afetados. Leilões sem interessados são
- * ignorados; se nada mudar, NENHUMA escrita acontece (mutateAggregated
- * devolve null → transação sem set).
+ * AUTO REMOVER INTERESSE — remove a marcação "Tenho Interesse" DE UM ÚNICO
+ * USUÁRIO (o executor da função) em vários leilões de uma vez, em UMA ÚNICA
+ * transação sobre o doc agregado (`bazaarInterests/current`): 1 leitura +
+ * 1 escrita no total, independente da quantidade de leilões afetados.
  *
- * Permissão: qualquer usuário aprovado pode escrever no doc agregado pelas
- * rules atuais (é o mesmo doc dos cliques de interesse), mas esta função é
- * exposta apenas no fluxo do Boss ("Atualizar Valores"); a operação não
- * concede nada além do que o botão "Remover" de cada linha já permite.
+ * IMPORTANTE (regra do produto): interesses de OUTROS usuários nos mesmos
+ * leilões são preservados intactos — só a entrada `byAuction[auctionId][uid]`
+ * do executor é removida. O leilão/personagem em si nunca sai da lista
+ * oficial (esta função não toca na lista, apenas no doc de interesses; um
+ * leilão que fique sem nenhum interessado é apenas compactado no doc, o que
+ * não afeta sua exibição no painel). Se nada mudar, NENHUMA escrita
+ * acontece (mutate devolve null → transação sem set).
+ *
+ * Permissão: é exatamente o que o botão "Remover" de cada linha já permite
+ * (o usuário removendo o próprio interesse), apenas em lote.
  */
-export async function removeBazaarInterestsForAuctions(params: { auctionIds: Array<string | number>; bazaarVersion: string }): Promise<BazaarInterestMap> {
+export async function removeBazaarInterestsForAuctions(params: { auctionIds: Array<string | number>; uid: string; bazaarVersion: string }): Promise<BazaarInterestMap> {
   const bazaarVersion = normalizeBazaarVersion(params.bazaarVersion);
+  const uid = normalizeFirestoreId(params.uid, "uid");
   const targets = new Set(
     (params.auctionIds || [])
       .map(id => String(id ?? "").trim())
@@ -691,8 +696,10 @@ export async function removeBazaarInterestsForAuctions(params: { auctionIds: Arr
     const updated: Record<string, StoredAuctionInterests> = { ...byAuction };
     targets.forEach(auctionId => {
       const entries = updated[auctionId];
-      if (entries && Object.keys(entries).length > 0) {
-        updated[auctionId] = {};
+      // Remove APENAS a entrada do executor; os demais uids ficam como estão.
+      if (entries && entries[uid]) {
+        const { [uid]: _removed, ...rest } = entries;
+        updated[auctionId] = rest;
         changed = true;
       }
     });
