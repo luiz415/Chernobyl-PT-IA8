@@ -3895,7 +3895,19 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
                   : undefined;
                 // Pré-aprovação é EXCLUSIVA do dono original. O jogador só vê a
                 // ação de aceitar depois de a proposta estar registrada.
+                //
+                // SERVICE NUNCA TEM PRÉ-VENDA: personagens de Service pertencem
+                // a um CLIENTE externo — o Serviceiro/criador do registro não é
+                // o dono real. Sem o `!isServiceMember`, um Service com
+                // snapshot (resolvido como slot `type:"char"`, com
+                // `d.ownerUid = createdBy`) exibia o botão indevidamente para
+                // quem criou o cadastro. A checagem usa `isServiceMember`
+                // (isWaiting OU d.isService da própria PT), a mesma fonte do
+                // selo "Service". No backend, as rules de characterAcquisitions
+                // já exigem auth.uid == originalOwnerUid == createdByUid no
+                // create — nem o Boss cria em nome de terceiros.
                 const canPreApproveAcquisition = !!onCreateCharacterAcquisition
+                  && !isServiceMember
                   && !!sourceCharacter
                   && !!d.ownerUid
                   && !!playerUid

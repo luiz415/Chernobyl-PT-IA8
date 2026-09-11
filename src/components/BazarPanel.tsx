@@ -2668,26 +2668,6 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
                 <div className="inline-flex items-center gap-1.5 font-black text-amber-300 uppercase tracking-wide">
                   <Sparkles size={12} /> Última consulta
                 </div>
-                {/* FILTRAR USUÁRIOS — abre o modal dedicado de seleção de
-                    usuários (mesmo estado unificado da Visão Geral). */}
-                <button
-                  type="button"
-                  onClick={() => setIsUserFilterOpen(true)}
-                  className={`inline-flex h-5 flex-shrink-0 items-center gap-1 rounded-md border px-1.5 text-[9px] font-black transition-colors cursor-pointer ${
-                    friendsSummaryUserMode === "filter" && friendsSummarySelectedUsers.length > 0
-                      ? "border-red-500/60 bg-red-900/30 text-amber-200 hover:bg-red-900/45"
-                      : "border-white/10 bg-white/5 text-slate-300 hover:bg-white/10 hover:text-white"
-                  }`}
-                  title="Selecionar quais usuários têm os personagens considerados no Bazaar e na Visão Geral"
-                >
-                  <Users size={10} />
-                  Filtrar Usuários
-                  {friendsSummaryUserMode === "filter" && friendsSummarySelectedUsers.length > 0 && (
-                    <span className="rounded-full bg-amber-500 px-1 font-mono text-[8px] font-black leading-[12px] text-black">
-                      {friendsSummarySelectedUsers.length}
-                    </span>
-                  )}
-                </button>
               </div>
               <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[10px] leading-tight">
                 {displayedLastSummary ? (
@@ -3010,6 +2990,31 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
                 </button>
               </div>
               <div className="flex flex-col gap-1">
+                {/* FILTRAR USUÁRIOS — abre o modal dedicado de seleção de
+                    usuários (mesmo estado unificado da Visão Geral). Antes era
+                    um mini-botão ao lado do título "Última consulta"; foi
+                    promovido para a coluna de ações do lado direito, no MESMO
+                    formato dos demais botões (h-7), com cor própria (violeta)
+                    para ser identificado rapidamente sem destoar do padrão.
+                    A função e o estado do filtro são exatamente os mesmos. */}
+                <button
+                  type="button"
+                  onClick={() => setIsUserFilterOpen(true)}
+                  className={`inline-flex h-7 items-center justify-center gap-1 rounded-md border px-2.5 text-[10px] font-black transition-colors cursor-pointer ${
+                    friendsSummaryUserMode === "filter" && friendsSummarySelectedUsers.length > 0
+                      ? "border-red-500/60 bg-red-900/30 text-amber-200 hover:bg-red-900/45"
+                      : "border-violet-500/30 bg-violet-500/10 text-violet-300 hover:bg-violet-500/20"
+                  }`}
+                  title="Selecionar quais usuários têm os personagens considerados no Bazaar e na Visão Geral"
+                >
+                  <Users size={12} />
+                  Filtrar Usuários
+                  {friendsSummaryUserMode === "filter" && friendsSummarySelectedUsers.length > 0 && (
+                    <span className="rounded-full bg-amber-500 px-1.5 font-mono text-[9px] font-black leading-[14px] text-black">
+                      {friendsSummarySelectedUsers.length}
+                    </span>
+                  )}
+                </button>
                 <button type="button" onClick={() => setIsFriendsSummaryOpen(true)} className="inline-flex h-7 items-center justify-center gap-1 rounded-md border border-amber-500/25 bg-amber-500/10 px-2.5 text-[10px] font-black text-amber-300 hover:bg-amber-500/20 transition-colors cursor-pointer">
                   Resumo de Amigos
                 </button>
