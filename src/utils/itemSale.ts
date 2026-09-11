@@ -182,10 +182,11 @@ function formatKkShort(value: number): string {
  * Linha RESUMIDA da venda para o texto do WhatsApp — curta e suficiente para
  * explicar a origem do valor final.
  *
- * Regra VIGENTE (registro tem `saleTaxKk`) — formato definido pelo produto:
- *   "Oferta criada 3x (-3kk), taxa venda 3% (-4,5kk) = 142,5kk, RC a 90k"
+ * Regra VIGENTE (registro tem `saleTaxKk`) — formato definido pelo produto,
+ * com o valor BRUTO da venda no início da linha:
+ *   "Vendido por 150kk - Oferta criada 3x (-3kk), taxa venda 3% (-4,5kk) = 142,5kk, RC a 90k"
  *   (o chamador acrescenta " = 1.583 RC" com o resultado final)
- *   0 ofertas: "taxa venda 3% (-1,5kk) = 48,5kk, RC a 2,5k"
+ *   0 ofertas: "Vendido por 50kk - taxa venda 3% (-1,5kk) = 48,5kk, RC a 2,5k"
  * Regra ANTIGA (registros persistidos antes da mudança):
  *   "Vendido por 300kk − Taxa Market 2x 5% (−20kk) = 280kk, RC a 2,5k"
  *   "Vendido por 100kk (venda direta, sem taxa), RC a 2,5k"
@@ -203,7 +204,9 @@ export function formatItemSaleSummary(sale: ItemSaleRecord): string {
       parts.push(`taxa venda ${SALE_TAX_PERCENT}% (-${formatKkShort(sale.saleTaxKk)}kk)`);
     }
     if (parts.length === 0) return `Vendido por ${bruto} (sem taxa), ${cotacao}`;
-    return `${parts.join(", ")} = ${formatKkShort(sale.netKk)}kk, ${cotacao}`;
+    // Valor BRUTO da venda no início da linha (formato do produto):
+    //   "Vendido por 165kk - Oferta criada 3x (-3kk), taxa venda 3% (-4,95kk) = 157,05kk, RC a 90k"
+    return `Vendido por ${formatKkShort(sale.vendaKk)}kk - ${parts.join(", ")} = ${formatKkShort(sale.netKk)}kk, ${cotacao}`;
   }
   // ── Registro LEGADO (regra antiga de 5%/10kk por oferta) ─────────────────
   if (sale.taxCount > 0 && sale.taxDeductedKk > 0) {
