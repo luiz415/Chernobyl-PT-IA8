@@ -5139,18 +5139,25 @@ export default function App() {
     return <AuthModal />;
   }
 
-  const idleModeOverlay = (isIdleMode || isIdleRestoring) ? (
+  // ── OVERLAYS DO SISTEMA IDLE ─────────────────────────────────────────────
+  // Dois visuais distintos:
+  //   • IDLE (isIdleMode): modal completo e BLOQUEANTE — o app está pausado
+  //     e qualquer atividade (mousemove/tecla/clique) inicia a reativação.
+  //   • REATIVANDO (isIdleRestoring): apenas um AVISO flutuante compacto e
+  //     NÃO-BLOQUEANTE (pointer-events-none, sem véu escuro). A reativação
+  //     real já aconteceu no instante zero; o aviso é um flash breve
+  //     (IDLE_RESTORE_DELAY_MS no AuthContext) e o usuário pode usar o
+  //     aplicativo IMEDIATAMENTE, sem esperar o aviso sumir.
+  const idleModeOverlay = isIdleMode ? (
     <div className="app-modal-overlay fixed inset-0 z-[9999] flex items-center justify-center bg-black/85 backdrop-blur-md">
       <div className="app-modal-frame app-modal-size-sm w-full max-w-md overflow-y-auto rounded-2xl border border-[var(--th-line)]/80 bg-gradient-to-b from-[var(--th-bg-raised)] to-[var(--th-bg-deep)] shadow-[0_0_45px_color-mix(in_oklab,var(--th-brand)_35%,transparent)] p-4 sm:p-6 text-center space-y-5">
         <div className="mx-auto w-14 h-14 rounded-2xl border border-amber-500/30 bg-amber-500/10 flex items-center justify-center">
-          <Clock size={28} className={`text-amber-300 ${isIdleRestoring ? "animate-spin" : ""}`} />
+          <Clock size={28} className="text-amber-300" />
         </div>
         <div className="space-y-2">
-          <h2 className="text-lg font-black text-white tracking-wide">{isIdleRestoring ? "Reativando sistema..." : "Sistema pausado por inatividade"}</h2>
+          <h2 className="text-lg font-black text-white tracking-wide">Sistema pausado por inatividade</h2>
           <p className="text-sm text-slate-400 leading-relaxed">
-            {isIdleRestoring
-              ? "Estamos restaurando a sincronização e os recursos do aplicativo. Aguarde alguns instantes."
-              : "Pausamos temporariamente sincronizações não críticas para reduzir o consumo de recursos enquanto o aplicativo não está sendo utilizado."}
+            Pausamos temporariamente sincronizações não críticas para reduzir o consumo de recursos enquanto o aplicativo não está sendo utilizado.
           </p>
         </div>
         <div className="flex flex-col sm:flex-row gap-3 justify-center pt-2">
@@ -5162,6 +5169,13 @@ export default function App() {
             Desconectar
           </button>
         </div>
+      </div>
+    </div>
+  ) : isIdleRestoring ? (
+    <div className="pointer-events-none fixed inset-x-0 top-4 z-[9999] flex justify-center">
+      <div className="flex items-center gap-2.5 rounded-xl border border-amber-500/40 bg-[var(--th-bg-raised)]/95 px-4 py-2.5 shadow-[0_8px_30px_rgba(0,0,0,0.6)] backdrop-blur-sm">
+        <Clock size={16} className="animate-spin text-amber-300" />
+        <span className="text-sm font-black tracking-wide text-white">Reativando sistema...</span>
       </div>
     </div>
   ) : null;

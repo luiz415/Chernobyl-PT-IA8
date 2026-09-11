@@ -178,10 +178,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // ============================================================================
   // IDLE MODE LEVE — pausa temporária de listeners/timers seguros
   // ============================================================================
-  // Duração VISUAL do modal "Reativando sistema..." — exatamente 1 segundo.
-  // É só feedback: a reativação real (religar listeners/timers) acontece no
-  // instante zero, quando isIdleMode vira false.
-  const IDLE_RESTORE_DELAY_MS = 1000;
+  // Duração VISUAL do aviso "Reativando sistema..." — um flash breve, quase
+  // instantâneo. É só feedback: a reativação real (religar listeners/timers)
+  // acontece no instante zero, quando isIdleMode vira false. Valor pequeno
+  // de propósito: no momento da reativação o App re-renderiza e re-assina
+  // vários listeners, e qualquer atraso da main thread SOMA ao setTimeout —
+  // com 250ms o aviso desaparece assim que o navegador respira, liberando a
+  // percepção de uso imediatamente (o overlay de reativação também não
+  // bloqueia cliques — ver App.tsx).
+  const IDLE_RESTORE_DELAY_MS = 250;
   const [idleGovernance, setIdleGovernanceState] = useState(() => getIdleGovernance());
   const [isIdleMode, setIsIdleMode] = useState(false);
   const [isIdleRestoring, setIsIdleRestoring] = useState(false);
