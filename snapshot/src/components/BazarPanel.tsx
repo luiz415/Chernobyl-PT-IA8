@@ -3035,8 +3035,14 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
               </div>
             </div>
 
-            <div className="flex flex-row flex-wrap items-start justify-end gap-1.5 lg:flex-nowrap">
-              <div className="flex flex-wrap justify-end gap-1.5">
+            {/* COLUNA DE AÇÕES — reorganizada em LINHAS horizontais para não
+                esticar o quadro na vertical: a 1ª linha reúne os controles e
+                ações de TODOS os usuários; a 2ª linha é a SEÇÃO BOSS, um grupo
+                destacado só com as ações exclusivas do cargo. Os botões, cores
+                e funções são exatamente os mesmos — apenas a distribuição
+                mudou (empilhamento vertical → linhas com quebra automática). */}
+            <div className="flex min-w-0 flex-col items-end gap-1.5">
+              <div className="flex flex-wrap items-center justify-end gap-1.5">
                 <select value={timezoneOffsetMinutes} onChange={event => setTimezoneOffsetMinutes(Number(event.target.value))} title={`Fuso usado para exibir e filtrar encerramento (${formatTimeZoneOffset(timezoneOffsetMinutes)})`} className="h-7 rounded-md border border-[var(--th-line)]/70 bg-black/35 px-2 text-[11px] text-white outline-none focus:border-amber-600/60">
                   {BAZAR_TIMEZONE_OPTIONS.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
                 </select>
@@ -3146,14 +3152,9 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
                 <button type="button" onClick={() => setHideEndedAuctions(prev => !prev)} className={`inline-flex h-7 items-center gap-1 rounded-md border px-2.5 text-[10px] font-black transition-colors cursor-pointer ${hideEndedAuctions ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20" : "border-amber-500/25 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20"}`} title={hideEndedAuctions ? "Mostrar também leilões encerrados" : "Ocultar leilões encerrados"}>
                   {hideEndedAuctions ? "Ocultar encerrados" : "Exibir todos"}
                 </button>
-              </div>
-              <div className="flex flex-col gap-1">
                 {/* FILTRAR USUÁRIOS — abre o modal dedicado de seleção de
-                    usuários (mesmo estado unificado da Visão Geral). Antes era
-                    um mini-botão ao lado do título "Última consulta"; foi
-                    promovido para a coluna de ações do lado direito, no MESMO
-                    formato dos demais botões (h-7), com cor própria (violeta)
-                    para ser identificado rapidamente sem destoar do padrão.
+                    usuários (mesmo estado unificado da Visão Geral). Mesmo
+                    formato dos demais botões (h-7), cor própria (violeta).
                     A função e o estado do filtro são exatamente os mesmos. */}
                 <button
                   type="button"
@@ -3176,7 +3177,21 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
                 <button type="button" onClick={() => setIsFriendsSummaryOpen(true)} className="inline-flex h-7 items-center justify-center gap-1 rounded-md border border-amber-500/25 bg-amber-500/10 px-2.5 text-[10px] font-black text-amber-300 hover:bg-amber-500/20 transition-colors cursor-pointer">
                   Resumo de Amigos
                 </button>
-                {isBossUser && isElectron && !demoMode && (
+                <button type="button" onClick={() => handleSyncOfficialBazaar(true)} disabled={isOfficialSyncing} className="inline-flex h-7 items-center justify-center gap-1 rounded-md border border-cyan-500/25 bg-cyan-500/10 px-2.5 text-[10px] font-black text-cyan-300 hover:bg-cyan-500/20 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed">
+                  Atualizar
+                </button>
+              </div>
+
+              {/* ── SEÇÃO BOSS ──────────────────────────────────────────────
+                  Grupo destacado só com as ações exclusivas do cargo Boss,
+                  numa ÚNICA linha horizontal (com quebra automática quando
+                  faltar largura) para não esticar o quadro na vertical.
+                  Botões/estados idênticos aos de antes — só a posição mudou. */}
+              {isBossUser && isElectron && !demoMode && (
+                <div className="flex flex-wrap items-center justify-end gap-1.5 rounded-md border border-amber-500/20 bg-amber-500/[0.04] px-1.5 py-1">
+                  <span className="inline-flex items-center gap-1 pl-0.5 text-[8px] font-black uppercase tracking-widest text-amber-400/80" title="Ações exclusivas do cargo Boss">
+                    <Crown size={10} /> Boss
+                  </span>
                   <button
                     type="button"
                     onClick={() => setIsAutoBidOpen(true)}
@@ -3185,59 +3200,52 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
                   >
                     Auto Bid
                   </button>
-                )}
-                <button type="button" onClick={() => handleSyncOfficialBazaar(true)} disabled={isOfficialSyncing} className="inline-flex h-7 items-center justify-center gap-1 rounded-md border border-cyan-500/25 bg-cyan-500/10 px-2.5 text-[10px] font-black text-cyan-300 hover:bg-cyan-500/20 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed">
-                  Atualizar
-                </button>
-                {/* ATUALIZAR VALORES (apenas Boss, no Desktop) — relê SÓ a
-                    listagem do Bazaar e atualiza os valores LOCALMENTE (este
-                    dispositivo); nada é publicado/gravado no Firestore. Com o
-                    "Auto Remover Interesse" ligado, interesses de leilões cujo
-                    novo valor passou do limite são removidos numa única
-                    transação do doc agregado. */}
-                {isBossUser && isElectron && !demoMode && (
-                  <>
-                    <button
-                      type="button"
-                      onClick={() => { void handleRefreshValues(); }}
-                      disabled={isValueRefreshing || isLoading || isOfficialSyncing}
-                      className="inline-flex h-7 items-center justify-center gap-1 rounded-md border border-sky-500/30 bg-sky-500/10 px-2.5 text-[10px] font-black text-sky-300 hover:bg-sky-500/20 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-                      title="Relê a listagem do Bazaar e atualiza os valores dos leilões apenas neste dispositivo (nada é publicado para os demais usuários)"
-                    >
-                      {isValueRefreshing && <RefreshCw size={11} className="animate-spin" />}
-                      {isValueRefreshing ? "Atualizando..." : "Atualizar Valores"}
-                    </button>
-                    <label
-                      className="inline-flex h-7 items-center justify-center gap-1.5 rounded-md border border-rose-500/25 bg-rose-500/10 px-2 text-[9px] font-black text-rose-300 cursor-pointer select-none"
-                      title="Ao atualizar valores, remove automaticamente o interesse (de qualquer usuário) dos leilões cujo NOVO valor ficou ACIMA do limite; valor igual ou abaixo mantém o interesse"
-                    >
-                      <input
-                        type="checkbox"
-                        checked={autoRemoveInterestEnabled}
-                        onChange={event => setAutoRemoveInterestEnabled(event.target.checked)}
-                        className="h-3 w-3 accent-rose-400 cursor-pointer"
-                      />
-                      Auto Remover Interesse
-                      <input
-                        type="text"
-                        inputMode="numeric"
-                        value={autoRemoveInterestLimit}
-                        onChange={event => setAutoRemoveInterestLimit(sanitizeAutoRemoveLimit(event.target.value))}
-                        onClick={event => event.stopPropagation()}
-                        placeholder="Limite"
-                        aria-label="Limite de valor para remoção automática de interesse"
-                        disabled={!autoRemoveInterestEnabled}
-                        className="h-5 w-16 rounded border border-rose-500/25 bg-black/40 px-1 text-right font-mono text-[9px] font-bold text-rose-200 placeholder:text-rose-300/40 outline-none focus:border-rose-400/50 disabled:opacity-40"
-                      />
-                    </label>
-                    {(valueRefreshStatus || valueRefreshedAtMs > 0) && (
-                      <div className="max-w-[200px] text-right text-[8px] font-bold leading-tight text-sky-300/80" role="status">
-                        {valueRefreshStatus || `Valores atualizados localmente às ${new Date(valueRefreshedAtMs).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}.`}
-                      </div>
-                    )}
-                  </>
-                )}
-              </div>
+                  {/* ATUALIZAR VALORES — relê SÓ a listagem do Bazaar e
+                      atualiza os valores LOCALMENTE (este dispositivo); nada é
+                      publicado/gravado no Firestore. Com o "Auto Remover
+                      Interesse" ligado, interesses de leilões cujo novo valor
+                      passou do limite são removidos numa única transação do
+                      doc agregado. */}
+                  <button
+                    type="button"
+                    onClick={() => { void handleRefreshValues(); }}
+                    disabled={isValueRefreshing || isLoading || isOfficialSyncing}
+                    className="inline-flex h-7 items-center justify-center gap-1 rounded-md border border-sky-500/30 bg-sky-500/10 px-2.5 text-[10px] font-black text-sky-300 hover:bg-sky-500/20 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                    title="Relê a listagem do Bazaar e atualiza os valores dos leilões apenas neste dispositivo (nada é publicado para os demais usuários)"
+                  >
+                    {isValueRefreshing && <RefreshCw size={11} className="animate-spin" />}
+                    {isValueRefreshing ? "Atualizando..." : "Atualizar Valores"}
+                  </button>
+                  <label
+                    className="inline-flex h-7 items-center justify-center gap-1.5 rounded-md border border-rose-500/25 bg-rose-500/10 px-2 text-[9px] font-black text-rose-300 cursor-pointer select-none"
+                    title="Ao atualizar valores, remove automaticamente o interesse (de qualquer usuário) dos leilões cujo NOVO valor ficou ACIMA do limite; valor igual ou abaixo mantém o interesse"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={autoRemoveInterestEnabled}
+                      onChange={event => setAutoRemoveInterestEnabled(event.target.checked)}
+                      className="h-3 w-3 accent-rose-400 cursor-pointer"
+                    />
+                    Auto Remover Interesse
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      value={autoRemoveInterestLimit}
+                      onChange={event => setAutoRemoveInterestLimit(sanitizeAutoRemoveLimit(event.target.value))}
+                      onClick={event => event.stopPropagation()}
+                      placeholder="Limite"
+                      aria-label="Limite de valor para remoção automática de interesse"
+                      disabled={!autoRemoveInterestEnabled}
+                      className="h-5 w-16 rounded border border-rose-500/25 bg-black/40 px-1 text-right font-mono text-[9px] font-bold text-rose-200 placeholder:text-rose-300/40 outline-none focus:border-rose-400/50 disabled:opacity-40"
+                    />
+                  </label>
+                  {(valueRefreshStatus || valueRefreshedAtMs > 0) && (
+                    <div className="max-w-[260px] text-right text-[8px] font-bold leading-tight text-sky-300/80" role="status">
+                      {valueRefreshStatus || `Valores atualizados localmente às ${new Date(valueRefreshedAtMs).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}.`}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           </div>
         </div>
