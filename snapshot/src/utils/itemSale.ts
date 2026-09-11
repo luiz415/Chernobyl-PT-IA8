@@ -10,23 +10,36 @@
  *    do PartyPanel): floor((totalKk / rateKk) × 1000), inteiro, sem forçar
  *    múltiplo de 25 — múltiplo de 25 é regra EXCLUSIVA da divisão.
  *
- * 2. Taxa do Market: ao CRIAR uma oferta de venda, o Market cobra uma taxa de
- *    N% (padrão 5%) sobre o valor total da oferta, LIMITADA a 10kk por oferta.
- *      • até 200kk (com 5%)  -> taxa = 5% do valor;
- *      • acima de 200kk      -> taxa = 10kk (teto).
- *    Vender direto para a oferta de compra mais alta NÃO paga taxa (0x).
- *    O multiplicador (0x, 1x, 2x, ...) representa QUANTAS ofertas foram
- *    criadas até a venda acontecer — cada uma pagou a própria taxa, cada uma
- *    com o próprio teto de 10kk.
+ * 2. TAXAS DO MARKET (regra VIGENTE do jogo — duas taxas independentes):
+ *
+ *    • CRIAÇÃO DA OFERTA: 1% do valor anunciado, máx. 1kk POR OFERTA criada
+ *      (cobrada mesmo sem venda). N ofertas criadas = N × min(1%, 1kk).
+ *    • VENDA CONCLUÍDA: 3% do valor da venda, máx. 5kk — cobrada UMA única
+ *      vez quando o item é efetivamente vendido, independentemente de
+ *      quantas ofertas foram criadas antes.
+ *
+ *      Taxa total = ofertas × min(1% × valor, 1kk) + min(3% × valor, 5kk)
+ *
+ *    Exemplos canônicos (validados em teste):
+ *      50kk, 2 ofertas  -> 2×0,5 + 1,5      = 2,5kk
+ *      150kk, 3 ofertas -> 3×1 (teto) + 4,5 = 7,5kk
+ *      200kk, 2 ofertas -> 2×1 (teto) + 5 (teto) = 7kk
+ *
+ *    A regra ANTIGA (5% por oferta, teto 10kk) não é mais usada em cálculos
+ *    novos; registros antigos permanecem legíveis (formatItemSaleSummary
+ *    detecta o formato pela presença de `saleTaxKk`).
  */
 
 import type { ItemSaleRecord } from "../types";
 
-/** Teto da taxa do Market por oferta criada, em kk. */
-export const MARKET_TAX_CAP_KK = 10;
-
-/** Porcentagem padrão da taxa do Market. */
-export const DEFAULT_MARKET_TAX_PERCENT = 5;
+/** CRIAÇÃO da oferta: porcentagem sobre o valor anunciado. */
+export const OFFER_TAX_PERCENT = 1;
+/** CRIAÇÃO da oferta: teto em kk POR OFERTA criada. */
+export const OFFER_TAX_CAP_KK = 1;
+/** VENDA concluída: porcentagem sobre o valor da venda. */
+export const SALE_TAX_PERCENT = 3;
+/** VENDA concluída: teto em kk (cobrada uma única vez). */
+export const SALE_TAX_CAP_KK = 5;
 
 /**
  * Conversão kk -> RC. Fórmula: floor((totalKk / rateKk) * 1000).
@@ -42,61 +55,82 @@ export function computeItemRC(rateKk: number, totalKk: number): number {
   return Math.floor(raw);
 }
 
-/**
- * Taxa de UMA oferta: percent% do valor, respeitando o teto de 10kk.
- * O teto NÃO é proporcional ao percent — é o limite fixo do Market.
- */
-export function computeSingleOfferTaxKk(vendaKk: number, taxPercent: number): number {
-  if (!Number.isFinite(vendaKk) || vendaKk <= 0) return 0;
-  if (!Number.isFinite(taxPercent) || taxPercent <= 0) return 0;
-  const raw = (vendaKk * taxPercent) / 100;
-  // Arredonda a 2 casas para evitar ruído de ponto flutuante em percentuais
-  // fracionários; o teto é aplicado DEPOIS, por oferta.
-  const rounded = Math.round(raw * 100) / 100;
-  return Math.min(rounded, MARKET_TAX_CAP_KK);
+/** Arredonda a 2 casas — evita ruído de ponto flutuante nos percentuais. */
+function round2(value: number): number {
+  return Math.round(value * 100) / 100;
 }
 
 /**
- * Desconto TOTAL da taxa do Market para `taxCount` ofertas criadas.
- * Cada oferta paga a própria taxa com o próprio teto de 10kk — nunca um
- * percentual ilimitado sobre o total.
+ * CRIAÇÃO: taxa de UMA oferta = min(1% do valor anunciado, 1kk).
  */
-export function computeMarketTaxKk(vendaKk: number, taxPercent: number, taxCount: number): number {
-  if (!Number.isFinite(taxCount) || taxCount <= 0) return 0;
-  const per = computeSingleOfferTaxKk(vendaKk, taxPercent);
-  return Math.round(per * Math.floor(taxCount) * 100) / 100;
+export function computeOfferTaxPerOfferKk(vendaKk: number): number {
+  if (!Number.isFinite(vendaKk) || vendaKk <= 0) return 0;
+  return Math.min(round2((vendaKk * OFFER_TAX_PERCENT) / 100), OFFER_TAX_CAP_KK);
+}
+
+/**
+ * CRIAÇÃO: taxa TOTAL de `offerCount` ofertas criadas.
+ * O teto de 1kk vale POR OFERTA (aplicado antes da multiplicação) — nunca
+ * um percentual ilimitado sobre o total.
+ */
+export function computeOfferTaxTotalKk(vendaKk: number, offerCount: number): number {
+  if (!Number.isFinite(offerCount) || offerCount <= 0) return 0;
+  return round2(computeOfferTaxPerOfferKk(vendaKk) * Math.floor(offerCount));
+}
+
+/**
+ * VENDA CONCLUÍDA: min(3% do valor da venda, 5kk) — uma única vez.
+ */
+export function computeSaleTaxKk(vendaKk: number): number {
+  if (!Number.isFinite(vendaKk) || vendaKk <= 0) return 0;
+  return Math.min(round2((vendaKk * SALE_TAX_PERCENT) / 100), SALE_TAX_CAP_KK);
+}
+
+/**
+ * TAXA TOTAL do Market para a venda: criação (N ofertas) + venda concluída.
+ *   50kk/2 ofertas -> 2,5kk · 150kk/3 -> 7,5kk · 200kk/2 -> 7kk
+ */
+export function computeMarketTaxTotalKk(vendaKk: number, offerCount: number): number {
+  if (!Number.isFinite(vendaKk) || vendaKk <= 0) return 0;
+  return round2(computeOfferTaxTotalKk(vendaKk, offerCount) + computeSaleTaxKk(vendaKk));
 }
 
 /**
  * Monta o registro COMPLETO da venda — persistimos a operação inteira (e não
  * só o RC final) para que o "Copiar (WA)" e qualquer releitura futura possam
- * explicar como o valor foi obtido.
+ * RECONSTRUIR o cálculo: valor, cotação, nº de ofertas, taxa por oferta,
+ * taxa de venda, taxa total e resultado em RC.
  */
 export function buildItemSaleRecord(
   vendaKk: number,
   rateKk: number,
-  taxPercent: number,
-  taxCount: number,
+  offerCount: number,
 ): ItemSaleRecord {
   const safeVenda = Number.isFinite(vendaKk) && vendaKk > 0 ? vendaKk : 0;
   const safeRate = Number.isFinite(rateKk) && rateKk > 0 ? rateKk : 0;
-  const safePercent = Number.isFinite(taxPercent) && taxPercent > 0 ? taxPercent : 0;
-  const safeCount = Number.isFinite(taxCount) && taxCount > 0 ? Math.floor(taxCount) : 0;
-  const taxDeductedKk = computeMarketTaxKk(safeVenda, safePercent, safeCount);
-  // SEM desconto o valor de venda passa INTACTO (sem arredondar): preserva a
-  // precisão de vendas decimais, exatamente como a calculadora kk histórica.
+  const safeCount = Number.isFinite(offerCount) && offerCount > 0 ? Math.floor(offerCount) : 0;
+  const offerTaxPerOfferKk = safeCount > 0 ? computeOfferTaxPerOfferKk(safeVenda) : 0;
+  const offerTaxTotalKk = computeOfferTaxTotalKk(safeVenda, safeCount);
+  const saleTaxKk = computeSaleTaxKk(safeVenda);
+  const taxDeductedKk = round2(offerTaxTotalKk + saleTaxKk);
+  // Valor líquido = venda − taxa total; a conversão para RC (regra existente,
+  // inalterada) acontece SOMENTE sobre este líquido.
   const netKk = taxDeductedKk > 0
-    ? Math.max(0, Math.round((safeVenda - taxDeductedKk) * 100) / 100)
+    ? Math.max(0, round2(safeVenda - taxDeductedKk))
     : safeVenda;
   return {
     vendaKk: safeVenda,
     rateKk: safeRate,
-    taxPercent: safePercent,
+    // Percentual da CRIAÇÃO — mantém o campo legado preenchido com a regra nova.
+    taxPercent: OFFER_TAX_PERCENT,
     taxCount: safeCount,
     taxDeductedKk,
     netKk,
     resultRC: computeItemRC(safeRate, netKk),
     soldAt: Date.now(),
+    offerTaxPerOfferKk,
+    offerTaxTotalKk,
+    saleTaxKk,
   };
 }
 
@@ -138,15 +172,31 @@ export function formatKkValue(value: number, suffix: "k" | "kk" = "kk"): string 
 }
 
 /**
- * Linha RESUMIDA da venda para o texto do WhatsApp.
- * Curta, mas explica a operação: valor bruto, quantas ofertas pagaram taxa
- * (e quanto foi descontado), a cotação e o resultado final.
- *   2x: "Vendido por 300kk − Taxa Market 2x 5% (−20kk) = 280kk, RC a 2,5k"
- *   0x: "Vendido por 100kk (venda direta, sem taxa), RC a 2,5k"
+ * Linha RESUMIDA da venda para o texto do WhatsApp — curta e suficiente para
+ * explicar a origem do valor final.
+ *
+ * Regra VIGENTE (registro tem `saleTaxKk`):
+ *   "Vendido por 150kk − Taxas Market (3 ofertas −3kk + venda −4,5kk) = 142,5kk, RC a 2,5k"
+ *   "Vendido por 50kk − Taxa Market (venda −1,5kk) = 48,5kk, RC a 2,5k"   (0 ofertas)
+ * Regra ANTIGA (registros persistidos antes da mudança):
+ *   "Vendido por 300kk − Taxa Market 2x 5% (−20kk) = 280kk, RC a 2,5k"
+ *   "Vendido por 100kk (venda direta, sem taxa), RC a 2,5k"
  */
 export function formatItemSaleSummary(sale: ItemSaleRecord): string {
   const bruto = formatKkValue(sale.vendaKk, "kk");
   const cotacao = `RC a ${formatRateKkDisplay(sale.rateKk) || String(sale.rateKk)}k`;
+  // ── Registro da regra VIGENTE (criação 1%/1kk + venda 3%/5kk) ────────────
+  if (typeof sale.saleTaxKk === "number") {
+    const parts: string[] = [];
+    if (sale.taxCount > 0 && (sale.offerTaxTotalKk || 0) > 0) {
+      parts.push(`${sale.taxCount} oferta${sale.taxCount > 1 ? "s" : ""} −${formatKkValue(sale.offerTaxTotalKk || 0, "kk")}`);
+    }
+    if (sale.saleTaxKk > 0) parts.push(`venda −${formatKkValue(sale.saleTaxKk, "kk")}`);
+    if (parts.length === 0) return `Vendido por ${bruto} (sem taxa), ${cotacao}`;
+    const label = parts.length > 1 ? "Taxas Market" : "Taxa Market";
+    return `Vendido por ${bruto} − ${label} (${parts.join(" + ")}) = ${formatKkValue(sale.netKk, "kk")}, ${cotacao}`;
+  }
+  // ── Registro LEGADO (regra antiga de 5%/10kk por oferta) ─────────────────
   if (sale.taxCount > 0 && sale.taxDeductedKk > 0) {
     return `Vendido por ${bruto} − Taxa Market ${sale.taxCount}x ${formatRateKkDisplay(sale.taxPercent) || sale.taxPercent}% (−${formatKkValue(sale.taxDeductedKk, "kk")}) = ${formatKkValue(sale.netKk, "kk")}, ${cotacao}`;
   }

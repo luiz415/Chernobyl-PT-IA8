@@ -121,18 +121,32 @@ export interface ItemSaleRecord {
   vendaKk: number;
   /** Cotação do RC no Market: quantos k equivalem a 1000 RC. */
   rateKk: number;
-  /** Porcentagem configurada da taxa do Market (padrão 5). */
+  /**
+   * LEGADO (regra antiga de 5%/10kk): porcentagem configurada da taxa.
+   * Registros novos gravam a porcentagem da taxa de CRIAÇÃO (1). A regra
+   * vigente é identificada pela presença de `saleTaxKk`.
+   */
   taxPercent: number;
-  /** Multiplicador do botão "Taxa Market" (0x = sem taxa, 1x, 2x...). */
+  /** Quantidade de OFERTAS CRIADAS no Market (0 = venda direta sem oferta). */
   taxCount: number;
-  /** Total efetivamente descontado em kk (já com o teto de 10kk por oferta). */
+  /** Taxa TOTAL descontada em kk (criação de ofertas + venda concluída). */
   taxDeductedKk: number;
-  /** Valor considerado após a taxa, em kk. */
+  /** Valor considerado após as taxas, em kk. */
   netKk: number;
   /** Resultado final em RC = floor((netKk / rateKk) × 1000). */
   resultRC: number;
   /** Quando a venda foi registrada (epoch ms). */
   soldAt?: number;
+  // ── REGRA VIGENTE DO MARKET (1% criação/máx 1kk por oferta + 3% venda/máx
+  //    5kk) — campos presentes apenas em registros novos; a ausência indica
+  //    registro da regra antiga (5% por oferta/teto 10kk), que continua
+  //    legível para históricos. Persistidos para RECONSTRUIR o cálculo.
+  /** Taxa de criação POR OFERTA em kk: min(1% do valor, 1kk). */
+  offerTaxPerOfferKk?: number;
+  /** Taxa de criação TOTAL em kk: taxCount × offerTaxPerOfferKk. */
+  offerTaxTotalKk?: number;
+  /** Taxa da venda concluída em kk: min(3% do valor, 5kk) — cobrada 1 vez. */
+  saleTaxKk?: number;
 }
 
 export interface PartyCustomMember {
