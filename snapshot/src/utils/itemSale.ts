@@ -171,13 +171,21 @@ export function formatKkValue(value: number, suffix: "k" | "kk" = "kk"): string 
   return `${text}${suffix}`;
 }
 
+/** Formata kk SEM zeros à direita (4,5 e não 4,50) — usado no texto do WA. */
+function formatKkShort(value: number): string {
+  if (!Number.isFinite(value)) return "0";
+  const rounded = Math.round(value * 100) / 100;
+  return rounded.toLocaleString("de-DE", { maximumFractionDigits: 2 });
+}
+
 /**
  * Linha RESUMIDA da venda para o texto do WhatsApp — curta e suficiente para
  * explicar a origem do valor final.
  *
- * Regra VIGENTE (registro tem `saleTaxKk`):
- *   "Vendido por 150kk − Taxas Market (3 ofertas −3kk + venda −4,5kk) = 142,5kk, RC a 2,5k"
- *   "Vendido por 50kk − Taxa Market (venda −1,5kk) = 48,5kk, RC a 2,5k"   (0 ofertas)
+ * Regra VIGENTE (registro tem `saleTaxKk`) — formato definido pelo produto:
+ *   "Oferta criada 3x (-3kk), taxa venda 3% (-4,5kk) = 142,5kk, RC a 90k"
+ *   (o chamador acrescenta " = 1.583 RC" com o resultado final)
+ *   0 ofertas: "taxa venda 3% (-1,5kk) = 48,5kk, RC a 2,5k"
  * Regra ANTIGA (registros persistidos antes da mudança):
  *   "Vendido por 300kk − Taxa Market 2x 5% (−20kk) = 280kk, RC a 2,5k"
  *   "Vendido por 100kk (venda direta, sem taxa), RC a 2,5k"
@@ -189,12 +197,13 @@ export function formatItemSaleSummary(sale: ItemSaleRecord): string {
   if (typeof sale.saleTaxKk === "number") {
     const parts: string[] = [];
     if (sale.taxCount > 0 && (sale.offerTaxTotalKk || 0) > 0) {
-      parts.push(`${sale.taxCount} oferta${sale.taxCount > 1 ? "s" : ""} −${formatKkValue(sale.offerTaxTotalKk || 0, "kk")}`);
+      parts.push(`Oferta criada ${sale.taxCount}x (-${formatKkShort(sale.offerTaxTotalKk || 0)}kk)`);
     }
-    if (sale.saleTaxKk > 0) parts.push(`venda −${formatKkValue(sale.saleTaxKk, "kk")}`);
+    if (sale.saleTaxKk > 0) {
+      parts.push(`taxa venda ${SALE_TAX_PERCENT}% (-${formatKkShort(sale.saleTaxKk)}kk)`);
+    }
     if (parts.length === 0) return `Vendido por ${bruto} (sem taxa), ${cotacao}`;
-    const label = parts.length > 1 ? "Taxas Market" : "Taxa Market";
-    return `Vendido por ${bruto} − ${label} (${parts.join(" + ")}) = ${formatKkValue(sale.netKk, "kk")}, ${cotacao}`;
+    return `${parts.join(", ")} = ${formatKkShort(sale.netKk)}kk, ${cotacao}`;
   }
   // ── Registro LEGADO (regra antiga de 5%/10kk por oferta) ─────────────────
   if (sale.taxCount > 0 && sale.taxDeductedKk > 0) {
