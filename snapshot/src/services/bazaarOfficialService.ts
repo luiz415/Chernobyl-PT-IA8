@@ -665,3 +665,38 @@ export async function removeBazaarInterest(params: { auctionId: string | number;
     return updated;
   });
 }
+
+/**
+ * AUTO REMOVER INTERESSE (Boss) — remove TODOS os interessados dos leilões
+ * indicados em UMA ÚNICA transação sobre o doc agregado
+ * (`bazaarInterests/current`): 1 leitura + 1 escrita no total, independente
+ * da quantidade de leilões/usuários afetados. Leilões sem interessados são
+ * ignorados; se nada mudar, NENHUMA escrita acontece (mutateAggregated
+ * devolve null → transação sem set).
+ *
+ * Permissão: qualquer usuário aprovado pode escrever no doc agregado pelas
+ * rules atuais (é o mesmo doc dos cliques de interesse), mas esta função é
+ * exposta apenas no fluxo do Boss ("Atualizar Valores"); a operação não
+ * concede nada além do que o botão "Remover" de cada linha já permite.
+ */
+export async function removeBazaarInterestsForAuctions(params: { auctionIds: Array<string | number>; bazaarVersion: string }): Promise<BazaarInterestMap> {
+  const bazaarVersion = normalizeBazaarVersion(params.bazaarVersion);
+  const targets = new Set(
+    (params.auctionIds || [])
+      .map(id => String(id ?? "").trim())
+      .filter(id => id && !id.includes("/")),
+  );
+  return mutateAggregatedInterests(bazaarVersion, byAuction => {
+    let changed = false;
+    const updated: Record<string, StoredAuctionInterests> = { ...byAuction };
+    targets.forEach(auctionId => {
+      const entries = updated[auctionId];
+      if (entries && Object.keys(entries).length > 0) {
+        updated[auctionId] = {};
+        changed = true;
+      }
+    });
+    // Nada afetado: sem escrita (a transação não faz set).
+    return changed ? updated : null;
+  });
+}

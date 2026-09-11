@@ -16,7 +16,8 @@ import { DEFAULT_OVERVIEW_FILTERS, useOverviewFilters } from "../hooks/useOvervi
 import { FilterDateMax, FilterInline, FilterMulti, FilterNumber } from "./FilterTypes";
 import type { Character, PartyTab, WaitingService, Vocation } from "../types";
 import { useAuth } from "../context/AuthContext";
-import { getManualSyncCooldownRemainingMs, markManualSyncAttempt, publishOfficialBazaarList, readOfficialBazaarCache, removeBazaarInterest, setBazaarInterest, syncBazaarInterests, syncOfficialBazaarList, type BazaarInterestMap, type OfficialBazaarMetadata } from "../services/bazaarOfficialService";
+import { getManualSyncCooldownRemainingMs, markManualSyncAttempt, publishOfficialBazaarList, readOfficialBazaarCache, removeBazaarInterest, removeBazaarInterestsForAuctions, setBazaarInterest, syncBazaarInterests, syncOfficialBazaarList, type BazaarInterestMap, type OfficialBazaarMetadata } from "../services/bazaarOfficialService";
+import { applyValueOverlay, buildValueOverlay, clearBazaarValueOverlay, computeAutoRemoveAuctions, parseAutoRemoveLimit, readBazaarValueOverlay, sanitizeAutoRemoveLimit, saveBazaarValueOverlay } from "../utils/bazaarValueRefresh";
 import { BAZAR_NOTIFY_MINUTES_MAX, BAZAR_NOTIFY_MINUTES_MIN, clampBazarNotifyMinutes, getDeviceTimezoneOffsetMinutes, readBazarNotifyMinutes } from "../utils/bazaarTime";
 import { syncNotificationPrefsToCloud } from "../services/notificationPrefsSyncService";
 import { syncBazaarEndingAlerts } from "../services/bazaarInterestNotificationService";
@@ -240,6 +241,9 @@ const BAZAR_FILTERS_KEY = "rubinot_bazaar_filters";
 const BAZAR_LAST_SUMMARY_KEY = "rubinot_bazaar_last_summary";
 const BAZAR_TABLE_FILTERS_KEY = "rubinot_bazaar_table_filters";
 const BAZAR_HIDE_ENDED_KEY = "rubinot_bazaar_hide_ended_auctions";
+// ── ATUALIZAR VALORES (Boss) — preferências locais do dispositivo ─────────
+const BAZAAR_AUTO_REMOVE_ENABLED_KEY = "rubinot_bazaar_auto_remove_interest_enabled";
+const BAZAAR_AUTO_REMOVE_LIMIT_KEY = "rubinot_bazaar_auto_remove_interest_limit";
 const BAZAR_OPENED_LINKS_KEY_PREFIX = "rubinot_bazaar_opened_links";
 // Valor pessoal por usuário: guarda apenas a última conta escolhida no fluxo
 // de compra inline, sem criar configuração de perfil nem estrutura de contas.
@@ -1078,6 +1082,21 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
   });
   const defaultBidActive = defaultBid.enabled && defaultBid.amount !== null;
   const [isOfficialSyncing, setIsOfficialSyncing] = useState(false);
+  // ── ATUALIZAR VALORES (Boss) ──────────────────────────────────────────────
+  // Releitura da LISTAGEM do Bazaar (sem análise de quests) que atualiza os
+  // valores dos leilões APENAS localmente (overlay em memória + localStorage
+  // deste dispositivo, atrelado à versão da lista oficial). NENHUM valor é
+  // escrito no Firestore — a lista compartilhada dos demais usuários não muda.
+  const [isValueRefreshing, setIsValueRefreshing] = useState(false);
+  const [valueRefreshStatus, setValueRefreshStatus] = useState("");
+  const [valueRefreshedAtMs, setValueRefreshedAtMs] = useState<number>(() => {
+    if (demoMode) return 0;
+    const version = readOfficialBazaarCache()?.metadata?.version || "";
+    return readBazaarValueOverlay(version)?.updatedAtMs || 0;
+  });
+  // Auto Remover Interesse (checkbox + limite), persistidos por dispositivo.
+  const [autoRemoveInterestEnabled, setAutoRemoveInterestEnabled] = useState<boolean>(() => demoMode ? false : loadUIState(BAZAAR_AUTO_REMOVE_ENABLED_KEY, false));
+  const [autoRemoveInterestLimit, setAutoRemoveInterestLimit] = useState<string>(() => demoMode ? "" : loadUIState(BAZAAR_AUTO_REMOVE_LIMIT_KEY, ""));
   // MODO DEMO (tutorial): filtros de tabela NEUTROS. Os filtros persistidos
   // do usuário real (servidor/level/bid/encerramento/"Meus") foram feitos
   // para a lista oficial e eliminariam os leilões fictícios — a tabela do
@@ -1233,7 +1252,12 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
     if (officialCache) {
       const embeddedDetails = hydrateDetailsFromAuctions(officialCache.characters);
       setOfficialMetadata(officialCache.metadata);
-      setResult({ ok: true, fetchedAt: officialCache.loadedAtMs, total: officialCache.characters.length, auctions: officialCache.characters });
+      // ATUALIZAR VALORES: se este dispositivo tem um overlay local de valores
+      // da MESMA versão oficial, ele é reaplicado ao hidratar — a atualização
+      // visual do Boss sobrevive a reinícios sem tocar na lista compartilhada.
+      const valueOverlay = readBazaarValueOverlay(officialCache.metadata?.version || "");
+      const hydratedAuctions = valueOverlay ? applyValueOverlay(officialCache.characters, valueOverlay.values) : officialCache.characters;
+      setResult({ ok: true, fetchedAt: officialCache.loadedAtMs, total: hydratedAuctions.length, auctions: hydratedAuctions });
       setDetailsCache({ ...readDetailsCache(), ...embeddedDetails });
       return;
     }
@@ -1322,6 +1346,21 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
     saveHideEndedAuctionsPreference(hideEndedAuctions);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hideEndedAuctions]);
+
+  // ── ATUALIZAR VALORES: preferências do Auto Remover Interesse ────────────
+  // Persistidas por dispositivo (localStorage), como os demais ajustes do
+  // painel. Em demo nada é gravado.
+  useEffect(() => {
+    if (demoMode) return;
+    saveUIState(BAZAAR_AUTO_REMOVE_ENABLED_KEY, autoRemoveInterestEnabled);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoRemoveInterestEnabled]);
+
+  useEffect(() => {
+    if (demoMode) return;
+    saveUIState(BAZAAR_AUTO_REMOVE_LIMIT_KEY, autoRemoveInterestLimit);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoRemoveInterestLimit]);
 
   
 
@@ -1801,7 +1840,12 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
       const response = await syncOfficialBazaarList({ force });
       if (response.cache) {
         setOfficialMetadata(response.cache.metadata);
-        setResult({ ok: true, fetchedAt: response.cache.loadedAtMs, total: response.cache.characters.length, auctions: response.cache.characters });
+        // ATUALIZAR VALORES: overlay local reaplicado apenas se ainda for da
+        // MESMA versão oficial; versão nova invalida o overlay sozinha.
+        const valueOverlay = readBazaarValueOverlay(response.cache.metadata?.version || "");
+        const syncedAuctions = valueOverlay ? applyValueOverlay(response.cache.characters, valueOverlay.values) : response.cache.characters;
+        if (!valueOverlay) setValueRefreshedAtMs(0);
+        setResult({ ok: true, fetchedAt: response.cache.loadedAtMs, total: syncedAuctions.length, auctions: syncedAuctions });
         setDetailsCache(prev => ({ ...prev, ...hydrateDetailsFromAuctions(response.cache?.characters || []) }));
         // "Atualizar" manual: 1 leitura do agregado (antes eram N+1).
         const interests = await syncBazaarInterests(response.cache.version, { force });
@@ -1821,6 +1865,116 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
       }
     } finally {
       setIsOfficialSyncing(false);
+    }
+  }
+
+  /**
+   * ATUALIZAR VALORES (Boss) — relê SOMENTE a listagem do Bazaar (mesma
+   * infraestrutura da consulta: `rubinot-bazaar-fetch`, fila e navegador já
+   * configurados; SEM análise de quests) e atualiza os valores dos leilões
+   * da lista oficial APENAS NESTE DISPOSITIVO:
+   *
+   *   • Os novos valores viram um overlay local (memória + localStorage,
+   *     atrelado à versão oficial). NENHUM valor é escrito no Firestore —
+   *     lista compartilhada, metadados e caches dos outros usuários intactos.
+   *   • Leilões da lista não reencontrados na listagem (encerrados/expirados)
+   *     mantêm os valores originais.
+   *   • AUTO REMOVER INTERESSE (opcional): com o checkbox ligado e um limite
+   *     definido, leilões cujo NOVO valor ficou ESTRITAMENTE ACIMA do limite
+   *     têm TODOS os interesses removidos em UMA única transação no doc
+   *     agregado (1 leitura + 1 escrita no total; nada a remover = 0 escrita).
+   *
+   * A consulta oficial (requestBazaarQuery/executeBazaarQuery) permanece
+   * intocada — este fluxo nunca publica lista nem mexe nos filtros.
+   */
+  async function handleRefreshValues() {
+    if (demoMode) return; // demo: nada real é lido/gravado
+    if (!isBossUser) {
+      setError("Apenas usuários Boss podem atualizar os valores do Bazaar.");
+      return;
+    }
+    if (!isElectron) {
+      setError("A atualização de valores precisa ser executada no aplicativo Desktop (Electron).");
+      return;
+    }
+    if (isLoading || isOfficialSyncing || isValueRefreshing) return;
+    const officialCache = readOfficialBazaarCache();
+    const officialVersion = officialCache?.metadata?.version || officialMetadata?.version || "";
+    const officialAuctions = officialCache?.characters || [];
+    if (!officialVersion || officialAuctions.length === 0) {
+      setError("Não há lista oficial carregada para atualizar valores.");
+      return;
+    }
+    setError(null);
+    setIsValueRefreshing(true);
+    setValueRefreshStatus("Relendo a listagem do Bazaar...");
+    try {
+      const { ipcRenderer } = (window as any).require("electron");
+      // Parada antecipada: a listagem da API é ordenada por encerramento; o
+      // maior encerramento da lista oficial (+ folga) cobre todos os leilões
+      // que interessam — páginas além disso não têm nada da lista.
+      let maxEndTs = 0;
+      officialAuctions.forEach(auction => {
+        const ts = normalizeAuctionEndTimestamp(auction.auctionEndTs ?? null);
+        if (ts && ts > maxEndTs) maxEndTs = ts;
+      });
+      const response = await ipcRenderer.invoke("rubinot-bazaar-fetch", {
+        browser: loadUIState(BAZAAR_BROWSER_KEY, "webkit"),
+        endUntilTs: maxEndTs > 0 ? maxEndTs + 5 * 60 : 0,
+        cleanProfile: false,
+        speedMode: loadUIState<BazaarSpeedMode>(BAZAAR_SPEED_MODE_KEY, "moderado"),
+        browserOrder: loadUIState<string[]>(BAZAAR_BROWSER_ORDER_KEY, DEFAULT_BROWSER_ORDER),
+        retryBrowsers: loadUIState<string[]>(BAZAAR_RETRY_BROWSERS_KEY, []),
+        retryCounts: normalizeRetryCounts(loadUIState<BazaarRetryCounts | null>(BAZAAR_RETRY_COUNTS_KEY, null)),
+        autoRun: false,
+      }) as BazaarFetchResult;
+      if (!response?.ok || response?.cancelled || !Array.isArray(response.auctions)) {
+        setError(response?.error || "Não foi possível reler a listagem do Bazaar. Os valores atuais foram mantidos.");
+        return;
+      }
+
+      // Overlay {auctionKey → novos valores} apenas dos leilões reencontrados.
+      const { values, matchedCount } = buildValueOverlay(officialAuctions, response.auctions);
+      const updatedAtMs = Date.now();
+      saveBazaarValueOverlay({ version: officialVersion, updatedAtMs, values });
+      setValueRefreshedAtMs(updatedAtMs);
+
+      // Atualização LOCAL da tabela: mesma lista, valores novos onde houve match.
+      const updatedAuctions = applyValueOverlay(result?.auctions || officialAuctions, values);
+      setResult(prev => prev
+        ? { ...prev, auctions: updatedAuctions }
+        : { ok: true, fetchedAt: updatedAtMs, total: updatedAuctions.length, auctions: updatedAuctions });
+
+      let statusMessage = `Valores atualizados localmente: ${matchedCount} de ${officialAuctions.length} leilões reencontrados.`;
+
+      // ── AUTO REMOVER INTERESSE ────────────────────────────────────────────
+      const limit = parseAutoRemoveLimit(autoRemoveInterestLimit);
+      if (autoRemoveInterestEnabled && limit !== null) {
+        const officialWithNewValues = applyValueOverlay(officialAuctions, values);
+        const { auctionIds, removedInterestCount } = computeAutoRemoveAuctions(officialWithNewValues, bazaarInterests, limit);
+        if (auctionIds.length > 0) {
+          setValueRefreshStatus("Removendo interesses acima do limite...");
+          // UMA transação no doc agregado remove todos de uma vez
+          // (1 leitura + 1 escrita, independente da quantidade).
+          const confirmed = await removeBazaarInterestsForAuctions({ auctionIds, bazaarVersion: officialVersion });
+          setBazaarInterests(confirmed);
+          syncBazaarEndingAlerts({
+            characters: autoBidCharacters,
+            interestsByAuctionId: confirmed,
+            currentUserUid: currentUser?.uid || "",
+            bazaarVersion: officialVersion,
+          });
+          statusMessage += ` Interesses removidos: ${removedInterestCount} (leilões acima de ${limit.toLocaleString("de-DE")}).`;
+        } else {
+          statusMessage += " Nenhum interesse acima do limite.";
+        }
+      }
+      setValueRefreshStatus(statusMessage);
+    } catch (err: any) {
+      setError(err?.message || "Erro ao atualizar os valores do Bazaar.");
+    } finally {
+      await closeRubinotBrowserFromRenderer("atualizar-valores-finalizado");
+      setIsValueRefreshing(false);
     }
   }
 
@@ -2211,6 +2365,10 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
           });
           if (published) {
             setOfficialMetadata(published.metadata);
+            // ATUALIZAR VALORES: lista nova publicada → o overlay local de
+            // valores da versão anterior perde o sentido e é descartado.
+            clearBazaarValueOverlay();
+            setValueRefreshedAtMs(0);
             // Etapa 6: consulta nova nasce LIMPA — o agregado foi zerado no
             // MESMO commit da publicação (rotação diária: interesses da
             // consulta anterior morrem no publish; cada usuário remarca).
@@ -3031,6 +3189,54 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
                 <button type="button" onClick={() => handleSyncOfficialBazaar(true)} disabled={isOfficialSyncing} className="inline-flex h-7 items-center justify-center gap-1 rounded-md border border-cyan-500/25 bg-cyan-500/10 px-2.5 text-[10px] font-black text-cyan-300 hover:bg-cyan-500/20 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed">
                   Atualizar
                 </button>
+                {/* ATUALIZAR VALORES (apenas Boss, no Desktop) — relê SÓ a
+                    listagem do Bazaar e atualiza os valores LOCALMENTE (este
+                    dispositivo); nada é publicado/gravado no Firestore. Com o
+                    "Auto Remover Interesse" ligado, interesses de leilões cujo
+                    novo valor passou do limite são removidos numa única
+                    transação do doc agregado. */}
+                {isBossUser && isElectron && !demoMode && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => { void handleRefreshValues(); }}
+                      disabled={isValueRefreshing || isLoading || isOfficialSyncing}
+                      className="inline-flex h-7 items-center justify-center gap-1 rounded-md border border-sky-500/30 bg-sky-500/10 px-2.5 text-[10px] font-black text-sky-300 hover:bg-sky-500/20 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                      title="Relê a listagem do Bazaar e atualiza os valores dos leilões apenas neste dispositivo (nada é publicado para os demais usuários)"
+                    >
+                      {isValueRefreshing && <RefreshCw size={11} className="animate-spin" />}
+                      {isValueRefreshing ? "Atualizando..." : "Atualizar Valores"}
+                    </button>
+                    <label
+                      className="inline-flex h-7 items-center justify-center gap-1.5 rounded-md border border-rose-500/25 bg-rose-500/10 px-2 text-[9px] font-black text-rose-300 cursor-pointer select-none"
+                      title="Ao atualizar valores, remove automaticamente o interesse (de qualquer usuário) dos leilões cujo NOVO valor ficou ACIMA do limite; valor igual ou abaixo mantém o interesse"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={autoRemoveInterestEnabled}
+                        onChange={event => setAutoRemoveInterestEnabled(event.target.checked)}
+                        className="h-3 w-3 accent-rose-400 cursor-pointer"
+                      />
+                      Auto Remover Interesse
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        value={autoRemoveInterestLimit}
+                        onChange={event => setAutoRemoveInterestLimit(sanitizeAutoRemoveLimit(event.target.value))}
+                        onClick={event => event.stopPropagation()}
+                        placeholder="Limite"
+                        aria-label="Limite de valor para remoção automática de interesse"
+                        disabled={!autoRemoveInterestEnabled}
+                        className="h-5 w-16 rounded border border-rose-500/25 bg-black/40 px-1 text-right font-mono text-[9px] font-bold text-rose-200 placeholder:text-rose-300/40 outline-none focus:border-rose-400/50 disabled:opacity-40"
+                      />
+                    </label>
+                    {(valueRefreshStatus || valueRefreshedAtMs > 0) && (
+                      <div className="max-w-[200px] text-right text-[8px] font-bold leading-tight text-sky-300/80" role="status">
+                        {valueRefreshStatus || `Valores atualizados localmente às ${new Date(valueRefreshedAtMs).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}.`}
+                      </div>
+                    )}
+                  </>
+                )}
               </div>
             </div>
           </div>
