@@ -414,10 +414,16 @@ export default function RtcImportModal({ open, onClose }: Props) {
             </button>
           </div>
 
-          {/* Seletores: Quest + Vocação */}
-          <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-2">
-            <div className="flex items-center gap-1.5">
-              <span className="text-[9px] font-black uppercase tracking-widest text-slate-500">Quest</span>
+          {/* Seletores: Quest + Vocação — rótulos em DESTAQUE: cada grupo é
+              uma cápsula com borda própria e o nome ("Quest"/"Vocação") vira
+              um chip ciano (identidade do título do modal), muito mais
+              visível que o texto cinza anterior. Mesma altura de linha —
+              o cabeçalho não cresce; seletores/lógica intocados. */}
+          <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-2">
+            <div className="inline-flex items-center gap-1.5 rounded-lg border border-cyan-500/25 bg-cyan-500/[0.05] p-1">
+              <span className="inline-flex items-center self-stretch rounded-md border border-cyan-400/40 bg-cyan-500/15 px-2 text-[9px] font-black uppercase tracking-widest text-cyan-200 shadow-[0_0_8px_rgba(34,211,238,0.15)]">
+                Quest
+              </span>
               {(Object.keys(RTC_QUEST_LABELS) as RtcQuest[]).map(q => {
                 const active = quest === q;
                 const isSw = q === "soulwar";
@@ -437,8 +443,10 @@ export default function RtcImportModal({ open, onClose }: Props) {
                 );
               })}
             </div>
-            <div className="flex items-center gap-1.5">
-              <span className="text-[9px] font-black uppercase tracking-widest text-slate-500">Vocação</span>
+            <div className="inline-flex items-center gap-1.5 rounded-lg border border-cyan-500/25 bg-cyan-500/[0.05] p-1">
+              <span className="inline-flex items-center self-stretch rounded-md border border-cyan-400/40 bg-cyan-500/15 px-2 text-[9px] font-black uppercase tracking-widest text-cyan-200 shadow-[0_0_8px_rgba(34,211,238,0.15)]">
+                Vocação
+              </span>
               {VOCATIONS.map(v => {
                 const active = voc === v;
                 const styles = vocStyles(v);
