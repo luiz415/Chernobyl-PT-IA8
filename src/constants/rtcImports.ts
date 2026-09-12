@@ -100,40 +100,183 @@ export const RTC_SLOT_LABELS: Record<RtcSlotType, string> = {
 export const RTC_SLOT_TYPES: RtcSlotType[] = ["acesso", "boss"];
 
 /**
- * Um perfil configurado (recomendado ou pessoal) para uma combinação.
+ * Uma ENTRADA armazenada no mapa `entries` (três formas possíveis):
+ *
+ *   • PERFIL (chave "profile|quest|voc|id"): { profileName, code, colorIndex }
+ *     — cadastrado no card "Códigos Usados"; fonte única dos códigos.
+ *   • SELEÇÃO (chave "quest|voc|divisão|tipo"): { profileId }
+ *     — referência ao perfil escolhido para aquele Boss/Acesso. Editar o
+ *     perfil reflete automaticamente em todos os usos (só o id é gravado).
+ *   • LEGADO (chave "quest|voc|divisão|tipo"): { profileName, code }
+ *     — formato antigo (código inline por slot); apresentado por
+ *     `buildRtcCombinationView` como perfil VIRTUAL na seleção (o conteúdo
+ *     antigo continua visível/importável; regravar converge ao formato novo).
+ *
  * `code` é TEXTO LITERAL: vírgulas, pontos, pipes, ponto e vírgula e qualquer
  * caractere especial são armazenados e copiados exatamente como digitados —
  * nenhuma normalização em nenhum ponto do fluxo.
  */
 export interface RtcEntry {
-  /** Nome do perfil (ex.: "Full DPS", "Tank padrão"). */
-  profileName: string;
-  /** Código RTC literal. */
-  code: string;
+  /** Nome do perfil (perfis e legado). */
+  profileName?: string;
+  /** Código RTC literal (perfis e legado). */
+  code?: string;
+  /** Referência ao perfil selecionado (seleções). */
+  profileId?: string;
+  /** Índice da cor de identidade do perfil (perfis). */
+  colorIndex?: number;
   /** Última alteração (ms) — informativo. */
   updatedAtMs: number;
 }
 
-/** Mapa `chave composta → perfil` como persistido no Firestore. */
+/** Mapa `chave composta → entrada` como persistido no Firestore. */
 export type RtcEntryMap = Record<string, RtcEntry>;
 
 /** Limites de sanidade (espelhados nas regras do Firestore). */
 export const RTC_PROFILE_NAME_MAX = 60;
 export const RTC_CODE_MAX = 4000;
 
+/** Máximo de perfis no card "Códigos Usados" por Quest + Vocação + guia. */
+export const RTC_MAX_PROFILES = 10;
+
 /**
  * Chave composta de uma combinação Quest + Vocação + Divisão + Tipo.
- * É o identificador do perfil dentro de `entries` — estável e legível
+ * É o identificador da SELEÇÃO dentro de `entries` — estável e legível
  * (ex.: "soulwar|EK|sw_brachio|acesso").
  */
 export function buildRtcKey(quest: RtcQuest, voc: Vocation, divisionId: string, slot: RtcSlotType): string {
   return `${quest}|${voc}|${divisionId}|${slot}`;
 }
 
+// ============================================================================
+// CÓDIGOS USADOS — PERFIS COMO FONTE ÚNICA
+// ----------------------------------------------------------------------------
+// Os perfis vivem no MESMO mapa `entries` dos documentos existentes, sob o
+// prefixo "profile|" (o separador "|" garante que nunca colidem com chaves de
+// seleção, que começam com a quest). Assim a persistência, as regras do
+// Firestore e o custo (1 doc por escopo) permanecem EXATAMENTE os mesmos.
+//
+//   chave do perfil:  "profile|<quest>|<voc>|<id>"
+//   valor:            { profileName, code, colorIndex, updatedAtMs }
+//
+//   chave da seleção: "<quest>|<voc>|<divisão>|<tipo>"   (inalterada)
+//   valor:            { profileId: "<id>", updatedAtMs }
+//
+// Editar um perfil altera UMA chave; todos os Bosses que o referenciam
+// refletem na hora (guardam só o id). A cor de identidade é o `colorIndex`
+// persistido → o MESMO perfil tem a MESMA cor em qualquer uso e dispositivo.
+// ============================================================================
+
+/** Prefixo das chaves de perfil dentro de `entries`. */
+export const RTC_PROFILE_PREFIX = "profile";
+
+/** Um perfil do card "Códigos Usados", pronto para exibição. */
+export interface RtcProfile {
+  /** Id estável do perfil (sufixo da chave). */
+  id: string;
+  /** Chave completa no mapa `entries`. */
+  key: string;
+  profileName: string;
+  code: string;
+  /** Cor de identidade persistida (índice em RTC_CODE_HUES). */
+  colorIndex: number;
+  updatedAtMs: number;
+}
+
+/** Chave de um perfil "Códigos Usados" (por Quest + Vocação). */
+export function buildRtcProfileKey(quest: RtcQuest, voc: Vocation, profileId: string): string {
+  return `${RTC_PROFILE_PREFIX}|${quest}|${voc}|${profileId}`;
+}
+
+/** Gera um id de perfil estável e único (timestamp + sufixo aleatório). */
+export function newRtcProfileId(): string {
+  return `p${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+}
+
+/**
+ * Visão consolidada de uma combinação Quest + Vocação dentro de um mapa
+ * `entries`: perfis do card "Códigos Usados" + seleção efetiva por slot.
+ */
+export interface RtcCombinationView {
+  /** Perfis da combinação, em ordem de criação (updatedAtMs asc, id desempata). */
+  profiles: RtcProfile[];
+  /** Perfil efetivo de cada chave de seleção ("quest|voc|divisão|tipo"). */
+  selections: Record<string, RtcProfile>;
+}
+
+/**
+ * Monta a visão da combinação a partir do mapa cru, ABSORVENDO O LEGADO:
+ * entradas antigas de slot com { profileName, code } inline (sem profileId)
+ * são apresentadas como um perfil "virtual" derivado — o usuário vê o mesmo
+ * conteúdo de antes e, ao regravar, o dado converge para o formato novo.
+ * Função PURA (testável em Node); não escreve nada.
+ */
+export function buildRtcCombinationView(entries: RtcEntryMap, quest: RtcQuest, voc: Vocation): RtcCombinationView {
+  const profilePrefix = `${RTC_PROFILE_PREFIX}|${quest}|${voc}|`;
+  const byId = new Map<string, RtcProfile>();
+
+  Object.entries(entries).forEach(([key, entry]) => {
+    if (!key.startsWith(profilePrefix)) return;
+    const id = key.slice(profilePrefix.length);
+    if (!id || !entry || typeof entry.profileName !== "string" || typeof entry.code !== "string") return;
+    byId.set(id, {
+      id,
+      key,
+      profileName: entry.profileName,
+      code: entry.code,
+      colorIndex: typeof entry.colorIndex === "number" && Number.isFinite(entry.colorIndex)
+        ? Math.abs(Math.trunc(entry.colorIndex)) % RTC_CODE_HUES.length
+        : 0,
+      updatedAtMs: entry.updatedAtMs || 0,
+    });
+  });
+
+  const selections: Record<string, RtcProfile> = {};
+  const selectionPrefix = `${quest}|${voc}|`;
+  Object.entries(entries).forEach(([key, entry]) => {
+    if (!key.startsWith(selectionPrefix) || !entry) return;
+    if (typeof entry.profileId === "string" && entry.profileId) {
+      const profile = byId.get(entry.profileId);
+      if (profile) selections[key] = profile; // referência viva: edições refletem
+      return;
+    }
+    // LEGADO: código inline no slot → perfil virtual (id derivado da chave,
+    // cor determinística pelo código para manter a identidade anterior).
+    if (typeof entry.profileName === "string" && typeof entry.code === "string" && entry.code) {
+      selections[key] = {
+        id: `legacy|${key}`,
+        key,
+        profileName: entry.profileName,
+        code: entry.code,
+        colorIndex: rtcCodeColorIndex(entry.code),
+        updatedAtMs: entry.updatedAtMs || 0,
+      };
+    }
+  });
+
+  const profiles = Array.from(byId.values()).sort(
+    (a, b) => (a.updatedAtMs - b.updatedAtMs) || a.id.localeCompare(b.id),
+  );
+  return { profiles, selections };
+}
+
+/**
+ * Menor índice de cor ainda livre na lista de perfis (novo perfil ganha a
+ * primeira cor disponível; com as 12 ocupadas, recicla pela contagem).
+ */
+export function nextRtcColorIndex(profiles: RtcProfile[]): number {
+  const used = new Set(profiles.map(p => p.colorIndex));
+  for (let i = 0; i < RTC_CODE_HUES.length; i++) {
+    if (!used.has(i)) return i;
+  }
+  return profiles.length % RTC_CODE_HUES.length;
+}
+
 /**
  * Valida/normaliza um mapa `entries` vindo do Firestore. Defensivo: ignora
  * chaves não-string, entradas sem forma esperada e trunca campos acima dos
  * limites (sem alterar o CONTEÚDO dentro do limite — código continua literal).
+ * Aceita as três formas de entrada: perfil, seleção (profileId) e legado.
  */
 export function sanitizeRtcEntryMap(raw: unknown): RtcEntryMap {
   const out: RtcEntryMap = {};
@@ -144,12 +287,18 @@ export function sanitizeRtcEntryMap(raw: unknown): RtcEntryMap {
     const entry = value as Partial<RtcEntry>;
     const profileName = typeof entry.profileName === "string" ? entry.profileName.slice(0, RTC_PROFILE_NAME_MAX) : "";
     const code = typeof entry.code === "string" ? entry.code.slice(0, RTC_CODE_MAX) : "";
-    if (!profileName && !code) return;
-    out[key] = {
-      profileName,
-      code,
+    const profileId = typeof entry.profileId === "string" ? entry.profileId.slice(0, 60) : "";
+    if (!profileName && !code && !profileId) return;
+    const sanitized: RtcEntry = {
       updatedAtMs: typeof entry.updatedAtMs === "number" && Number.isFinite(entry.updatedAtMs) ? entry.updatedAtMs : 0,
     };
+    if (profileName) sanitized.profileName = profileName;
+    if (code) sanitized.code = code;
+    if (profileId) sanitized.profileId = profileId;
+    if (typeof entry.colorIndex === "number" && Number.isFinite(entry.colorIndex)) {
+      sanitized.colorIndex = Math.abs(Math.trunc(entry.colorIndex)) % RTC_CODE_HUES.length;
+    }
+    out[key] = sanitized;
   });
   return out;
 }
@@ -196,4 +345,9 @@ function fnv1a(text: string): number {
 /** Cor de identidade de um código RTC (mesmo código → mesma cor, sempre). */
 export function rtcCodeHue(code: string): string {
   return RTC_CODE_HUES[fnv1a(code) % RTC_CODE_HUES.length];
+}
+
+/** Índice determinístico de cor para entradas LEGADAS (sem colorIndex). */
+export function rtcCodeColorIndex(code: string): number {
+  return fnv1a(code) % RTC_CODE_HUES.length;
 }

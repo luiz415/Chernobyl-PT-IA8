@@ -1,19 +1,25 @@
 import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
-import { Check, Copy, FileCode2, Pencil, Plus, Trash2, X } from "lucide-react";
+import { Check, ChevronDown, Copy, FileCode2, Library, Pencil, Plus, Trash2, X } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 import { VOCATIONS, VOC_COLORS, VOC_LABEL, customConfirm, type Vocation } from "../types";
 import {
+  RTC_CODE_HUES,
   RTC_CODE_MAX,
   RTC_DIVISIONS,
+  RTC_MAX_PROFILES,
   RTC_PROFILE_NAME_MAX,
   RTC_QUEST_LABELS,
   RTC_SLOT_LABELS,
+  buildRtcCombinationView,
   buildRtcKey,
-  rtcCodeHue,
+  buildRtcProfileKey,
+  newRtcProfileId,
+  nextRtcColorIndex,
   rtcDivisionSlots,
   type RtcEntry,
   type RtcEntryMap,
+  type RtcProfile,
   type RtcQuest,
   type RtcSlotType,
 } from "../constants/rtcImports";
@@ -25,15 +31,36 @@ import {
 } from "../services/rtcImportsService";
 
 // ============================================================================
-// MODAL "IMPORT RTC"
+// MODAL "IMPORT RTC" — perfis como FONTE ÚNICA ("Códigos Usados")
 // ----------------------------------------------------------------------------
-// Gerenciamento e importação de códigos RTC por Quest + Vocação + Divisão +
-// Tipo (Acesso/Boss), organizados em DUAS GUIAS exclusivas:
+// Gerenciamento e importação de códigos RTC por Quest + Vocação, em DUAS
+// GUIAS exclusivas:
 //
 //   • RECOMENDADO → doc global `rtcImports/recommended`; todos veem,
 //                   só Boss edita (UI + regras do Firestore);
 //   • MEU PERFIL  → doc `userRtcImports/{uid}`; perfis do próprio
 //                   usuário, sincronizados entre dispositivos.
+//
+// NOVA ARQUITETURA DOS DADOS (por guia + Quest + Vocação):
+//
+//   ┌─ CÓDIGOS USADOS (card fixo) ──────────────────────────────┐
+//   │  até 10 perfis: nome + código RTC + cor de identidade     │
+//   └───────────────────────────────────────────────────────────┘
+//                 ▲ fonte única dos códigos
+//   ┌─ CARDS DOS BOSSES ────────────────────────────────────────┐
+//   │  cada slot (Acesso/Boss) apenas SELECIONA um perfil       │
+//   │  cadastrado acima; Importar copia o código do perfil      │
+//   └───────────────────────────────────────────────────────────┘
+//
+//   • Perfis: chave "profile|quest|voc|id" no MESMO mapa `entries` dos
+//     documentos existentes → persistência, permissões e custo intocados.
+//   • Seleções: a chave de slot existente ("quest|voc|divisão|tipo") agora
+//     guarda só { profileId } — editar o perfil reflete em TODOS os usos.
+//   • LEGADO: slots antigos com código inline continuam visíveis/importáveis
+//     (perfil "virtual"); regravar converge ao formato novo.
+//   • CORES: cada perfil recebe um `colorIndex` persistido na criação
+//     (primeira cor livre da paleta RTC_CODE_HUES) → o MESMO perfil tem a
+//     MESMA cor em todos os usos, dispositivos e sessões.
 //
 // Decisões que importam:
 //   • PORTAL em document.body — o app vive num container com CSS `zoom` que
@@ -42,23 +69,8 @@ import {
 //   • Listeners assinados SÓ com o modal aberto: 1 leitura por doc + deltas.
 //   • Cores de vocação: exclusivamente `VOC_COLORS` (identidade oficial).
 //   • CÓDIGO LITERAL: textarea sem transformação; o botão "Importar" copia
-//     o valor armazenado byte a byte (é a MESMA função de copiar de sempre,
-//     apenas com rótulo "Importar").
-//   • IDENTIDADE POR CÓDIGO: botões "Importar" coloridos por hash do código
-//     (rtcCodeHue) — códigos IGUAIS têm botões IGUAIS em qualquer lugar do
-//     modal; códigos diferentes tendem a cores diferentes.
-//   • LAYOUT (guias + cards): fluxo Quest → Vocação → guia → Importar. Cada
-//     guia mostra SOMENTE a sua categoria, numa GRADE de CARDS por etapa
-//     (2 colunas; 1 em telas estreitas). Cada card tem faixa de identidade
-//     da vocação (número + nome + apelido + badge x/y de preenchimento) e
-//     os SLOTS empilhados com rótulo próprio (Acesso = teal, Boss =
-//     violeta) — sem cabeçalho de tabela distante nem colunas vazias nas
-//     etapas finais (Last/Bakragore só exibem Boss). Botões "Importar" têm
-//     largura fixa (alinhados na vertical dentro de cada coluna). As guias
-//     carregam contadores de perfis configurados na combinação atual.
-//     Identidades de cor preservadas: âmbar = Recomendado, céu = Meu Perfil,
-//     cor da vocação nos cards.
-//   • Esc fecha (mas primeiro cancela uma edição aberta, se houver).
+//     o valor armazenado byte a byte (mesma função de sempre).
+//   • Esc fecha (mas primeiro cancela edição/seleção aberta, se houver).
 // ============================================================================
 
 interface Props {
@@ -66,14 +78,13 @@ interface Props {
   onClose: () => void;
 }
 
-/** Identifica a edição em andamento (uma por vez). */
-interface EditingState {
-  scope: "recommended" | "personal";
-  key: string;
+/** Edição de um PERFIL do card "Códigos Usados" (uma por vez). */
+interface ProfileEditingState {
+  /** null = criação de perfil novo. */
+  profileId: string | null;
   profileName: string;
   code: string;
-  /** true = criação (não existia perfil nesta combinação). */
-  isNew: boolean;
+  colorIndex: number;
 }
 
 /** Estilos derivados da cor da vocação (mesma técnica do ImbuementsModal). */
@@ -88,6 +99,18 @@ function vocStyles(voc: Vocation) {
   };
 }
 
+/** Estilos de identidade de um perfil (cor persistida no colorIndex). */
+function profileStyles(colorIndex: number) {
+  const hue = RTC_CODE_HUES[colorIndex % RTC_CODE_HUES.length];
+  return {
+    hue,
+    text: `color-mix(in oklab, ${hue} 80%, white)`,
+    border: `color-mix(in oklab, ${hue} 55%, transparent)`,
+    fill: `color-mix(in oklab, ${hue} 15%, transparent)`,
+    glow: `color-mix(in oklab, ${hue} 25%, transparent)`,
+  };
+}
+
 export default function RtcImportModal({ open, onClose }: Props) {
   const { currentUser, userProfile } = useAuth();
   const isBoss = userProfile?.role === "Boss";
@@ -99,7 +122,10 @@ export default function RtcImportModal({ open, onClose }: Props) {
   const [tab, setTab] = useState<"recommended" | "personal">("recommended");
   const [recommended, setRecommended] = useState<RtcEntryMap>({});
   const [personal, setPersonal] = useState<RtcEntryMap>({});
-  const [editing, setEditing] = useState<EditingState | null>(null);
+  // Edição de perfil no card "Códigos Usados" (uma por vez).
+  const [profileEditing, setProfileEditing] = useState<ProfileEditingState | null>(null);
+  // Slot de Boss com o seletor de perfil aberto (chave da seleção).
+  const [pickerKey, setPickerKey] = useState<string>("");
   const [copiedKey, setCopiedKey] = useState<string>("");
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
@@ -115,16 +141,21 @@ export default function RtcImportModal({ open, onClose }: Props) {
     };
   }, [open, uid]);
 
-  // Esc: primeiro cancela edição aberta; sem edição, fecha o modal.
+  // Esc: primeiro fecha edição/seletor aberto; sem nada aberto, fecha o modal.
   useEffect(() => {
     if (!open) return;
     function handleKey(event: KeyboardEvent) {
       if (event.key !== "Escape") return;
-      setEditing(prev => {
-        if (prev) return null;
-        onClose();
-        return prev;
+      let consumed = false;
+      setProfileEditing(prev => {
+        if (prev) consumed = true;
+        return null;
       });
+      setPickerKey(prev => {
+        if (prev) consumed = true;
+        return "";
+      });
+      if (!consumed) onClose();
     }
     window.addEventListener("keydown", handleKey);
     return () => window.removeEventListener("keydown", handleKey);
@@ -133,7 +164,8 @@ export default function RtcImportModal({ open, onClose }: Props) {
   // Estado transitório zerado ao fechar.
   useEffect(() => {
     if (open) return;
-    setEditing(null);
+    setProfileEditing(null);
+    setPickerKey("");
     setCopiedKey("");
     setSaveError("");
   }, [open]);
@@ -141,14 +173,31 @@ export default function RtcImportModal({ open, onClose }: Props) {
   const divisions = RTC_DIVISIONS[quest];
   const vs = useMemo(() => vocStyles(voc), [voc]);
 
-  // Contadores das guias: perfis configurados na combinação Quest+Vocação
-  // atual (ex.: "3/11"). Ajudam a saber onde há código sem trocar de guia.
+  // Mapa da guia ativa + visão consolidada da combinação (perfis + seleções,
+  // com absorção do legado). Recalculada a cada mudança de dado/combinação.
+  const activeEntries = tab === "recommended" ? recommended : personal;
+  const view = useMemo(
+    () => buildRtcCombinationView(activeEntries, quest, voc),
+    [activeEntries, quest, voc],
+  );
+  const canEditActive = tab === "recommended" ? isBoss : true;
+  const profilesFull = view.profiles.length >= RTC_MAX_PROFILES;
+
+  // Contadores das guias: slots com perfil selecionado na combinação atual.
   const slotKeys = useMemo(
     () => divisions.flatMap(d => rtcDivisionSlots(d).map(slot => buildRtcKey(quest, voc, d.id, slot))),
     [divisions, quest, voc],
   );
-  const recommendedCount = useMemo(() => slotKeys.filter(k => recommended[k]).length, [slotKeys, recommended]);
-  const personalCount = useMemo(() => slotKeys.filter(k => personal[k]).length, [slotKeys, personal]);
+  const recommendedView = useMemo(() => buildRtcCombinationView(recommended, quest, voc), [recommended, quest, voc]);
+  const personalView = useMemo(() => buildRtcCombinationView(personal, quest, voc), [personal, quest, voc]);
+  const recommendedCount = useMemo(() => slotKeys.filter(k => recommendedView.selections[k]).length, [slotKeys, recommendedView]);
+  const personalCount = useMemo(() => slotKeys.filter(k => personalView.selections[k]).length, [slotKeys, personalView]);
+
+  function resetTransient() {
+    setProfileEditing(null);
+    setPickerKey("");
+    setSaveError("");
+  }
 
   async function copyCode(uniqueKey: string, code: string) {
     try {
@@ -159,192 +208,180 @@ export default function RtcImportModal({ open, onClose }: Props) {
     } catch {}
   }
 
-  function startEdit(scope: "recommended" | "personal", key: string, existing: RtcEntry | undefined) {
-    setSaveError("");
-    setEditing({
-      scope,
-      key,
-      profileName: existing?.profileName || "",
-      code: existing?.code || "",
-      isNew: !existing,
-    });
+  /** Grava UMA entrada (perfil ou seleção) no escopo da guia ativa. */
+  async function persistEntry(key: string, entry: RtcEntry | null): Promise<boolean> {
+    return tab === "recommended"
+      ? await saveRecommendedRtcEntry(key, entry)
+      : await savePersonalRtcEntry(uid, key, entry, personal);
   }
 
-  async function saveEditing() {
-    if (!editing || saving) return;
-    const profileName = editing.profileName.trim().slice(0, RTC_PROFILE_NAME_MAX);
+  /** Reflete a escrita no estado local (modo simulação não tem listener). */
+  function reflectLocally(key: string, entry: RtcEntry | null) {
+    const apply = (prev: RtcEntryMap) => {
+      const next = { ...prev };
+      if (entry) next[key] = entry; else delete next[key];
+      return next;
+    };
+    if (tab === "personal") setPersonal(apply);
+    else setRecommended(apply);
+  }
+
+  // ── CÓDIGOS USADOS: salvar/excluir perfil ────────────────────────────────
+  async function saveProfileEditing() {
+    if (!profileEditing || saving) return;
+    const profileName = profileEditing.profileName.trim().slice(0, RTC_PROFILE_NAME_MAX);
     // Código NÃO recebe trim — espaços podem ser parte legítima do conteúdo.
-    const code = editing.code.slice(0, RTC_CODE_MAX);
+    const code = profileEditing.code.slice(0, RTC_CODE_MAX);
     if (!profileName || !code) {
       setSaveError("Informe o nome do perfil e o código RTC.");
       return;
     }
-    const entry: RtcEntry = { profileName, code, updatedAtMs: Date.now() };
+    const isNew = !profileEditing.profileId;
+    if (isNew && profilesFull) {
+      setSaveError(`Limite de ${RTC_MAX_PROFILES} perfis atingido nesta combinação.`);
+      return;
+    }
+    const profileId = profileEditing.profileId || newRtcProfileId();
+    const key = buildRtcProfileKey(quest, voc, profileId);
+    const entry: RtcEntry = {
+      profileName,
+      code,
+      colorIndex: profileEditing.colorIndex,
+      updatedAtMs: isNew ? Date.now() : (view.profiles.find(p => p.id === profileId)?.updatedAtMs || Date.now()),
+    };
     setSaving(true);
-    const ok = editing.scope === "recommended"
-      ? await saveRecommendedRtcEntry(editing.key, entry)
-      : await savePersonalRtcEntry(uid, editing.key, entry, personal);
+    const ok = await persistEntry(key, entry);
     setSaving(false);
     if (!ok) {
       setSaveError("Não foi possível salvar. Verifique sua conexão e permissões.");
       return;
     }
-    // Modo simulação não tem listener: reflete localmente na hora.
-    if (editing.scope === "personal") setPersonal(prev => ({ ...prev, [editing.key]: entry }));
-    else setRecommended(prev => ({ ...prev, [editing.key]: entry }));
-    setEditing(null);
+    reflectLocally(key, entry);
+    setProfileEditing(null);
     setSaveError("");
   }
 
-  function deleteEditing() {
-    if (!editing || saving) return;
+  function deleteProfileEditing() {
+    if (!profileEditing?.profileId || saving) return;
+    const profileId = profileEditing.profileId;
+    // Usos do perfil nos Bosses — o aviso deixa claro que serão limpos junto.
+    const usedIn = slotKeys.filter(k => activeEntries[k]?.profileId === profileId);
     // `customConfirm` do app é callback-based (dialog global) — o trabalho
     // real acontece dentro do onConfirm.
     customConfirm(
-      `Excluir o perfil ${editing.scope === "recommended" ? "recomendado" : "pessoal"} desta combinação?`,
-      () => { void performDelete(); },
+      usedIn.length > 0
+        ? `Excluir este perfil de "Códigos Usados"? Ele está selecionado em ${usedIn.length} local(is), que ficará(ão) sem perfil.`
+        : "Excluir este perfil de \"Códigos Usados\"?",
+      () => { void performProfileDelete(profileId, usedIn); },
       "Excluir perfil",
     );
   }
 
-  async function performDelete() {
-    if (!editing || saving) return;
+  async function performProfileDelete(profileId: string, usedIn: string[]) {
     setSaving(true);
-    const ok = editing.scope === "recommended"
-      ? await saveRecommendedRtcEntry(editing.key, null)
-      : await savePersonalRtcEntry(uid, editing.key, null, personal);
+    // Remove o perfil e TODAS as seleções que o referenciam (nunca deixar
+    // seleção apontando para perfil inexistente).
+    let ok = await persistEntry(buildRtcProfileKey(quest, voc, profileId), null);
+    for (const key of usedIn) {
+      if (!ok) break;
+      ok = await persistEntry(key, null);
+    }
     setSaving(false);
     if (!ok) {
       setSaveError("Não foi possível excluir. Verifique sua conexão e permissões.");
       return;
     }
-    const clear = (prev: RtcEntryMap) => {
-      const next = { ...prev };
-      delete next[editing.key];
-      return next;
-    };
-    if (editing.scope === "personal") setPersonal(clear);
-    else setRecommended(clear);
-    setEditing(null);
+    reflectLocally(buildRtcProfileKey(quest, voc, profileId), null);
+    usedIn.forEach(key => reflectLocally(key, null));
+    setProfileEditing(null);
+    setSaveError("");
+  }
+
+  // ── BOSSES: selecionar/limpar perfil de um slot ──────────────────────────
+  async function selectProfileForSlot(key: string, profileId: string | null) {
+    if (saving) return;
+    const entry: RtcEntry | null = profileId ? { profileId, updatedAtMs: Date.now() } : null;
+    setSaving(true);
+    const ok = await persistEntry(key, entry);
+    setSaving(false);
+    if (!ok) {
+      setSaveError("Não foi possível salvar a seleção. Verifique sua conexão e permissões.");
+      return;
+    }
+    reflectLocally(key, entry);
+    setPickerKey("");
     setSaveError("");
   }
 
   if (!open) return null;
 
-  // ── SLOT de um tipo (Acesso/Boss) dentro do CARD da divisão ─────────────
-  // O escopo vem da GUIA ativa — cada guia mostra só a sua categoria.
-  // Cada slot é um bloco autocontido com rótulo próprio ("Acesso"/"Boss"),
-  // eliminando a dependência de um cabeçalho de tabela distante: o olho
-  // nunca precisa subir para saber o que está lendo. Conteúdo em UMA linha:
-  //   ACESSO/BOSS · nome do perfil (truncado)  [✎]  [ Importar — largura FIXA ]
-  // A largura fixa do botão mantém TODOS os "Importar" alinhados na
-  // vertical. Slot sem perfil: "Adicionar" (quem pode editar) ou marcação
-  // discreta (quem não pode).
-  function renderSlot(scope: "recommended" | "personal", slot: RtcSlotType, key: string, entry: RtcEntry | undefined) {
-    const isRecommended = scope === "recommended";
-    const canEdit = isRecommended ? isBoss : true;
-    const uniqueKey = `${scope}:${key}`;
-    const isCopied = copiedKey === uniqueKey;
-    const isAccess = slot === "acesso";
-
+  // ── Chip de identidade de um perfil (nome + cor persistida) ─────────────
+  function renderProfileChip(profile: RtcProfile, compact = false) {
+    const ps = profileStyles(profile.colorIndex);
     return (
-      <div
-        key={slot}
-        className="flex min-w-0 items-center gap-1.5 rounded-lg border border-[var(--th-line)]/50 bg-[var(--th-bg-base)]/60 px-2 py-1.5"
+      <span
+        className={`inline-flex min-w-0 items-center gap-1 rounded-md border font-bold ${compact ? "px-1.5 py-px text-[9px]" : "px-2 py-0.5 text-[10px]"}`}
+        style={{ borderColor: ps.border, background: ps.fill, color: ps.text }}
+        title={profile.profileName}
       >
-        {/* Rótulo do tipo — identidade fixa: Acesso = teal, Boss = violeta.
-            Largura fixa para os conteúdos de todos os cards alinharem. */}
-        <span
-          className={`flex-shrink-0 w-[46px] text-center rounded border px-1 py-px text-[8px] font-black uppercase tracking-widest ${isAccess
-            ? "border-teal-500/40 bg-teal-500/10 text-teal-300"
-            : "border-violet-500/40 bg-violet-500/10 text-violet-300"}`}
-        >
-          {RTC_SLOT_LABELS[slot]}
-        </span>
-
-        {!entry ? (
-          canEdit ? (
-            <button
-              type="button"
-              onClick={() => startEdit(scope, key, undefined)}
-              className="inline-flex h-6 min-w-0 flex-1 items-center justify-center gap-1 rounded-md border border-dashed border-[var(--th-line)] text-[9px] font-bold text-slate-500 hover:text-slate-300 hover:border-slate-500/70 transition-colors cursor-pointer"
-              title={isRecommended ? "Configurar recomendação (Boss)" : "Adicionar meu perfil"}
-            >
-              <Plus size={10} /> Adicionar
-            </button>
-          ) : (
-            <span className="inline-flex h-6 min-w-0 flex-1 items-center justify-center rounded-md text-[9px] italic text-slate-600">
-              Sem recomendação
-            </span>
-          )
-        ) : (
-          <>
-            <span className="min-w-0 flex-1 truncate text-[10px] font-bold leading-tight text-slate-200" title={entry.profileName}>
-              {entry.profileName}
-            </span>
-            {canEdit && (
-              <button
-                type="button"
-                onClick={() => startEdit(scope, key, entry)}
-                className="flex-shrink-0 inline-flex h-5 w-5 items-center justify-center rounded border border-transparent text-slate-500 hover:text-slate-200 hover:border-[var(--th-line)] transition-colors cursor-pointer"
-                title={isRecommended ? "Editar perfil recomendado (Boss)" : "Editar meu perfil"}
-              >
-                <Pencil size={10} />
-              </button>
-            )}
-            {/* Botão IMPORTAR — copia o código literal (mesma função de
-                sempre); identidade visual POR CÓDIGO (mesmo código = mesma
-                cor em qualquer lugar). Largura fixa = alinhamento perfeito. */}
-            <button
-              type="button"
-              onClick={() => copyCode(uniqueKey, entry.code)}
-              className="flex-shrink-0 inline-flex h-6 w-[86px] items-center justify-center gap-1 rounded-md border text-[9px] font-black tracking-wide transition-all duration-150 cursor-pointer hover:brightness-125 active:scale-95"
-              style={isCopied
-                ? { borderColor: "rgba(16,185,129,0.6)", background: "rgba(16,185,129,0.18)", color: "#6ee7b7" }
-                : {
-                    borderColor: `color-mix(in oklab, ${rtcCodeHue(entry.code)} 55%, transparent)`,
-                    background: `color-mix(in oklab, ${rtcCodeHue(entry.code)} 15%, transparent)`,
-                    color: `color-mix(in oklab, ${rtcCodeHue(entry.code)} 80%, white)`,
-                    boxShadow: `0 0 8px color-mix(in oklab, ${rtcCodeHue(entry.code)} 25%, transparent)`,
-                  }}
-              title={isCopied ? "Código copiado!" : `Importar (copiar) o código do perfil "${entry.profileName}"`}
-            >
-              {isCopied
-                ? <><Check size={10} strokeWidth={3} /> Copiado</>
-                : <><Copy size={9} strokeWidth={2.5} /> Importar</>}
-            </button>
-          </>
-        )}
-      </div>
+        <span className="h-1.5 w-1.5 flex-shrink-0 rounded-full" style={{ background: ps.hue }} />
+        <span className="truncate">{profile.profileName}</span>
+      </span>
     );
   }
 
-  // ── Formulário inline de edição (um por vez, dentro do slot) ─────────────
-  function renderEditor() {
-    if (!editing) return null;
-    const isRecommended = editing.scope === "recommended";
+  // ── Botão IMPORTAR — cor de identidade do PERFIL selecionado ────────────
+  function renderImportButton(uniqueKey: string, profile: RtcProfile) {
+    const isCopied = copiedKey === uniqueKey;
+    const ps = profileStyles(profile.colorIndex);
     return (
-      <div className="mt-1.5 rounded-lg border border-[var(--th-brand)]/40 bg-[var(--th-bg-base)] p-2 space-y-1.5 shadow-lg shadow-black/40">
+      <button
+        type="button"
+        onClick={() => copyCode(uniqueKey, profile.code)}
+        className="flex-shrink-0 inline-flex h-6 w-[86px] items-center justify-center gap-1 rounded-md border text-[9px] font-black tracking-wide transition-all duration-150 cursor-pointer hover:brightness-125 active:scale-95"
+        style={isCopied
+          ? { borderColor: "rgba(16,185,129,0.6)", background: "rgba(16,185,129,0.18)", color: "#6ee7b7" }
+          : { borderColor: ps.border, background: ps.fill, color: ps.text, boxShadow: `0 0 8px ${ps.glow}` }}
+        title={isCopied ? "Código copiado!" : `Importar (copiar) o código do perfil "${profile.profileName}"`}
+      >
+        {isCopied
+          ? <><Check size={10} strokeWidth={3} /> Copiado</>
+          : <><Copy size={9} strokeWidth={2.5} /> Importar</>}
+      </button>
+    );
+  }
+
+  // ── Editor de perfil do card "Códigos Usados" (inline, um por vez) ──────
+  function renderProfileEditor() {
+    if (!profileEditing) return null;
+    const isRecommended = tab === "recommended";
+    const ps = profileStyles(profileEditing.colorIndex);
+    return (
+      <div
+        className="rounded-lg border bg-[var(--th-bg-base)] p-2 space-y-1.5 shadow-lg shadow-black/40"
+        style={{ borderColor: ps.border }}
+      >
         <div className="flex items-center justify-between gap-2">
-          <span className={`text-[9px] font-black uppercase tracking-wider ${isRecommended ? "text-amber-300" : "text-sky-300"}`}>
-            {isRecommended ? "Editar recomendado (Boss)" : "Editar meu perfil"}
+          <span className={`inline-flex items-center gap-1.5 text-[9px] font-black uppercase tracking-wider ${isRecommended ? "text-amber-300" : "text-sky-300"}`}>
+            <span className="h-2 w-2 rounded-full" style={{ background: ps.hue }} />
+            {profileEditing.profileId ? "Editar perfil" : "Novo perfil"}{isRecommended ? " (Boss)" : ""}
           </span>
-          <button type="button" onClick={() => { setEditing(null); setSaveError(""); }} className="text-slate-500 hover:text-slate-300 transition-colors cursor-pointer" title="Cancelar edição">
+          <button type="button" onClick={() => { setProfileEditing(null); setSaveError(""); }} className="text-slate-500 hover:text-slate-300 transition-colors cursor-pointer" title="Cancelar edição">
             <X size={12} />
           </button>
         </div>
         <input
           type="text"
-          value={editing.profileName}
-          onChange={event => setEditing(prev => prev ? { ...prev, profileName: event.target.value } : prev)}
+          value={profileEditing.profileName}
+          onChange={event => setProfileEditing(prev => prev ? { ...prev, profileName: event.target.value } : prev)}
           maxLength={RTC_PROFILE_NAME_MAX}
           placeholder="Nome do perfil (ex.: Full DPS)"
           className="w-full rounded-md border border-[var(--th-line)] bg-[var(--th-bg-raised)] px-2 py-1 text-[11px] font-bold text-slate-100 placeholder:text-slate-600 outline-none focus:border-[var(--th-brand)]/70"
           autoFocus
         />
         <textarea
-          value={editing.code}
-          onChange={event => setEditing(prev => prev ? { ...prev, code: event.target.value } : prev)}
+          value={profileEditing.code}
+          onChange={event => setProfileEditing(prev => prev ? { ...prev, code: event.target.value } : prev)}
           maxLength={RTC_CODE_MAX}
           placeholder="Código RTC (colado exatamente como exportado do jogo)"
           rows={3}
@@ -355,10 +392,10 @@ export default function RtcImportModal({ open, onClose }: Props) {
         />
         {saveError && <div className="text-[10px] font-bold text-rose-400">{saveError}</div>}
         <div className="flex items-center justify-between gap-2">
-          {!editing.isNew ? (
+          {profileEditing.profileId ? (
             <button
               type="button"
-              onClick={deleteEditing}
+              onClick={deleteProfileEditing}
               disabled={saving}
               className="inline-flex items-center gap-1 rounded-md border border-rose-500/40 bg-rose-500/10 px-2 py-1 text-[10px] font-bold text-rose-300 hover:bg-rose-500/20 transition-colors cursor-pointer disabled:opacity-50"
             >
@@ -367,7 +404,7 @@ export default function RtcImportModal({ open, onClose }: Props) {
           ) : <span />}
           <button
             type="button"
-            onClick={saveEditing}
+            onClick={saveProfileEditing}
             disabled={saving}
             className="inline-flex items-center gap-1 rounded-md border border-emerald-500/50 bg-emerald-600/20 px-3 py-1 text-[10px] font-black text-emerald-300 hover:bg-emerald-600/35 transition-colors cursor-pointer disabled:opacity-50"
           >
@@ -378,37 +415,235 @@ export default function RtcImportModal({ open, onClose }: Props) {
     );
   }
 
-  // ── CARD de uma DIVISÃO na guia ativa ────────────────────────────────────
-  // Cada etapa é um CARD independente numa grade de 2 colunas (1 coluna em
-  // telas estreitas): faixa superior com número + nome da etapa na identidade
-  // da vocação, e abaixo os SLOTS empilhados (Acesso e/ou Boss), cada um com
-  // rótulo próprio. Vantagens sobre a tabela anterior:
-  //   • sem cabeçalho distante — cada informação é rotulada onde está;
-  //   • etapas finais (só Boss) não carregam coluna vazia com traço;
-  //   • a grade 2×N usa melhor o espaço horizontal do modal (cards curtos
-  //     lado a lado em vez de linhas compridas e rasas);
-  //   • botões "Importar" com largura fixa seguem alinhados dentro de cada
-  //     coluna de cards — comparação e localização continuam imediatas.
-  // O editor inline abre DENTRO do card da etapa em edição.
+  // ── CARD FIXO "CÓDIGOS USADOS" — fonte única dos perfis da combinação ───
+  // Sempre visível no topo da guia. Lista compacta: chip colorido do perfil +
+  // prévia do código + editar. "Adicionar perfil" respeita o limite de 10
+  // (desabilitado com aviso claro ao atingir).
+  function renderCodesUsedCard() {
+    const isRecommended = tab === "recommended";
+    const accent = isRecommended ? "#f59e0b" : "#38bdf8";
+    return (
+      <div
+        className="mb-3 overflow-hidden rounded-xl border bg-[var(--th-bg-raised)]/60"
+        style={{ borderColor: `color-mix(in oklab, ${accent} 40%, transparent)`, boxShadow: `0 0 14px color-mix(in oklab, ${accent} 10%, transparent)` }}
+      >
+        <div
+          className="flex flex-wrap items-center gap-2 border-b px-3 py-2"
+          style={{ borderColor: `color-mix(in oklab, ${accent} 30%, transparent)`, background: `color-mix(in oklab, ${accent} 8%, transparent)` }}
+        >
+          <Library size={13} style={{ color: accent }} className="flex-shrink-0" />
+          <span className="text-[11px] font-black uppercase tracking-widest" style={{ color: `color-mix(in oklab, ${accent} 85%, white)` }}>
+            Códigos Usados
+          </span>
+          <span className="rounded-full border border-[var(--th-line)] px-1.5 text-[9px] font-bold text-slate-500" title={`${view.profiles.length} de ${RTC_MAX_PROFILES} perfis cadastrados`}>
+            {view.profiles.length}/{RTC_MAX_PROFILES}
+          </span>
+          <span className="hidden text-[9px] text-slate-500 sm:inline">
+            — perfis desta combinação; selecione-os nos cards abaixo.
+          </span>
+          {canEditActive && (
+            profilesFull ? (
+              <span className="ml-auto rounded-md border border-rose-500/40 bg-rose-500/10 px-2 py-0.5 text-[9px] font-black uppercase tracking-wide text-rose-300">
+                Limite de {RTC_MAX_PROFILES} atingido
+              </span>
+            ) : (
+              <button
+                type="button"
+                onClick={() => {
+                  setSaveError("");
+                  setPickerKey("");
+                  setProfileEditing({ profileId: null, profileName: "", code: "", colorIndex: nextRtcColorIndex(view.profiles) });
+                }}
+                className="ml-auto inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[10px] font-black transition-all cursor-pointer hover:brightness-125"
+                style={{ borderColor: `color-mix(in oklab, ${accent} 50%, transparent)`, background: `color-mix(in oklab, ${accent} 14%, transparent)`, color: `color-mix(in oklab, ${accent} 85%, white)` }}
+              >
+                <Plus size={11} /> Adicionar perfil
+              </button>
+            )
+          )}
+        </div>
+        <div className="space-y-1 p-2">
+          {view.profiles.length === 0 && !profileEditing && (
+            <p className="px-1 py-1.5 text-[10px] italic text-slate-500">
+              {canEditActive
+                ? "Nenhum perfil cadastrado. Adicione um perfil (nome + código RTC) para poder selecioná-lo nos Bosses abaixo."
+                : "Nenhum perfil recomendado cadastrado pelo Boss para esta combinação."}
+            </p>
+          )}
+          {view.profiles.map(profile => {
+            const ps = profileStyles(profile.colorIndex);
+            const usedCount = slotKeys.filter(k => view.selections[k]?.id === profile.id).length;
+            const uniqueKey = `${tab}:profile:${profile.id}`;
+            if (profileEditing?.profileId === profile.id) {
+              return <div key={profile.id}>{renderProfileEditor()}</div>;
+            }
+            return (
+              <div
+                key={profile.id}
+                className="flex min-w-0 items-center gap-1.5 rounded-lg border border-[var(--th-line)]/50 bg-[var(--th-bg-base)]/60 px-2 py-1"
+                style={{ borderLeft: `3px solid ${ps.hue}` }}
+              >
+                {renderProfileChip(profile)}
+                <span className="min-w-0 flex-1 truncate font-mono text-[9px] text-slate-500" title="Prévia do código (armazenado na íntegra)">
+                  {profile.code}
+                </span>
+                {usedCount > 0 && (
+                  <span className="flex-shrink-0 rounded-full border border-[var(--th-line)] px-1.5 text-[8px] font-bold text-slate-500" title={`Selecionado em ${usedCount} local(is)`}>
+                    {usedCount} uso{usedCount > 1 ? "s" : ""}
+                  </span>
+                )}
+                {canEditActive && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSaveError("");
+                      setPickerKey("");
+                      setProfileEditing({ profileId: profile.id, profileName: profile.profileName, code: profile.code, colorIndex: profile.colorIndex });
+                    }}
+                    className="flex-shrink-0 inline-flex h-5 w-5 items-center justify-center rounded border border-transparent text-slate-500 hover:text-slate-200 hover:border-[var(--th-line)] transition-colors cursor-pointer"
+                    title="Editar perfil"
+                  >
+                    <Pencil size={10} />
+                  </button>
+                )}
+                {renderImportButton(uniqueKey, profile)}
+              </div>
+            );
+          })}
+          {profileEditing && !profileEditing.profileId && renderProfileEditor()}
+        </div>
+      </div>
+    );
+  }
+
+  // ── SLOT de um tipo (Acesso/Boss) dentro do CARD da divisão ─────────────
+  // O slot apenas SELECIONA um perfil de "Códigos Usados" (fonte única).
+  // Conteúdo em UMA linha: rótulo do tipo · chip do perfil selecionado ·
+  // seletor · Importar (cor de identidade do perfil, largura fixa).
+  function renderSlot(slot: RtcSlotType, key: string, selected: RtcProfile | undefined) {
+    const uniqueKey = `${tab}:${key}`;
+    const isAccess = slot === "acesso";
+    const isLegacy = !!selected && selected.id.startsWith("legacy|");
+    const pickerOpen = pickerKey === key;
+    const hasProfiles = view.profiles.length > 0;
+
+    return (
+      <div key={slot} className="min-w-0">
+        <div className="flex min-w-0 items-center gap-1.5 rounded-lg border border-[var(--th-line)]/50 bg-[var(--th-bg-base)]/60 px-2 py-1.5">
+          {/* Rótulo do tipo — identidade fixa: Acesso = teal, Boss = violeta.
+              Largura fixa para os conteúdos de todos os cards alinharem. */}
+          <span
+            className={`flex-shrink-0 w-[46px] text-center rounded border px-1 py-px text-[8px] font-black uppercase tracking-widest ${isAccess
+              ? "border-teal-500/40 bg-teal-500/10 text-teal-300"
+              : "border-violet-500/40 bg-violet-500/10 text-violet-300"}`}
+          >
+            {RTC_SLOT_LABELS[slot]}
+          </span>
+
+          {/* Seleção atual (chip na cor do perfil) OU convite a selecionar. */}
+          {canEditActive ? (
+            <button
+              type="button"
+              onClick={() => {
+                setSaveError("");
+                setProfileEditing(null);
+                setPickerKey(prev => (prev === key ? "" : key));
+              }}
+              className={`flex min-w-0 flex-1 items-center gap-1 rounded-md border px-1.5 py-0.5 text-left transition-colors cursor-pointer ${pickerOpen
+                ? "border-[var(--th-brand)]/60 bg-[var(--th-bg-raised)]"
+                : "border-transparent hover:border-[var(--th-line)] hover:bg-[var(--th-bg-raised)]/60"}`}
+              title={selected ? `Perfil selecionado: ${selected.profileName} — clique para trocar` : "Selecionar um perfil de Códigos Usados"}
+            >
+              {selected ? (
+                <>{renderProfileChip(selected, true)}{isLegacy && (
+                  <span className="flex-shrink-0 rounded border border-[var(--th-line)] px-1 text-[8px] font-bold text-slate-500" title="Código do formato anterior — regrave escolhendo um perfil de Códigos Usados">
+                    antigo
+                  </span>
+                )}</>
+              ) : (
+                <span className="truncate text-[9px] italic text-slate-500">
+                  {hasProfiles ? "Selecionar perfil..." : "Cadastre um perfil em Códigos Usados"}
+                </span>
+              )}
+              <ChevronDown size={10} className={`ml-auto flex-shrink-0 text-slate-500 transition-transform ${pickerOpen ? "rotate-180" : ""}`} />
+            </button>
+          ) : (
+            <span className="flex min-w-0 flex-1 items-center gap-1 px-1.5 py-0.5">
+              {selected
+                ? renderProfileChip(selected, true)
+                : <span className="truncate text-[9px] italic text-slate-600">Sem recomendação</span>}
+            </span>
+          )}
+
+          {selected && renderImportButton(uniqueKey, selected)}
+        </div>
+
+        {/* Seletor de perfis — lista SOMENTE os perfis existentes em
+            "Códigos Usados" (fonte única; impossível escolher inexistente). */}
+        {pickerOpen && canEditActive && (
+          <div className="mt-1 space-y-0.5 rounded-lg border border-[var(--th-brand)]/40 bg-[var(--th-bg-base)] p-1.5 shadow-lg shadow-black/40">
+            {!hasProfiles ? (
+              <p className="px-1 py-0.5 text-[9px] italic text-slate-500">
+                Nenhum perfil disponível — cadastre em "Códigos Usados" acima.
+              </p>
+            ) : (
+              view.profiles.map(profile => {
+                const isCurrent = selected?.id === profile.id;
+                const ps = profileStyles(profile.colorIndex);
+                return (
+                  <button
+                    key={profile.id}
+                    type="button"
+                    disabled={saving}
+                    onClick={() => { void selectProfileForSlot(key, profile.id); }}
+                    className={`flex w-full min-w-0 items-center gap-1.5 rounded-md border px-1.5 py-1 text-left transition-colors cursor-pointer disabled:opacity-50 ${isCurrent
+                      ? "border-emerald-500/50 bg-emerald-500/10"
+                      : "border-transparent hover:bg-[var(--th-bg-raised)]"}`}
+                  >
+                    <span className="h-2 w-2 flex-shrink-0 rounded-full" style={{ background: ps.hue }} />
+                    <span className="min-w-0 flex-1 truncate text-[10px] font-bold" style={{ color: ps.text }}>
+                      {profile.profileName}
+                    </span>
+                    {isCurrent && <Check size={10} className="flex-shrink-0 text-emerald-400" />}
+                  </button>
+                );
+              })
+            )}
+            {selected && !isLegacy && (
+              <button
+                type="button"
+                disabled={saving}
+                onClick={() => { void selectProfileForSlot(key, null); }}
+                className="flex w-full items-center gap-1.5 rounded-md border border-transparent px-1.5 py-1 text-left text-[9px] font-bold text-slate-500 hover:text-rose-300 hover:bg-rose-500/5 transition-colors cursor-pointer disabled:opacity-50"
+              >
+                <X size={10} /> Remover seleção
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // ── CARD de uma DIVISÃO (Boss) na guia ativa ─────────────────────────────
+  // Grade 2×N de cards por etapa: faixa superior com número + nome na
+  // identidade da vocação + badge x/y, e os SLOTS empilhados (Acesso/Boss).
   function renderDivisionCard(
     division: (typeof divisions)[number],
     index: number,
-    entries: RtcEntryMap,
   ) {
     const slots = rtcDivisionSlots(division);
-    const editingHere = editing && slots.some(slot => editing.key === buildRtcKey(quest, voc, division.id, slot));
-    const configured = slots.filter(slot => entries[buildRtcKey(quest, voc, division.id, slot)]).length;
+    const pickerHere = pickerKey && slots.some(slot => pickerKey === buildRtcKey(quest, voc, division.id, slot));
+    const configured = slots.filter(slot => view.selections[buildRtcKey(quest, voc, division.id, slot)]).length;
     return (
       <div
         key={division.id}
         className="overflow-hidden rounded-xl bg-[var(--th-bg-raised)]/50"
         style={{
-          border: `1px solid ${editingHere ? `color-mix(in oklab, ${vs.hue} 60%, transparent)` : vs.border}`,
-          boxShadow: editingHere ? `0 0 12px ${vs.glow}` : "0 1px 6px rgba(0,0,0,0.25)",
+          border: `1px solid ${pickerHere ? `color-mix(in oklab, ${vs.hue} 60%, transparent)` : vs.border}`,
+          boxShadow: pickerHere ? `0 0 12px ${vs.glow}` : "0 1px 6px rgba(0,0,0,0.25)",
         }}
       >
-        {/* Faixa da etapa — número, nome e (quando houver) apelido, na
-            identidade da vocação; badge discreta com o preenchimento. */}
         <div
           className="flex items-center gap-2 border-b px-2.5 py-1.5"
           style={{ borderColor: vs.border, background: `color-mix(in oklab, ${vs.hue} 9%, transparent)` }}
@@ -430,7 +665,7 @@ export default function RtcImportModal({ open, onClose }: Props) {
             style={configured === slots.length
               ? { borderColor: "rgba(16,185,129,0.4)", color: "#34d399" }
               : { borderColor: "var(--th-line)", color: "#64748b" }}
-            title={`${configured} de ${slots.length} código(s) configurado(s) nesta etapa`}
+            title={`${configured} de ${slots.length} código(s) selecionado(s) nesta etapa`}
           >
             {configured}/{slots.length}
           </span>
@@ -439,9 +674,8 @@ export default function RtcImportModal({ open, onClose }: Props) {
         <div className="space-y-1 p-1.5">
           {slots.map(slot => {
             const key = buildRtcKey(quest, voc, division.id, slot);
-            return renderSlot(tab, slot, key, entries[key]);
+            return renderSlot(slot, key, view.selections[key]);
           })}
-          {editingHere && renderEditor()}
         </div>
       </div>
     );
@@ -470,7 +704,7 @@ export default function RtcImportModal({ open, onClose }: Props) {
                 Import RTC
               </h2>
               <p className="mt-0.5 text-[11px] leading-snug text-slate-400">
-                Selecione a Quest e a vocação, escolha entre <span className="text-amber-300 font-bold">Recomendado</span> e <span className="text-sky-300 font-bold">Meu Perfil</span> e importe o código da etapa desejada.
+                Cadastre os perfis em <span className="font-bold text-slate-300">Códigos Usados</span>, selecione-os nos Bosses e use <span className="font-bold text-slate-300">Importar</span> para copiar o código.
               </p>
             </div>
             <button
@@ -483,11 +717,8 @@ export default function RtcImportModal({ open, onClose }: Props) {
             </button>
           </div>
 
-          {/* Seletores: Quest + Vocação — rótulos em DESTAQUE: cada grupo é
-              uma cápsula com borda própria e o nome ("Quest"/"Vocação") vira
-              um chip ciano (identidade do título do modal), muito mais
-              visível que o texto cinza anterior. Mesma altura de linha —
-              o cabeçalho não cresce; seletores/lógica intocados. */}
+          {/* Seletores: Quest + Vocação — cápsulas com rótulo em chip ciano
+              (identidade do título). Trocar seleção limpa estado transitório. */}
           <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-2">
             <div className="inline-flex items-center gap-1.5 rounded-lg border border-cyan-500/25 bg-cyan-500/[0.05] p-1">
               <span className="inline-flex items-center self-stretch rounded-md border border-cyan-400/40 bg-cyan-500/15 px-2 text-[9px] font-black uppercase tracking-widest text-cyan-200 shadow-[0_0_8px_rgba(34,211,238,0.15)]">
@@ -504,7 +735,7 @@ export default function RtcImportModal({ open, onClose }: Props) {
                   <button
                     key={q}
                     type="button"
-                    onClick={() => { setQuest(q); setEditing(null); setSaveError(""); }}
+                    onClick={() => { setQuest(q); resetTransient(); }}
                     className={`rounded-lg border px-2.5 py-1 text-[11px] font-black tracking-wide transition-all cursor-pointer ${active ? activeClass : "border-[var(--th-line)]/70 bg-[var(--th-bg-raised)] text-slate-500 hover:text-slate-300"}`}
                   >
                     {RTC_QUEST_LABELS[q]}
@@ -523,7 +754,7 @@ export default function RtcImportModal({ open, onClose }: Props) {
                   <button
                     key={v}
                     type="button"
-                    onClick={() => { setVoc(v); setEditing(null); setSaveError(""); }}
+                    onClick={() => { setVoc(v); resetTransient(); }}
                     className="rounded-lg border px-2.5 py-1 text-[11px] font-black tracking-wide transition-all cursor-pointer"
                     style={active
                       ? { borderColor: styles.border, background: styles.fill, color: styles.text, boxShadow: `0 0 10px ${styles.glow}` }
@@ -538,13 +769,13 @@ export default function RtcImportModal({ open, onClose }: Props) {
           </div>
         </div>
 
-        {/* ── Conteúdo rolável: guias + lista de divisões ─────────────────── */}
+        {/* ── Conteúdo rolável: guias + Códigos Usados + cards dos Bosses ── */}
         <div className="app-modal-body flex-1 overflow-y-auto px-4 py-3">
           {/* GUIAS "Recomendado" / "Meu Perfil" + contexto da combinação.
-              Cada guia exibe EXCLUSIVAMENTE a sua categoria de códigos —
-              mesma persistência/permissões de sempre, só muda a exibição.
-              Trocar de guia cancela edição aberta (o editor pertence a um
-              escopo). Contador = perfis configurados na combinação atual. */}
+              Cada guia exibe EXCLUSIVAMENTE a sua categoria — perfis e
+              seleções de uma não interferem na outra. Trocar de guia limpa
+              edição/seletor abertos. Contador = slots com perfil na
+              combinação atual. */}
           <div className="mb-2.5 flex flex-wrap items-end justify-between gap-2 border-b border-[var(--th-line)]/60">
             <div className="flex items-end gap-1">
               {([
@@ -556,7 +787,7 @@ export default function RtcImportModal({ open, onClose }: Props) {
                   <button
                     key={t.id}
                     type="button"
-                    onClick={() => { setTab(t.id); setEditing(null); setSaveError(""); }}
+                    onClick={() => { setTab(t.id); resetTransient(); }}
                     className={`inline-flex items-center gap-1.5 rounded-t-lg border border-b-0 px-3.5 py-1.5 text-[11px] font-black tracking-wide transition-all cursor-pointer -mb-px ${active
                       ? `${t.activeClass} shadow-[0_-2px_10px_rgba(0,0,0,0.25)]`
                       : "border-transparent text-slate-500 hover:text-slate-300"}`}
@@ -586,20 +817,24 @@ export default function RtcImportModal({ open, onClose }: Props) {
               : <>Seus <span className="font-black text-sky-400/90">perfis pessoais</span> para esta Quest e vocação — sincronizados em todos os seus dispositivos.</>}
           </p>
 
+          {/* CARD FIXO — fonte única dos perfis. */}
+          {renderCodesUsedCard()}
+
+          {/* Erro fora do editor (ex.: falha ao selecionar perfil). */}
+          {saveError && !profileEditing && (
+            <div className="mb-2 rounded-md border border-rose-500/40 bg-rose-500/10 px-2 py-1 text-[10px] font-bold text-rose-300">{saveError}</div>
+          )}
+
           {/* GRADE DE CARDS — um card por etapa, 2 colunas (1 em telas
-              estreitas), na ordem da Quest. Cada card carrega a própria
-              identificação e os slots rotulados — nada depende de cabeçalho
-              de tabela ou de colunas vazias. */}
+              estreitas), na ordem da Quest. */}
           <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-            {divisions.map((division, index) =>
-              renderDivisionCard(division, index, tab === "recommended" ? recommended : personal)
-            )}
+            {divisions.map((division, index) => renderDivisionCard(division, index))}
           </div>
 
           {/* Legenda compacta. */}
           <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-[var(--th-line)]/40 pt-2 text-[9px] text-slate-600">
             <span><span className="font-black text-violet-300/80">{RTC_SLOT_LABELS.boss}</span> é o chefe da etapa; <span className="font-black text-teal-300/80">{RTC_SLOT_LABELS.acesso}</span> é o código de acesso, quando a etapa possui um.</span>
-            <span>Botões <span className="font-bold text-slate-400">Importar</span> com a mesma cor indicam códigos idênticos.</span>
+            <span>Cada perfil tem uma <span className="font-bold text-slate-400">cor fixa</span> — a mesma em Códigos Usados, nos Bosses e no botão Importar.</span>
           </div>
         </div>
       </div>
