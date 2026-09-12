@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import bazarBgUrl from "../assets/bazar-bg.png";
-import { AlertTriangle, ArrowDownUp, Check, CheckCircle2, ChevronDown, ChevronUp, Crown, ExternalLink, Filter, FlagTriangleRight, Flame, Plus, RefreshCw, RotateCcw, ShieldAlert, ShoppingBag, Sparkles, Star, Target, Users, X } from "lucide-react";
+import { AlertTriangle, ArrowDownUp, Check, CheckCircle2, ChevronDown, ChevronUp, Coins, Crown, ExternalLink, Filter, FlagTriangleRight, Flame, Plus, RefreshCw, RotateCcw, ShieldAlert, ShoppingBag, Sparkles, Star, Target, Users, X } from "lucide-react";
 import BazaarSearchFiltersModal from "./BazaarSearchFiltersModal";
 import BazaarUsedFiltersModal from "./BazaarUsedFiltersModal";
 import BazaarBrowserModal, { BAZAAR_BROWSER_KEY, BAZAAR_BROWSER_ORDER_KEY, BAZAAR_METHOD_KEY, BAZAAR_RETRY_BROWSERS_KEY, BAZAAR_RETRY_COUNTS_KEY, BAZAAR_SPEED_MODE_KEY, DEFAULT_BAZAAR_METHOD, DEFAULT_BROWSER_ORDER, normalizeBazaarMethod, normalizeRetryCounts } from "./BazaarBrowserModal";
@@ -1070,6 +1070,11 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
   const inlineAccountInputRef = useRef<HTMLInputElement | null>(null);
   const inlineValorPagoInputRef = useRef<HTMLInputElement | null>(null);
   const [localBazaarNotifications, setLocalBazaarNotifications] = useState<LocalBazaarNotification[]>([]);
+  // `true` após a PRIMEIRA carga real do agregado de interesses. Necessário
+  // para o filtro das notificações por interesse: antes da carga o mapa é {}
+  // (indistinguível de "ninguém interessado") e filtrar cedo apagaria chips
+  // válidos por um instante. Sem leitura extra: só marca as cargas existentes.
+  const [bazaarInterestsLoaded, setBazaarInterestsLoaded] = useState(false);
   // ── BID PADRÃO ────────────────────────────────────────────────────────────
   // Valor de lance pré-configurado no quadro "Última consulta". Ativo somente
   // com a caixa marcada E um valor inteiro válido (parseBidAmount, o mesmo
@@ -1430,6 +1435,7 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
         syncBazaarInterests(response.cache.version, { force: false }).then(interestResponse => {
           if (!interestResponse.error) {
             setBazaarInterests(interestResponse.interests);
+            setBazaarInterestsLoaded(true);
             // Alimenta o agendador LOCAL de encerramento (dispositivo).
             syncBazaarEndingAlerts({
               characters: response.cache!.characters,
@@ -1522,6 +1528,27 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
     }, delay);
     return () => window.clearTimeout(timer);
   }, [localBazaarNotifications]);
+
+  // ── NOTIFICAÇÕES VISÍVEIS = notificações locais ∩ "Tenho Interesse" ───────
+  // As notificações de encerramento só fazem sentido enquanto o usuário TEM
+  // interesse no leilão. Este filtro derivado (zero Firestore, zero listener:
+  // usa o `bazaarInterests` já em memória) remove o chip na HORA em que o
+  // interesse some — clique manual em "Remover", Auto Remover Interesse ou
+  // qualquer outro mecanismo que atualize o mapa. Individual por leilão: as
+  // demais notificações ficam intactas. Guardas:
+  //   • demo: chips fictícios do tutorial não são filtrados;
+  //   • antes da 1ª carga do agregado (bazaarInterestsLoaded=false) o mapa
+  //     vazio é ambíguo — nada é filtrado para não piscar chips válidos;
+  //   • sem auctionId não há como cruzar — o chip permanece (expira sozinho).
+  const visibleBazaarNotifications = useMemo(() => {
+    if (demoMode) return localBazaarNotifications;
+    if (!bazaarInterestsLoaded || !currentUser?.uid) return localBazaarNotifications;
+    return localBazaarNotifications.filter(item => {
+      if (!item.auctionId) return true;
+      const users = bazaarInterests[item.auctionId] || [];
+      return users.some(user => user.uid === currentUser.uid);
+    });
+  }, [localBazaarNotifications, bazaarInterests, bazaarInterestsLoaded, currentUser?.uid, demoMode]);
 
   // Servidores dos "Filtros Consulta": vêm SEMPRE da constante oficial
   // (`src/constants/servers.ts`), na ordem definida lá. Antes a lista era
@@ -1851,6 +1878,7 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
         const interests = await syncBazaarInterests(response.cache.version, { force });
         if (!interests.error) {
           setBazaarInterests(interests.interests);
+          setBazaarInterestsLoaded(true);
           syncBazaarEndingAlerts({
             characters: response.cache.characters,
             interestsByAuctionId: interests.interests,
@@ -1964,6 +1992,7 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
           // (1 leitura + 1 escrita, independente da quantidade de leilões).
           const confirmed = await removeBazaarInterestsForAuctions({ auctionIds, uid: executorUid, bazaarVersion: officialVersion });
           setBazaarInterests(confirmed);
+          setBazaarInterestsLoaded(true);
           syncBazaarEndingAlerts({
             characters: autoBidCharacters,
             interestsByAuctionId: confirmed,
@@ -2379,6 +2408,7 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
             // MESMO commit da publicação (rotação diária: interesses da
             // consulta anterior morrem no publish; cada usuário remarca).
             setBazaarInterests({});
+            setBazaarInterestsLoaded(true);
             // Nova consulta publicada: o agregado global foi zerado no mesmo
             // commit; o agendador local também recomeça vazio (a versão nova
             // zera o registro de alertas enviados deste dispositivo).
@@ -2710,20 +2740,50 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
           </div>
         )}
 
-        {localBazaarNotifications.length > 0 && (
+        {visibleBazaarNotifications.length > 0 && (
           <div className="space-y-1">
-            {/* ── CABEÇALHO DAS NOTIFICAÇÕES + "ABRIR TODOS" ─────────────────
+            {/* ── CABEÇALHO DAS NOTIFICAÇÕES + "ABRIR TODOS" / "BIDAR TODOS" ─
                 Só existe quando há ≥1 notificação de encerramento visível no
                 painel (o bloco inteiro é condicional). "Abrir todos" abre o
                 link de CADA personagem notificado no momento do clique, com
                 dedupe por leilão, usando os MESMOS openExternal e
                 markBazaarLinkOpened dos cliques individuais. */}
-            <div className="flex items-center justify-end">
+            <div className="flex items-center justify-end gap-1.5">
+              {/* BIDAR TODOS — só com Bid Padrão ATIVO (caixa marcada + valor
+                  válido). Abre a página de LANCE de cada personagem notificado
+                  com o valor do Bid Padrão na URL, usando EXATAMENTE o mesmo
+                  construtor do botão individual "Bid" (buildBazaarBidUrl) e o
+                  mesmo registro de abertura. Dedupe por leilão. Nenhum lance é
+                  executado: o usuário confirma no site, como no Bid normal. */}
+              {defaultBidActive && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const amount = String(defaultBid.amount ?? "");
+                    const seen = new Set<string>();
+                    visibleBazaarNotifications.forEach(item => {
+                      const dedupeKey = item.auctionId || item.url || "";
+                      if (!dedupeKey || seen.has(dedupeKey)) return;
+                      seen.add(dedupeKey);
+                      // MESMA estrutura de link do Bid individual: extrai o ID
+                      // do leilão da URL/auctionId e monta .../bid?amount=N.
+                      const bidUrl = buildBazaarBidUrl(item.url, item.auctionId, amount);
+                      if (!bidUrl) return;
+                      if (item.auctionId) markBazaarLinkOpened(item.auctionId);
+                      openExternal(bidUrl);
+                    });
+                  }}
+                  className="inline-flex items-center gap-1 rounded border border-emerald-500/40 bg-emerald-500/15 px-2 py-0.5 text-[10px] font-black text-emerald-200 hover:bg-emerald-500/25 transition-colors cursor-pointer"
+                  title={`Abrir a página de lance de cada personagem notificado com o Bid Padrão (${defaultBid.amount})`}
+                >
+                  <Coins size={10} /> Bidar todos
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => {
                   const seen = new Set<string>();
-                  localBazaarNotifications.forEach(item => {
+                  visibleBazaarNotifications.forEach(item => {
                     const dedupeKey = item.auctionId || item.url || "";
                     if (!dedupeKey || seen.has(dedupeKey)) return;
                     seen.add(dedupeKey);
@@ -2733,12 +2793,12 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
                   });
                 }}
                 className="inline-flex items-center gap-1 rounded border border-amber-500/40 bg-amber-500/15 px-2 py-0.5 text-[10px] font-black text-amber-200 hover:bg-amber-500/25 transition-colors cursor-pointer"
-                title={`Abrir o link de cada personagem notificado (${localBazaarNotifications.length} notificaç${localBazaarNotifications.length === 1 ? "ão" : "ões"})`}
+                title={`Abrir o link de cada personagem notificado (${visibleBazaarNotifications.length} notificaç${visibleBazaarNotifications.length === 1 ? "ão" : "ões"})`}
               >
                 <ExternalLink size={10} /> Abrir todos
               </button>
             </div>
-            {localBazaarNotifications.map(notification => {
+            {visibleBazaarNotifications.map(notification => {
               // Status de abertura do link — MESMO controle da lista de
               // personagens (openedLinksState/getBazaarLinkState). Clicar
               // novamente atualiza o registro de última abertura.
@@ -3710,6 +3770,7 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
                                     setBazaarInterests(next);
                                     const confirmed = await removeBazaarInterest({ auctionId: auctionKey, uid: currentUser.uid, bazaarVersion: officialMetadata.version });
                                     setBazaarInterests(confirmed);
+                                    setBazaarInterestsLoaded(true);
                                     syncBazaarEndingAlerts({ characters: autoBidCharacters, interestsByAuctionId: confirmed, currentUserUid: currentUser.uid, bazaarVersion: officialMetadata.version });
                                   } else {
                                     const user = { uid: currentUser.uid, name: userProfile?.nome || "Usuário", auctionId: auctionKey, bazaarVersion: officialMetadata.version, createdAtMs: Date.now() };
@@ -3717,6 +3778,7 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
                                     setBazaarInterests(next);
                                     const confirmed = await setBazaarInterest({ auctionId: auctionKey, bazaarVersion: officialMetadata.version, uid: currentUser.uid, name: user.name });
                                     setBazaarInterests(confirmed);
+                                    setBazaarInterestsLoaded(true);
                                     syncBazaarEndingAlerts({ characters: autoBidCharacters, interestsByAuctionId: confirmed, currentUserUid: currentUser.uid, bazaarVersion: officialMetadata.version });
                                   }
                                 } catch (error: any) {
