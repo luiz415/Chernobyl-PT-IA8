@@ -106,20 +106,16 @@ export const RTC_SLOT_TYPES: RtcSlotType[] = ["acesso", "boss"];
  *     — cadastrado no card "Códigos Usados"; fonte única dos códigos.
  *   • SELEÇÃO (chave "quest|voc|divisão|tipo"): { profileId }
  *     — referência ao perfil escolhido para aquele Boss/Acesso. Editar o
- *     perfil reflete automaticamente em todos os usos (só o id é gravado).
- *   • LEGADO (chave "quest|voc|divisão|tipo"): { profileName, code }
- *     — formato antigo (código inline por slot); apresentado por
- *     `buildRtcCombinationView` como perfil VIRTUAL na seleção (o conteúdo
- *     antigo continua visível/importável; regravar converge ao formato novo).
+ *       perfil reflete automaticamente em todos os usos (só o id é gravado).
  *
  * `code` é TEXTO LITERAL: vírgulas, pontos, pipes, ponto e vírgula e qualquer
  * caractere especial são armazenados e copiados exatamente como digitados —
  * nenhuma normalização em nenhum ponto do fluxo.
  */
 export interface RtcEntry {
-  /** Nome do perfil (perfis e legado). */
+  /** Nome do perfil (perfis). */
   profileName?: string;
-  /** Código RTC literal (perfis e legado). */
+  /** Código RTC literal (perfis). */
   code?: string;
   /** Referência ao perfil selecionado (seleções). */
   profileId?: string;
@@ -205,11 +201,10 @@ export interface RtcCombinationView {
 }
 
 /**
- * Monta a visão da combinação a partir do mapa cru, ABSORVENDO O LEGADO:
- * entradas antigas de slot com { profileName, code } inline (sem profileId)
- * são apresentadas como um perfil "virtual" derivado — o usuário vê o mesmo
- * conteúdo de antes e, ao regravar, o dado converge para o formato novo.
- * Função PURA (testável em Node); não escreve nada.
+ * Monta a visão da combinação a partir do mapa cru: perfis do prefixo
+ * "profile|" e seleções resolvidas por referência (profileId). Seleção
+ * apontando para perfil inexistente é ignorada. Função PURA (testável em
+ * Node); não escreve nada.
  */
 export function buildRtcCombinationView(entries: RtcEntryMap, quest: RtcQuest, voc: Vocation): RtcCombinationView {
   const profilePrefix = `${RTC_PROFILE_PREFIX}|${quest}|${voc}|`;
@@ -235,23 +230,9 @@ export function buildRtcCombinationView(entries: RtcEntryMap, quest: RtcQuest, v
   const selectionPrefix = `${quest}|${voc}|`;
   Object.entries(entries).forEach(([key, entry]) => {
     if (!key.startsWith(selectionPrefix) || !entry) return;
-    if (typeof entry.profileId === "string" && entry.profileId) {
-      const profile = byId.get(entry.profileId);
-      if (profile) selections[key] = profile; // referência viva: edições refletem
-      return;
-    }
-    // LEGADO: código inline no slot → perfil virtual (id derivado da chave,
-    // cor determinística pelo código para manter a identidade anterior).
-    if (typeof entry.profileName === "string" && typeof entry.code === "string" && entry.code) {
-      selections[key] = {
-        id: `legacy|${key}`,
-        key,
-        profileName: entry.profileName,
-        code: entry.code,
-        colorIndex: rtcCodeColorIndex(entry.code),
-        updatedAtMs: entry.updatedAtMs || 0,
-      };
-    }
+    if (typeof entry.profileId !== "string" || !entry.profileId) return;
+    const profile = byId.get(entry.profileId);
+    if (profile) selections[key] = profile; // referência viva: edições refletem
   });
 
   const profiles = Array.from(byId.values()).sort(
@@ -304,19 +285,15 @@ export function sanitizeRtcEntryMap(raw: unknown): RtcEntryMap {
 }
 
 // ============================================================================
-// IDENTIDADE VISUAL POR CÓDIGO
+// IDENTIDADE VISUAL DOS PERFIS
 // ----------------------------------------------------------------------------
-// Exigência do produto: quando o MESMO código RTC aparece em mais de um lugar
-// do modal, os botões de copiar devem ter a MESMA cor/identidade — permitindo
-// reconhecer visualmente códigos iguais. Códigos diferentes tendem a receber
-// cores diferentes.
-//
-// Implementação: hash determinístico (FNV-1a) do código literal → índice numa
-// paleta fixa de matizes bem distintos. O mesmo código SEMPRE cai na mesma
-// cor, em qualquer parte do modal, em qualquer dispositivo.
+// Cada perfil de "Códigos Usados" recebe um `colorIndex` PERSISTIDO na
+// criação (primeira cor livre — ver nextRtcColorIndex). O índice aponta para
+// esta paleta fixa de matizes bem distintos: o MESMO perfil tem SEMPRE a
+// MESMA cor em todos os usos, dispositivos e sessões.
 // ============================================================================
 
-/** Paleta de matizes dos botões de copiar (cores visualmente distintas). */
+/** Paleta de matizes de identidade dos perfis (cores visualmente distintas). */
 export const RTC_CODE_HUES: string[] = [
   "#f59e0b", // âmbar
   "#22d3ee", // ciano
@@ -332,22 +309,7 @@ export const RTC_CODE_HUES: string[] = [
   "#38bdf8", // céu
 ];
 
-/** Hash FNV-1a de 32 bits — determinístico e barato. */
-function fnv1a(text: string): number {
-  let hash = 0x811c9dc5;
-  for (let i = 0; i < text.length; i++) {
-    hash ^= text.charCodeAt(i);
-    hash = Math.imul(hash, 0x01000193);
-  }
-  return hash >>> 0;
-}
-
-/** Cor de identidade de um código RTC (mesmo código → mesma cor, sempre). */
-export function rtcCodeHue(code: string): string {
-  return RTC_CODE_HUES[fnv1a(code) % RTC_CODE_HUES.length];
-}
-
-/** Índice determinístico de cor para entradas LEGADAS (sem colorIndex). */
-export function rtcCodeColorIndex(code: string): number {
-  return fnv1a(code) % RTC_CODE_HUES.length;
+/** Cor de identidade de um perfil a partir do `colorIndex` persistido. */
+export function rtcProfileHue(colorIndex: number): string {
+  return RTC_CODE_HUES[Math.abs(Math.trunc(colorIndex)) % RTC_CODE_HUES.length];
 }

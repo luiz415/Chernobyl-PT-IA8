@@ -56,11 +56,14 @@ import {
 //     documentos existentes → persistência, permissões e custo intocados.
 //   • Seleções: a chave de slot existente ("quest|voc|divisão|tipo") agora
 //     guarda só { profileId } — editar o perfil reflete em TODOS os usos.
-//   • LEGADO: slots antigos com código inline continuam visíveis/importáveis
-//     (perfil "virtual"); regravar converge ao formato novo.
+//     Seleção apontando para perfil inexistente é ignorada (sem legado:
+//     entradas de formato anterior simplesmente não são exibidas).
 //   • CORES: cada perfil recebe um `colorIndex` persistido na criação
 //     (primeira cor livre da paleta RTC_CODE_HUES) → o MESMO perfil tem a
 //     MESMA cor em todos os usos, dispositivos e sessões.
+//   • CARD "CÓDIGOS USADOS" ULTRACOMPACTO: uma faixa única com os perfis em
+//     CHIPS (nome na cor de identidade + editar + remover). O código salvo
+//     NÃO aparece no card — só no editor, ao editar.
 //
 // Decisões que importam:
 //   • PORTAL em document.body — o app vive num container com CSS `zoom` que
@@ -261,17 +264,17 @@ export default function RtcImportModal({ open, onClose }: Props) {
     setSaveError("");
   }
 
-  function deleteProfileEditing() {
-    if (!profileEditing?.profileId || saving) return;
-    const profileId = profileEditing.profileId;
+  /** Remoção de perfil — direto do chip ou de dentro do editor. */
+  function requestProfileDelete(profileId: string, profileName: string) {
+    if (saving) return;
     // Usos do perfil nos Bosses — o aviso deixa claro que serão limpos junto.
     const usedIn = slotKeys.filter(k => activeEntries[k]?.profileId === profileId);
     // `customConfirm` do app é callback-based (dialog global) — o trabalho
     // real acontece dentro do onConfirm.
     customConfirm(
       usedIn.length > 0
-        ? `Excluir este perfil de "Códigos Usados"? Ele está selecionado em ${usedIn.length} local(is), que ficará(ão) sem perfil.`
-        : "Excluir este perfil de \"Códigos Usados\"?",
+        ? `Excluir o perfil "${profileName}"? Ele está selecionado em ${usedIn.length} local(is), que ficará(ão) sem perfil.`
+        : `Excluir o perfil "${profileName}"?`,
       () => { void performProfileDelete(profileId, usedIn); },
       "Excluir perfil",
     );
@@ -392,16 +395,7 @@ export default function RtcImportModal({ open, onClose }: Props) {
         />
         {saveError && <div className="text-[10px] font-bold text-rose-400">{saveError}</div>}
         <div className="flex items-center justify-between gap-2">
-          {profileEditing.profileId ? (
-            <button
-              type="button"
-              onClick={deleteProfileEditing}
-              disabled={saving}
-              className="inline-flex items-center gap-1 rounded-md border border-rose-500/40 bg-rose-500/10 px-2 py-1 text-[10px] font-bold text-rose-300 hover:bg-rose-500/20 transition-colors cursor-pointer disabled:opacity-50"
-            >
-              <Trash2 size={10} /> Excluir
-            </button>
-          ) : <span />}
+          <span />
           <button
             type="button"
             onClick={saveProfileEditing}
@@ -416,34 +410,86 @@ export default function RtcImportModal({ open, onClose }: Props) {
   }
 
   // ── CARD FIXO "CÓDIGOS USADOS" — fonte única dos perfis da combinação ───
-  // Sempre visível no topo da guia. Lista compacta: chip colorido do perfil +
-  // prévia do código + editar. "Adicionar perfil" respeita o limite de 10
-  // (desabilitado com aviso claro ao atingir).
+  // EXTREMAMENTE COMPACTO: uma única faixa com o título e os perfis como
+  // CHIPS em linha (quebra automática). O código salvo NÃO é exibido — cada
+  // chip traz apenas nome (na cor de identidade) + editar + remover.
+  // "Adicionar perfil" respeita o limite de 10, com aviso claro ao atingir.
+  // O editor (criar/editar) abre logo abaixo da faixa, um por vez.
   function renderCodesUsedCard() {
     const isRecommended = tab === "recommended";
     const accent = isRecommended ? "#f59e0b" : "#38bdf8";
     return (
       <div
-        className="mb-3 overflow-hidden rounded-xl border bg-[var(--th-bg-raised)]/60"
+        className="mb-3 rounded-xl border bg-[var(--th-bg-raised)]/60"
         style={{ borderColor: `color-mix(in oklab, ${accent} 40%, transparent)`, boxShadow: `0 0 14px color-mix(in oklab, ${accent} 10%, transparent)` }}
       >
-        <div
-          className="flex flex-wrap items-center gap-2 border-b px-3 py-2"
-          style={{ borderColor: `color-mix(in oklab, ${accent} 30%, transparent)`, background: `color-mix(in oklab, ${accent} 8%, transparent)` }}
-        >
-          <Library size={13} style={{ color: accent }} className="flex-shrink-0" />
-          <span className="text-[11px] font-black uppercase tracking-widest" style={{ color: `color-mix(in oklab, ${accent} 85%, white)` }}>
-            Códigos Usados
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 px-2.5 py-1.5">
+          <span className="inline-flex flex-shrink-0 items-center gap-1.5">
+            <Library size={12} style={{ color: accent }} />
+            <span className="text-[10px] font-black uppercase tracking-widest" style={{ color: `color-mix(in oklab, ${accent} 85%, white)` }}>
+              Códigos Usados
+            </span>
+            <span className="rounded-full border border-[var(--th-line)] px-1.5 text-[8px] font-bold text-slate-500" title={`${view.profiles.length} de ${RTC_MAX_PROFILES} perfis cadastrados`}>
+              {view.profiles.length}/{RTC_MAX_PROFILES}
+            </span>
           </span>
-          <span className="rounded-full border border-[var(--th-line)] px-1.5 text-[9px] font-bold text-slate-500" title={`${view.profiles.length} de ${RTC_MAX_PROFILES} perfis cadastrados`}>
-            {view.profiles.length}/{RTC_MAX_PROFILES}
-          </span>
-          <span className="hidden text-[9px] text-slate-500 sm:inline">
-            — perfis desta combinação; selecione-os nos cards abaixo.
-          </span>
+
+          {/* Chips dos perfis — nome + editar + remover (sem código). */}
+          {view.profiles.map(profile => {
+            const ps = profileStyles(profile.colorIndex);
+            const isEditingThis = profileEditing?.profileId === profile.id;
+            return (
+              <span
+                key={profile.id}
+                className="inline-flex min-w-0 max-w-[180px] items-center gap-1 rounded-md border px-1.5 py-0.5"
+                style={{
+                  borderColor: isEditingThis ? ps.hue : ps.border,
+                  background: ps.fill,
+                  boxShadow: isEditingThis ? `0 0 8px ${ps.glow}` : undefined,
+                }}
+                title={profile.profileName}
+              >
+                <span className="h-1.5 w-1.5 flex-shrink-0 rounded-full" style={{ background: ps.hue }} />
+                <span className="truncate text-[10px] font-bold" style={{ color: ps.text }}>{profile.profileName}</span>
+                {canEditActive && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSaveError("");
+                        setPickerKey("");
+                        setProfileEditing({ profileId: profile.id, profileName: profile.profileName, code: profile.code, colorIndex: profile.colorIndex });
+                      }}
+                      className="flex-shrink-0 text-slate-500 hover:text-slate-200 transition-colors cursor-pointer"
+                      title={`Editar o perfil "${profile.profileName}"`}
+                    >
+                      <Pencil size={9} />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => { setSaveError(""); requestProfileDelete(profile.id, profile.profileName); }}
+                      className="flex-shrink-0 text-slate-500 hover:text-rose-400 transition-colors cursor-pointer"
+                      title={`Remover o perfil "${profile.profileName}"`}
+                    >
+                      <Trash2 size={9} />
+                    </button>
+                  </>
+                )}
+              </span>
+            );
+          })}
+
+          {view.profiles.length === 0 && !profileEditing && (
+            <span className="text-[9px] italic text-slate-500">
+              {canEditActive
+                ? "Nenhum perfil — adicione para selecionar nos Bosses abaixo."
+                : "Nenhum perfil recomendado cadastrado pelo Boss."}
+            </span>
+          )}
+
           {canEditActive && (
             profilesFull ? (
-              <span className="ml-auto rounded-md border border-rose-500/40 bg-rose-500/10 px-2 py-0.5 text-[9px] font-black uppercase tracking-wide text-rose-300">
+              <span className="ml-auto flex-shrink-0 rounded-md border border-rose-500/40 bg-rose-500/10 px-2 py-0.5 text-[8px] font-black uppercase tracking-wide text-rose-300">
                 Limite de {RTC_MAX_PROFILES} atingido
               </span>
             ) : (
@@ -454,64 +500,17 @@ export default function RtcImportModal({ open, onClose }: Props) {
                   setPickerKey("");
                   setProfileEditing({ profileId: null, profileName: "", code: "", colorIndex: nextRtcColorIndex(view.profiles) });
                 }}
-                className="ml-auto inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[10px] font-black transition-all cursor-pointer hover:brightness-125"
+                className="ml-auto inline-flex flex-shrink-0 items-center gap-1 rounded-md border px-2 py-0.5 text-[9px] font-black transition-all cursor-pointer hover:brightness-125"
                 style={{ borderColor: `color-mix(in oklab, ${accent} 50%, transparent)`, background: `color-mix(in oklab, ${accent} 14%, transparent)`, color: `color-mix(in oklab, ${accent} 85%, white)` }}
               >
-                <Plus size={11} /> Adicionar perfil
+                <Plus size={10} /> Adicionar perfil
               </button>
             )
           )}
         </div>
-        <div className="space-y-1 p-2">
-          {view.profiles.length === 0 && !profileEditing && (
-            <p className="px-1 py-1.5 text-[10px] italic text-slate-500">
-              {canEditActive
-                ? "Nenhum perfil cadastrado. Adicione um perfil (nome + código RTC) para poder selecioná-lo nos Bosses abaixo."
-                : "Nenhum perfil recomendado cadastrado pelo Boss para esta combinação."}
-            </p>
-          )}
-          {view.profiles.map(profile => {
-            const ps = profileStyles(profile.colorIndex);
-            const usedCount = slotKeys.filter(k => view.selections[k]?.id === profile.id).length;
-            const uniqueKey = `${tab}:profile:${profile.id}`;
-            if (profileEditing?.profileId === profile.id) {
-              return <div key={profile.id}>{renderProfileEditor()}</div>;
-            }
-            return (
-              <div
-                key={profile.id}
-                className="flex min-w-0 items-center gap-1.5 rounded-lg border border-[var(--th-line)]/50 bg-[var(--th-bg-base)]/60 px-2 py-1"
-                style={{ borderLeft: `3px solid ${ps.hue}` }}
-              >
-                {renderProfileChip(profile)}
-                <span className="min-w-0 flex-1 truncate font-mono text-[9px] text-slate-500" title="Prévia do código (armazenado na íntegra)">
-                  {profile.code}
-                </span>
-                {usedCount > 0 && (
-                  <span className="flex-shrink-0 rounded-full border border-[var(--th-line)] px-1.5 text-[8px] font-bold text-slate-500" title={`Selecionado em ${usedCount} local(is)`}>
-                    {usedCount} uso{usedCount > 1 ? "s" : ""}
-                  </span>
-                )}
-                {canEditActive && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setSaveError("");
-                      setPickerKey("");
-                      setProfileEditing({ profileId: profile.id, profileName: profile.profileName, code: profile.code, colorIndex: profile.colorIndex });
-                    }}
-                    className="flex-shrink-0 inline-flex h-5 w-5 items-center justify-center rounded border border-transparent text-slate-500 hover:text-slate-200 hover:border-[var(--th-line)] transition-colors cursor-pointer"
-                    title="Editar perfil"
-                  >
-                    <Pencil size={10} />
-                  </button>
-                )}
-                {renderImportButton(uniqueKey, profile)}
-              </div>
-            );
-          })}
-          {profileEditing && !profileEditing.profileId && renderProfileEditor()}
-        </div>
+
+        {/* Editor (criar OU editar) — abaixo da faixa, um por vez. */}
+        {profileEditing && <div className="px-2 pb-2">{renderProfileEditor()}</div>}
       </div>
     );
   }
@@ -523,7 +522,6 @@ export default function RtcImportModal({ open, onClose }: Props) {
   function renderSlot(slot: RtcSlotType, key: string, selected: RtcProfile | undefined) {
     const uniqueKey = `${tab}:${key}`;
     const isAccess = slot === "acesso";
-    const isLegacy = !!selected && selected.id.startsWith("legacy|");
     const pickerOpen = pickerKey === key;
     const hasProfiles = view.profiles.length > 0;
 
@@ -555,11 +553,7 @@ export default function RtcImportModal({ open, onClose }: Props) {
               title={selected ? `Perfil selecionado: ${selected.profileName} — clique para trocar` : "Selecionar um perfil de Códigos Usados"}
             >
               {selected ? (
-                <>{renderProfileChip(selected, true)}{isLegacy && (
-                  <span className="flex-shrink-0 rounded border border-[var(--th-line)] px-1 text-[8px] font-bold text-slate-500" title="Código do formato anterior — regrave escolhendo um perfil de Códigos Usados">
-                    antigo
-                  </span>
-                )}</>
+                renderProfileChip(selected, true)
               ) : (
                 <span className="truncate text-[9px] italic text-slate-500">
                   {hasProfiles ? "Selecionar perfil..." : "Cadastre um perfil em Códigos Usados"}
@@ -609,7 +603,7 @@ export default function RtcImportModal({ open, onClose }: Props) {
                 );
               })
             )}
-            {selected && !isLegacy && (
+            {selected && (
               <button
                 type="button"
                 disabled={saving}
