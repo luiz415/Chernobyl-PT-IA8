@@ -344,9 +344,25 @@ function readSavedBazarFilters(): BazarSavedFilters {
   }
 }
 
+/**
+ * Grava as preferências de consulta POR MESCLAGEM. A chave é COMPARTILHADA
+ * com outros módulos que guardam campos irmãos no mesmo objeto — hoje o Bid
+ * Padrão (`defaultBidEnabled`/`defaultBidAmount`, via utils/bazaarDefaultBid)
+ * — então reescrever o objeto inteiro apagaria silenciosamente o que os
+ * outros módulos salvaram (era exatamente o que fazia a caixa "Bid Padrão"
+ * voltar desmarcada ao reabrir o app: este save rodava na montagem do painel
+ * e descartava a preferência). Os campos recebidos aqui sempre têm valor,
+ * portanto a mesclagem nunca ressuscita valores antigos deles.
+ */
 function saveBazarFilters(filters: BazarSavedFilters) {
   try {
-    localStorage.setItem(BAZAR_FILTERS_KEY, JSON.stringify(filters));
+    const raw = localStorage.getItem(BAZAR_FILTERS_KEY);
+    let base: Record<string, unknown> = {};
+    try {
+      const parsed = raw ? JSON.parse(raw) : null;
+      if (parsed && typeof parsed === "object") base = parsed as Record<string, unknown>;
+    } catch {}
+    localStorage.setItem(BAZAR_FILTERS_KEY, JSON.stringify({ ...base, ...filters }));
   } catch {}
 }
 
