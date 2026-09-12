@@ -434,14 +434,20 @@ service cloud.firestore {
         && request.resource.data.status == 'pendente';
       allow update, delete: if isBoss();
     }
+    // PRESENÇA — nova arquitetura (RTDB → Cloud Function presenceSync):
+    // presence/count é escrito EXCLUSIVAMENTE pelo Admin SDK da Function
+    // (Admin SDK ignora estas regras). Clientes apenas leem (polling de 10
+    // min). Nenhum cliente grava mais presença no Firestore — a presença
+    // bruta vive no Realtime Database (regras em database.rules.json).
     match /presence/count {
       allow read: if isAuth() && isApproved();
-      allow create, update: if isAuth() && isApproved();
+      allow write: if false;
     }
+    // Coleção legada presence/{uid} (heartbeat antigo): aposentada. Sem novas
+    // escritas; o dono pode apagar o próprio doc residual.
     match /presence/{userId} {
       allow read: if isAuth() && isApproved();
-      allow create: if isAuth() && isApproved() && request.auth.uid == userId;
-      allow update: if isAuth() && isApproved() && request.auth.uid == userId;
+      allow create, update: if false;
       allow delete: if isAuth() && isApproved() && request.auth.uid == userId;
     }
     match /user_logs/{userId} {

@@ -47,3 +47,10 @@ export { materializeAcquisitionAcceptance } from "./acquisitionAcceptance.js";
 // pré-aprovação automaticamente. Centralizado no backend porque quem remove
 // pode não ser o dono da pré-venda (Rules só permitem o delete ao dono/Boss).
 export { cleanupRemovedSlotPreApprovals } from "./acquisitionCleanup.js";
+// Contador de usuários online: presença bruta no RTDB (status/{uid}, com
+// onDisconnect no servidor), trigger abaixo mantém o doc Firestore
+// presence/count escrevendo SÓ quando o total muda. Clientes leem por
+// polling de 10 min — sem listener. REGIÃO: us-central1 (obrigatória — o
+// trigger deve rodar na região da instância RTDB; RTDB não existe em
+// southamerica-east1).
+export { presenceSync } from "./presenceSync.js";

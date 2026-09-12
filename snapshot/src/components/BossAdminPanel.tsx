@@ -26,8 +26,10 @@ import {
 import { openExternalUrl } from "../utils/openExternal";
 import type { Donation } from "../types/donations";
 import { formatRC, type ManualVipCreditNotification, type VipCreditRequest } from "../types";
-import { db, isSimulationMode, onSnapshot, updateDoc, setDoc, deleteDoc, getDoc, getDocs } from "../firebase/config";
+import { db, rtdb, isSimulationMode, onSnapshot, updateDoc, setDoc, deleteDoc, getDoc, getDocs } from "../firebase/config";
 import { collection, doc, serverTimestamp, query, where, increment, runTransaction, Timestamp } from "firebase/firestore";
+// Leitura pontual da presença (RTDB, custo zero) — só na aba Usuários.
+import { ref as rtdbRef, get as rtdbGet } from "firebase/database";
 import { getLogs, clearLogs, getStats, type LogEntry } from "../utils/firestoreLogger";
 import { getVipEffectiveExpirationMillis, getVipExpirationMillis, formatVipExpirationDate, formatVipRemainingTime, VIP_DAY_MS } from "../utils/vipAccess";
 import { ArrowDown, ArrowUp, ArrowUpDown } from "lucide-react";
@@ -36,7 +38,6 @@ import { FilterSelect, FilterInline, FilterNumber } from "./FilterTypes";
 interface Props {
   open: boolean;
   onClose: () => void;
-  presenceMap?: Record<string, any>;
   minAverage?: number;
   globalSettings?: {
     minimumAverageDonation: number;
@@ -57,7 +58,7 @@ interface Props {
 
 const DONATIONS_KEY = "chernobyl_donations";
 
-export default function BossAdminPanel({ open, onClose, presenceMap = {}, minAverage = 10, globalSettings, pendingDonationsCount: externalPendingDonationsCount = 0, pendingRequestsCount: externalPendingRequestsCount = 0, pendingVipCount: externalPendingVipCount = 0 }: Props) {
+export default function BossAdminPanel({ open, onClose, minAverage = 10, globalSettings, pendingDonationsCount: externalPendingDonationsCount = 0, pendingRequestsCount: externalPendingRequestsCount = 0, pendingVipCount: externalPendingVipCount = 0 }: Props) {
   const {
     currentUser,
     userProfile,
@@ -549,44 +550,45 @@ export default function BossAdminPanel({ open, onClose, presenceMap = {}, minAve
   }
 
   // ============================================================================
-  // CACHE PERSISTENTE DE "VISTO POR ÚLTIMO"
-  // O documento presence/{uid} é DELETADO quando o usuário desconecta, fazendo o
-  // lastSeen sumir do presenceMap. Este cache (localStorage) registra
-  // obrigatoriamente o último horário visto de cada usuário, garantindo que o
-  // "visto por último" continue exibido mesmo após o usuário sair.
+  // "VISTO POR ÚLTIMO" — LEITURA PONTUAL DO REALTIME DATABASE
+  //
+  // A presença mora no RTDB (status/{uid}): conexões vivas em `conns` e
+  // `lastSeen` gravado pelo PRÓPRIO SERVIDOR na desconexão (onDisconnect) —
+  // sempre correto, mesmo em fechamento abrupto. O nó persiste após a saída,
+  // então o antigo cache paliativo de localStorage deixou de ser necessário.
+  //
+  // ECONOMIA: uma única leitura `get(status)` (RTDB, custo por operação =
+  // zero) ao abrir a aba Usuários — nenhum listener, nenhum poll, nenhuma
+  // leitura de coleção Firestore.
   // ============================================================================
-  const LASTSEEN_CACHE_KEY = "boss_lastseen_cache";
-  const [, setLastSeenCache] = useState<Record<string, number>>(() => {
-    try {
-      const raw = localStorage.getItem(LASTSEEN_CACHE_KEY);
-      const parsed = raw ? JSON.parse(raw) : {};
-      return parsed && typeof parsed === "object" ? parsed : {};
-    } catch { return {}; }
-  });
-  // Mescla o presenceMap atual no cache — sempre mantém o MAIOR timestamp conhecido
+  interface BossPresenceEntry { online: boolean; lastSeen: number; lastLoginAt: number }
+  const [presenceMap, setPresenceMap] = useState<Record<string, BossPresenceEntry>>({});
   useEffect(() => {
-    const uids = Object.keys(presenceMap);
-    if (uids.length === 0) return;
-    setLastSeenCache(prev => {
-      let changed = false;
-      const next = { ...prev };
-      uids.forEach(uid => {
-        const incoming = presenceMap[uid];
-        if (incoming > 0 && (!next[uid] || incoming > next[uid])) {
-          next[uid] = incoming;
-          changed = true;
-        }
+    if (!open || !userProfile || userProfile.role !== "Boss" || activeTab !== "users" || isIdleMode) return;
+    if (isSimulationMode || !rtdb) { setPresenceMap({}); return; }
+    if (globalSettings?.presenceEnabled === false) { setPresenceMap({}); return; }
+    let cancelled = false;
+    rtdbGet(rtdbRef(rtdb, "status")).then(snapshot => {
+      if (cancelled) return;
+      const raw = (snapshot.val() || {}) as Record<string, any>;
+      const map: Record<string, BossPresenceEntry> = {};
+      Object.keys(raw).forEach(uid => {
+        const entry = raw[uid] || {};
+        const conns = entry.conns && typeof entry.conns === "object" ? entry.conns : {};
+        // Mesma regra da Cloud Function: online ⇔ ≥1 conexão ativa.
+        const online = Object.keys(conns).some(id => conns[id]?.active !== false);
+        map[uid] = {
+          online,
+          lastSeen: Number(entry.lastSeen) || 0,
+          lastLoginAt: Number(entry.lastLoginAt) || 0,
+        };
       });
-      if (changed) {
-        try { localStorage.setItem(LASTSEEN_CACHE_KEY, JSON.stringify(next)); } catch {}
-        return next;
-      }
-      return prev;
-    });
-  }, [presenceMap]);
-  function formatPresenceTime(ts?: any): string {
-    if (!ts) return "—";
-    const millis = ts?.toMillis?.() || ts;
+      setPresenceMap(map);
+    }).catch(() => { if (!cancelled) setPresenceMap({}); });
+    return () => { cancelled = true; };
+  }, [open, userProfile?.role, activeTab, isIdleMode, globalSettings?.presenceEnabled]);
+
+  function formatPresenceTime(millis?: number): string {
     if (!millis || millis <= 0) return "—";
     return new Date(millis).toLocaleString("pt-BR", {
       day: "2-digit",
@@ -594,13 +596,6 @@ export default function BossAdminPanel({ open, onClose, presenceMap = {}, minAve
       hour: "2-digit",
       minute: "2-digit"
     });
-  }
-
-  function isUserOnline(lastActivityAt?: any): boolean {
-    if (!lastActivityAt) return false;
-    const millis = lastActivityAt?.toMillis?.() || lastActivityAt;
-    const ONLINE_THRESHOLD_MS = 30 * 60 * 1000; // 30 minutos
-    return Date.now() - millis < ONLINE_THRESHOLD_MS;
   }
 
   // Listener lazy: Doações + leitura pontual de donation_settings
@@ -766,7 +761,7 @@ export default function BossAdminPanel({ open, onClose, presenceMap = {}, minAve
   };
   const getUserOnline = (uid: string): boolean => {
     if (globalSettings?.presenceEnabled === false) return false;
-    return isUserOnline(presenceMap[uid]?.lastActivityAt);
+    return presenceMap[uid]?.online === true;
   };
 
   const filteredActiveUsers = useMemo(() => {
@@ -804,8 +799,8 @@ export default function BossAdminPanel({ open, onClose, presenceMap = {}, minAve
           const bOn = getUserOnline(b.uid) ? 1 : 0;
           cmp = bOn - aOn;
           if (cmp === 0) {
-            const aTs = presenceMap[a.uid]?.lastActivityAt?.toMillis?.() || presenceMap[a.uid]?.lastActivityAt || 0;
-            const bTs = presenceMap[b.uid]?.lastActivityAt?.toMillis?.() || presenceMap[b.uid]?.lastActivityAt || 0;
+            const aTs = presenceMap[a.uid]?.lastSeen || 0;
+            const bTs = presenceMap[b.uid]?.lastSeen || 0;
             cmp = bTs - aTs;
           }
           break;
@@ -1372,7 +1367,7 @@ export default function BossAdminPanel({ open, onClose, presenceMap = {}, minAve
                                 );
                               }
                               const p = presenceMap[user.uid];
-                              const online = isUserOnline(p?.lastActivityAt);
+                              const online = p?.online === true;
                               return (
                                 <div className="space-y-1">
                                   {online ? (
@@ -1385,9 +1380,8 @@ export default function BossAdminPanel({ open, onClose, presenceMap = {}, minAve
                                     </span>
                                   )}
                                   <div className="text-[8px] text-slate-500 flex flex-col font-mono leading-tight">
-                                    <span>Ativ: {formatPresenceTime(p?.lastActivityAt)}</span>
+                                    <span>Visto: {formatPresenceTime(p?.lastSeen)}</span>
                                     <span>In: {formatPresenceTime(p?.lastLoginAt)}</span>
-                                    <span>Out: {formatPresenceTime(p?.lastLogoutAt)}</span>
                                   </div>
                                 </div>
                               );

@@ -15,7 +15,8 @@ import {
   runTransaction,
   Timestamp
 } from "firebase/firestore";
-import { auth, db, isSimulationMode, setDoc, getDoc, updateDoc, onSnapshot, addDoc } from "../firebase/config";
+import { auth, db, rtdb, isSimulationMode, setDoc, getDoc, updateDoc, onSnapshot, addDoc } from "../firebase/config";
+import { startRtdbPresence } from "../services/presenceRtdbService";
 import { saveUserLogsToFirestore, getLogs, getStats, getLoggerGovernance, subscribeLoggerGovernance } from "../utils/firestoreLogger";
 import { increment } from "firebase/firestore";
 import {
@@ -1121,63 +1122,51 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     };
   }, [currentUser, userProfile, loggerGovernance.paused, loggerGovernance.sendIntervalSeconds, isIdleMode]);
 
-  // Presence heartbeat — 10 min interval (600.000ms)
-  // Requisitos: lastLoginAt, lastActivityAt, lastLogoutAt, isOnline
+  // ── PRESENÇA — REALTIME DATABASE (substitui o heartbeat Firestore) ────────
+  //
+  // ECONOMIA: o heartbeat de 3 min no Firestore (~20 writes/h por usuário)
+  // foi ELIMINADO. A presença vive no RTDB (custo por operação = zero):
+  //   • conexão registrada em status/{uid}/conns/{connId} com onDisconnect
+  //     — o SERVIDOR remove a conexão quando o socket cai (fechamento
+  //     abrupto, crash, queda de rede), sem depender de beforeunload;
+  //   • a Cloud Function `presenceSync` observa essas transições e mantém o
+  //     doc agregado Firestore `presence/count`, escrevendo SÓ quando o
+  //     total muda;
+  //   • a detecção local de ociosidade continua idêntica (6 min sem
+  //     atividade → setIsUserIdle), mas agora vira apenas um flag barato no
+  //     RTDB (`active: false`) em vez de um write no Firestore.
+  //
+  // Sem RTDB configurado (rtdb === null), nada é registrado e o contador
+  // aparece indisponível ("-") — degradação silenciosa, nada quebra.
   useEffect(() => {
     if (!currentUser || !userProfile || userProfile.status !== "aprovado") return;
     if (isIdleMode) return;
     if (!presenceGovernance.enabled) return;
-    if (isSimulationMode || !db) return;
+    if (isSimulationMode || !rtdb) return;
 
-    const IDLE_THRESHOLD_MS = 6 * 60 * 1000; // 6 minutos de ociosidade (2x intervalo)
-    const HEARTBEAT_INTERVAL_MS = 180 * 1000; // 180 segundos (3 minutos)
+    const IDLE_THRESHOLD_MS = 6 * 60 * 1000; // 6 minutos de ociosidade (mantido)
+    const IDLE_CHECK_INTERVAL_MS = 60 * 1000; // verificação LOCAL (sem rede)
     const ACTIVITY_THROTTLE_MS = 10000; // throttle de 10s para detecção de atividade
 
-    const userRef = doc(db, "presence", currentUser.uid);
+    const presenceHandle = startRtdbPresence(
+      rtdb,
+      currentUser.uid,
+      userProfile.nome || currentUser.email || "Anônimo",
+    );
+
     let lastActivityTime = Date.now();
     let wentIdle = false;
     let lastEventTime = 0;
 
-    const updatePresence = async (fields: Record<string, any>) => {
-      if (checkRateLimit()) return;
-      try {
-        await setDoc(userRef, {
-          uid: currentUser.uid,
-          displayName: userProfile.nome || currentUser.email || "Anônimo",
-          role: effectiveUserProfile?.role || "Normal",
-          ...fields,
-          updatedAt: serverTimestamp(),
-        }, { merge: true });
-      } catch (err) {
-        console.error("Erro ao atualizar presença:", err);
-      }
-    };
-
-    // Heartbeat inicial (Login)
-    updatePresence({
-      lastLoginAt: serverTimestamp(),
-      lastActivityAt: serverTimestamp(),
-      isOnline: true
-    });
-
-    const runHeartbeat = async () => {
+    // Checagem de ociosidade 100% local: só toca a rede (RTDB) na TRANSIÇÃO
+    // ativo→ocioso ou ocioso→ativo — nunca em intervalos regulares.
+    const idleCheck = () => {
       const isIdle = Date.now() - lastActivityTime > IDLE_THRESHOLD_MS;
-      
-      if (isIdle) {
-        if (!wentIdle) {
-          wentIdle = true;
-          setIsUserIdle(true);
-          // Marca como offline no Firestore se ultrapassou os 30 min
-          updatePresence({ isOnline: false });
-        }
-        return;
+      if (isIdle && !wentIdle) {
+        wentIdle = true;
+        setIsUserIdle(true);
+        presenceHandle.setActive(false);
       }
-
-      // Heartbeat normal de manutenção
-      updatePresence({
-        lastActivityAt: serverTimestamp(),
-        isOnline: true
-      });
     };
 
     const onUserActivity = () => {
@@ -1189,37 +1178,27 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (wentIdle) {
         wentIdle = false;
         setIsUserIdle(false);
-        updatePresence({
-          lastActivityAt: serverTimestamp(),
-          isOnline: true
-        });
+        presenceHandle.setActive(true);
       }
     };
 
     const activityEvents = ["mousemove", "keydown", "click", "scroll", "touchstart", "wheel"];
     activityEvents.forEach(evt => window.addEventListener(evt, onUserActivity, { passive: true }));
 
-    const interval = setInterval(runHeartbeat, HEARTBEAT_INTERVAL_MS);
-
-    const handleBeforeUnload = () => {
-      // Logout silencioso ao fechar aba
-      updatePresence({
-        lastLogoutAt: serverTimestamp(),
-        isOnline: false
-      });
-    };
-    window.addEventListener("beforeunload", handleBeforeUnload);
+    const interval = setInterval(idleCheck, IDLE_CHECK_INTERVAL_MS);
 
     return () => {
       clearInterval(interval);
       activityEvents.forEach(evt => window.removeEventListener(evt, onUserActivity));
-      window.removeEventListener("beforeunload", handleBeforeUnload);
+      // Saída limpa (logout, troca de usuário, governança desligada):
+      // remove a conexão agora; o onDisconnect cobre os fechamentos abruptos.
+      presenceHandle.stop();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentUser?.uid, userProfile?.status, isIdleMode, presenceGovernance.enabled]);
 
-  // Presence READ listener lives in App.tsx (feeds onlineCount / presenceMap state).
-  // Only the WRITE heartbeat lives here to centralize rate-limit logic.
+  // Presence READ (contador agregado) continua em App.tsx: polling de 10 min
+  // sobre o doc Firestore `presence/count`, mantido pela CF `presenceSync`.
 
   return (
     <AuthContext.Provider

@@ -436,8 +436,9 @@ export default function App() {
     } catch { return 1; }
   });
   const [presenceCountUnavailable, setPresenceCountUnavailable] = useState(false);
-  // Mapa centralizado de presença: uid -> lastSeen em milissegundos (alimentado pelo único listener de presence)
-  const [presenceMap, setPresenceMap] = useState<Record<string, any>>({});
+  // O mapa de presença ("Visto por último" do painel Boss) saiu daqui: o
+  // BossAdminPanel lê o RTDB (status/*, custo zero) sob demanda, somente com
+  // a aba Usuários aberta — nenhum poll de coleção Firestore alimenta mais UI.
 
   const [tab, setTab] = useState<Tab>("ativos");
   // "DISPONÍVEIS" é o padrão ao entrar em Meus Personagens.
@@ -1400,8 +1401,26 @@ export default function App() {
     }
   }
 
-  // REFATORAÇÃO PRESENCE — Requisito: Documento agregado presence/count
-  // Redução de leituras para Normal/VIP e tempo real para Boss
+  // ── CONTADOR DE ONLINE — LEITURA ÚNICA E BARATA (presence/count) ──────────
+  //
+  // ARQUITETURA (prioridade: economia de consumo do Firestore):
+  //   Cliente → RTDB status/{uid} (custo zero, com onDisconnect no servidor)
+  //   → Cloud Function `presenceSync` (dispara só em conexão/desconexão)
+  //   → Firestore presence/count (escrito SÓ quando o total muda, só pela CF)
+  //   → este polling (1 read por cliente a cada 10 min — SEM listener).
+  //
+  // O que foi REMOVIDO daqui (e por quê):
+  //   • recálculo lendo a coleção `presence` inteira (N reads) — a CF é a
+  //     única fonte do agregado; nenhum papel de usuário varre coleção;
+  //   • escrita de presence/count pelo cliente — as Rules agora negam
+  //     (allow write: if false); só o Admin SDK da CF escreve;
+  //   • tratamento de "documento obsoleto" — sem heartbeat, o doc não
+  //     envelhece: ele só muda quando o número de online muda, e o valor
+  //     gravado permanece correto até a próxima transição.
+  //   • distinção Boss × Normal/VIP — todos pagam o mesmo 1 read/10 min.
+  //
+  // O presenceMap do painel Boss NÃO é mais alimentado aqui: o painel lê o
+  // RTDB (gratuito) sob demanda, apenas com a aba Usuários aberta.
   useEffect(() => {
     if (!currentUser || !userProfile || userProfile.status !== "aprovado") return;
     if (isIdleMode) return;
@@ -1411,97 +1430,32 @@ export default function App() {
     }
     if (isSimulation) return;
 
-    const isBoss = userProfile.role === "Boss";
-    const POLL_INTERVAL_MS = 10 * 60 * 1000; // 10 minutos (requisito)
-    const ONLINE_THRESHOLD_MS = 30 * 60 * 1000; // 30 minutos (requisito)
-    const STALE_THRESHOLD_MS = 15 * 60 * 1000; // 15 minutos: documento considerado obsoleto
+    const POLL_INTERVAL_MS = 10 * 60 * 1000; // 10 minutos (mantido)
+    const FOCUS_THROTTLE_MS = 60 * 1000; // focar repetidamente não multiplica reads
 
     let cancelled = false;
+    let lastFetchMs = 0;
 
-    // --- FUNÇÃO COMPARTILHADA: recalcula contador lendo toda a coleção ---
-    // Qualquer usuário pode chamar como fallback quando o documento
-    // presence/count está ausente ou obsoleto. O Boss chama a cada poll.
-    const recalculatePresenceCount = async () => {
-      try {
-        const snap = await getDocs(collection(db, "presence"));
-        if (cancelled) return;
-        const now = Date.now();
-        let onlineCount = 0;
-        const nextPresenceMap: Record<string, any> = {};
-
-        snap.docs.forEach(d => {
-          if (d.id === "count") return; // pular documento agregado
-          const p = d.data();
-
-          // Compatibilidade: aceita lastActivityAt (novo) e lastSeen (legado)
-          const activityAt = p.lastActivityAt?.toMillis?.()
-            || p.lastSeen?.toMillis?.()
-            || (typeof p.lastActivityAt === "number" ? p.lastActivityAt : 0)
-            || (typeof p.lastSeen === "number" ? p.lastSeen : 0)
-            || 0;
-          if (activityAt > 0) nextPresenceMap[d.id] = { ...p, lastActivityAt: activityAt };
-
-          // Regra: Online se atividade < 30 min E isOnline !== false
-          if (activityAt > 0 && (now - activityAt) < ONLINE_THRESHOLD_MS && p.isOnline !== false) {
-            onlineCount++;
-          }
-        });
-
-        // Garantir que o contador NUNCA seja zero (o próprio usuário conta como mínimo 1)
-        const finalCount = Math.max(1, onlineCount);
-
-        setOnlineCount(finalCount);
-        setPresenceCountUnavailable(false);
-        setPresenceMap(nextPresenceMap);
-
-        // Gravar documento agregado — qualquer usuário aprovado pode escrever
-        try {
-          await setDoc(doc(db, "presence", "count"), {
-            onlineCount: finalCount,
-            updatedAt: serverTimestamp(),
-            recalculatedAt: now
-          }, { merge: true });
-        } catch (writeErr) {
-          console.error("Erro ao gravar presence/count:", writeErr);
-        }
-
-        try { localStorage.setItem("presence_count_fallback", String(finalCount)); } catch {}
-      } catch (err) {
-        console.error("Erro ao recalcular presença:", err);
-      }
-    };
-
-    // --- LEITURA LEVE: lê apenas o documento agregado (1 read) ---
-    // Se o documento estiver ausente ou obsoleto (>15 min), faz fallback
-    // para recálculo completo (N reads) para qualquer papel de usuário.
     const fetchAggregatedCount = async () => {
+      lastFetchMs = Date.now();
       try {
         const countSnap = await getDoc(doc(db, "presence", "count"));
+        if (cancelled) return;
         if (countSnap.exists()) {
-          const countData = countSnap.data();
-          const age = Date.now() - (countData.recalculatedAt || 0);
-          const count = countData.onlineCount || 0;
-
-          // Dados frescos e válidos: usar direto (1 read apenas)
-          if (count > 0 && age < STALE_THRESHOLD_MS) {
-            setOnlineCount(count);
-            setPresenceCountUnavailable(false);
-            return;
-          }
-        }
-        if (globalSettings.presenceMode === "economico" && !isBoss) {
-          setPresenceCountUnavailable(true);
+          const count = Number(countSnap.data().onlineCount) || 0;
+          setOnlineCount(count);
+          setPresenceCountUnavailable(false);
+          try { localStorage.setItem("presence_count_fallback", String(count)); } catch {}
           return;
         }
-        // Documento ausente, obsoleto ou com count=0:
-        // no modo completo, qualquer usuário faz recálculo completo como fallback
-        await recalculatePresenceCount();
-      } catch (err) {
-        // Se falhar, tentar cache local como último recurso
+        // Doc ainda não criado (CF nunca rodou): indisponível, sem fallback caro.
+        setPresenceCountUnavailable(true);
+      } catch {
+        // Falha de rede: mostra o último valor conhecido, se houver.
         try {
           const cached = localStorage.getItem("presence_count_fallback");
-          if (cached && globalSettings.presenceMode === "completo") {
-            setOnlineCount(Math.max(1, parseInt(cached, 10) || 1));
+          if (cached !== null) {
+            setOnlineCount(parseInt(cached, 10) || 0);
             setPresenceCountUnavailable(false);
           } else {
             setPresenceCountUnavailable(true);
@@ -1510,25 +1464,18 @@ export default function App() {
       }
     };
 
-    // --- Execução Inicial ---
-    // Boss: sempre recalcula (mantém o documento atualizado para todos)
-    // Normal/VIP: lê o documento agregado (com fallback automático)
-    if (isBoss) recalculatePresenceCount();
-    else fetchAggregatedCount();
+    fetchAggregatedCount();
 
-    // --- Polling Periódico (10 min) ---
-    // Pausa leituras quando o usuário está ocioso (economia de reads)
+    // Polling periódico — pausado quando o usuário está ocioso.
     const interval = setInterval(() => {
       if (isUserIdle) return;
-      if (isBoss) recalculatePresenceCount();
-      else fetchAggregatedCount();
+      fetchAggregatedCount();
     }, POLL_INTERVAL_MS);
 
-    // --- Foco da Janela ---
-    // Revalida ao focar (indica que o usuário voltou a interagir)
+    // Revalidação ao focar, com throttle (alt-tab frenético ≠ reads extras).
     const onFocus = () => {
-      if (isBoss) recalculatePresenceCount();
-      else fetchAggregatedCount();
+      if (Date.now() - lastFetchMs < FOCUS_THROTTLE_MS) return;
+      fetchAggregatedCount();
     };
     window.addEventListener("focus", onFocus);
 
@@ -1537,7 +1484,7 @@ export default function App() {
       clearInterval(interval);
       window.removeEventListener("focus", onFocus);
     };
-  }, [currentUser?.uid, userProfile?.role, isSimulation, isUserIdle, adminOpen, isIdleMode, globalSettings.presenceEnabled, globalSettings.presenceMode]);
+  }, [currentUser?.uid, userProfile?.role, isSimulation, isUserIdle, isIdleMode, globalSettings.presenceEnabled, globalSettings.presenceMode]);
 
   // SYNC SHARED CHARACTERS - Observar data.characters e sincronizar com Firestore em documento agregado por usuário
   const lastSavedSharedCharsRef = useRef<string>("");
@@ -5582,7 +5529,7 @@ export default function App() {
           />
         );
       })()}
-      <BossAdminPanel open={adminOpen} onClose={() => setAdminOpen(false)} presenceMap={presenceMap} minAverage={globalSettings.minimumAverageDonation} globalSettings={globalSettings} pendingDonationsCount={pendingDonationsCount} pendingRequestsCount={pendingRequestsCount} pendingVipCount={pendingVipCount} />
+      <BossAdminPanel open={adminOpen} onClose={() => setAdminOpen(false)} minAverage={globalSettings.minimumAverageDonation} globalSettings={globalSettings} pendingDonationsCount={pendingDonationsCount} pendingRequestsCount={pendingRequestsCount} pendingVipCount={pendingVipCount} />
       <ReceiveRCModal open={receiveRCOpen} onClose={() => setReceiveRCOpen(false)} />
       <TwitchModal open={twitchOpen} onClose={() => setTwitchOpen(false)} />
       <FriendsModal open={friendsOpen} onClose={() => setFriendsOpen(false)} />
