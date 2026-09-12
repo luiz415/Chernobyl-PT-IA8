@@ -61,9 +61,11 @@ import {
 //   • CORES: cada perfil recebe um `colorIndex` persistido na criação
 //     (primeira cor livre da paleta RTC_CODE_HUES) → o MESMO perfil tem a
 //     MESMA cor em todos os usos, dispositivos e sessões.
-//   • CARD "CÓDIGOS USADOS" ULTRACOMPACTO: uma faixa única com os perfis em
-//     CHIPS (nome na cor de identidade + editar + remover). O código salvo
-//     NÃO aparece no card — só no editor, ao editar.
+//   • CARD "CÓDIGOS USADOS" COMPACTO em duas faixas: cabeçalho (título +
+//     contador + instrução + Adicionar) e chips dos perfis. Cada CHIP é um
+//     BOTÃO DE COPIAR (clicar no nome copia o código literal, feedback
+//     "Copiado"), com editar/remover ao lado, separados por divisor. O
+//     código salvo NÃO aparece no card — só no editor, ao editar.
 //
 // Decisões que importam:
 //   • PORTAL em document.body — o app vive num container com CSS `zoom` que
@@ -410,83 +412,42 @@ export default function RtcImportModal({ open, onClose }: Props) {
   }
 
   // ── CARD FIXO "CÓDIGOS USADOS" — fonte única dos perfis da combinação ───
-  // EXTREMAMENTE COMPACTO: uma única faixa com o título e os perfis como
-  // CHIPS em linha (quebra automática). O código salvo NÃO é exibido — cada
-  // chip traz apenas nome (na cor de identidade) + editar + remover.
-  // "Adicionar perfil" respeita o limite de 10, com aviso claro ao atingir.
-  // O editor (criar/editar) abre logo abaixo da faixa, um por vez.
+  // COMPACTO E CLARO — duas faixas finas:
+  //   1) CABEÇALHO: ícone + título + contador x/10 à esquerda; instrução de
+  //      uso ao centro; "Adicionar perfil" (ou aviso de limite) à direita.
+  //   2) PERFIS: chips em linha (quebra automática). Cada chip é um BOTÃO DE
+  //      COPIAR — clicar no nome copia o código salvo (literal), com
+  //      feedback "Copiado" em verde. Editar/remover ficam no próprio chip.
+  //   O código salvo NÃO é exibido — só no editor, ao editar.
   function renderCodesUsedCard() {
     const isRecommended = tab === "recommended";
     const accent = isRecommended ? "#f59e0b" : "#38bdf8";
     return (
       <div
-        className="mb-3 rounded-xl border bg-[var(--th-bg-raised)]/60"
+        className="mb-3 overflow-hidden rounded-xl border bg-[var(--th-bg-raised)]/60"
         style={{ borderColor: `color-mix(in oklab, ${accent} 40%, transparent)`, boxShadow: `0 0 14px color-mix(in oklab, ${accent} 10%, transparent)` }}
       >
-        <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 px-2.5 py-1.5">
+        {/* Faixa 1 — CABEÇALHO: título destacado, separado dos perfis. */}
+        <div
+          className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b px-2.5 py-1.5"
+          style={{ borderColor: `color-mix(in oklab, ${accent} 25%, transparent)`, background: `color-mix(in oklab, ${accent} 7%, transparent)` }}
+        >
           <span className="inline-flex flex-shrink-0 items-center gap-1.5">
-            <Library size={12} style={{ color: accent }} />
-            <span className="text-[10px] font-black uppercase tracking-widest" style={{ color: `color-mix(in oklab, ${accent} 85%, white)` }}>
+            <Library size={13} style={{ color: accent }} />
+            <span className="text-[11px] font-black uppercase tracking-widest" style={{ color: `color-mix(in oklab, ${accent} 85%, white)` }}>
               Códigos Usados
             </span>
-            <span className="rounded-full border border-[var(--th-line)] px-1.5 text-[8px] font-bold text-slate-500" title={`${view.profiles.length} de ${RTC_MAX_PROFILES} perfis cadastrados`}>
+            <span
+              className="rounded-full border px-1.5 text-[9px] font-bold"
+              style={{ borderColor: `color-mix(in oklab, ${accent} 40%, transparent)`, color: `color-mix(in oklab, ${accent} 75%, white)` }}
+              title={`${view.profiles.length} de ${RTC_MAX_PROFILES} perfis cadastrados`}
+            >
               {view.profiles.length}/{RTC_MAX_PROFILES}
             </span>
           </span>
-
-          {/* Chips dos perfis — nome + editar + remover (sem código). */}
-          {view.profiles.map(profile => {
-            const ps = profileStyles(profile.colorIndex);
-            const isEditingThis = profileEditing?.profileId === profile.id;
-            return (
-              <span
-                key={profile.id}
-                className="inline-flex min-w-0 max-w-[180px] items-center gap-1 rounded-md border px-1.5 py-0.5"
-                style={{
-                  borderColor: isEditingThis ? ps.hue : ps.border,
-                  background: ps.fill,
-                  boxShadow: isEditingThis ? `0 0 8px ${ps.glow}` : undefined,
-                }}
-                title={profile.profileName}
-              >
-                <span className="h-1.5 w-1.5 flex-shrink-0 rounded-full" style={{ background: ps.hue }} />
-                <span className="truncate text-[10px] font-bold" style={{ color: ps.text }}>{profile.profileName}</span>
-                {canEditActive && (
-                  <>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setSaveError("");
-                        setPickerKey("");
-                        setProfileEditing({ profileId: profile.id, profileName: profile.profileName, code: profile.code, colorIndex: profile.colorIndex });
-                      }}
-                      className="flex-shrink-0 text-slate-500 hover:text-slate-200 transition-colors cursor-pointer"
-                      title={`Editar o perfil "${profile.profileName}"`}
-                    >
-                      <Pencil size={9} />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => { setSaveError(""); requestProfileDelete(profile.id, profile.profileName); }}
-                      className="flex-shrink-0 text-slate-500 hover:text-rose-400 transition-colors cursor-pointer"
-                      title={`Remover o perfil "${profile.profileName}"`}
-                    >
-                      <Trash2 size={9} />
-                    </button>
-                  </>
-                )}
-              </span>
-            );
-          })}
-
-          {view.profiles.length === 0 && !profileEditing && (
-            <span className="text-[9px] italic text-slate-500">
-              {canEditActive
-                ? "Nenhum perfil — adicione para selecionar nos Bosses abaixo."
-                : "Nenhum perfil recomendado cadastrado pelo Boss."}
-            </span>
-          )}
-
+          <span className="hidden text-[9px] text-slate-500 md:inline">
+            Clique em um perfil para <span className="font-bold text-slate-400">copiar o código</span> · selecione-o nos Bosses abaixo.
+          </span>
           {canEditActive && (
             profilesFull ? (
               <span className="ml-auto flex-shrink-0 rounded-md border border-rose-500/40 bg-rose-500/10 px-2 py-0.5 text-[8px] font-black uppercase tracking-wide text-rose-300">
@@ -509,7 +470,78 @@ export default function RtcImportModal({ open, onClose }: Props) {
           )}
         </div>
 
-        {/* Editor (criar OU editar) — abaixo da faixa, um por vez. */}
+        {/* Faixa 2 — PERFIS: chips-botão de copiar (nome | ✎ | 🗑). */}
+        <div className="flex flex-wrap items-center gap-1.5 px-2.5 py-1.5">
+          {view.profiles.map(profile => {
+            const ps = profileStyles(profile.colorIndex);
+            const isEditingThis = profileEditing?.profileId === profile.id;
+            const uniqueKey = `${tab}:profile:${profile.id}`;
+            const isCopied = copiedKey === uniqueKey;
+            return (
+              <span
+                key={profile.id}
+                className="inline-flex min-w-0 max-w-[200px] items-stretch overflow-hidden rounded-md border"
+                style={isCopied
+                  ? { borderColor: "rgba(16,185,129,0.6)", background: "rgba(16,185,129,0.14)" }
+                  : {
+                      borderColor: isEditingThis ? ps.hue : ps.border,
+                      background: ps.fill,
+                      boxShadow: isEditingThis ? `0 0 8px ${ps.glow}` : undefined,
+                    }}
+              >
+                {/* ÁREA PRINCIPAL do chip = botão COPIAR (código literal). */}
+                <button
+                  type="button"
+                  onClick={() => copyCode(uniqueKey, profile.code)}
+                  className="inline-flex min-w-0 items-center gap-1 px-1.5 py-0.5 transition-all cursor-pointer hover:brightness-125 active:scale-95"
+                  title={isCopied ? "Código copiado!" : `Copiar o código do perfil "${profile.profileName}"`}
+                >
+                  {isCopied
+                    ? <Check size={9} strokeWidth={3} className="flex-shrink-0 text-emerald-400" />
+                    : <Copy size={8} strokeWidth={2.5} className="flex-shrink-0" style={{ color: ps.text }} />}
+                  <span className="truncate text-[10px] font-bold" style={{ color: isCopied ? "#6ee7b7" : ps.text }}>
+                    {isCopied ? "Copiado" : profile.profileName}
+                  </span>
+                </button>
+                {/* Ações do chip — separadas por divisor fino para clareza. */}
+                {canEditActive && (
+                  <span className="inline-flex flex-shrink-0 items-center gap-1 border-l px-1" style={{ borderColor: isCopied ? "rgba(16,185,129,0.35)" : ps.border }}>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSaveError("");
+                        setPickerKey("");
+                        setProfileEditing({ profileId: profile.id, profileName: profile.profileName, code: profile.code, colorIndex: profile.colorIndex });
+                      }}
+                      className="text-slate-500 hover:text-slate-200 transition-colors cursor-pointer"
+                      title={`Editar o perfil "${profile.profileName}"`}
+                    >
+                      <Pencil size={9} />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => { setSaveError(""); requestProfileDelete(profile.id, profile.profileName); }}
+                      className="text-slate-500 hover:text-rose-400 transition-colors cursor-pointer"
+                      title={`Remover o perfil "${profile.profileName}"`}
+                    >
+                      <Trash2 size={9} />
+                    </button>
+                  </span>
+                )}
+              </span>
+            );
+          })}
+
+          {view.profiles.length === 0 && !profileEditing && (
+            <span className="text-[9px] italic text-slate-500">
+              {canEditActive
+                ? "Nenhum perfil — adicione para selecionar nos Bosses abaixo."
+                : "Nenhum perfil recomendado cadastrado pelo Boss."}
+            </span>
+          )}
+        </div>
+
+        {/* Editor (criar OU editar) — abaixo das faixas, um por vez. */}
         {profileEditing && <div className="px-2 pb-2">{renderProfileEditor()}</div>}
       </div>
     );
