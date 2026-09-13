@@ -15,6 +15,7 @@
 // ============================================================================
 
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { AlertTriangle, Check, Coins, Copy, Download, ExternalLink, Eye, FlagTriangleRight, ListChecks, Package, Pencil, Plus, RefreshCw, Search, Sparkles, Square, Trash2, Upload, X } from "lucide-react";
 import BazaarBrowserModal, { BAZAAR_BROWSER_KEY, BAZAAR_BROWSER_ORDER_KEY, BAZAAR_RETRY_BROWSERS_KEY, BAZAAR_RETRY_COUNTS_KEY, BAZAAR_SPEED_MODE_KEY, DEFAULT_BROWSER_ORDER, normalizeRetryCounts } from "./BazaarBrowserModal";
 import type { BazaarRetryCounts, BazaarSpeedMode } from "./BazaarBrowserModal";
@@ -35,11 +36,13 @@ import {
   buildWatchlistIndex,
   exportWatchlistJson,
   loadItemsCoinRate,
+  loadItemsInterests,
   loadItemsLastQuery,
   loadWatchedItems,
   normalizeWatchedItemName,
   parseWatchlistImport,
   saveItemsCoinRate,
+  saveItemsInterests,
   saveItemsLastQuery,
   saveWatchedItems,
   type BazaarItemsCharacterResult,
@@ -47,6 +50,8 @@ import {
   type RawItemMatch,
   type WatchedItem,
 } from "../utils/bazaarWatchedItems";
+import { syncBazaarItemsEndingAlerts } from "../services/bazaarInterestNotificationService";
+import { useAuth } from "../context/AuthContext";
 
 // ── Tipos mínimos do IPC (mesmo contrato dos handlers existentes) ───────────
 interface ItemsAuction {
@@ -111,7 +116,27 @@ interface ItemDraft {
 
 const EMPTY_DRAFT: ItemDraft = { id: null, name: "", valueKk: "" };
 
+/**
+ * Prefixo dos ids de alerta do canal de ITENS (definido no serviço de
+ * alertas). Distingue os chips deste painel dos chips do painel de quests —
+ * cada painel exibe SOMENTE os seus.
+ */
+const ITEMS_ALERT_ID_PREFIX = "bazaar_items_ending_";
+
+/** Chip local de "leilão encerrando" — mesmo formato do painel de quests. */
+interface ItemsLocalNotification {
+  id: string;
+  title: string;
+  body: string;
+  url?: string;
+  expiresAtMs?: number;
+  auctionId?: string;
+}
+
 export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffsetMinutes, getLinkState, openLink }: Props) {
+  const { currentUser } = useAuth();
+  const currentUid = currentUser?.uid || "";
+
   // ── Configurações locais ───────────────────────────────────────────────────
   const [watchedItems, setWatchedItems] = useState<WatchedItem[]>(() => loadWatchedItems());
   const [coinRateText, setCoinRateText] = useState<string>(() => {
@@ -140,7 +165,110 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
   // aplicativo (AvailableCharacter/CharTable). Uma chave por origem da cópia.
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
+  // ── "Tenho Interesse" — 100% LOCAL (localStorage por uid, ZERO Firestore) ─
+  const [itemInterests, setItemInterests] = useState<string[]>(() => loadItemsInterests(currentUid));
+  // Chips locais de "leilão encerrando" — mesmo formato/comportamento do
+  // painel de quests, alimentados pelo canal de ITENS do agendador local.
+  const [itemsNotifications, setItemsNotifications] = useState<ItemsLocalNotification[]>([]);
+
   const coinRate = parseCoinRate(coinRateText);
+
+  // Recarrega o interesse local quando o usuário muda (mesma chave por uid).
+  useEffect(() => {
+    setItemInterests(loadItemsInterests(currentUid));
+  }, [currentUid]);
+
+  // ── Agendador de alertas do canal de ITENS ────────────────────────────────
+  // Alimenta a fila local SEPARADA das quests com os resultados da última
+  // consulta LOCAL + interesses LOCAIS. Notificações saem pelo MESMO caminho
+  // das quests (centro/som/desktop + chip) — nada disso passa pelo Firestore.
+  useEffect(() => {
+    if (!currentUid || !lastQuery) return;
+    syncBazaarItemsEndingAlerts({
+      characters: (lastQuery.results || []).map(result => ({
+        id: result.id || result.url || result.name,
+        name: result.name,
+        server: result.server,
+        auctionEndTs: result.auctionEndTs ?? null,
+        url: result.url,
+      })),
+      interestedAuctionIds: itemInterests,
+      currentUserUid: currentUid,
+      bazaarVersion: `items_${lastQuery.completedAtMs}`,
+    });
+  }, [currentUid, lastQuery, itemInterests]);
+
+  // Chips do painel — mesmo evento/formato do painel de quests, filtrado
+  // pelo prefixo do canal de itens (cada painel exibe somente os seus).
+  useEffect(() => {
+    const handleLocalNotification = (event: Event) => {
+      const detail = (event as CustomEvent).detail || {};
+      const id = String(detail.id || "");
+      if (!id.startsWith(ITEMS_ALERT_ID_PREFIX)) return;
+      const notification: ItemsLocalNotification = {
+        id,
+        title: detail.title || "Leilão encerrando",
+        body: detail.body || "Um leilão de interesse está perto de encerrar.",
+        url: detail.url,
+        expiresAtMs: detail.expiresAtMs,
+        auctionId: String(detail.auctionId || "") || undefined,
+      };
+      setItemsNotifications(prev => {
+        const withoutSame = prev.filter(item => item.id !== notification.id);
+        return [...withoutSame, notification].sort((a, b) => (a.expiresAtMs || 0) - (b.expiresAtMs || 0));
+      });
+    };
+    window.addEventListener("bazaar-interest-local-notification", handleLocalNotification);
+    return () => window.removeEventListener("bazaar-interest-local-notification", handleLocalNotification);
+  }, []);
+
+  // Expiração dos chips — mesmo mecanismo do painel de quests: remove o chip
+  // no momento em que o leilão encerra.
+  useEffect(() => {
+    if (itemsNotifications.length === 0) return;
+    const nowMs = Date.now();
+    const nextExpirationMs = itemsNotifications.reduce((min, item) => {
+      if (!item.expiresAtMs) return min;
+      return Math.min(min, item.expiresAtMs);
+    }, Number.POSITIVE_INFINITY);
+    if (!Number.isFinite(nextExpirationMs)) return;
+    const delay = Math.max(0, nextExpirationMs - nowMs);
+    const timer = window.setTimeout(() => {
+      const currentMs = Date.now();
+      setItemsNotifications(prev => prev.filter(item => !item.expiresAtMs || item.expiresAtMs > currentMs));
+    }, delay);
+    return () => window.clearTimeout(timer);
+  }, [itemsNotifications]);
+
+  // ── Encaixe dos botões no quadro do TÍTULO (portal) ───────────────────────
+  // O BazarPanel reserva o contêiner `#bazaar-items-title-actions` no quadro
+  // do título quando o modo itens está ativo (mesma posição dos botões do
+  // modo de quests). O contêiner só existe DEPOIS da montagem — por isso a
+  // referência é resolvida em efeito, não durante o render.
+  const [titleActionsHost, setTitleActionsHost] = useState<HTMLElement | null>(null);
+  useEffect(() => {
+    setTitleActionsHost(document.getElementById("bazaar-items-title-actions"));
+    return () => setTitleActionsHost(null);
+  }, []);
+
+  /** Marca/desmarca "Tenho Interesse" — grava SOMENTE no localStorage. */
+  function toggleItemInterest(auctionKey: string) {
+    const key = String(auctionKey || "").trim();
+    if (!key) return;
+    setItemInterests(prev => {
+      const next = prev.includes(key) ? prev.filter(id => id !== key) : [...prev, key];
+      saveItemsInterests(currentUid, next);
+      return next;
+    });
+  }
+
+  // ── Chips visíveis = notificações locais ∩ "Tenho Interesse" ──────────────
+  // Mesma regra do painel de quests: remover o interesse remove o chip na
+  // hora. Sem auctionId não há como cruzar — o chip permanece (expira só).
+  const visibleItemsNotifications = itemsNotifications.filter(item => {
+    if (!item.auctionId) return true;
+    return itemInterests.includes(item.auctionId);
+  });
 
   /** Copia texto e marca o feedback — mesmo mecanismo dos copiar existentes. */
   async function copyText(key: string, text: string) {
@@ -426,11 +554,96 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
 
   const results = lastQuery?.results || [];
 
+  // ── Botões de ação do painel — vivem no QUADRO DO TÍTULO ──────────────────
+  // Mesmo padrão do painel de quests ("Filtros Consulta"/"Consultar Bazaar"
+  // no título): aqui são "Lista de Itens" e "Consultar Bazaar"/"Parar". A
+  // lógica é a MESMA de antes — apenas o encaixe mudou (portal no contêiner
+  // reservado pelo BazarPanel). Sem o contêiner (ex.: montagem isolada), os
+  // botões caem no quadro "Última Consulta" como antes — nunca somem.
+  const titleActions = (
+    <>
+      <button
+        type="button"
+        onClick={() => { setIsItemsModalOpen(true); setImportFeedback(null); }}
+        className="inline-flex h-7 items-center gap-1 px-2.5 rounded-lg border border-fuchsia-500/25 bg-fuchsia-500/10 text-fuchsia-300 text-[10px] font-black transition-all cursor-pointer hover:bg-fuchsia-500/20"
+        title="Itens monitorados na consulta: nome e valor base em kk"
+      >
+        <ListChecks size={12} /> Lista de Itens ({watchedItems.length})
+      </button>
+      {isElectron && (isRunning ? (
+        <button
+          type="button"
+          onClick={() => void requestStop()}
+          className="inline-flex h-7 items-center gap-1 px-2.5 rounded-lg border border-rose-500/40 bg-rose-500/15 text-rose-300 text-[10px] font-black transition-all cursor-pointer hover:bg-rose-500/25"
+          title="Encerra a consulta após o personagem atual. Os resultados já analisados são mantidos."
+        >
+          <Square size={11} /> Parar
+        </button>
+      ) : (
+        <button
+          type="button"
+          onClick={requestItemsQuery}
+          className="inline-flex h-7 items-center gap-1 px-2.5 rounded-lg bg-gradient-to-r from-fuchsia-700/80 to-fuchsia-600/80 hover:from-fuchsia-600 hover:to-fuchsia-500 border border-fuchsia-500/40 text-white text-[10px] font-black transition-all cursor-pointer shadow-md shadow-fuchsia-900/15"
+        >
+          <RefreshCw size={12} /> Consultar Bazaar
+        </button>
+      ))}
+    </>
+  );
+
   return (
     <div className="flex-1 min-h-0 flex flex-col gap-1.5 overflow-hidden">
+      {/* Botões no quadro do TÍTULO — portal para o contêiner do BazarPanel. */}
+      {titleActionsHost && createPortal(titleActions, titleActionsHost)}
+
       {error && (
         <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-300 flex items-center gap-2">
           <AlertTriangle size={15} /> {error}
+        </div>
+      )}
+
+      {/* ── Chips "leilão encerrando" — MESMO visual/comportamento do painel
+          de quests (sem "Abrir todos"/"Bidar todos", exclusivos das quests).
+          Clique = abre o link com o MESMO registro compartilhado. */}
+      {visibleItemsNotifications.length > 0 && (
+        <div className="space-y-1">
+          {visibleItemsNotifications.map(notification => {
+            const notifAuctionKey = notification.auctionId || "";
+            const notifLinkState = notifAuctionKey && getLinkState ? getLinkState(notifAuctionKey) : "open";
+            return (
+              <button
+                key={notification.id}
+                type="button"
+                onClick={() => {
+                  if (!notification.url) return;
+                  if (openLink && notifAuctionKey) openLink(notifAuctionKey, notification.url);
+                  else openExternalUrl(notification.url);
+                }}
+                className="w-full rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-left text-[11px] leading-tight text-amber-200 flex items-center justify-between gap-2 hover:bg-amber-500/20 transition-colors cursor-pointer"
+                title={notifLinkState === "open" ? "Abrir personagem no Bazaar" : "Link já aberto neste dispositivo"}
+              >
+                <span className="inline-flex items-center gap-1.5 min-w-0">
+                  <AlertTriangle size={12} className="flex-shrink-0" />
+                  <strong className="truncate">{notification.title}</strong>
+                  <span className="truncate text-amber-200/80">{notification.body}</span>
+                </span>
+                <span className="inline-flex flex-shrink-0 items-center gap-1">
+                  {notifLinkState !== "open" && (
+                    <span
+                      className={`inline-flex items-center gap-0.5 rounded border px-1 py-0.5 text-[8px] font-black uppercase tracking-wide ${
+                        notifLinkState === "last"
+                          ? "border-amber-400/45 bg-amber-500/15 text-amber-200"
+                          : "border-emerald-500/30 bg-emerald-500/10 text-emerald-300"
+                      }`}
+                    >
+                      <Check size={9} strokeWidth={3} />{notifLinkState === "last" ? "Último aberto" : "Aberto"}
+                    </span>
+                  )}
+                  <span className="text-[9px] font-black underline">Abrir</span>
+                </span>
+              </button>
+            );
+          })}
         </div>
       )}
 
@@ -470,34 +683,13 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
             />
           </label>
 
-          <div className="ml-auto flex items-center gap-1.5">
-            <button
-              type="button"
-              onClick={() => { setIsItemsModalOpen(true); setImportFeedback(null); }}
-              className="inline-flex h-7 items-center gap-1 px-2.5 rounded-lg border border-fuchsia-500/25 bg-fuchsia-500/10 text-fuchsia-300 text-[10px] font-black transition-all cursor-pointer hover:bg-fuchsia-500/20"
-              title="Itens monitorados na consulta: nome e valor base em kk"
-            >
-              <ListChecks size={12} /> Lista de Itens ({watchedItems.length})
-            </button>
-            {isElectron && (isRunning ? (
-              <button
-                type="button"
-                onClick={() => void requestStop()}
-                className="inline-flex h-7 items-center gap-1 px-2.5 rounded-lg border border-rose-500/40 bg-rose-500/15 text-rose-300 text-[10px] font-black transition-all cursor-pointer hover:bg-rose-500/25"
-                title="Encerra a consulta após o personagem atual. Os resultados já analisados são mantidos."
-              >
-                <Square size={11} /> Parar
-              </button>
-            ) : (
-              <button
-                type="button"
-                onClick={requestItemsQuery}
-                className="inline-flex h-7 items-center gap-1 px-2.5 rounded-lg bg-gradient-to-r from-fuchsia-700/80 to-fuchsia-600/80 hover:from-fuchsia-600 hover:to-fuchsia-500 border border-fuchsia-500/40 text-white text-[10px] font-black transition-all cursor-pointer shadow-md shadow-fuchsia-900/15"
-              >
-                <RefreshCw size={12} /> Consultar Bazaar
-              </button>
-            ))}
-          </div>
+          {/* Fallback: sem o contêiner do título (montagem isolada), os
+              botões permanecem aqui — o comportamento nunca se perde. */}
+          {!titleActionsHost && (
+            <div className="ml-auto flex items-center gap-1.5">
+              {titleActions}
+            </div>
+          )}
         </div>
 
         {/* Resumo da última execução (persistido localmente) */}
@@ -569,6 +761,7 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                 <th className="px-2 py-2 text-right">Valor Itens (KK)</th>
                 <th className="px-2 py-2 text-right">Valor Itens (RC)</th>
                 <th className="px-2 py-2 text-center">Detalhes</th>
+                <th className="px-2 py-2 text-center">Tenho Interesse</th>
                 <th className="px-2 py-2 text-center">Link</th>
               </tr>
             </thead>
@@ -576,6 +769,8 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
               {results.map(result => {
                 const auctionKey = result.id || result.url || result.name;
                 const copyKey = `res_${auctionKey}`;
+                // "Tenho Interesse" — estado 100% LOCAL (localStorage por uid).
+                const isInterested = itemInterests.includes(auctionKey);
                 // Estado do link — MESMO mecanismo do painel de quests
                 // (openedLinksState compartilhado via props).
                 const linkState = getLinkState ? getLinkState(auctionKey) : "open";
@@ -628,6 +823,31 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                     >
                       <Eye size={10} /> Ver
                     </button>
+                  </td>
+                  <td className="px-2 py-1.5 text-center">
+                    {/* "Tenho Interesse" — MESMO padrão visual do botão das
+                        quests (borda/fundo ciano, "Tenho interesse"/"Remover"),
+                        com marcação visível quando ativo. Gravação SOMENTE
+                        local — nada no Firestore. */}
+                    <div className="flex flex-col items-center gap-0.5">
+                      <button
+                        type="button"
+                        onClick={() => toggleItemInterest(auctionKey)}
+                        className={`inline-flex items-center justify-center gap-1 rounded border px-2 py-1 text-[9px] font-black transition-colors cursor-pointer ${
+                          isInterested
+                            ? "border-cyan-400/45 bg-cyan-500/20 text-cyan-200 hover:bg-cyan-500/30"
+                            : "border-cyan-500/25 bg-cyan-500/10 text-cyan-300 hover:bg-cyan-500/20 hover:text-cyan-200"
+                        }`}
+                        title={isInterested ? "Remover interesse (somente neste dispositivo)" : "Marcar interesse (somente neste dispositivo)"}
+                      >
+                        {isInterested ? "Remover" : "Tenho interesse"}
+                      </button>
+                      {isInterested && (
+                        <span className="inline-flex items-center gap-0.5 text-[8px] font-black uppercase tracking-wide text-cyan-300">
+                          <Check size={9} strokeWidth={3} /> Interessado
+                        </span>
+                      )}
+                    </div>
                   </td>
                   <td className="px-2 py-1.5 text-center">
                     {/* Botão Link — MESMO método/visual do painel de quests:
@@ -750,7 +970,7 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                     const copyKey = `item_${item.id}`;
                     return (
                     <div key={item.id} className="flex items-center gap-2 rounded-lg border border-[var(--th-line)]/40 bg-black/20 px-2.5 py-1.5">
-                      <div className="flex-1 min-w-0">
+                      <div className="flex-1 min-w-0 flex items-center gap-1">
                         {/* Nome = botão de copiar (SOMENTE o nome exato, sem
                             valor/Tier/data). Mesmo padrão visual dos demais
                             copiar do app: hover revela o ícone, 1,5s de
@@ -758,7 +978,7 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                         <button
                           type="button"
                           onClick={() => copyText(copyKey, item.name)}
-                          className={`group inline-flex max-w-full items-center gap-1 rounded px-1 py-0.5 text-[11px] font-bold transition-colors cursor-copy ${
+                          className={`group inline-flex min-w-0 items-center gap-1 rounded px-1 py-0.5 text-[11px] font-bold transition-colors cursor-copy ${
                             copiedKey === copyKey ? "bg-emerald-500/20 text-emerald-300" : "text-slate-100 hover:bg-white/10 hover:text-white"
                           }`}
                           title={copiedKey === copyKey ? "Nome copiado" : `Copiar "${item.name}"`}
@@ -769,13 +989,15 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                             <><span className="truncate">{item.name}</span><Copy size={10} className="flex-shrink-0 opacity-0 group-hover:opacity-70 transition-opacity" /></>
                           )}
                         </button>
-                        {/* Data da última alteração de VALOR — compacta, na
-                            linha de baixo para não alargar o modal. */}
-                        <div className="px-1 text-[8px] leading-tight text-slate-500">
-                          {item.updatedAtMs
-                            ? `(Atualizado dia ${formatItemUpdatedAt(item.updatedAtMs, timezoneOffsetMinutes)} horas)`
-                            : "(Sem registro de atualização)"}
-                        </div>
+                        {/* Data da última alteração de VALOR — NA MESMA LINHA,
+                            à frente do nome, em AMARELO (destacada e compacta). */}
+                        {item.updatedAtMs ? (
+                          <span className="flex-shrink-0 text-[8px] font-bold leading-tight text-amber-300 whitespace-nowrap">
+                            {`(Atualizado dia ${formatItemUpdatedAt(item.updatedAtMs, timezoneOffsetMinutes)} horas)`}
+                          </span>
+                        ) : (
+                          <span className="flex-shrink-0 text-[8px] leading-tight text-slate-500 whitespace-nowrap">(Sem registro de atualização)</span>
+                        )}
                       </div>
                       <span className="font-mono text-[11px] text-amber-200 flex-shrink-0">{formatKkValue(item.valueKk, "kk")}</span>
                       <button type="button" onClick={() => { setDraft({ id: item.id, name: item.name, valueKk: String(item.valueKk) }); setDraftError(null); }} className="p-1 rounded text-sky-300 hover:bg-sky-500/15 transition-colors cursor-pointer flex-shrink-0" title="Editar">

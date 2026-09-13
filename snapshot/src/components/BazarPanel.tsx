@@ -2713,6 +2713,15 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
             </h2>
           )}
 
+          {/* Contêiner das ações do MODO ITENS no quadro do título — mesmo
+              posicionamento dos botões do modo de quests. Os botões em si
+              ("Lista de Itens" / "Consultar Bazaar") são renderizados pelo
+              BazaarItemsPanel via portal: toda a lógica continua no painel
+              de itens; aqui vive apenas o encaixe visual. */}
+          {isBossUser && !demoMode && showItemsMode && (
+            <div id="bazaar-items-title-actions" className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1.5" />
+          )}
+
           {/* Os seletores de painel saíram daqui — vivem no controle
               segmentado do canto superior esquerdo. No quadro do título
               permanecem SOMENTE os controles do modo de quests. */}

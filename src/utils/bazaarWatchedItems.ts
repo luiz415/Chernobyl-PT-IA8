@@ -16,6 +16,11 @@ import { loadUIState, saveUIState } from "../storage";
 export const BAZAAR_WATCHED_ITEMS_KEY = "rubinot_bazaar_watched_items";
 export const BAZAAR_ITEMS_COIN_RATE_KEY = "rubinot_bazaar_items_coin_rate";
 export const BAZAAR_ITEMS_LAST_QUERY_KEY = "rubinot_bazaar_items_last_query";
+/**
+ * Interesse do painel de itens — 100% LOCAL, por usuário (requisito explícito:
+ * NADA de Firestore para registrar/atualizar/sincronizar interesse de itens).
+ */
+export const BAZAAR_ITEMS_INTERESTS_KEY_PREFIX = "rubinot_bazaar_items_interests_";
 
 /** Item monitorado: nome exato (sem Tier) + valor base em kk. */
 export interface WatchedItem {
@@ -233,6 +238,46 @@ export function loadItemsLastQuery(): BazaarItemsLastQuery | null {
 
 export function saveItemsLastQuery(query: BazaarItemsLastQuery): void {
   saveUIState(BAZAAR_ITEMS_LAST_QUERY_KEY, query);
+}
+
+// ============================================================================
+// "TENHO INTERESSE" DO PAINEL DE ITENS — 100% LOCAL (localStorage, por uid)
+// ----------------------------------------------------------------------------
+// Requisito explícito da funcionalidade: o interesse deste painel NÃO passa
+// pelo Firestore em NENHUMA hipótese (nem registro, nem atualização, nem
+// sincronização). O formato é um simples array de ids de leilão marcados
+// pelo usuário neste dispositivo.
+// ============================================================================
+
+function itemsInterestsKey(uid: string): string {
+  return `${BAZAAR_ITEMS_INTERESTS_KEY_PREFIX}${String(uid || "").trim() || "local"}`;
+}
+
+/** Ids de leilão marcados como "Tenho Interesse" no painel de itens (local). */
+export function loadItemsInterests(uid: string): string[] {
+  const raw = loadUIState<unknown>(itemsInterestsKey(uid), []);
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set<string>();
+  const ids: string[] = [];
+  for (const entry of raw) {
+    const id = String(entry ?? "").trim();
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    ids.push(id);
+  }
+  return ids;
+}
+
+export function saveItemsInterests(uid: string, auctionIds: string[]): void {
+  const seen = new Set<string>();
+  const ids: string[] = [];
+  for (const entry of auctionIds || []) {
+    const id = String(entry ?? "").trim();
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    ids.push(id);
+  }
+  saveUIState(itemsInterestsKey(uid), ids);
 }
 
 // ============================================================================
