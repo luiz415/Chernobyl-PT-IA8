@@ -22,6 +22,8 @@ export interface WatchedItem {
   id: string;
   name: string;
   valueKk: number;
+  /** Última vez que o VALOR foi alterado e salvo (ms). Ausente em itens legados. */
+  updatedAtMs?: number;
 }
 
 /** Match bruto devolvido pelo processo principal (Electron). */
@@ -56,6 +58,10 @@ export interface BazaarItemsCharacterResult {
   server: string;
   matches: CharacterItemMatch[];
   totalKk: number;
+  /** Valor (bid) do personagem NO MOMENTO da consulta — só exibição. */
+  bid?: number;
+  /** Encerramento do leilão (s ou ms, normalizado na exibição) — só exibição. */
+  auctionEndTs?: number | null;
 }
 
 /** Resumo persistido da última consulta de itens (local, nunca Firestore). */
@@ -171,8 +177,19 @@ function sanitizeWatchedItem(raw: unknown): WatchedItem | null {
   const name = String(item.name ?? "").trim();
   const valueKk = Number(item.valueKk);
   if (!name || !Number.isFinite(valueKk) || valueKk <= 0) return null;
+  // Valores em kk são INTEIROS (regra da interface). Itens legados com casas
+  // decimais são arredondados na leitura — o cálculo em si não muda. Um item
+  // que arredonde para 0 (ex.: 0,4kk legado) deixa de ser válido.
+  const rounded = Math.round(valueKk);
+  if (rounded < 1) return null;
   const id = String(item.id ?? "").trim() || `wi_${Math.random().toString(36).slice(2, 10)}`;
-  return { id, name, valueKk: Math.round(valueKk * 100) / 100 };
+  const updatedAtMs = Number(item.updatedAtMs);
+  return {
+    id,
+    name,
+    valueKk: rounded,
+    ...(Number.isFinite(updatedAtMs) && updatedAtMs > 0 ? { updatedAtMs } : {}),
+  };
 }
 
 export function sanitizeWatchedItems(raw: unknown): WatchedItem[] {
@@ -228,7 +245,13 @@ export function exportWatchlistJson(items: WatchedItem[]): string {
       kind: "bazaar-watched-items",
       version: 1,
       exportedAt: new Date().toISOString(),
-      items: items.map(item => ({ name: item.name, valueKk: item.valueKk })),
+      items: items.map(item => ({
+        name: item.name,
+        valueKk: item.valueKk,
+        // Preserva a data da última atualização de valor no arquivo, para que
+        // um import em outro dispositivo mantenha o histórico visível.
+        ...(item.updatedAtMs ? { updatedAtMs: item.updatedAtMs } : {}),
+      })),
     },
     null,
     2,

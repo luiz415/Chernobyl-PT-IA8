@@ -15,12 +15,13 @@
 // ============================================================================
 
 import { useEffect, useRef, useState } from "react";
-import { AlertTriangle, Coins, Download, ExternalLink, Eye, FlagTriangleRight, ListChecks, Package, Pencil, Plus, RefreshCw, Search, Sparkles, Square, Trash2, Upload, X } from "lucide-react";
+import { AlertTriangle, Check, Coins, Copy, Download, ExternalLink, Eye, FlagTriangleRight, ListChecks, Package, Pencil, Plus, RefreshCw, Search, Sparkles, Square, Trash2, Upload, X } from "lucide-react";
 import BazaarBrowserModal, { BAZAAR_BROWSER_KEY, BAZAAR_BROWSER_ORDER_KEY, BAZAAR_RETRY_BROWSERS_KEY, BAZAAR_RETRY_COUNTS_KEY, BAZAAR_SPEED_MODE_KEY, DEFAULT_BROWSER_ORDER, normalizeRetryCounts } from "./BazaarBrowserModal";
 import type { BazaarRetryCounts, BazaarSpeedMode } from "./BazaarBrowserModal";
 import { loadUIState } from "../storage";
 import { computeItemRC, formatKkValue } from "../utils/itemSale";
 import {
+  formatAuctionEnd,
   formatDateTimeWithOffset,
   formatDuration,
   formatTimeZoneOffset,
@@ -28,6 +29,7 @@ import {
   normalizeAuctionEndTimestamp,
   parseDateTimeLocalWithOffset,
 } from "../utils/bazaarTime";
+import { openExternalUrl } from "../utils/openExternal";
 import {
   buildCharacterMatches,
   buildWatchlistIndex,
@@ -91,6 +93,13 @@ interface Props {
   isBossUser: boolean;
   isElectron: boolean;
   timezoneOffsetMinutes: number;
+  /**
+   * Reuso do botão "Link" do painel de quests: estado de abertura por leilão
+   * ("open" | "opened" | "last") vindo do MESMO openedLinksState do BazarPanel.
+   */
+  getLinkState?: (auctionKey: string) => "open" | "opened" | "last";
+  /** Marca o leilão como aberto e abre no navegador padrão (mesmo fluxo das quests). */
+  openLink?: (auctionKey: string, url: string) => void;
 }
 
 /** Entrada em edição no modal da Lista de Itens. */
@@ -102,7 +111,7 @@ interface ItemDraft {
 
 const EMPTY_DRAFT: ItemDraft = { id: null, name: "", valueKk: "" };
 
-export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffsetMinutes }: Props) {
+export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffsetMinutes, getLinkState, openLink }: Props) {
   // ── Configurações locais ───────────────────────────────────────────────────
   const [watchedItems, setWatchedItems] = useState<WatchedItem[]>(() => loadWatchedItems());
   const [coinRateText, setCoinRateText] = useState<string>(() => {
@@ -127,8 +136,20 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
   const [importFeedback, setImportFeedback] = useState<string | null>(null);
   const importInputRef = useRef<HTMLInputElement | null>(null);
   const [detailResult, setDetailResult] = useState<BazaarItemsCharacterResult | null>(null);
+  // Feedback "Copiado!" (1,5s) — mesmo padrão dos demais botões de copiar do
+  // aplicativo (AvailableCharacter/CharTable). Uma chave por origem da cópia.
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
   const coinRate = parseCoinRate(coinRateText);
+
+  /** Copia texto e marca o feedback — mesmo mecanismo dos copiar existentes. */
+  async function copyText(key: string, text: string) {
+    const value = String(text || "").trim();
+    if (!value) return;
+    try { await navigator.clipboard.writeText(value); } catch { /* fallback silencioso */ }
+    setCopiedKey(key);
+    window.setTimeout(() => setCopiedKey(current => (current === key ? null : current)), 1500);
+  }
 
   // Progresso do processo principal — o mesmo canal usado pelas quests. Só é
   // exibido enquanto ESTA consulta roda (isRunning), então não interfere no
@@ -161,17 +182,27 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
 
   function submitDraft() {
     const name = draft.name.trim();
-    const valueKk = Number(draft.valueKk.replace(",", "."));
+    // Valores em kk são INTEIROS: o input já bloqueia não-dígitos, mas a
+    // validação re-confere (colar texto, itens legados etc.).
+    const rawValue = draft.valueKk.trim();
     if (!name) { setDraftError("Informe o nome do item."); return; }
-    if (!Number.isFinite(valueKk) || valueKk <= 0) { setDraftError("Informe o valor em kk (maior que zero)."); return; }
+    if (!/^\d+$/.test(rawValue)) { setDraftError("Informe o valor em kk usando somente números inteiros."); return; }
+    const valueKk = Number(rawValue);
+    if (!Number.isSafeInteger(valueKk) || valueKk <= 0) { setDraftError("Informe o valor em kk (inteiro, maior que zero)."); return; }
     const key = normalizeWatchedItemName(name);
     const duplicated = watchedItems.some(item => item.id !== draft.id && normalizeWatchedItemName(item.name) === key);
     if (duplicated) { setDraftError("Este item já está na lista."); return; }
-    const rounded = Math.round(valueKk * 100) / 100;
+    const now = Date.now();
     if (draft.id) {
-      persistItems(watchedItems.map(item => item.id === draft.id ? { ...item, name, valueKk: rounded } : item));
+      persistItems(watchedItems.map(item => {
+        if (item.id !== draft.id) return item;
+        // "Atualizado dia..." só muda quando o VALOR muda de fato — renomear
+        // sem alterar o valor preserva a data anterior.
+        const valueChanged = item.valueKk !== valueKk;
+        return { ...item, name, valueKk, updatedAtMs: valueChanged ? now : item.updatedAtMs };
+      }));
     } else {
-      persistItems([...watchedItems, { id: `wi_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`, name, valueKk: rounded }]);
+      persistItems([...watchedItems, { id: `wi_${now.toString(36)}_${Math.random().toString(36).slice(2, 7)}`, name, valueKk, updatedAtMs: now }]);
     }
     setDraft(EMPTY_DRAFT);
     setDraftError(null);
@@ -209,12 +240,19 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
       const merged = [...watchedItems];
       let added = 0;
       let updated = 0;
+      const now = Date.now();
       for (const incoming of items) {
         const key = normalizeWatchedItemName(incoming.name);
         const existingIndex = merged.findIndex(item => normalizeWatchedItemName(item.name) === key);
         if (existingIndex >= 0) {
           if (merged[existingIndex].valueKk !== incoming.valueKk) {
-            merged[existingIndex] = { ...merged[existingIndex], valueKk: incoming.valueKk };
+            merged[existingIndex] = {
+              ...merged[existingIndex],
+              valueKk: incoming.valueKk,
+              // Valor alterado pelo import também conta como atualização:
+              // usa a data do arquivo quando presente, senão o momento atual.
+              updatedAtMs: incoming.updatedAtMs || now,
+            };
             updated += 1;
           }
         } else {
@@ -350,6 +388,10 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
           server: String(auction.server || ""),
           matches,
           totalKk,
+          // Dados de EXIBIÇÃO da listagem no momento da consulta (valor do
+          // personagem e encerramento) — nenhum efeito no cálculo dos itens.
+          bid: Number(auction.bid || 0),
+          auctionEndTs: auction.auctionEndTs ?? null,
         });
       }
       results.sort((a, b) => b.totalKk - a.totalKk);
@@ -521,27 +563,58 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
             <thead className="sticky top-0 bg-[var(--th-n-raised)]/95 backdrop-blur-sm z-10">
               <tr className="text-[9px] uppercase tracking-wider text-slate-400">
                 <th className="px-2 py-2 text-left">Personagem</th>
-                <th className="px-2 py-2 text-center">Link</th>
-                <th className="px-2 py-2 text-right">Total itens (kk)</th>
-                <th className="px-2 py-2 text-right">Total RC</th>
+                <th className="px-2 py-2 text-center">Servidor</th>
+                <th className="px-2 py-2 text-center">Encerra</th>
+                <th className="px-2 py-2 text-center">Valor</th>
+                <th className="px-2 py-2 text-right">Valor Itens (KK)</th>
+                <th className="px-2 py-2 text-right">Valor Itens (RC)</th>
                 <th className="px-2 py-2 text-center">Detalhes</th>
+                <th className="px-2 py-2 text-center">Link</th>
               </tr>
             </thead>
             <tbody>
-              {results.map(result => (
-                <tr key={result.id || result.name} className="border-t border-[var(--th-line)]/40 hover:bg-white/[0.03]">
+              {results.map(result => {
+                const auctionKey = result.id || result.url || result.name;
+                const copyKey = `res_${auctionKey}`;
+                // Estado do link — MESMO mecanismo do painel de quests
+                // (openedLinksState compartilhado via props).
+                const linkState = getLinkState ? getLinkState(auctionKey) : "open";
+                const linkButtonLabel = linkState === "last" ? "Último Aberto" : linkState === "opened" ? "Aberto" : "Abrir";
+                const linkButtonClass = linkState === "last"
+                  ? "border-amber-400/45 bg-amber-500/15 text-amber-200 hover:bg-amber-500/25 shadow-[0_0_12px_color-mix(in_oklab,var(--color-amber-500)_16%,transparent)]"
+                  : linkState === "opened"
+                    ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/18"
+                    : "border-amber-600/30 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20";
+                return (
+                <tr key={auctionKey} className="border-t border-[var(--th-line)]/40 hover:bg-white/[0.03]">
                   <td className="px-2 py-1.5">
-                    <div className="font-bold text-slate-100 truncate max-w-[220px]">{result.name || "—"}</div>
-                    <div className="text-[9px] text-slate-500">
-                      {[result.vocation, result.level ? `Lv ${result.level}` : "", result.server].filter(Boolean).join(" · ")}
+                    {/* Nome + level como botão de copiar — mesmo padrão visual
+                        dos copiar de personagem do app (hover revela o ícone,
+                        1,5s de "Copiado!"). Copia "Nome, Lv X". */}
+                    <button
+                      type="button"
+                      onClick={() => copyText(copyKey, result.level ? `${result.name}, Lv ${result.level}` : result.name)}
+                      className={`group inline-flex max-w-[220px] items-center gap-1 rounded px-1 py-0.5 font-bold transition-colors cursor-copy ${
+                        copiedKey === copyKey ? "bg-emerald-500/20 text-emerald-300" : "text-slate-100 hover:bg-white/10 hover:text-white"
+                      }`}
+                      title={copiedKey === copyKey ? "Copiado" : `Copiar "${result.name}${result.level ? `, Lv ${result.level}` : ""}"`}
+                    >
+                      {copiedKey === copyKey ? (
+                        <><Check size={11} className="flex-shrink-0 text-emerald-400" /><span>Copiado!</span></>
+                      ) : (
+                        <><span className="truncate">{result.name || "—"}</span><Copy size={10} className="flex-shrink-0 opacity-0 group-hover:opacity-70 transition-opacity" /></>
+                      )}
+                    </button>
+                    <div className="text-[9px] text-slate-500 px-1">
+                      {[result.vocation, result.level ? `Lv ${result.level}` : ""].filter(Boolean).join(" · ")}
                     </div>
                   </td>
-                  <td className="px-2 py-1.5 text-center">
-                    {result.url ? (
-                      <a href={result.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-sky-300 hover:text-sky-200 font-bold text-[10px] underline">
-                        <ExternalLink size={10} /> Abrir
-                      </a>
-                    ) : <span className="text-slate-600">—</span>}
+                  <td className="px-2 py-1.5 text-center text-slate-300">{result.server || "—"}</td>
+                  <td className="px-2 py-1.5 text-center font-mono text-slate-300">
+                    {formatAuctionEnd(result.auctionEndTs ?? null, timezoneOffsetMinutes)}
+                  </td>
+                  <td className="px-2 py-1.5 text-center font-mono text-emerald-300" title="Valor do personagem no momento da consulta">
+                    {Number.isFinite(result.bid) && (result.bid || 0) > 0 ? `${(result.bid || 0).toLocaleString("de-DE")} coins` : "—"}
                   </td>
                   <td className="px-2 py-1.5 text-right font-mono font-bold text-amber-200">{formatKkValue(result.totalKk, "kk")}</td>
                   <td className="px-2 py-1.5 text-right font-mono font-bold text-emerald-300">
@@ -556,8 +629,24 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                       <Eye size={10} /> Ver
                     </button>
                   </td>
+                  <td className="px-2 py-1.5 text-center">
+                    {/* Botão Link — MESMO método/visual do painel de quests:
+                        marca a abertura no openedLinksState compartilhado e
+                        abre no navegador padrão via openExternal. */}
+                    {result.url ? (
+                      <button
+                        type="button"
+                        onClick={() => (openLink ? openLink(auctionKey, result.url) : openExternalUrl(result.url))}
+                        title={linkState === "last" ? "Último personagem aberto" : linkState === "opened" ? "Este link já foi aberto neste dispositivo" : "Abrir personagem no Bazaar"}
+                        className={`inline-flex h-7 max-w-full min-w-0 items-center justify-center gap-0.5 rounded-lg px-1.5 py-1 border text-[9px] font-black transition-colors cursor-pointer ${linkButtonClass}`}
+                      >
+                        <ExternalLink size={11} className="flex-shrink-0" /> <span className="truncate">{linkButtonLabel}</span>
+                      </button>
+                    ) : <span className="text-slate-600">—</span>}
+                  </td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
         )}
@@ -597,10 +686,11 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                   />
                   <input
                     type="text"
-                    inputMode="decimal"
+                    inputMode="numeric"
                     value={draft.valueKk}
-                    onChange={event => setDraft(prev => ({ ...prev, valueKk: event.target.value }))}
+                    onChange={event => setDraft(prev => ({ ...prev, valueKk: sanitizeIntegerKk(event.target.value) }))}
                     placeholder="Valor (kk)"
+                    title="Somente números inteiros (sem casas decimais)"
                     className="h-8 w-24 rounded-md border border-[var(--th-line)]/70 bg-black/35 px-2 text-[11px] text-white outline-none focus:border-fuchsia-600/60"
                   />
                   <button type="submit" className="inline-flex h-8 items-center gap-1 px-2.5 rounded-lg border border-fuchsia-500/40 bg-fuchsia-600/70 hover:bg-fuchsia-500/70 text-white text-[10px] font-black transition-all cursor-pointer">
@@ -614,7 +704,7 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                 </div>
                 {draftError && <p role="alert" className="text-[10px] font-medium text-rose-300">{draftError}</p>}
                 <p className="text-[9px] text-slate-500 leading-relaxed">
-                  O valor cadastrado é a BASE do cálculo. Itens com <span className="font-mono text-slate-400">[Tier x]</span> no Bazaar valem +20% por nível de Tier sobre esta base.
+                  O valor cadastrado é a BASE do cálculo, em kk <strong className="text-slate-400">inteiros</strong> (sem casas decimais). Itens com <span className="font-mono text-slate-400">[Tier x]</span> no Bazaar valem +20% por nível de Tier sobre esta base.
                 </p>
               </form>
 
@@ -656,18 +746,47 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                 </p>
               ) : (
                 <div className="space-y-1">
-                  {filteredItems.map(item => (
+                  {filteredItems.map(item => {
+                    const copyKey = `item_${item.id}`;
+                    return (
                     <div key={item.id} className="flex items-center gap-2 rounded-lg border border-[var(--th-line)]/40 bg-black/20 px-2.5 py-1.5">
-                      <span className="flex-1 min-w-0 truncate text-[11px] font-bold text-slate-100">{item.name}</span>
+                      <div className="flex-1 min-w-0">
+                        {/* Nome = botão de copiar (SOMENTE o nome exato, sem
+                            valor/Tier/data). Mesmo padrão visual dos demais
+                            copiar do app: hover revela o ícone, 1,5s de
+                            "Copiado!". */}
+                        <button
+                          type="button"
+                          onClick={() => copyText(copyKey, item.name)}
+                          className={`group inline-flex max-w-full items-center gap-1 rounded px-1 py-0.5 text-[11px] font-bold transition-colors cursor-copy ${
+                            copiedKey === copyKey ? "bg-emerald-500/20 text-emerald-300" : "text-slate-100 hover:bg-white/10 hover:text-white"
+                          }`}
+                          title={copiedKey === copyKey ? "Nome copiado" : `Copiar "${item.name}"`}
+                        >
+                          {copiedKey === copyKey ? (
+                            <><Check size={11} className="flex-shrink-0 text-emerald-400" /><span>Copiado!</span></>
+                          ) : (
+                            <><span className="truncate">{item.name}</span><Copy size={10} className="flex-shrink-0 opacity-0 group-hover:opacity-70 transition-opacity" /></>
+                          )}
+                        </button>
+                        {/* Data da última alteração de VALOR — compacta, na
+                            linha de baixo para não alargar o modal. */}
+                        <div className="px-1 text-[8px] leading-tight text-slate-500">
+                          {item.updatedAtMs
+                            ? `(Atualizado dia ${formatItemUpdatedAt(item.updatedAtMs, timezoneOffsetMinutes)} horas)`
+                            : "(Sem registro de atualização)"}
+                        </div>
+                      </div>
                       <span className="font-mono text-[11px] text-amber-200 flex-shrink-0">{formatKkValue(item.valueKk, "kk")}</span>
-                      <button type="button" onClick={() => { setDraft({ id: item.id, name: item.name, valueKk: String(item.valueKk).replace(".", ",") }); setDraftError(null); }} className="p-1 rounded text-sky-300 hover:bg-sky-500/15 transition-colors cursor-pointer flex-shrink-0" title="Editar">
+                      <button type="button" onClick={() => { setDraft({ id: item.id, name: item.name, valueKk: String(item.valueKk) }); setDraftError(null); }} className="p-1 rounded text-sky-300 hover:bg-sky-500/15 transition-colors cursor-pointer flex-shrink-0" title="Editar">
                         <Pencil size={12} />
                       </button>
                       <button type="button" onClick={() => removeItem(item.id)} className="p-1 rounded text-rose-300 hover:bg-rose-500/15 transition-colors cursor-pointer flex-shrink-0" title="Remover">
                         <Trash2 size={12} />
                       </button>
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </div>
@@ -762,4 +881,23 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
 function parseCoinRate(text: string): number {
   const value = Number(String(text || "").trim().replace(",", "."));
   return Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+/** Mantém somente dígitos — campos de valor em kk aceitam apenas inteiros. */
+function sanitizeIntegerKk(raw: string): string {
+  return String(raw || "").replace(/\D+/g, "").slice(0, 9);
+}
+
+/** "dd/MM às HH:mm" da última atualização do item, no fuso configurado. */
+function formatItemUpdatedAt(ms: number, offsetMinutes: number): string {
+  try {
+    const shifted = new Date(ms + offsetMinutes * 60 * 1000);
+    const day = String(shifted.getUTCDate()).padStart(2, "0");
+    const month = String(shifted.getUTCMonth() + 1).padStart(2, "0");
+    const hour = String(shifted.getUTCHours()).padStart(2, "0");
+    const minute = String(shifted.getUTCMinutes()).padStart(2, "0");
+    return `${day}/${month} às ${hour}:${minute}`;
+  } catch {
+    return "—";
+  }
 }

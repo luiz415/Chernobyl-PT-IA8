@@ -19,7 +19,7 @@ import type { Character, PartyTab, WaitingService, Vocation } from "../types";
 import { useAuth } from "../context/AuthContext";
 import { getManualSyncCooldownRemainingMs, markManualSyncAttempt, publishOfficialBazaarList, readOfficialBazaarCache, removeBazaarInterest, removeBazaarInterestsForAuctions, setBazaarInterest, syncBazaarInterests, syncOfficialBazaarList, type BazaarInterestMap, type OfficialBazaarMetadata } from "../services/bazaarOfficialService";
 import { applyValueOverlay, buildValueOverlay, clearBazaarValueOverlay, computeAutoRemoveAuctions, parseAutoRemoveLimit, readBazaarValueOverlay, sanitizeAutoRemoveLimit, saveBazaarValueOverlay } from "../utils/bazaarValueRefresh";
-import { BAZAR_NOTIFY_MINUTES_MAX, BAZAR_NOTIFY_MINUTES_MIN, clampBazarNotifyMinutes, formatDateTimeWithOffset, formatDuration, formatTimeZoneOffset, getBazarEndUntilAtConfiguredTime, getDefaultBazarEndUntil, getDeviceTimezoneOffsetMinutes, normalizeAuctionEndTimestamp, parseDateTimeLocalWithOffset, readBazarNotifyMinutes } from "../utils/bazaarTime";
+import { BAZAR_NOTIFY_MINUTES_MAX, BAZAR_NOTIFY_MINUTES_MIN, clampBazarNotifyMinutes, formatAuctionEnd, formatDateTimeWithOffset, formatDuration, formatTimeZoneOffset, getBazarEndUntilAtConfiguredTime, getDefaultBazarEndUntil, getDeviceTimezoneOffsetMinutes, normalizeAuctionEndTimestamp, parseDateTimeLocalWithOffset, readBazarNotifyMinutes } from "../utils/bazaarTime";
 import { syncNotificationPrefsToCloud } from "../services/notificationPrefsSyncService";
 import { syncBazaarEndingAlerts } from "../services/bazaarInterestNotificationService";
 import { buildBazaarBidUrl, extractBazaarAuctionId, parseBidAmount, sanitizeBidInput } from "../utils/bazaarBid";
@@ -668,20 +668,9 @@ function formatEndUntilForDisplay(value: string): string {
   return `${day}/${month}/${year} ${hour}:${minute}`;
 }
 
-function formatAuctionEnd(ts: number | null, offsetMinutes: number): string {
-  const normalizedTs = normalizeAuctionEndTimestamp(ts);
-  if (!normalizedTs) return "—";
-  try {
-    const shifted = new Date(normalizedTs * 1000 + offsetMinutes * 60 * 1000);
-    const day = String(shifted.getUTCDate()).padStart(2, "0");
-    const month = String(shifted.getUTCMonth() + 1).padStart(2, "0");
-    const hour = String(shifted.getUTCHours()).padStart(2, "0");
-    const minute = String(shifted.getUTCMinutes()).padStart(2, "0");
-    return `${day}/${month} ${hour}:${minute}`;
-  } catch {
-    return "—";
-  }
-}
+// `formatAuctionEnd` foi MOVIDO para `utils/bazaarTime.ts` (fonte única) —
+// o painel "Personagens com Itens" exibe a coluna "Encerra" com exatamente a
+// mesma formatação. Corpo idêntico ao que vivia aqui.
 
 function isAuctionStillActive(auction: BazaarAuction, nowUnixTs: number): boolean {
   const auctionEndTs = normalizeAuctionEndTimestamp(auction.auctionEndTs);
@@ -2668,6 +2657,42 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
       </div>
 
       <div className="relative z-10 h-full flex flex-col p-1.5 gap-1.5">
+        {/* ── SELETOR DE PAINÉIS (canto superior esquerdo, fora do quadro do
+            título) — exclusivo do Boss. Controle segmentado compacto: o modo
+            ativo ganha o preenchimento da sua cor (âmbar = quests, fúcsia =
+            itens). A restrição não é só visual: `showItemsMode` embute o
+            gate e o useEffect derruba o modo se a permissão mudar. */}
+        {isBossUser && !demoMode && (
+          <div className="absolute left-2 top-2 z-20 inline-flex items-center rounded-xl border border-[var(--th-line)]/60 bg-[var(--th-n-base)]/90 backdrop-blur-md p-0.5 shadow-lg shadow-black/40">
+            <button
+              type="button"
+              onClick={() => setPanelMode("quests")}
+              disabled={isLoading || isCheckingDetails}
+              className={`inline-flex h-6 items-center gap-1 px-2 rounded-[10px] text-[9px] font-black uppercase tracking-wide transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${
+                !showItemsMode
+                  ? "bg-amber-500/20 border border-amber-400/40 text-amber-200 shadow-[0_0_10px_color-mix(in_oklab,var(--color-amber-500)_18%,transparent)]"
+                  : "border border-transparent text-slate-400 hover:text-amber-300 hover:bg-amber-500/10"
+              }`}
+              title="Personagens Para Quests"
+            >
+              <ShoppingBag size={11} /> Quests
+            </button>
+            <button
+              type="button"
+              onClick={() => setPanelMode("itens")}
+              disabled={isLoading || isCheckingDetails}
+              className={`inline-flex h-6 items-center gap-1 px-2 rounded-[10px] text-[9px] font-black uppercase tracking-wide transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${
+                showItemsMode
+                  ? "bg-fuchsia-500/20 border border-fuchsia-400/40 text-fuchsia-200 shadow-[0_0_10px_color-mix(in_oklab,var(--color-fuchsia-500)_18%,transparent)]"
+                  : "border border-transparent text-slate-400 hover:text-fuchsia-300 hover:bg-fuchsia-500/10"
+              }`}
+              title="Personagens com itens"
+            >
+              <Package size={11} /> Itens
+            </button>
+          </div>
+        )}
+
         <div className="relative mx-auto w-full max-w-3xl flex items-center justify-center overflow-hidden rounded-2xl border border-amber-500/35 bg-[linear-gradient(135deg,color-mix(in_oklab,var(--th-brand)_94%,transparent),color-mix(in_oklab,var(--th-brand)_72%,transparent),color-mix(in_oklab,var(--th-brand)_94%,transparent))] backdrop-blur-md px-3 py-2 shadow-[0_14px_36px_rgba(0,0,0,0.34),0_0_28px_color-mix(in_oklab,var(--color-amber-500)_10%,transparent)] min-h-[46px] transition-all duration-500">
           <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_50%_0%,color-mix(in_oklab,var(--color-amber-500)_18%,transparent),transparent_55%)]" />
           <div className="pointer-events-none absolute left-1/2 top-0 h-px w-2/3 -translate-x-1/2 bg-gradient-to-r from-transparent via-amber-300/60 to-transparent" />
@@ -2688,41 +2713,19 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
             </h2>
           )}
 
-          {isBossUser && !demoMode && (
+          {/* Os seletores de painel saíram daqui — vivem no controle
+              segmentado do canto superior esquerdo. No quadro do título
+              permanecem SOMENTE os controles do modo de quests. */}
+          {isBossUser && !demoMode && !showItemsMode && (
             <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1.5">
-              {/* Navegação entre os dois painéis — exclusiva do Boss. No modo
-                  itens NÃO há "Filtros Consulta" nem o Consultar das quests:
-                  os controles do modo vivem no próprio quadro do painel. */}
-              {showItemsMode ? (
-                <button
-                  type="button"
-                  onClick={() => setPanelMode("quests")}
-                  className="inline-flex h-7 items-center gap-1 px-2.5 rounded-lg border border-amber-500/25 bg-amber-500/10 text-amber-300 text-[10px] font-black transition-all cursor-pointer hover:bg-amber-500/20"
-                  title="Personagens Para Quests"
-                >
-                  <ShoppingBag size={12} /> Personagens Para Quests
+              <button type="button" onClick={openSearchFiltersModal} disabled={isLoading || isCheckingDetails} className="inline-flex h-7 items-center gap-1 px-2.5 rounded-lg border border-amber-500/25 bg-amber-500/10 text-amber-300 text-[10px] font-black transition-all cursor-pointer hover:bg-amber-500/20 disabled:opacity-50 disabled:cursor-not-allowed">
+                <Filter size={12} /> Filtros Consulta
+              </button>
+              {isElectron && (
+                <button type="button" onClick={requestBazaarQuery} disabled={isLoading || isOfficialSyncing} className="inline-flex h-7 items-center gap-1 px-2.5 rounded-lg bg-gradient-to-r from-amber-700/80 to-amber-600/80 hover:from-amber-600 hover:to-amber-500 border border-amber-500/40 text-black text-[10px] font-black transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed shadow-md shadow-amber-900/15">
+                  <RefreshCw size={12} className={isLoading ? "animate-spin" : ""} />
+                  {isLoading ? "Consultando..." : "Consultar Bazaar"}
                 </button>
-              ) : (
-                <>
-                  <button
-                    type="button"
-                    onClick={() => setPanelMode("itens")}
-                    disabled={isLoading || isCheckingDetails}
-                    className="inline-flex h-7 items-center gap-1 px-2.5 rounded-lg border border-fuchsia-500/25 bg-fuchsia-500/10 text-fuchsia-300 text-[10px] font-black transition-all cursor-pointer hover:bg-fuchsia-500/20 disabled:opacity-50 disabled:cursor-not-allowed"
-                    title="Personagens com itens"
-                  >
-                    <Package size={12} /> Itens
-                  </button>
-                  <button type="button" onClick={openSearchFiltersModal} disabled={isLoading || isCheckingDetails} className="inline-flex h-7 items-center gap-1 px-2.5 rounded-lg border border-amber-500/25 bg-amber-500/10 text-amber-300 text-[10px] font-black transition-all cursor-pointer hover:bg-amber-500/20 disabled:opacity-50 disabled:cursor-not-allowed">
-                    <Filter size={12} /> Filtros Consulta
-                  </button>
-                  {isElectron && (
-                    <button type="button" onClick={requestBazaarQuery} disabled={isLoading || isOfficialSyncing} className="inline-flex h-7 items-center gap-1 px-2.5 rounded-lg bg-gradient-to-r from-amber-700/80 to-amber-600/80 hover:from-amber-600 hover:to-amber-500 border border-amber-500/40 text-black text-[10px] font-black transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed shadow-md shadow-amber-900/15">
-                      <RefreshCw size={12} className={isLoading ? "animate-spin" : ""} />
-                      {isLoading ? "Consultando..." : "Consultar Bazaar"}
-                    </button>
-                  )}
-                </>
               )}
             </div>
           )}
@@ -2737,6 +2740,15 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
             isBossUser={isBossUser}
             isElectron={isElectron}
             timezoneOffsetMinutes={timezoneOffsetMinutes}
+            // Botão "Link": EXATAMENTE o mesmo mecanismo do painel de quests —
+            // mesmo estado compartilhado de aberturas (openedLinksState),
+            // mesma marcação e mesmo openExternal. Um personagem aberto em um
+            // painel aparece como "Aberto" também no outro.
+            getLinkState={getBazaarLinkState}
+            openLink={(auctionKey, url) => {
+              markBazaarLinkOpened(auctionKey);
+              openExternal(url);
+            }}
           />
         ) : (
         <>

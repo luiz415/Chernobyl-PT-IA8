@@ -175,6 +175,22 @@ export function formatDuration(ms: number | null | undefined): string {
   return `${hours}:${minutes}:${seconds}`;
 }
 
+/** "dd/MM HH:mm" do encerramento do leilão no fuso configurado. */
+export function formatAuctionEnd(ts: number | null, offsetMinutes: number): string {
+  const normalizedTs = normalizeAuctionEndTimestamp(ts);
+  if (!normalizedTs) return "—";
+  try {
+    const shifted = new Date(normalizedTs * 1000 + offsetMinutes * 60 * 1000);
+    const day = String(shifted.getUTCDate()).padStart(2, "0");
+    const month = String(shifted.getUTCMonth() + 1).padStart(2, "0");
+    const hour = String(shifted.getUTCHours()).padStart(2, "0");
+    const minute = String(shifted.getUTCMinutes()).padStart(2, "0");
+    return `${day}/${month} ${hour}:${minute}`;
+  } catch {
+    return "—";
+  }
+}
+
 export function formatDateTimeWithOffset(ms: number | null | undefined, offsetMinutes: number): string {
   if (!ms || !Number.isFinite(ms)) return "—";
   const shifted = new Date(ms + offsetMinutes * 60 * 1000);
