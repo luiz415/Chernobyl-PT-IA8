@@ -2657,6 +2657,11 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
       </div>
 
       <div className="relative z-10 h-full flex flex-col p-1.5 gap-1.5">
+        {/* ── LINHA DO CABEÇALHO ──────────────────────────────────────────
+            Título centralizado no quadro; controles FORA do quadro, na MESMA
+            linha: seletor de painéis no canto superior ESQUERDO e ações do
+            painel ativo no canto superior DIREITO. */}
+
         {/* ── SELETOR DE PAINÉIS (canto superior esquerdo, fora do quadro do
             título) — exclusivo do Boss. Controle segmentado compacto: o modo
             ativo ganha o preenchimento da sua cor (âmbar = quests, fúcsia =
@@ -2693,6 +2698,36 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
           </div>
         )}
 
+        {/* ── AÇÕES DO PAINEL (canto superior direito, fora do quadro do
+            título — espelho do seletor à esquerda, na MESMA linha do
+            cabeçalho). Cada painel exibe SOMENTE os seus botões:
+              • Quests: "Filtros Consulta" + "Consultar Bazaar";
+              • Itens: "Consultar Bazaar" + "Lista de Itens" (injetados pelo
+                BazaarItemsPanel via portal — a lógica permanece lá; sem
+                "Filtros Consulta" no modo itens).
+            Mesmo cartão compacto do seletor segmentado, para um padrão
+            visual consistente entre os dois painéis. */}
+        {isBossUser && !demoMode && (
+          showItemsMode ? (
+            <div
+              id="bazaar-items-title-actions"
+              className="absolute right-2 top-2 z-20 inline-flex items-center gap-1.5 rounded-xl border border-[var(--th-line)]/60 bg-[var(--th-n-base)]/90 backdrop-blur-md p-0.5 shadow-lg shadow-black/40 empty:hidden"
+            />
+          ) : (
+            <div className="absolute right-2 top-2 z-20 inline-flex items-center gap-1.5 rounded-xl border border-[var(--th-line)]/60 bg-[var(--th-n-base)]/90 backdrop-blur-md p-0.5 shadow-lg shadow-black/40">
+              <button type="button" onClick={openSearchFiltersModal} disabled={isLoading || isCheckingDetails} className="inline-flex h-7 items-center gap-1 px-2.5 rounded-lg border border-amber-500/25 bg-amber-500/10 text-amber-300 text-[10px] font-black transition-all cursor-pointer hover:bg-amber-500/20 disabled:opacity-50 disabled:cursor-not-allowed">
+                <Filter size={12} /> Filtros Consulta
+              </button>
+              {isElectron && (
+                <button type="button" onClick={requestBazaarQuery} disabled={isLoading || isOfficialSyncing} className="inline-flex h-7 items-center gap-1 px-2.5 rounded-lg bg-gradient-to-r from-amber-700/80 to-amber-600/80 hover:from-amber-600 hover:to-amber-500 border border-amber-500/40 text-black text-[10px] font-black transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed shadow-md shadow-amber-900/15">
+                  <RefreshCw size={12} className={isLoading ? "animate-spin" : ""} />
+                  {isLoading ? "Consultando..." : "Consultar Bazaar"}
+                </button>
+              )}
+            </div>
+          )
+        )}
+
         <div className="relative mx-auto w-full max-w-3xl flex items-center justify-center overflow-hidden rounded-2xl border border-amber-500/35 bg-[linear-gradient(135deg,color-mix(in_oklab,var(--th-brand)_94%,transparent),color-mix(in_oklab,var(--th-brand)_72%,transparent),color-mix(in_oklab,var(--th-brand)_94%,transparent))] backdrop-blur-md px-3 py-2 shadow-[0_14px_36px_rgba(0,0,0,0.34),0_0_28px_color-mix(in_oklab,var(--color-amber-500)_10%,transparent)] min-h-[46px] transition-all duration-500">
           <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_50%_0%,color-mix(in_oklab,var(--color-amber-500)_18%,transparent),transparent_55%)]" />
           <div className="pointer-events-none absolute left-1/2 top-0 h-px w-2/3 -translate-x-1/2 bg-gradient-to-r from-transparent via-amber-300/60 to-transparent" />
@@ -2713,31 +2748,10 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
             </h2>
           )}
 
-          {/* Contêiner das ações do MODO ITENS no quadro do título — mesmo
-              posicionamento dos botões do modo de quests. Os botões em si
-              ("Lista de Itens" / "Consultar Bazaar") são renderizados pelo
-              BazaarItemsPanel via portal: toda a lógica continua no painel
-              de itens; aqui vive apenas o encaixe visual. */}
-          {isBossUser && !demoMode && showItemsMode && (
-            <div id="bazaar-items-title-actions" className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1.5" />
-          )}
-
-          {/* Os seletores de painel saíram daqui — vivem no controle
-              segmentado do canto superior esquerdo. No quadro do título
-              permanecem SOMENTE os controles do modo de quests. */}
-          {isBossUser && !demoMode && !showItemsMode && (
-            <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1.5">
-              <button type="button" onClick={openSearchFiltersModal} disabled={isLoading || isCheckingDetails} className="inline-flex h-7 items-center gap-1 px-2.5 rounded-lg border border-amber-500/25 bg-amber-500/10 text-amber-300 text-[10px] font-black transition-all cursor-pointer hover:bg-amber-500/20 disabled:opacity-50 disabled:cursor-not-allowed">
-                <Filter size={12} /> Filtros Consulta
-              </button>
-              {isElectron && (
-                <button type="button" onClick={requestBazaarQuery} disabled={isLoading || isOfficialSyncing} className="inline-flex h-7 items-center gap-1 px-2.5 rounded-lg bg-gradient-to-r from-amber-700/80 to-amber-600/80 hover:from-amber-600 hover:to-amber-500 border border-amber-500/40 text-black text-[10px] font-black transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed shadow-md shadow-amber-900/15">
-                  <RefreshCw size={12} className={isLoading ? "animate-spin" : ""} />
-                  {isLoading ? "Consultando..." : "Consultar Bazaar"}
-                </button>
-              )}
-            </div>
-          )}
+          {/* Os botões de ação saíram do quadro do título — vivem no cartão
+              do canto superior DIREITO, fora do quadro, na mesma linha do
+              cabeçalho (espelho do seletor de painéis à esquerda). O quadro
+              contém SOMENTE o título. */}
         </div>
 
         {/* ── CORPO DO PAINEL ─────────────────────────────────────────────

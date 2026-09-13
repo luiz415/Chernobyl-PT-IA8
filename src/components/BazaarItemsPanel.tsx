@@ -145,6 +145,10 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
   });
   const [endUntil, setEndUntil] = useState<string>(() => getDefaultBazarEndUntil(timezoneOffsetMinutes));
   const [lastQuery, setLastQuery] = useState<BazaarItemsLastQuery | null>(() => loadItemsLastQuery());
+  // "Pesquisar Item" do quadro "Última Consulta": filtro LOCAL e derivado
+  // sobre os resultados já obtidos — nunca dispara nova consulta nem altera
+  // os dados persistidos (lastQuery/localStorage permanecem intactos).
+  const [resultsSearch, setResultsSearch] = useState("");
 
   // ── Estado da consulta ─────────────────────────────────────────────────────
   const [isBrowserModalOpen, setIsBrowserModalOpen] = useState(false);
@@ -240,11 +244,11 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
     return () => window.clearTimeout(timer);
   }, [itemsNotifications]);
 
-  // ── Encaixe dos botões no quadro do TÍTULO (portal) ───────────────────────
-  // O BazarPanel reserva o contêiner `#bazaar-items-title-actions` no quadro
-  // do título quando o modo itens está ativo (mesma posição dos botões do
-  // modo de quests). O contêiner só existe DEPOIS da montagem — por isso a
-  // referência é resolvida em efeito, não durante o render.
+  // ── Encaixe dos botões nas AÇÕES DO CABEÇALHO (portal) ────────────────────
+  // O BazarPanel reserva o contêiner `#bazaar-items-title-actions` no canto
+  // superior DIREITO da linha do cabeçalho, FORA do quadro do título (mesma
+  // posição das ações do modo de quests). O contêiner só existe DEPOIS da
+  // montagem — por isso a referência é resolvida em efeito, não no render.
   const [titleActionsHost, setTitleActionsHost] = useState<HTMLElement | null>(null);
   useEffect(() => {
     setTitleActionsHost(document.getElementById("bazaar-items-title-actions"));
@@ -554,22 +558,30 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
 
   const results = lastQuery?.results || [];
 
-  // ── Botões de ação do painel — vivem no QUADRO DO TÍTULO ──────────────────
-  // Mesmo padrão do painel de quests ("Filtros Consulta"/"Consultar Bazaar"
-  // no título): aqui são "Lista de Itens" e "Consultar Bazaar"/"Parar". A
-  // lógica é a MESMA de antes — apenas o encaixe mudou (portal no contêiner
-  // reservado pelo BazarPanel). Sem o contêiner (ex.: montagem isolada), os
-  // botões caem no quadro "Última Consulta" como antes — nunca somem.
+  // ── "Pesquisar Item" — filtro LOCAL sobre os resultados já obtidos ────────
+  // Derivado puro: filtra a lista em memória a cada digitação, sem nova
+  // consulta ao Bazaar, sem Firestore e sem tocar nos dados persistidos
+  // (lastQuery permanece intacto). Pesquisa parcial e sem distinção de
+  // caixa/acentos — mesma normalização do casamento de itens
+  // (normalizeWatchedItemName). Compara com o nome ENCONTRADO no personagem
+  // (foundName, ex.: "Falcon Coif [Tier 3]") e com o nome monitorado
+  // (watchedName) — qualquer um dos dois casa.
+  const resultsSearchTerm = normalizeWatchedItemName(resultsSearch);
+  const visibleResults = resultsSearchTerm
+    ? results.filter(result => (result.matches || []).some(match =>
+        normalizeWatchedItemName(match.foundName).includes(resultsSearchTerm)
+        || normalizeWatchedItemName(match.watchedName).includes(resultsSearchTerm)))
+    : results;
+
+  // ── Botões de ação do painel — canto superior DIREITO do cabeçalho ────────
+  // Injetados via portal no cartão reservado pelo BazarPanel FORA do quadro
+  // do título (mesma linha, espelho do seletor de painéis à esquerda).
+  // Ordem exigida: "Consultar Bazaar" e depois "Lista de Itens". A lógica é
+  // a MESMA de antes — apenas o encaixe mudou. Sem o contêiner (ex.:
+  // montagem isolada), os botões caem no quadro "Última Consulta" — nunca
+  // somem.
   const titleActions = (
     <>
-      <button
-        type="button"
-        onClick={() => { setIsItemsModalOpen(true); setImportFeedback(null); }}
-        className="inline-flex h-7 items-center gap-1 px-2.5 rounded-lg border border-fuchsia-500/25 bg-fuchsia-500/10 text-fuchsia-300 text-[10px] font-black transition-all cursor-pointer hover:bg-fuchsia-500/20"
-        title="Itens monitorados na consulta: nome e valor base em kk"
-      >
-        <ListChecks size={12} /> Lista de Itens ({watchedItems.length})
-      </button>
       {isElectron && (isRunning ? (
         <button
           type="button"
@@ -588,12 +600,21 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
           <RefreshCw size={12} /> Consultar Bazaar
         </button>
       ))}
+      <button
+        type="button"
+        onClick={() => { setIsItemsModalOpen(true); setImportFeedback(null); }}
+        className="inline-flex h-7 items-center gap-1 px-2.5 rounded-lg border border-fuchsia-500/25 bg-fuchsia-500/10 text-fuchsia-300 text-[10px] font-black transition-all cursor-pointer hover:bg-fuchsia-500/20"
+        title="Itens monitorados na consulta: nome e valor base em kk"
+      >
+        <ListChecks size={12} /> Lista de Itens ({watchedItems.length})
+      </button>
     </>
   );
 
   return (
     <div className="flex-1 min-h-0 flex flex-col gap-1.5 overflow-hidden">
-      {/* Botões no quadro do TÍTULO — portal para o contêiner do BazarPanel. */}
+      {/* Botões nas AÇÕES DO CABEÇALHO (canto superior direito, fora do
+          quadro do título) — portal para o contêiner do BazarPanel. */}
       {titleActionsHost && createPortal(titleActions, titleActionsHost)}
 
       {error && (
@@ -683,6 +704,37 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
             />
           </label>
 
+          {/* ── Pesquisar Item — filtro LOCAL da lista de personagens ─────
+              Filtra dinamicamente sobre os resultados JÁ obtidos (pesquisa
+              parcial, sem distinção de caixa/acentos). Nunca dispara nova
+              consulta nem altera os dados persistidos; campo vazio = todos
+              os personagens de volta. */}
+          <label className="relative inline-flex items-center gap-1 text-[10px]" title="Filtra os personagens da última consulta: somente quem possui o item pesquisado entre os itens encontrados. Pesquisa local — não refaz a consulta.">
+            <Search size={11} className="absolute left-1.5 text-slate-500 pointer-events-none" />
+            <input
+              type="text"
+              value={resultsSearch}
+              onChange={event => setResultsSearch(event.target.value)}
+              placeholder="Pesquisar item..."
+              className="h-7 w-40 rounded-md border border-[var(--th-line)]/70 bg-black/35 pl-6 pr-6 text-[10px] text-white outline-none focus:border-fuchsia-600/60 placeholder:text-slate-600"
+            />
+            {resultsSearch && (
+              <button
+                type="button"
+                onClick={() => setResultsSearch("")}
+                className="absolute right-1 p-0.5 rounded text-slate-500 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
+                title="Limpar pesquisa"
+              >
+                <X size={11} />
+              </button>
+            )}
+          </label>
+          {resultsSearchTerm && (
+            <span className="text-[9px] font-bold text-fuchsia-300">
+              {visibleResults.length} de {results.length} {results.length === 1 ? "personagem" : "personagens"}
+            </span>
+          )}
+
           {/* Fallback: sem o contêiner do título (montagem isolada), os
               botões permanecem aqui — o comportamento nunca se perde. */}
           {!titleActionsHost && (
@@ -738,15 +790,19 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
       </div>
 
       {/* ── Resultados compactos ────────────────────────────────────────────── */}
+      {/* A tabela exibe `visibleResults` — o derivado do "Pesquisar Item".
+          Sem pesquisa, visibleResults === results (todos os personagens). */}
       <div className="flex-1 min-h-0 overflow-auto custom-scrollbar rounded-lg border border-[var(--th-line)]/60 bg-[var(--th-n-base)]/80">
-        {results.length === 0 ? (
+        {visibleResults.length === 0 ? (
           <div className="h-full flex items-center justify-center p-6">
             <div className="text-center space-y-2 max-w-md">
               <Package size={28} className="mx-auto text-fuchsia-400/60" />
               <p className="text-xs text-slate-400 leading-relaxed">
-                {lastQuery
-                  ? "Nenhum personagem da última consulta possui itens da sua Lista de Itens."
-                  : "Cadastre os itens desejados em \u201CLista de Itens\u201D, ajuste a data e a cotação do coin e clique em \u201CConsultar Bazaar\u201D."}
+                {resultsSearchTerm && results.length > 0
+                  ? `Nenhum personagem da última consulta possui um item com \u201C${resultsSearch.trim()}\u201D. Limpe a pesquisa para ver todos.`
+                  : lastQuery
+                    ? "Nenhum personagem da última consulta possui itens da sua Lista de Itens."
+                    : "Cadastre os itens desejados em \u201CLista de Itens\u201D, ajuste a data e a cotação do coin e clique em \u201CConsultar Bazaar\u201D."}
               </p>
             </div>
           </div>
@@ -766,7 +822,7 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
               </tr>
             </thead>
             <tbody>
-              {results.map(result => {
+              {visibleResults.map(result => {
                 const auctionKey = result.id || result.url || result.name;
                 const copyKey = `res_${auctionKey}`;
                 // "Tenho Interesse" — estado 100% LOCAL (localStorage por uid).
