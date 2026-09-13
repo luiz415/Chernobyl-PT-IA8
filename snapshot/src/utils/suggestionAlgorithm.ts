@@ -66,6 +66,25 @@ export interface SuggestionOptions {
    * considerada empréstimo do usuário. Não exclui Services da sugestão.
    */
   noServiceLoan?: boolean;
+  /**
+   * "Priorizar Personagens de Service": quando ligada, a sugestão busca —
+   * entre as composições VÁLIDAS pelas regras existentes — a que usa o MAIOR
+   * número de personagens de Service (`type === "waiting"`) do servidor.
+   *
+   * É uma PRIORIDADE, nunca uma exclusão:
+   *   • personagens do Hub continuam elegíveis e completam a PT quando não
+   *     há Services suficientes ou quando a melhor composição válida os exige;
+   *   • NENHUMA regra é relaxada: quest, servidor, vocação, level mínimo,
+   *     conta única, "Emprestar no máximo", "Não emprestar Service" e
+   *     Shared XP valem exatamente como antes;
+   *   • com "Não emprestar Service" ativo, o limite de 1 Service por
+   *     responsável segue valendo (a prioridade não o contorna).
+   *
+   * Implementação: apenas a FUNÇÃO OBJETIVO muda (nº de Services domina o
+   * score do time, e o desempate entre servidores passa a considerar essa
+   * contagem primeiro). Desligada, o comportamento é idêntico ao anterior.
+   */
+  prioritizeServices?: boolean;
   strength: "low" | "medium" | "high"; // baixo, médio, alto
   serverMode: "auto" | "specific";
   specificServer: string;
@@ -1229,6 +1248,30 @@ export function suggestParty(
     return 100000 - Math.abs(avgLevel - targets.medium);
   }
 
+  // ── "PRIORIZAR PERSONAGENS DE SERVICE" ─────────────────────────────────────
+  // A prioridade entra APENAS na função objetivo: cada Service no time soma
+  // um bônus que DOMINA qualquer pontuação de level (cujo alcance é da ordem
+  // de 100000 + level). Assim, entre duas composições VÁLIDAS, a com mais
+  // Services sempre vence; entre composições com o MESMO número de Services,
+  // o critério de Força continua decidindo, exatamente como antes.
+  //
+  // Nenhuma regra de elegibilidade/validação muda com a opção ligada — a
+  // mesma busca (mesmo DFS, mesmas podas) apenas passa a preferir outro
+  // ponto ótimo. Desligada, o bônus é 0 e o score é idêntico ao anterior.
+  const SERVICE_PRIORITY_BONUS = 10_000_000;
+
+  function countTeamServices(team: PartyCandidate[]): number {
+    let count = 0;
+    for (const member of team) if (member.type === "waiting") count++;
+    return count;
+  }
+
+  function scoreTeam(team: PartyCandidate[], targets: StrengthTargets): number {
+    const levelScore = scoreTeamLevel(team, options.strength, targets);
+    if (!options.prioritizeServices) return levelScore;
+    return countTeamServices(team) * SERVICE_PRIORITY_BONUS + levelScore;
+  }
+
   // Limite de empréstimo desta execução: quantas repetições de dono a PT pode
   // ter. `null` = sem limite. Resolvido uma única vez, fora da recursão.
   const maxOwnerRepeats = normalizeMaxOwnerRepeats(options.maxOwnerRepeats);
@@ -1251,6 +1294,21 @@ export function suggestParty(
     srvCandidates.forEach(c => {
       if (pool[c.voc]) pool[c.voc].push(c);
     });
+
+    // Com a prioridade de Services ligada, Services vão para a FRENTE de cada
+    // pool de vocação. Isso não altera o conjunto de composições possíveis —
+    // o DFS continua explorando todas — mas faz as combinações ricas em
+    // Services serem avaliadas primeiro, o que garante encontrá-las mesmo
+    // quando a busca é interrompida pelo teto de avaliações (MAX_EVAL).
+    // A ordenação é estável: dentro de cada grupo, a ordem original fica.
+    if (options.prioritizeServices) {
+      (Object.keys(pool) as Vocation[]).forEach(voc => {
+        pool[voc] = [
+          ...pool[voc].filter(c => c.type === "waiting"),
+          ...pool[voc].filter(c => c.type !== "waiting"),
+        ];
+      });
+    }
 
     // Inspecionar se temos candidatos suficientes em cada vocação antes de rodar a busca
     for (const voc of Object.keys(template.counts) as Vocation[]) {
@@ -1284,7 +1342,9 @@ export function suggestParty(
 
       if (slotIdx === 5) {
         evalCount++;
-        const score = scoreTeamLevel(currentTeam, options.strength, targets);
+        // Score unificado: com "Priorizar Personagens de Service" ligada, o
+        // nº de Services domina; desligada, é o score de Força de sempre.
+        const score = scoreTeam(currentTeam, targets);
         if (score > bestScore) {
           bestScore = score;
           bestTeam = [...currentTeam];
@@ -1378,6 +1438,8 @@ export function suggestParty(
     futurePTs: number;
     templateQuality: number;
     serverCandidatesCount: number;
+    /** Nº de Services no time (desempate quando `prioritizeServices`). */
+    serviceCount: number;
   }
 
   const serverSuggestions: ServerSuggestionCandidate[] = [];
@@ -1404,13 +1466,33 @@ export function suggestParty(
       templates = templatesToTry.length > 0 ? templatesToTry : PARTY_TEMPLATES;
     }
 
+    // "Priorizar Personagens de Service": a escolha do TEMPLATE dentro do
+    // servidor também respeita a prioridade. Sem ela, vale o comportamento
+    // original (primeiro template da ordem de escassez que formar time).
+    // Com ela, TODOS os templates permitidos são avaliados e vence o de
+    // maior score — como o nº de Services domina o score, isso escolhe o
+    // template que comporta mais Services; empates mantêm a ordem de
+    // escassez (o primeiro avaliado só é trocado por score ESTRITAMENTE
+    // maior). Mesma busca (`findBestTeamForTemplate`), sem lógica paralela.
+    let chosen: { template: PartyTemplate; res: { team: PartyCandidate[]; score: number } } | null = null;
     for (let tIdx = 0; tIdx < templates.length; tIdx++) {
       const template = templates[tIdx];
       if (options.skipTemplateNames?.includes(template.name)) continue;
 
       const res = findBestTeamForTemplate(srvCandidates, template, targets);
+      if (!res) continue;
 
-      if (res) {
+      if (!options.prioritizeServices) {
+        // Comportamento original: primeiro template que forma time vence.
+        chosen = { template, res };
+        break;
+      }
+      if (!chosen || res.score > chosen.res.score) chosen = { template, res };
+    }
+
+    {
+      if (chosen) {
+        const { template, res } = chosen;
         // Encontramos a melhor composição deste servidor segundo a ordem do algoritmo.
         const avgLevel = Math.round(
           res.team.reduce((sum, c) => sum + c.level, 0) / 5
@@ -1442,14 +1524,19 @@ export function suggestParty(
           futurePTs: computeMaxPossibleParties(remainingCounts, templatesToTry.length > 0 ? templatesToTry : PARTY_TEMPLATES),
           templateQuality: getTemplateQuality(template),
           serverCandidatesCount: srvCandidates.length,
+          serviceCount: countTeamServices(res.team),
         });
-        break;
       }
     }
   }
 
   if (serverSuggestions.length > 0) {
     serverSuggestions.sort((a, b) => {
+      // "Priorizar Personagens de Service": entre servidores, vence primeiro
+      // quem coloca MAIS Services na composição; os critérios de sempre
+      // decidem os empates. Com a opção desligada, este passo não existe e a
+      // ordenação é EXATAMENTE a anterior.
+      if (options.prioritizeServices && b.serviceCount !== a.serviceCount) return b.serviceCount - a.serviceCount;
       if (b.futurePTs !== a.futurePTs) return b.futurePTs - a.futurePTs;
       if (b.templateQuality !== a.templateQuality) return b.templateQuality - a.templateQuality;
       if (b.teamScore !== a.teamScore) return b.teamScore - a.teamScore;

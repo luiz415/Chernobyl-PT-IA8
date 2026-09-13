@@ -280,6 +280,12 @@ export default function SuggestPartyModal({
   // EXCEDENTE de um usuario. Nao remove Services da sugestao.
   const [noServiceLoan, setNoServiceLoan] = useState<boolean>(() =>
     loadUIState(`${PERSIST_KEY}.noServiceLoan`, false));
+  // "Priorizar Personagens de Service": entre as composições VÁLIDAS, busca a
+  // que usa o MAIOR número de Services do servidor. É prioridade, não
+  // exclusão: personagens do Hub continuam elegíveis e completam a PT.
+  // Nenhuma regra existente é relaxada (incluindo "Não emprestar Service").
+  const [prioritizeServices, setPrioritizeServices] = useState<boolean>(() =>
+    loadUIState(`${PERSIST_KEY}.prioritizeServices`, false));
   // ============================================================================
   // EMPRÉSTIMO — "Emprestar no máximo: N"
   //
@@ -381,6 +387,7 @@ export default function SuggestPartyModal({
   useEffect(() => { saveUIState(`${PERSIST_KEY}.selectedUsers`, selectedUsers); }, [selectedUsers]);
   useEffect(() => { saveUIState(`${PERSIST_KEY}.maxOwnerRepeats`, maxOwnerRepeats); }, [maxOwnerRepeats]);
   useEffect(() => { saveUIState(`${PERSIST_KEY}.noServiceLoan`, noServiceLoan); }, [noServiceLoan]);
+  useEffect(() => { saveUIState(`${PERSIST_KEY}.prioritizeServices`, prioritizeServices); }, [prioritizeServices]);
   useEffect(() => { saveUIState(`${PERSIST_KEY}.strength`, strength); }, [strength]);
   useEffect(() => { saveUIState(`${PERSIST_KEY}.minLevels`, minLevels); }, [minLevels]);
   useEffect(() => { saveUIState(`${PERSIST_KEY}.ptType`, internalPtType); }, [internalPtType]);
@@ -949,7 +956,7 @@ export default function SuggestPartyModal({
   const filtersRef = useRef({
     characters, waitingList, allParties, userName,
     party, effectivePartyId, effectivePtType,
-    userMode, selectedUsers, effectiveMaxOwnerRepeats, noServiceLoan,
+    userMode, selectedUsers, effectiveMaxOwnerRepeats, noServiceLoan, prioritizeServices,
     strength, serverMode, specificServer, minLevels,
     sharedXP, useCharacters, useWaitingList,
     suggestionMode, templateType, customComposition, customCompositionSaved,
@@ -957,7 +964,7 @@ export default function SuggestPartyModal({
   filtersRef.current = {
     characters, waitingList, allParties, userName,
     party, effectivePartyId, effectivePtType,
-    userMode, selectedUsers, effectiveMaxOwnerRepeats, noServiceLoan,
+    userMode, selectedUsers, effectiveMaxOwnerRepeats, noServiceLoan, prioritizeServices,
     strength, serverMode, specificServer, minLevels,
     sharedXP, useCharacters, useWaitingList,
     suggestionMode, templateType, customComposition, customCompositionSaved,
@@ -1002,6 +1009,7 @@ export default function SuggestPartyModal({
         selectedUsers: f.selectedUsers,
         maxOwnerRepeats: f.effectiveMaxOwnerRepeats,
         noServiceLoan: f.noServiceLoan,
+        prioritizeServices: f.prioritizeServices,
         strength: f.strength,
         serverMode: f.serverMode,
         specificServer: f.specificServer,
@@ -1374,6 +1382,23 @@ export default function SuggestPartyModal({
                       )}
                     </div>
                     <span className={`transition-colors duration-200 ${noServiceLoan ? "text-slate-200" : "text-slate-400 group-hover:text-slate-300"}`}>Não emprestar Service</span>
+                  </label>
+                </CursorTooltip>
+                <CursorTooltip text="Monta a composição usando o MÁXIMO possível de personagens de Service do servidor, sem violar nenhuma regra ativa. É uma prioridade, não uma exclusão: Personagens do Hub continuam sendo usados para completar a PT. Com 'Não emprestar Service' ativo, vale no máximo 1 Service por usuário responsável.">
+                  <label className="group flex items-center gap-2 px-2 py-1.5 rounded-lg border border-transparent hover:border-red-900/30 transition-all cursor-pointer text-[10px] font-medium select-none">
+                    <input type="checkbox" checked={prioritizeServices} onChange={e => setPrioritizeServices(e.target.checked)} className="sr-only" />
+                    <div className={`relative w-[16px] h-[16px] rounded-[4px] border-2 flex-shrink-0 flex items-center justify-center transition-all duration-200 ${
+                      prioritizeServices
+                        ? "bg-gradient-to-br from-[var(--th-brand-mid)] to-[var(--th-brand-deep)] border-amber-600/50 shadow-[0_0_6px_color-mix(in_oklab,var(--th-brand)_40%,transparent),inset_0_1px_1px_rgba(255,255,255,0.08)]"
+                        : "bg-[var(--th-n-deep)] border-[var(--th-line)]/100 group-hover:border-[var(--th-brand)]/80 group-hover:bg-[var(--th-bg-base)]"
+                    }`}>
+                      {prioritizeServices && (
+                        <svg width="9" height="7" viewBox="0 0 10 8" fill="none" className="drop-shadow-sm">
+                          <path d="M1.5 4L3.8 6.5L8.5 1.5" stroke="#f6c96e" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                        </svg>
+                      )}
+                    </div>
+                    <span className={`transition-colors duration-200 ${prioritizeServices ? "text-slate-200" : "text-slate-400 group-hover:text-slate-300"}`}>Priorizar Personagens de Service</span>
                   </label>
                 </CursorTooltip>
                 <CursorTooltip text="Forçar PT's em que os personagens compartilham experiência (Shared XP).">
