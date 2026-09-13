@@ -192,7 +192,9 @@ export default function CharacterModal({ open, initial, accounts, servers, onSav
         voc: data.voc as Character["voc"],
         account: data.account.trim(),
         personagem: data.personagem.trim(),
-        servidor: data.servidor.trim(),
+        // Canoniza para o padrão interno (ex.: "Infernum I" → "Infernum 1"):
+        // cobre valores antigos carregados na edição e importações externas.
+        servidor: normalizeServerName(data.servidor),
         aVenda: data.vendido ? false : !!data.aVenda,
         taxaAplicada: taxApplied ? taxPercent : undefined,
         valorVendaOriginal: taxApplied && previousValue != null ? previousValue : undefined,

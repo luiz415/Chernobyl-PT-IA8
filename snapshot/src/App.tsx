@@ -59,6 +59,7 @@ import {
 } from "./services/pushNotificationService";
 import { syncBazaarEndingAlerts, stopBazaarEndingAlerts } from "./services/bazaarInterestNotificationService";
 import { readOfficialBazaarCache, readBazaarInterestsCache } from "./services/bazaarOfficialService";
+import { normalizeServerName } from "./constants/servers";
 import { syncNotificationPrefsToCloud } from "./services/notificationPrefsSyncService";
 import { buildAcceptedFriendSet, filterVisibleEntitiesWithException } from "./utils/friendshipAccess";
 import { useModalViewportBounds } from "./hooks/useModalViewportBounds";
@@ -3758,7 +3759,9 @@ export default function App() {
 
     const account = String(purchase.account || "").trim();
     const personagem = String(purchase.name || "").trim();
-    const servidor = String(purchase.server || "").trim();
+    // Canoniza o servidor vindo do Bazaar para o padrão interno (fonte única
+    // em src/constants/servers.ts — ex.: "Infernum I" → "Infernum 1").
+    const servidor = normalizeServerName(String(purchase.server || ""));
     const voc = mapBazaarVocationToCharacterVocation(String(purchase.vocation || ""));
     const level = Math.floor(Number(purchase.level));
     const valorPago = Number(purchase.valorPago);

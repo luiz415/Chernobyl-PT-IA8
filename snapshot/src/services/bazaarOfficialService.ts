@@ -8,6 +8,7 @@ import {
   writeBatch,
 } from "firebase/firestore";
 import { db } from "../firebase/config";
+import { normalizeServerName } from "../constants/servers";
 
 export interface OfficialBazaarCharacter {
   id: string;
@@ -235,6 +236,9 @@ function normalizeOfficialCharacter(character: OfficialBazaarCharacter): Officia
   return {
     ...character,
     id: normalizeFirestoreId(character.id, "auctionId"),
+    // Nome do servidor SEMPRE no padrão interno (ex.: "Infernum I" → "Infernum 1").
+    // Publicar já canonizado evita que cada leitor precise se preocupar com isso.
+    server: normalizeServerName(character.server),
   };
 }
 export function getManualSyncCooldownRemainingMs(): number {
@@ -251,7 +255,15 @@ export function readOfficialBazaarCache(): OfficialBazaarCache | null {
     const raw = localStorage.getItem(OFFICIAL_CACHE_KEY);
     const parsed = raw ? JSON.parse(raw) : null;
     if (!parsed || parsed.schemaVersion !== CACHE_SCHEMA_VERSION || !parsed.version || !Array.isArray(parsed.characters)) return null;
-    return parsed;
+    // Cache local gravado por versão antiga pode conter servidores na
+    // nomenclatura externa (ex.: "Infernum I") — canoniza na leitura.
+    return {
+      ...parsed,
+      characters: parsed.characters.map((character: OfficialBazaarCharacter) => {
+        const server = normalizeServerName(character?.server);
+        return server === character?.server ? character : { ...character, server };
+      }),
+    };
   } catch {
     return null;
   }
@@ -463,7 +475,12 @@ export async function syncOfficialBazaarList(options: { force?: boolean } = {}):
     const currentSnap = await getDoc(doc(db, "bazaar", "current"));
     if (!currentSnap.exists()) return { cache: local, changed: false, skipped: false, error: "Lista oficial não encontrada." };
     const current = currentSnap.data() as any;
-    const characters = Array.isArray(current.characters) ? current.characters.map((character: OfficialBazaarCharacter) => ({ ...character, id: String(character.id ?? "") })) : [];
+    // Além do id, o servidor também é canonizado NA LEITURA: uma lista já
+    // publicada por uma versão antiga do app pode conter a nomenclatura
+    // externa (ex.: "Infernum I"); normalizar aqui garante que TODOS os
+    // consumidores (tabela, filtros, resumos, notificações) vejam o padrão
+    // interno ("Infernum 1") sem depender de republicação.
+    const characters = Array.isArray(current.characters) ? current.characters.map((character: OfficialBazaarCharacter) => ({ ...character, id: String(character.id ?? ""), server: normalizeServerName(character.server) })) : [];
     const cache: OfficialBazaarCache = {
       schemaVersion: CACHE_SCHEMA_VERSION,
       version: metadata.version,

@@ -24,7 +24,7 @@ import { syncBazaarEndingAlerts } from "../services/bazaarInterestNotificationSe
 import { buildBazaarBidUrl, extractBazaarAuctionId, parseBidAmount, sanitizeBidInput } from "../utils/bazaarBid";
 import { readBazaarDefaultBid, resolveBazaarBid, saveBazaarDefaultBid } from "../utils/bazaarDefaultBid";
 import { loadUIState, saveUIState, loadNotifications } from "../storage";
-import { SERVER_OPTIONS, serverKey } from "../constants/servers";
+import { SERVER_OPTIONS, normalizeServerName, serverKey } from "../constants/servers";
 import { computeUserPriority } from "../utils/bazaarUserPriority";
 import { collectBusyIdsForQuest } from "../utils/questEligibility";
 
@@ -558,6 +558,21 @@ function getAuctionKey(auction: BazaarAuction): string {
 }
 
 /**
+ * Canoniza o nome do servidor de cada leilão vindo de FONTE EXTERNA (consulta
+ * ao vivo do Rubinot via Electron, cache local antigo). O site/API pode usar
+ * outra nomenclatura (ex.: "Infernum I"); internamente o app usa SEMPRE o
+ * padrão de `src/constants/servers.ts` ("Infernum 1"). Normalizar na entrada
+ * garante que filtros, resumos, prioridades e notificações enxerguem um único
+ * nome — sem tratamentos isolados por tela.
+ */
+function normalizeAuctionServers(auctions: BazaarAuction[]): BazaarAuction[] {
+  return auctions.map(auction => {
+    const normalized = normalizeServerName(auction.server);
+    return normalized === auction.server ? auction : { ...auction, server: normalized };
+  });
+}
+
+/**
  * Valida os dois únicos campos complementados pelo usuário no fluxo inline.
  * `valorPago` é mantido como texto até a confirmação para distinguir campo
  * vazio de um valor informado explicitamente como zero.
@@ -802,7 +817,10 @@ function readBazarCache(): BazaarFetchResult | null {
   try {
     const raw = localStorage.getItem(BAZAR_CACHE_KEY);
     const parsed = raw ? JSON.parse(raw) : null;
-    return parsed && Array.isArray(parsed.auctions) ? parsed : null;
+    if (!parsed || !Array.isArray(parsed.auctions)) return null;
+    // Cache gravado por versão antiga pode ter servidores na nomenclatura
+    // externa (ex.: "Infernum I") — canoniza na leitura para o padrão interno.
+    return { ...parsed, auctions: normalizeAuctionServers(parsed.auctions) };
   } catch {
     return null;
   }
@@ -2221,7 +2239,10 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
 
       // Etapa 2.1: lista intermediária apenas com filtros resolvíveis pela API.
       // Esta lista ainda não é exibida quando há filtro de quest ativo.
-      const apiFilteredAuctions = getApiFilteredAuctions(response.auctions || [], activeFilters);
+      // Servidores canonizados ANTES de filtrar: a seleção de servidores do
+      // usuário usa os nomes internos ("Infernum 1"), então um leilão que
+      // chegasse como "Infernum I" escaparia do filtro sem esta normalização.
+      const apiFilteredAuctions = getApiFilteredAuctions(normalizeAuctionServers(response.auctions || []), activeFilters);
       let nextDetailsCache = readDetailsCache();
       let finalAuctions = apiFilteredAuctions;
       // Preenchido apenas quando a análise individual roda (filtros de quest).
