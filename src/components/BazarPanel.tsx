@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import bazarBgUrl from "../assets/bazar-bg.png";
-import { AlertTriangle, ArrowDownUp, Check, CheckCircle2, ChevronDown, ChevronUp, Coins, Crown, ExternalLink, Filter, FlagTriangleRight, Flame, Plus, RefreshCw, RotateCcw, ShieldAlert, ShoppingBag, Sparkles, Star, Target, Users, X } from "lucide-react";
+import { AlertTriangle, ArrowDownUp, Check, CheckCircle2, ChevronDown, ChevronUp, Coins, Crown, ExternalLink, Filter, FlagTriangleRight, Flame, Package, Plus, RefreshCw, RotateCcw, ShieldAlert, ShoppingBag, Sparkles, Star, Target, Users, X } from "lucide-react";
+import BazaarItemsPanel from "./BazaarItemsPanel";
 import BazaarSearchFiltersModal from "./BazaarSearchFiltersModal";
 import BazaarUsedFiltersModal from "./BazaarUsedFiltersModal";
 import BazaarBrowserModal, { BAZAAR_BROWSER_KEY, BAZAAR_BROWSER_ORDER_KEY, BAZAAR_METHOD_KEY, BAZAAR_RETRY_BROWSERS_KEY, BAZAAR_RETRY_COUNTS_KEY, BAZAAR_SPEED_MODE_KEY, DEFAULT_BAZAAR_METHOD, DEFAULT_BROWSER_ORDER, normalizeBazaarMethod, normalizeRetryCounts } from "./BazaarBrowserModal";
@@ -18,7 +19,7 @@ import type { Character, PartyTab, WaitingService, Vocation } from "../types";
 import { useAuth } from "../context/AuthContext";
 import { getManualSyncCooldownRemainingMs, markManualSyncAttempt, publishOfficialBazaarList, readOfficialBazaarCache, removeBazaarInterest, removeBazaarInterestsForAuctions, setBazaarInterest, syncBazaarInterests, syncOfficialBazaarList, type BazaarInterestMap, type OfficialBazaarMetadata } from "../services/bazaarOfficialService";
 import { applyValueOverlay, buildValueOverlay, clearBazaarValueOverlay, computeAutoRemoveAuctions, parseAutoRemoveLimit, readBazaarValueOverlay, sanitizeAutoRemoveLimit, saveBazaarValueOverlay } from "../utils/bazaarValueRefresh";
-import { BAZAR_NOTIFY_MINUTES_MAX, BAZAR_NOTIFY_MINUTES_MIN, clampBazarNotifyMinutes, getDeviceTimezoneOffsetMinutes, readBazarNotifyMinutes } from "../utils/bazaarTime";
+import { BAZAR_NOTIFY_MINUTES_MAX, BAZAR_NOTIFY_MINUTES_MIN, clampBazarNotifyMinutes, formatDateTimeWithOffset, formatDuration, formatTimeZoneOffset, getBazarEndUntilAtConfiguredTime, getDefaultBazarEndUntil, getDeviceTimezoneOffsetMinutes, normalizeAuctionEndTimestamp, parseDateTimeLocalWithOffset, readBazarNotifyMinutes } from "../utils/bazaarTime";
 import { syncNotificationPrefsToCloud } from "../services/notificationPrefsSyncService";
 import { syncBazaarEndingAlerts } from "../services/bazaarInterestNotificationService";
 import { buildBazaarBidUrl, extractBazaarAuctionId, parseBidAmount, sanitizeBidInput } from "../utils/bazaarBid";
@@ -586,57 +587,12 @@ function getBazaarInlinePurchaseValidationError(account: string, valorPago: stri
   return null;
 }
 
-function normalizeAuctionEndTimestamp(ts: number | null): number | null {
-  if (!ts || !Number.isFinite(ts)) return null;
-  return ts > 1_000_000_000_000 ? Math.floor(ts / 1000) : Math.floor(ts);
-}
-
-function formatTimeZoneOffset(offsetMinutes: number): string {
-  const sign = offsetMinutes >= 0 ? "+" : "-";
-  const absMinutes = Math.abs(offsetMinutes);
-  const hours = Math.floor(absMinutes / 60).toString().padStart(2, "0");
-  const minutes = (absMinutes % 60).toString().padStart(2, "0");
-  return `UTC${sign}${hours}${minutes === "00" ? "" : `:${minutes}`}`;
-}
-
-function parseDateTimeLocalWithOffset(value: string, offsetMinutes: number): number {
-  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/);
-  if (!match) return 0;
-  const [, year, month, day, hour, minute] = match;
-  const utcMs = Date.UTC(Number(year), Number(month) - 1, Number(day), Number(hour), Number(minute));
-  return Math.floor((utcMs - offsetMinutes * 60 * 1000) / 1000);
-}
-
-function formatDateTimeLocalFromConfiguredZoneDate(date: Date): string {
-  const year = date.getUTCFullYear();
-  const month = String(date.getUTCMonth() + 1).padStart(2, "0");
-  const day = String(date.getUTCDate()).padStart(2, "0");
-  const hour = String(date.getUTCHours()).padStart(2, "0");
-  const minute = String(date.getUTCMinutes()).padStart(2, "0");
-  return `${year}-${month}-${day}T${hour}:${minute}`;
-}
-
-function getBazarEndUntilAtConfiguredTime(offsetMinutes: number, dayOffsetFromToday: number, hour: number, minute = 0, nowMs = Date.now()): string {
-  const nowInConfiguredZone = new Date(nowMs + offsetMinutes * 60 * 1000);
-  const target = new Date(Date.UTC(
-    nowInConfiguredZone.getUTCFullYear(),
-    nowInConfiguredZone.getUTCMonth(),
-    nowInConfiguredZone.getUTCDate() + dayOffsetFromToday,
-    hour,
-    minute,
-    0,
-    0,
-  ));
-  return formatDateTimeLocalFromConfiguredZoneDate(target);
-}
-
-function getDefaultBazarEndUntil(offsetMinutes: number): string {
-  const nowMs = Date.now();
-  const nowInConfiguredZone = new Date(nowMs + offsetMinutes * 60 * 1000);
-  const currentMinutes = nowInConfiguredZone.getUTCHours() * 60 + nowInConfiguredZone.getUTCMinutes();
-  const targetDayOffset = currentMinutes >= 10 * 60 ? 1 : 0;
-  return getBazarEndUntilAtConfiguredTime(offsetMinutes, targetDayOffset, 10, 0, nowMs);
-}
+// `normalizeAuctionEndTimestamp`, `formatTimeZoneOffset`,
+// `parseDateTimeLocalWithOffset`, `getBazarEndUntilAtConfiguredTime`,
+// `getDefaultBazarEndUntil`, `formatDuration` e `formatDateTimeWithOffset`
+// foram MOVIDOS para `utils/bazaarTime.ts` (fonte única) — o painel
+// "Personagens com Itens" usa exatamente as mesmas regras. Nenhuma mudança
+// de comportamento: os corpos são idênticos aos que viviam aqui.
 
 function getAutoBazarEndUntil(offsetMinutes: number): string {
   return getBazarEndUntilAtConfiguredTime(offsetMinutes, 1, 11, 0);
@@ -746,15 +702,6 @@ function isAuctionEndingSoon(auction: BazaarAuction, nowUnixTs: number): boolean
   return secondsLeft > 0 && secondsLeft <= 5 * 60;
 }
 
-function formatDuration(ms: number | null | undefined): string {
-  if (!ms || ms < 0 || !Number.isFinite(ms)) return "--:--:--";
-  const totalSeconds = Math.floor(ms / 1000);
-  const hours = Math.floor(totalSeconds / 3600).toString().padStart(2, "0");
-  const minutes = Math.floor((totalSeconds % 3600) / 60).toString().padStart(2, "0");
-  const seconds = (totalSeconds % 60).toString().padStart(2, "0");
-  return `${hours}:${minutes}:${seconds}`;
-}
-
 function formatTimeOfDayWithOffset(ms: number | null | undefined, offsetMinutes: number): string {
   if (!ms || !Number.isFinite(ms)) return "--:--:--";
   const shifted = new Date(ms + offsetMinutes * 60 * 1000);
@@ -762,18 +709,6 @@ function formatTimeOfDayWithOffset(ms: number | null | undefined, offsetMinutes:
   const minutes = String(shifted.getUTCMinutes()).padStart(2, "0");
   const seconds = String(shifted.getUTCSeconds()).padStart(2, "0");
   return `${hours}:${minutes}:${seconds}`;
-}
-
-function formatDateTimeWithOffset(ms: number | null | undefined, offsetMinutes: number): string {
-  if (!ms || !Number.isFinite(ms)) return "—";
-  const shifted = new Date(ms + offsetMinutes * 60 * 1000);
-  const day = String(shifted.getUTCDate()).padStart(2, "0");
-  const month = String(shifted.getUTCMonth() + 1).padStart(2, "0");
-  const year = shifted.getUTCFullYear();
-  const hours = String(shifted.getUTCHours()).padStart(2, "0");
-  const minutes = String(shifted.getUTCMinutes()).padStart(2, "0");
-  const seconds = String(shifted.getUTCSeconds()).padStart(2, "0");
-  return `${day}/${month}/${year} ${hours}:${minutes}:${seconds}`;
 }
 
 function getInterestCreatedAtMs(user: any): number {
@@ -1218,6 +1153,19 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
   }, [availableInlineAccounts, inlineAccountSearch]);
   const isElectron = typeof window !== "undefined" && !!(window as any).require;
   const isBossUser = userProfile?.role === "Boss";
+  // ── MODO DO PAINEL: "quests" (atual, intacto) ou "itens" (novo, só Boss) ──
+  // Estado deliberadamente NÃO persistido: o painel sempre abre no modo atual
+  // de quests; o modo itens é uma navegação pontual do Boss. A restrição é
+  // real: além dos botões ocultos, o modo "itens" nunca é renderizado sem
+  // Boss (ver o JSX do corpo) — e o useEffect abaixo derruba o modo caso a
+  // permissão mude com o painel aberto.
+  const [panelMode, setPanelMode] = useState<"quests" | "itens">("quests");
+  const showItemsMode = panelMode === "itens" && isBossUser && !demoMode;
+  useEffect(() => {
+    // Permissão revogada (ou tutorial ativado) com o modo itens aberto:
+    // volta imediatamente para o painel de quests.
+    if (panelMode === "itens" && (!isBossUser || demoMode)) setPanelMode("quests");
+  }, [panelMode, isBossUser, demoMode]);
   const needsQuestDetails = soulwarFilter !== "all" || sanguineFilter !== "all";
   // Quais quests os filtros atuais realmente exigem. Uma quest em "Todas" não
   // é consultada e a coluna correspondente mostra "Não verificado".
@@ -2725,27 +2673,73 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
           <div className="pointer-events-none absolute left-1/2 top-0 h-px w-2/3 -translate-x-1/2 bg-gradient-to-r from-transparent via-amber-300/60 to-transparent" />
           <div className="pointer-events-none absolute -inset-px rounded-2xl border border-amber-300/10 animate-pulse" style={{ animationDuration: "3.6s" }} />
           <div className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 w-8 h-8 rounded-xl bg-gradient-to-br from-amber-400/18 via-amber-800/18 to-red-950/55 border border-amber-400/35 flex items-center justify-center shadow-[0_0_18px_color-mix(in_oklab,var(--color-amber-500)_18%,transparent),inset_0_1px_0_rgba(255,255,255,0.08)]">
-            <ShoppingBag size={16} className="text-amber-300 drop-shadow-[0_0_8px_color-mix(in_oklab,var(--color-amber-500)_45%,transparent)]" />
+            {showItemsMode
+              ? <Package size={16} className="text-fuchsia-300 drop-shadow-[0_0_8px_color-mix(in_oklab,var(--color-fuchsia-500)_45%,transparent)]" />
+              : <ShoppingBag size={16} className="text-amber-300 drop-shadow-[0_0_8px_color-mix(in_oklab,var(--color-amber-500)_45%,transparent)]" />}
           </div>
-          <h2 className="relative text-lg font-black bg-gradient-to-r from-amber-100 via-yellow-400 to-amber-300 bg-clip-text text-transparent tracking-[0.08em] truncate uppercase" style={{ filter: "drop-shadow(0 0 6px color-mix(in oklab, var(--color-amber-500) 32%, transparent))" }}>
-            Painel Bazaar
-          </h2>
+          {/* Título e COR mudam junto com o modo — âmbar (quests) / fúcsia (itens) */}
+          {showItemsMode ? (
+            <h2 className="relative text-lg font-black bg-gradient-to-r from-fuchsia-100 via-fuchsia-400 to-purple-300 bg-clip-text text-transparent tracking-[0.08em] truncate uppercase" style={{ filter: "drop-shadow(0 0 6px color-mix(in oklab, var(--color-fuchsia-500) 32%, transparent))" }}>
+              Personagens com Itens
+            </h2>
+          ) : (
+            <h2 className="relative text-lg font-black bg-gradient-to-r from-amber-100 via-yellow-400 to-amber-300 bg-clip-text text-transparent tracking-[0.08em] truncate uppercase" style={{ filter: "drop-shadow(0 0 6px color-mix(in oklab, var(--color-amber-500) 32%, transparent))" }}>
+              Painel Bazaar
+            </h2>
+          )}
 
           {isBossUser && !demoMode && (
             <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1.5">
-              <button type="button" onClick={openSearchFiltersModal} disabled={isLoading || isCheckingDetails} className="inline-flex h-7 items-center gap-1 px-2.5 rounded-lg border border-amber-500/25 bg-amber-500/10 text-amber-300 text-[10px] font-black transition-all cursor-pointer hover:bg-amber-500/20 disabled:opacity-50 disabled:cursor-not-allowed">
-                <Filter size={12} /> Filtros Consulta
-              </button>
-              {isElectron && (
-                <button type="button" onClick={requestBazaarQuery} disabled={isLoading || isOfficialSyncing} className="inline-flex h-7 items-center gap-1 px-2.5 rounded-lg bg-gradient-to-r from-amber-700/80 to-amber-600/80 hover:from-amber-600 hover:to-amber-500 border border-amber-500/40 text-black text-[10px] font-black transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed shadow-md shadow-amber-900/15">
-                  <RefreshCw size={12} className={isLoading ? "animate-spin" : ""} />
-                  {isLoading ? "Consultando..." : "Consultar Bazaar"}
+              {/* Navegação entre os dois painéis — exclusiva do Boss. No modo
+                  itens NÃO há "Filtros Consulta" nem o Consultar das quests:
+                  os controles do modo vivem no próprio quadro do painel. */}
+              {showItemsMode ? (
+                <button
+                  type="button"
+                  onClick={() => setPanelMode("quests")}
+                  className="inline-flex h-7 items-center gap-1 px-2.5 rounded-lg border border-amber-500/25 bg-amber-500/10 text-amber-300 text-[10px] font-black transition-all cursor-pointer hover:bg-amber-500/20"
+                  title="Personagens Para Quests"
+                >
+                  <ShoppingBag size={12} /> Personagens Para Quests
                 </button>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => setPanelMode("itens")}
+                    disabled={isLoading || isCheckingDetails}
+                    className="inline-flex h-7 items-center gap-1 px-2.5 rounded-lg border border-fuchsia-500/25 bg-fuchsia-500/10 text-fuchsia-300 text-[10px] font-black transition-all cursor-pointer hover:bg-fuchsia-500/20 disabled:opacity-50 disabled:cursor-not-allowed"
+                    title="Personagens com itens"
+                  >
+                    <Package size={12} /> Itens
+                  </button>
+                  <button type="button" onClick={openSearchFiltersModal} disabled={isLoading || isCheckingDetails} className="inline-flex h-7 items-center gap-1 px-2.5 rounded-lg border border-amber-500/25 bg-amber-500/10 text-amber-300 text-[10px] font-black transition-all cursor-pointer hover:bg-amber-500/20 disabled:opacity-50 disabled:cursor-not-allowed">
+                    <Filter size={12} /> Filtros Consulta
+                  </button>
+                  {isElectron && (
+                    <button type="button" onClick={requestBazaarQuery} disabled={isLoading || isOfficialSyncing} className="inline-flex h-7 items-center gap-1 px-2.5 rounded-lg bg-gradient-to-r from-amber-700/80 to-amber-600/80 hover:from-amber-600 hover:to-amber-500 border border-amber-500/40 text-black text-[10px] font-black transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed shadow-md shadow-amber-900/15">
+                      <RefreshCw size={12} className={isLoading ? "animate-spin" : ""} />
+                      {isLoading ? "Consultando..." : "Consultar Bazaar"}
+                    </button>
+                  )}
+                </>
               )}
             </div>
           )}
         </div>
 
+        {/* ── CORPO DO PAINEL ─────────────────────────────────────────────
+            Modo "itens" (novo, exclusivo Boss): componente próprio, 100%
+            local. Modo "quests": todo o conteúdo atual, intacto. O modo
+            itens NUNCA monta sem Boss — `showItemsMode` já embute o gate. */}
+        {showItemsMode ? (
+          <BazaarItemsPanel
+            isBossUser={isBossUser}
+            isElectron={isElectron}
+            timezoneOffsetMinutes={timezoneOffsetMinutes}
+          />
+        ) : (
+        <>
         {error && (
           <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-300 flex items-center gap-2">
             <AlertTriangle size={15} /> {error}
@@ -4110,6 +4104,8 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
             </table>
           )}
         </div>
+        </>
+        )}
       </div>
 
       <BazaarUsedFiltersModal

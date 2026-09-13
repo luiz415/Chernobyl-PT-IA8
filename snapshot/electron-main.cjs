@@ -5001,6 +5001,33 @@ require('./electron-bazaar-new.cjs').registerBazaarNewMethod({
 });
 
 // ============================================================================
+// PERSONAGENS COM ITENS — registro do módulo isolado
+// ----------------------------------------------------------------------------
+// Mesmo desenho do método novo: a consulta de itens vive inteira em
+// `electron-bazaar-items.cjs`; aqui apenas INJETAMOS as funções que já
+// existem. Canal exclusivo `rubinot-bazaar-items-v2` — 100% API JSON, sem
+// nenhum fallback página-a-página (requisito da funcionalidade).
+// ============================================================================
+require('./electron-bazaar-items.cjs').registerBazaarItemsMethod({
+  ipcMain,
+  diag: rubinotDiag,
+  runQueued: runRubinotQueued,
+  getContext: getRubinotContext,
+  ensureSessionReady: ensureRubinotSessionReady,
+  getSessionPage: getRubinotSessionPage,
+  fetchJsonDetailed: fetchRubinotJsonDetailed,
+  normalizeAuctionUrl: normalizeRubinotAuctionUrl,
+  resolveBrowserKey: resolveRubinotBrowserKey,
+  isManualStopRequested: isRubinotManualStopRequested,
+  sendProgress: sendRubinotProgress,
+  buildProgress: buildRubinotProgress,
+  finishProgress: finishRubinotProgress,
+  getSelectedBrowser: () => rubinotSelectedBrowser,
+  getUseCleanProfile: () => rubinotUseCleanProfile,
+  apiBase: RUBINOT_BAZAAR_API,
+});
+
+// ============================================================================
 // AUTO BID — registro do módulo isolado
 // ----------------------------------------------------------------------------
 // Único ponto de contato com a função Auto Bid. Tudo o que ela faz vive em
