@@ -1234,7 +1234,10 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
               </button>
             </div>
 
-            <div className="flex-1 min-h-0 overflow-auto custom-scrollbar px-4 py-3 space-y-3">
+            {/* CABEÇALHO FIXO do corpo do modal: formulário de adicionar +
+                pesquisa/exportar/importar ficam SEMPRE visíveis — a rolagem
+                vertical pertence exclusivamente à área da lista, abaixo. */}
+            <div className="flex-shrink-0 px-4 pt-3 pb-2 space-y-3 border-b border-[var(--th-line)]/30">
               {/* Formulário: EXCLUSIVO para adicionar novos itens — a edição
                   de itens existentes é INLINE, na própria linha da lista. */}
               <form
@@ -1301,7 +1304,12 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                 />
               </div>
               {importFeedback && <p className="text-[10px] font-medium text-amber-300">{importFeedback}</p>}
+            </div>
 
+            {/* ÚNICA região com rolagem vertical: a lista de itens ocupa o
+                espaço restante do modal (flex-1) e rola sozinha — cabeçalho,
+                formulário e pesquisa acima permanecem parados. */}
+            <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar px-4 py-2.5">
               {/* Lista */}
               {filteredItems.length === 0 ? (
                 <p className="text-[11px] text-slate-500 text-center py-4">
