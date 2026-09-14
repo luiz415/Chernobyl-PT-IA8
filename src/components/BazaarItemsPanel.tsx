@@ -25,7 +25,17 @@ import { FilterDateMax, FilterInline, FilterMulti, FilterNumber } from "./Filter
 import { STICKY_FILTER_CELL_CLASS, STICKY_HEAD_CELL_CLASS, closeRubinotBrowserFromRenderer, isAuctionVisibleWithEndedGrace } from "./BazarPanel";
 import type { BazaarRetryCounts, BazaarSpeedMode } from "./BazaarBrowserModal";
 import { loadUIState } from "../storage";
-import { computeItemRC, formatKkValue } from "../utils/itemSale";
+import { computeItemRC, formatKkValue as formatKkValueBase } from "../utils/itemSale";
+
+/**
+ * Formatação de kk da guia Itens: valores têm até 1 casa decimal,
+ * exibidos SEM zeros à direita ("1,5kk", nunca "1,50kk"; inteiros "210kk").
+ * Mesma função base do restante do app (trimZeros opt-in — nada muda fora
+ * do modo itens).
+ */
+function formatKkValue(value: number, suffix: "k" | "kk" = "kk"): string {
+  return formatKkValueBase(value, suffix, true);
+}
 // "Atualizar Valores" — MESMO mecanismo das quests: os helpers puros do
 // overlay (cruzamento lista antiga × listagem nova) são reutilizados como
 // estão; aqui a aplicação é sobre os resultados LOCAIS da última consulta.
@@ -73,6 +83,7 @@ import {
 import { SERVER_OPTIONS } from "../constants/servers";
 import { syncBazaarItemsEndingAlerts } from "../services/bazaarInterestNotificationService";
 import { useAuth } from "../context/AuthContext";
+import type { BazaarItemsPurchasePrefill } from "../types";
 
 // ── Tipos mínimos do IPC (mesmo contrato dos handlers existentes) ───────────
 interface ItemsAuction {
@@ -106,6 +117,9 @@ interface ItemsDetailsResult {
     gold?: number;
     /** Skills inteiras da página (chaves canônicas do Electron). */
     skills?: ItemsCharacterSkills;
+    /** Quests REAIS do payload (deriveQuestsFromApiPayload): true = feita. */
+    soulwarCompleted?: boolean | null;
+    sanguineCompleted?: boolean | null;
     error?: string;
   }>;
   analyzedCount?: number;
@@ -158,6 +172,18 @@ interface Props {
    * guia (o navegador é compartilhado; nunca duas consultas ao mesmo tempo).
    */
   isQuestsQueryRunning?: boolean;
+  /**
+   * Nomes NORMALIZADOS dos personagens já cadastrados em Meus Personagens
+   * (mesma fonte/normalização da coluna "Comprado" das quests) — desabilita
+   * o botão quando o personagem já está na lista.
+   */
+  personalCharacterNames?: ReadonlySet<string>;
+  /**
+   * "Comprado": abre o CharacterModal COMPLETO no App, pré-preenchido com os
+   * dados da consulta (quests reais + snapshot dos itens). Retorno com erro
+   * (ex.: duplicado) é exibido inline na própria linha.
+   */
+  onOpenPurchaseModal?: (prefill: BazaarItemsPurchasePrefill) => { ok: boolean; error?: string };
 }
 
 /** Entrada em edição no modal da Lista de Itens. */
@@ -408,7 +434,7 @@ interface ItemsLocalNotification {
   auctionId?: string;
 }
 
-export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffsetMinutes, getLinkState, openLink, getViewState, markViewed, onRunningChange, isQuestsQueryRunning }: Props) {
+export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffsetMinutes, getLinkState, openLink, getViewState, markViewed, onRunningChange, isQuestsQueryRunning, personalCharacterNames, onOpenPurchaseModal }: Props) {
   const { currentUser } = useAuth();
   const currentUid = currentUser?.uid || "";
 
@@ -477,9 +503,10 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
     return () => window.clearInterval(interval);
   }, []);
 
-  // Timer do feedback "Atualizar" (modal Detalhes) — limpo no unmount.
+  // Timers do feedback "Atualizar" (modais Detalhes e Lista) — limpos no unmount.
   useEffect(() => () => {
     if (detailApplyTimerRef.current !== null) window.clearTimeout(detailApplyTimerRef.current);
+    if (listApplyTimerRef.current !== null) window.clearTimeout(listApplyTimerRef.current);
   }, []);
 
   function updateTableFilters(patch: Partial<ItemsTableFilters>) {
@@ -547,6 +574,14 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
   const [detailApply, setDetailApply] = useState<number | null>(null);
   const [detailApplyDone, setDetailApplyDone] = useState<{ matchIndex: number; count: number } | null>(null);
   const detailApplyTimerRef = useRef<number | null>(null);
+  // Erros do fluxo "Comprado" (ex.: personagem já cadastrado) — exibidos
+  // inline na própria célula, por leilão.
+  const [purchaseErrors, setPurchaseErrors] = useState<Record<string, string>>({});
+  // Atualização global a partir do modal LISTA DE ITENS — mesma mecânica de
+  // confirmação inline do Detalhes, com chave por id do item da lista.
+  const [listApply, setListApply] = useState<string | null>(null);
+  const [listApplyDone, setListApplyDone] = useState<{ itemId: string; count: number } | null>(null);
+  const listApplyTimerRef = useRef<number | null>(null);
   // Feedback "Copiado!" (1,5s) — mesmo padrão dos demais botões de copiar do
   // aplicativo (AvailableCharacter/CharTable). Uma chave por origem da cópia.
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
@@ -723,13 +758,11 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
   /** Formulário superior — EXCLUSIVO para ADICIONAR novos itens. */
   function submitDraft() {
     const name = draft.name.trim();
-    // Valores em kk são INTEIROS: o input já bloqueia não-dígitos, mas a
-    // validação re-confere (colar texto, itens legados etc.).
-    const rawValue = draft.valueKk.trim();
+    // Valores em kk aceitam UMA casa decimal (ex.: 1,5). O input já limita o
+    // formato, mas a validação re-confere (colar texto etc.).
     if (!name) { setDraftError("Informe o nome do item."); return; }
-    if (!/^\d+$/.test(rawValue)) { setDraftError("Informe o valor em kk usando somente números inteiros."); return; }
-    const valueKk = Number(rawValue);
-    if (!Number.isSafeInteger(valueKk) || valueKk <= 0) { setDraftError("Informe o valor em kk (inteiro, maior que zero)."); return; }
+    const valueKk = parseDecimalKk(draft.valueKk);
+    if (valueKk === null) { setDraftError("Informe o valor em kk (maior que zero, com no máximo 1 casa decimal — ex.: 1,5)."); return; }
     const key = normalizeWatchedItemName(name);
     const duplicated = watchedItems.some(item => normalizeWatchedItemName(item.name) === key);
     if (duplicated) { setDraftError("Este item já está na lista."); return; }
@@ -741,7 +774,8 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
 
   /** Abre a edição INLINE do valor na linha do item (uma linha por vez). */
   function startInlineEdit(item: WatchedItem) {
-    setInlineEdit({ id: item.id, valueKk: String(item.valueKk) });
+    // Vírgula pt-BR no campo (o parser aceita vírgula e ponto).
+    setInlineEdit({ id: item.id, valueKk: String(item.valueKk).replace(".", ",") });
     setInlineEditError(null);
   }
 
@@ -757,10 +791,8 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
    */
   function saveInlineEdit() {
     if (!inlineEdit) return;
-    const rawValue = inlineEdit.valueKk.trim();
-    if (!/^\d+$/.test(rawValue)) { setInlineEditError("Informe o valor em kk usando somente números inteiros."); return; }
-    const valueKk = Number(rawValue);
-    if (!Number.isSafeInteger(valueKk) || valueKk <= 0) { setInlineEditError("Informe o valor em kk (inteiro, maior que zero)."); return; }
+    const valueKk = parseDecimalKk(inlineEdit.valueKk);
+    if (valueKk === null) { setInlineEditError("Informe o valor em kk (maior que zero, com no máximo 1 casa decimal — ex.: 1,5)."); return; }
     const now = Date.now();
     persistItems(watchedItems.map(item => {
       if (item.id !== inlineEdit.id) return item;
@@ -1028,6 +1060,11 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
           totalKk: Math.round((totalKk + goldKk) * 100) / 100,
           ...(goldKk > 0 ? { goldKk } : {}),
           ...(detail.skills && Object.keys(detail.skills).length > 0 ? { skills: detail.skills } : {}),
+          // QUESTS REAIS do MESMO payload (para o fluxo "Comprado"): nunca
+          // assumidas — quando inconclusivas ficam null e o CharacterModal
+          // abre com o padrão (usuário confere).
+          ...(detail.soulwarCompleted !== undefined ? { soulwarCompleted: detail.soulwarCompleted } : {}),
+          ...(detail.sanguineCompleted !== undefined ? { sanguineCompleted: detail.sanguineCompleted } : {}),
           // Dados de EXIBIÇÃO da listagem no momento da consulta (valor do
           // personagem e encerramento) — nenhum efeito no cálculo dos itens.
           bid: Number(auction.bid || 0),
@@ -1143,8 +1180,10 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
   function applyManualKk(auctionKey: string, rawValue: string) {
     if (!lastQuery) return;
     const clean = rawValue.trim();
-    const manual = clean === "" ? null : Number(clean);
-    if (manual !== null && (!Number.isSafeInteger(manual) || manual < 0)) return;
+    // Correção manual também aceita 1 casa decimal (vazio = volta ao
+    // automático) — mesma regra dos demais campos de valor em kk.
+    const manual = clean === "" ? null : parseDecimalKk(clean);
+    if (clean !== "" && manual === null) return;
     const updated: BazaarItemsLastQuery = {
       ...lastQuery,
       results: lastQuery.results.map(result => {
@@ -1169,10 +1208,8 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
     if (!detailResult || !detailEdit) return;
     const match = detailResult.matches[detailEdit.matchIndex];
     if (!match) { setDetailEdit(null); return; }
-    const rawValue = detailEdit.value.trim();
-    if (!/^\d+$/.test(rawValue)) { setDetailEditError("Informe o valor em kk usando somente números inteiros."); return; }
-    const valueKk = Number(rawValue);
-    if (!Number.isSafeInteger(valueKk) || valueKk <= 0) { setDetailEditError("Informe o valor em kk (inteiro, maior que zero)."); return; }
+    const valueKk = parseDecimalKk(detailEdit.value);
+    if (valueKk === null) { setDetailEditError("Informe o valor em kk (maior que zero, com no máximo 1 casa decimal — ex.: 1,5)."); return; }
 
     const server = String(detailResult.server || "");
     const serverKey = canonicalServerKey(server);
@@ -1228,29 +1265,7 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
     if (!detailResult) return;
     const match = detailResult.matches[matchIndex];
     if (!match) { setDetailApply(null); return; }
-    const valueKk = match.baseValueKk;
-    const now = Date.now();
-
-    const { map, changedServers } = propagateWatchedItemValueToAllServers(watchedByServer, match.watchedName, valueKk, now);
-    if (changedServers.length > 0) {
-      // Uma única gravação do mapa completo (mesma chave/formato de sempre).
-      persistAllServerItems(map);
-      // Reprecifica a última consulta apenas nos servidores que mudaram —
-      // correções manuais de KK e parcela de Ouro permanecem intactas.
-      if (lastQuery) {
-        let repriced = lastQuery.results;
-        for (const server of changedServers) {
-          repriced = repriceQueryResultsForServerItem(repriced, server, match.watchedName, valueKk);
-        }
-        const updated: BazaarItemsLastQuery = { ...lastQuery, results: repriced };
-        saveItemsLastQuery(updated);
-        setLastQuery(updated);
-        // Modal permanece aberto já refletindo os números novos.
-        const detailKey = detailResult.id || detailResult.url || detailResult.name;
-        const refreshed = repriced.find(result => (result.id || result.url || result.name) === detailKey);
-        if (refreshed) setDetailResult(refreshed);
-      }
-    }
+    const { changedServers } = propagateItemValueGlobally(match.watchedName, match.baseValueKk);
 
     // Feedback inline (2,5s): quantos servidores foram efetivamente
     // atualizados — 0 significa que todos já estavam no valor.
@@ -1260,6 +1275,89 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
     detailApplyTimerRef.current = window.setTimeout(() => {
       setDetailApplyDone(null);
       detailApplyTimerRef.current = null;
+    }, 2500);
+  }
+
+  /**
+   * NÚCLEO da propagação global — COMPARTILHADO pelo modal "Detalhes" e pelo
+   * modal "Lista de Itens" (uma única implementação): aplica `valueKk` ao
+   * item em TODAS as listas de servidores (helper puro só grava onde mudou)
+   * e reprecifica a última consulta SÓ nos servidores alterados, preservando
+   * correções manuais de KK e a parcela de Ouro.
+   */
+  function propagateItemValueGlobally(watchedName: string, valueKk: number): { changedServers: string[] } {
+    const now = Date.now();
+    const { map, changedServers } = propagateWatchedItemValueToAllServers(watchedByServer, watchedName, valueKk, now);
+    if (changedServers.length > 0) {
+      // Uma única gravação do mapa completo (mesma chave/formato de sempre).
+      persistAllServerItems(map);
+      if (lastQuery) {
+        let repriced = lastQuery.results;
+        for (const server of changedServers) {
+          repriced = repriceQueryResultsForServerItem(repriced, server, watchedName, valueKk);
+        }
+        const updated: BazaarItemsLastQuery = { ...lastQuery, results: repriced };
+        saveItemsLastQuery(updated);
+        setLastQuery(updated);
+        // Se o modal Detalhes estiver aberto, mantém os números atualizados.
+        if (detailResult) {
+          const detailKey = detailResult.id || detailResult.url || detailResult.name;
+          const refreshed = repriced.find(result => (result.id || result.url || result.name) === detailKey);
+          if (refreshed) setDetailResult(refreshed);
+        }
+      }
+    }
+    return { changedServers };
+  }
+
+  /**
+   * "COMPRADO" — monta o prefill com os dados JÁ OBTIDOS na consulta (zero
+   * fetch/leitura extra) e pede ao App para abrir o CharacterModal COMPLETO:
+   *  • quests REAIS do payload da consulta (soulwarCompleted/sanguineCompleted);
+   *  • snapshot dos itens (matches/ouro/correção manual) associado ao
+   *    personagem ao salvar (`bazaarItems`) — o Boss os revê depois em
+   *    Meus Personagens → Disponíveis → Itens → Ver, sem nova consulta.
+   */
+  function openPurchaseModalForResult(result: BazaarItemsCharacterResult) {
+    if (!onOpenPurchaseModal) return;
+    const auctionKey = result.id || result.url || result.name;
+    const response = onOpenPurchaseModal({
+      name: result.name,
+      level: result.level,
+      server: result.server,
+      vocation: result.vocation,
+      soulwarCompleted: result.soulwarCompleted ?? null,
+      sanguineCompleted: result.sanguineCompleted ?? null,
+      items: {
+        server: result.server,
+        totalKk: result.totalKk,
+        ...(typeof result.goldKk === "number" && result.goldKk > 0 ? { goldKk: result.goldKk } : {}),
+        manualTotalKk: typeof result.manualTotalKk === "number" && result.manualTotalKk > 0 ? result.manualTotalKk : null,
+        matches: result.matches.map(match => ({ ...match })),
+        capturedAtMs: Date.now(),
+      },
+    });
+    setPurchaseErrors(prev => {
+      const next = { ...prev };
+      if (response.ok) delete next[auctionKey];
+      else next[auctionKey] = response.error || "Não foi possível abrir o cadastro.";
+      return next;
+    });
+  }
+
+  /**
+   * "ATUALIZAR P/ TODOS OS SERVIDORES" no modal LISTA DE ITENS — mesma
+   * lógica do Detalhes (propagateItemValueGlobally), com confirmação inline
+   * na própria linha do item. Usa o valor ATUAL configurado no item.
+   */
+  function applyListGlobalValue(item: WatchedItem) {
+    const { changedServers } = propagateItemValueGlobally(item.name, item.valueKk);
+    setListApply(null);
+    setListApplyDone({ itemId: item.id, count: changedServers.length });
+    if (listApplyTimerRef.current !== null) window.clearTimeout(listApplyTimerRef.current);
+    listApplyTimerRef.current = window.setTimeout(() => {
+      setListApplyDone(null);
+      listApplyTimerRef.current = null;
     }, 2500);
   }
 
@@ -1716,6 +1814,10 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                 {/* TÍTULO de "Personagem" CENTRALIZADO (regra atualizada);
                     só o CONTEÚDO das linhas dessa coluna fica à esquerda. */}
                 <SortHeader label="Personagem" column="name" />
+                {/* COMPRADO — mesmo conceito da coluna das quests: adiciona o
+                    personagem à lista pessoal; aqui, abre o CharacterModal
+                    COMPLETO pré-preenchido com os dados da consulta. */}
+                <th className={`${STICKY_HEAD_CELL_CLASS} h-10 px-1 py-2 text-center align-middle leading-none`} title="Adicionar o personagem comprado à minha lista (abre o cadastro completo já preenchido com os dados desta consulta — inclusive quests e itens)">Comprado</th>
                 <SortHeader label="Servidor" column="server" />
                 <SortHeader label="Encerra" column="auctionEndTs" />
                 <SortHeader label="Valor" column="bid" />
@@ -1748,6 +1850,8 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                     <div className="flex min-w-0 flex-1 items-center justify-start [&>div]:w-full [&>div]:max-w-[112px]"><FilterInline value={tableFilters.name} onChange={value => updateTableFilters({ name: value })} placeholder="Personagem" maxWidth="100%" /></div>
                   </div>
                 </th>
+                {/* Comprado: sem filtro próprio. */}
+                <th className={`${STICKY_FILTER_CELL_CLASS} h-10 px-1 py-1.5 text-center align-middle text-[10px] text-slate-600`}>—</th>
                 <th className={`${STICKY_FILTER_CELL_CLASS} h-10 px-1 py-1.5 align-middle`}><div className="flex w-full items-center justify-center [&>button]:w-full [&>button]:max-w-[96px]"><FilterMulti label="Servidor" options={serverOptions} selected={tableFilters.servers} onApply={values => updateTableFilters({ servers: values })} placeholder="Servidor" searchable /></div></th>
                 <th className={`${STICKY_FILTER_CELL_CLASS} h-10 px-1 py-1.5 align-middle`}><div className="flex w-full items-center justify-center [&>div]:w-full [&>div]:max-w-[122px]"><FilterDateMax label="Encerra até" value={tableFilters.endUntil} onChange={value => updateTableFilters({ endUntil: value })} placeholder="Encerra" /></div></th>
                 <th className={`${STICKY_FILTER_CELL_CLASS} h-10 px-1 py-1.5 align-middle`}><div className="flex w-full items-center justify-center [&>button]:w-full [&>button]:max-w-[80px]"><FilterNumber label="Valor" value={tableFilters.bidValue} operator={tableFilters.bidOperator} onChange={(value, operator) => updateTableFilters({ bidValue: value, bidOperator: operator })} placeholder="Valor" /></div></th>
@@ -1786,7 +1890,7 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                 // usuário não perca o acesso ao botão de limpar justamente
                 // quando os filtros não retornam resultados.
                 <tr>
-                  <td colSpan={11} className="px-4 py-10 text-center align-middle text-sm text-slate-500">
+                  <td colSpan={12} className="px-4 py-10 text-center align-middle text-sm text-slate-500">
                     <div className="flex flex-col items-center justify-center gap-3">
                       <span>Nenhum personagem encontrado para os filtros atuais.</span>
                       {hasActiveTableFilters && (
@@ -1855,6 +1959,40 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                       {[result.vocation, result.level ? `Lv ${result.level}` : ""].filter(Boolean).join(" · ")}
                     </div>
                   </td>
+                  <td className="px-1 py-1.5 text-center align-middle">
+                    {/* COMPRADO — mesmo botão/estados da coluna das quests
+                        (verde +, check quando já cadastrado); aqui o clique
+                        abre o CharacterModal COMPLETO no App, pré-preenchido
+                        com os dados desta consulta (quests reais + itens). */}
+                    {(() => {
+                      const isAlreadyAdded = !!personalCharacterNames?.has(String(result.name || "").trim().toLowerCase());
+                      return (
+                        <div className="flex flex-col items-center gap-0.5">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (isAlreadyAdded) return;
+                              openPurchaseModalForResult(result);
+                            }}
+                            disabled={isAlreadyAdded}
+                            title={isAlreadyAdded
+                              ? "Personagem já adicionado à minha lista"
+                              : "Adicionar personagem comprado à minha lista (abre o cadastro completo já preenchido com os dados desta consulta)"}
+                            className={`inline-flex h-7 w-7 items-center justify-center rounded-lg border transition-colors shadow-[0_0_10px_rgba(16,185,129,0.08)] ${
+                              isAlreadyAdded
+                                ? "border-emerald-400/45 bg-emerald-500/18 text-emerald-200 cursor-default"
+                                : "border-emerald-500/35 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20 hover:text-emerald-200 hover:border-emerald-400/55 cursor-pointer"
+                            }`}
+                          >
+                            {isAlreadyAdded ? <Check size={14} strokeWidth={3} /> : <Plus size={14} strokeWidth={3} />}
+                          </button>
+                          {purchaseErrors[auctionKey] && !isAlreadyAdded && (
+                            <span role="alert" className="max-w-[110px] text-[8px] font-bold leading-tight text-rose-300">{purchaseErrors[auctionKey]}</span>
+                          )}
+                        </div>
+                      );
+                    })()}
+                  </td>
                   <td className="px-2 py-1.5 text-center text-slate-300">{result.server || "—"}</td>
                   <td className="px-2 py-1.5 text-center font-mono text-slate-300">
                     {formatAuctionEnd(result.auctionEndTs ?? null, timezoneOffsetMinutes)}
@@ -1875,13 +2013,13 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                           inputMode="numeric"
                           autoFocus
                           value={kkEdit.value}
-                          onChange={event => setKkEdit(prev => (prev ? { ...prev, value: event.target.value.replace(/\D+/g, "").slice(0, 9) } : prev))}
+                          onChange={event => setKkEdit(prev => (prev ? { ...prev, value: sanitizeDecimalKk(event.target.value) } : prev))}
                           onKeyDown={event => {
                             if (event.key === "Enter") { event.preventDefault(); applyManualKk(auctionKey, kkEdit.value); }
                             if (event.key === "Escape") { event.preventDefault(); setKkEdit(null); }
                           }}
                           placeholder="kk"
-                          title="Correção manual em kk inteiros. Vazio = volta ao valor calculado. Enter salva, Esc cancela."
+                          title="Correção manual em kk (até 1 casa decimal — ex.: 1,5). Vazio = volta ao valor calculado. Enter salva, Esc cancela."
                           className="h-6 w-16 rounded-md border border-fuchsia-500/60 bg-black/35 px-1.5 text-center font-mono text-[11px] text-amber-200 outline-none focus:border-fuchsia-400"
                         />
                         <button type="button" onClick={() => applyManualKk(auctionKey, kkEdit.value)} className="p-0.5 rounded text-emerald-300 hover:bg-emerald-500/15 transition-colors cursor-pointer" title="Salvar correção manual">
@@ -1903,7 +2041,7 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                         )}
                         <button
                           type="button"
-                          onClick={() => setKkEdit({ auctionKey, value: isManualKk ? String(effectiveKk) : "" })}
+                          onClick={() => setKkEdit({ auctionKey, value: isManualKk ? String(effectiveKk).replace(".", ",") : "" })}
                           className="p-0.5 rounded text-sky-300 hover:bg-sky-500/15 transition-colors cursor-pointer"
                           title="Editar: corrigir manualmente o Valor Itens (KK) deste personagem (prioridade sobre o calculado; o RC passa a usar o valor corrigido)"
                         >
@@ -2142,9 +2280,9 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                     type="text"
                     inputMode="numeric"
                     value={draft.valueKk}
-                    onChange={event => setDraft(prev => ({ ...prev, valueKk: sanitizeIntegerKk(event.target.value) }))}
+                    onChange={event => setDraft(prev => ({ ...prev, valueKk: sanitizeDecimalKk(event.target.value) }))}
                     placeholder="Valor (kk)"
-                    title="Somente números inteiros (sem casas decimais)"
+                    title="Valor em kk — até 1 casa decimal (ex.: 1,5)"
                     className="h-8 w-24 rounded-md border border-[var(--th-line)]/70 bg-black/35 px-2 text-[11px] text-white outline-none focus:border-fuchsia-600/60"
                   />
                   <button type="submit" className="inline-flex h-8 items-center gap-1 px-2.5 rounded-lg border border-fuchsia-500/40 bg-fuchsia-600/70 hover:bg-fuchsia-500/70 text-white text-[10px] font-black transition-all cursor-pointer">
@@ -2153,7 +2291,7 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                 </div>
                 {draftError && <p role="alert" className="text-[10px] font-medium text-rose-300">{draftError}</p>}
                 <p className="text-[9px] text-slate-500 leading-relaxed">
-                  O valor cadastrado é a BASE do cálculo, em kk <strong className="text-slate-400">inteiros</strong> (sem casas decimais). Itens com <span className="font-mono text-slate-400">[Tier x]</span> no Bazaar valem +20% por nível de Tier sobre esta base.
+                  O valor cadastrado é a BASE do cálculo, em kk (aceita <strong className="text-slate-400">1 casa decimal</strong> — ex.: 1,5kk). Itens com <span className="font-mono text-slate-400">[Tier x]</span> no Bazaar valem +20% por nível de Tier sobre esta base.
                 </p>
               </form>
 
@@ -2294,13 +2432,13 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                             inputMode="numeric"
                             autoFocus
                             value={inlineEdit.valueKk}
-                            onChange={event => { setInlineEdit(prev => (prev ? { ...prev, valueKk: sanitizeIntegerKk(event.target.value) } : prev)); setInlineEditError(null); }}
+                            onChange={event => { setInlineEdit(prev => (prev ? { ...prev, valueKk: sanitizeDecimalKk(event.target.value) } : prev)); setInlineEditError(null); }}
                             onKeyDown={event => {
                               if (event.key === "Enter") { event.preventDefault(); saveInlineEdit(); }
                               if (event.key === "Escape") { event.preventDefault(); cancelInlineEdit(); }
                             }}
                             placeholder="Valor (kk)"
-                            title="Somente números inteiros (sem casas decimais). Enter salva, Esc cancela."
+                            title="Valor em kk — até 1 casa decimal (ex.: 1,5). Enter salva, Esc cancela."
                             className="h-7 w-20 flex-shrink-0 rounded-md border border-fuchsia-500/60 bg-black/35 px-1.5 text-right font-mono text-[11px] text-amber-200 outline-none focus:border-fuchsia-400"
                           />
                           <button type="button" onClick={saveInlineEdit} className="p-1 rounded text-emerald-300 hover:bg-emerald-500/15 transition-colors cursor-pointer flex-shrink-0" title="Salvar novo valor">
@@ -2316,6 +2454,24 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                           <button type="button" onClick={() => startInlineEdit(item)} className="p-1 rounded text-sky-300 hover:bg-sky-500/15 transition-colors cursor-pointer flex-shrink-0" title="Editar valor nesta linha">
                             <Pencil size={12} />
                           </button>
+                          {/* "ATUALIZAR P/ TODOS OS SERVIDORES" — mesma lógica
+                              GLOBAL do modal Detalhes (núcleo compartilhado).
+                              O 1º clique NUNCA aplica: abre confirmação inline
+                              abaixo da linha. Usa o valor configurado do item. */}
+                          {listApplyDone?.itemId === item.id ? (
+                            <span className="inline-flex items-center gap-1 rounded px-1 py-0.5 text-[9px] font-black text-emerald-300 bg-emerald-500/15 flex-shrink-0" title={listApplyDone.count > 0 ? `Valor aplicado em ${listApplyDone.count} servidor(es)` : "Todos os servidores já estavam com este valor"}>
+                              <Check size={10} strokeWidth={3} /> {listApplyDone.count > 0 ? `${listApplyDone.count} atualizado(s)` : "Já atualizado"}
+                            </span>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => setListApply(prev => (prev === item.id ? null : item.id))}
+                              className={`p-1 rounded transition-colors cursor-pointer flex-shrink-0 ${listApply === item.id ? "text-amber-200 bg-amber-500/20" : "text-amber-300 hover:bg-amber-500/15"}`}
+                              title={`Atualizar valor para todos os servidores — aplica ${formatKkValue(item.valueKk, "kk")} de "${item.name}" à Lista de Itens de TODOS os servidores (pede confirmação)`}
+                            >
+                              <Globe size={12} />
+                            </button>
+                          )}
                           <button type="button" onClick={() => removeItem(item.id)} className="p-1 rounded text-rose-300 hover:bg-rose-500/15 transition-colors cursor-pointer flex-shrink-0" title="Remover">
                             <Trash2 size={12} />
                           </button>
@@ -2326,6 +2482,36 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                         linha, compacto, mesmo tom dos erros do modal. */}
                     {isEditing && inlineEditError && (
                       <p role="alert" className="mt-1 text-[10px] font-medium text-rose-300">{inlineEditError}</p>
+                    )}
+                    {/* Confirmação INLINE da atualização global (sem segundo
+                        modal) — idêntica em comportamento à do Detalhes:
+                        Confirmar aplica em todos os servidores; Cancelar
+                        descarta sem alterar nada. */}
+                    {listApply === item.id && !isEditing && (
+                      <div className="mt-1 flex flex-wrap items-center justify-end gap-x-2 gap-y-1 rounded-md border border-amber-400/30 bg-amber-500/10 px-2 py-1">
+                        <AlertTriangle size={10} className="flex-shrink-0 text-amber-300" />
+                        <span className="text-[9px] font-bold text-amber-200">
+                          Aplicar <span className="font-mono text-amber-100">{formatKkValue(item.valueKk, "kk")}</span> a "{item.name}" em <span className="uppercase">todos os servidores</span>?
+                        </span>
+                        <span className="inline-flex items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() => applyListGlobalValue(item)}
+                            className="inline-flex items-center gap-1 rounded-md border border-emerald-500/40 bg-emerald-500/15 px-1.5 py-0.5 text-[9px] font-black text-emerald-300 hover:bg-emerald-500/25 transition-colors cursor-pointer"
+                            title="Confirmar: atualiza este item nas Listas de Itens de todos os servidores"
+                          >
+                            <Check size={10} strokeWidth={3} /> Confirmar
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setListApply(null)}
+                            className="inline-flex items-center gap-1 rounded-md border border-white/15 bg-white/5 px-1.5 py-0.5 text-[9px] font-black text-slate-300 hover:bg-white/10 hover:text-white transition-colors cursor-pointer"
+                            title="Cancelar: nenhuma alteração é feita"
+                          >
+                            <X size={10} /> Cancelar
+                          </button>
+                        </span>
+                      </div>
                     )}
                     </div>
                     );
@@ -2454,13 +2640,13 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                               inputMode="numeric"
                               autoFocus
                               value={detailEdit.value}
-                              onChange={event => { setDetailEdit(prev => (prev ? { ...prev, value: sanitizeIntegerKk(event.target.value) } : prev)); setDetailEditError(null); }}
+                              onChange={event => { setDetailEdit(prev => (prev ? { ...prev, value: sanitizeDecimalKk(event.target.value) } : prev)); setDetailEditError(null); }}
                               onKeyDown={event => {
                                 if (event.key === "Enter") { event.preventDefault(); saveDetailEdit(); }
                                 if (event.key === "Escape") { event.preventDefault(); setDetailEdit(null); setDetailEditError(null); }
                               }}
                               placeholder="Base (kk)"
-                              title={`Novo valor BASE (kk inteiros) de "${match.watchedName}" em ${detailResult.server}. Enter salva, Esc cancela.`}
+                              title={`Novo valor BASE (kk, até 1 casa decimal) de "${match.watchedName}" em ${detailResult.server}. Enter salva, Esc cancela.`}
                               className="h-6 w-16 rounded-md border border-fuchsia-500/60 bg-black/35 px-1.5 text-right font-mono text-[10px] text-amber-200 outline-none focus:border-fuchsia-400"
                             />
                             <button type="button" onClick={saveDetailEdit} className="p-0.5 rounded text-emerald-300 hover:bg-emerald-500/15 transition-colors cursor-pointer" title={`Salvar novo valor base na Lista de Itens de ${detailResult.server}`}>
@@ -2475,7 +2661,7 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                             <span>{formatKkValue(match.totalKk, "kk")}</span>
                             <button
                               type="button"
-                              onClick={() => { setDetailEdit({ matchIndex: index, value: String(match.baseValueKk) }); setDetailEditError(null); }}
+                              onClick={() => { setDetailEdit({ matchIndex: index, value: String(match.baseValueKk).replace(".", ",") }); setDetailEditError(null); }}
                               className="p-0.5 rounded text-sky-300 hover:bg-sky-500/15 transition-colors cursor-pointer"
                               title={`Editar o valor base de "${match.watchedName}" na Lista de Itens de ${detailResult.server} (atualiza a lista do servidor e os cálculos dos personagens dele)`}
                             >
@@ -2595,9 +2781,32 @@ function parseCoinRate(text: string): number {
   return Number.isFinite(value) && value > 0 ? value : 0;
 }
 
-/** Mantém somente dígitos — campos de valor em kk aceitam apenas inteiros. */
-function sanitizeIntegerKk(raw: string): string {
-  return String(raw || "").replace(/\D+/g, "").slice(0, 9);
+/**
+ * Campos de valor em kk aceitam ATÉ UMA casa decimal (vírgula ou ponto):
+ * "1,5", "12.3", "125". Mantém dígitos e um único separador; máximo de uma
+ * casa após o separador.
+ */
+function sanitizeDecimalKk(raw: string): string {
+  let text = String(raw || "").replace(/[^\d.,]+/g, "").slice(0, 11);
+  // Um único separador (o primeiro vale); demais são removidos.
+  const sepIndex = text.search(/[.,]/);
+  if (sepIndex >= 0) {
+    const head = text.slice(0, sepIndex + 1);
+    const tail = text.slice(sepIndex + 1).replace(/[.,]+/g, "");
+    text = head + tail.slice(0, 1); // no máximo 1 casa decimal
+  }
+  return text;
+}
+
+/**
+ * Converte o texto do campo em número kk com 1 casa decimal.
+ * null = inválido (vazio, zero, formato errado).
+ */
+function parseDecimalKk(raw: string): number | null {
+  const text = String(raw || "").trim().replace(",", ".");
+  if (!/^\d+(\.\d)?$/.test(text)) return null;
+  const value = Math.round(Number(text) * 10) / 10;
+  return Number.isFinite(value) && value > 0 ? value : null;
 }
 
 /** "dd/MM às HH:mm" da última atualização do item, no fuso configurado. */

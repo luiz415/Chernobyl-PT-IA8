@@ -6,7 +6,7 @@ import {
   SlidersHorizontal, ChevronDown, FileSpreadsheet, Briefcase, FileCode2
 } from "lucide-react";
 import ExoriLogo from "./components/ExoriLogo";
-import type { AppData, Character, CharacterAcquisition, CharacterAcquisitionBuyerDetails, PartyFinalizationReason, PartyTab, PersonalPartyHistory, PtType, WaitingService, SharedService, DialogOptions, ProbableMarkersMap, Vocation } from "./types";
+import type { AppData, BazaarItemsPurchasePrefill, Character, CharacterAcquisition, CharacterAcquisitionBuyerDetails, PartyFinalizationReason, PartyTab, PersonalPartyHistory, PtType, WaitingService, SharedService, DialogOptions, ProbableMarkersMap, Vocation } from "./types";
 import { setGlobalDialogHandler, customAlert, customConfirm } from "./types";
 import { loadData, saveData, exportCSV, exportJSON, importJSON, buildPersonalBackup, normalizeImportedBackup, saveAutoSaveHandle, loadAutoSaveHandle, loadUIState, saveUIState, saveCloseTray, saveStartWithWindows, saveLowCpuUsage, loadSharedCharsCache, saveSharedCharsCache, isSharedCharsCacheFresh, invalidateSharedCharsCache } from "./storage";
 import { canViewServiceEntry, canViewServiceForViewer, projectServiceForViewer } from "./utils/serviceVisibility";
@@ -18,6 +18,10 @@ import initialBgUrl from "./assets/initial-bg.png";
 import CharTable from "./components/CharTable";
 import AcquiredCharactersPanel from "./components/AcquiredCharactersPanel";
 import CharacterModal from "./components/CharacterModal";
+import CharacterBazaarItemsModal from "./components/CharacterBazaarItemsModal";
+// Cotação do coin persistida pela guia Bazaar → Itens (local) — usada apenas
+// para a conversão em RC no modal de itens do personagem (Boss).
+import { loadItemsCoinRate } from "./utils/bazaarWatchedItems";
 import CurrencyCalculator from "./components/CurrencyCalculator";
 import ImbuementsModal from "./components/ImbuementsModal";
 import RtcImportModal from "./components/RtcImportModal";
@@ -454,6 +458,12 @@ export default function App() {
     setMyServicesCount(countMyServicesFromCache(currentUser?.uid || ""));
   }, [isMyServicesTabOpen, currentUser?.uid, userProfile?.status]);
   const [modalOpen, setModalOpen] = useState(false);
+  // Modal aberto pelo fluxo "Comprado" da guia Bazaar → Itens: realça os
+  // campos que o usuário precisa conferir (conta da compra e valor pago).
+  const [bazaarPurchaseModalActive, setBazaarPurchaseModalActive] = useState(false);
+  // Modal "Itens" de Meus Personagens (EXCLUSIVO DO BOSS): exibe o snapshot
+  // dos itens do Bazaar associados ao personagem na compra — sem consulta.
+  const [bazaarItemsViewCharacter, setBazaarItemsViewCharacter] = useState<Character | null>(null);
   const [editing, setEditing] = useState<Character | null>(null);
   const [characterModalMode, setCharacterModalMode] = useState<"create" | "edit">("create");
   const [calcOpen, setCalcOpen] = useState(false);
@@ -1493,12 +1503,18 @@ export default function App() {
     if (!currentUser?.uid || !userProfile || userProfile.status !== "aprovado" || isSimulation || !db || !hydrated) return;
 
     // O documento sharedCharacters/{uid} deve conter apenas personagens com: shared === true && !vendido
-    const charactersToShare = data.characters.filter(c => c.shared === true && !c.vendido).map(c => ({
-      ...c,
-      ownerUid: currentUser.uid,
-      ownerName: displayUserName,
-      updatedAt: Date.now()
-    }));
+    // PRIVACIDADE (itens do Bazaar): `bazaarItems` é dado EXCLUSIVO do Boss
+    // dono do personagem — NUNCA publicado no documento compartilhado.
+    // Usuários comuns com acesso ao personagem não recebem essas informações.
+    const charactersToShare = data.characters.filter(c => c.shared === true && !c.vendido).map(c => {
+      const { bazaarItems: _bazaarItems, ...publicCharacter } = c;
+      return {
+        ...publicCharacter,
+        ownerUid: currentUser.uid,
+        ownerName: displayUserName,
+        updatedAt: Date.now()
+      };
+    });
 
     // Comparamos o conteúdo sem o campo updatedAt para saber se houve mudança real nas propriedades
     const cleanForCompare = charactersToShare.map(({ updatedAt: _, ...rest }) => rest);
@@ -3737,12 +3753,80 @@ export default function App() {
   function openAdd() {
     setCharacterModalMode("create");
     setEditing(null);
+    setBazaarPurchaseModalActive(false);
     setModalOpen(true);
   }
   function openEdit(c: Character) {
     setCharacterModalMode("edit");
     setEditing(c);
+    setBazaarPurchaseModalActive(false);
     setModalOpen(true);
+  }
+
+  /**
+   * "COMPRADO" da guia Bazaar → ITENS: abre o CharacterModal COMPLETO (o
+   * mesmo fluxo real de cadastro — nenhuma versão simplificada) já
+   * pré-preenchido com os dados REAPROVEITADOS da última consulta:
+   * nome/level/servidor/vocação, quests REAIS (bosstiary da própria
+   * consulta — nunca assumidas como disponíveis) e o snapshot dos itens
+   * encontrados (`bazaarItems`), que fica associado ao personagem ao salvar.
+   * O usuário confere/ajusta a CONTA DA COMPRA e o valor pago e confirma —
+   * o salvamento cai no handleSave normal (mesma persistência de sempre).
+   */
+  function openBazaarItemsPurchaseModal(prefill: BazaarItemsPurchasePrefill): BazaarCharacterPurchaseResult {
+    if (!currentUser?.uid) return { ok: false, error: "Entre na sua conta para adicionar um personagem." };
+
+    const personagem = String(prefill.name || "").trim();
+    const servidor = normalizeServerName(String(prefill.server || ""));
+    const voc = mapBazaarVocationToCharacterVocation(String(prefill.vocation || ""));
+    const level = Math.floor(Number(prefill.level));
+    if (!personagem || !servidor || !voc || !Number.isFinite(level) || level <= 0) {
+      return { ok: false, error: "Os dados importados do Bazaar estão incompletos ou inválidos." };
+    }
+
+    const comparableName = normalizeBazaarCharacterNameForCompare(personagem);
+    if (data.characters.some(character => normalizeBazaarCharacterNameForCompare(character.personagem) === comparableName)) {
+      return { ok: false, error: "Este personagem já está na sua lista." };
+    }
+
+    const now = Date.now();
+    const prefilledCharacter: Character = {
+      id: createLocalCharacterId(),
+      account: "",
+      personagem,
+      servidor,
+      voc,
+      level,
+      // QUESTS REAIS da consulta: `soulwarCompleted === true` significa quest
+      // JÁ FEITA ⇒ indisponível (`soulwar = false`). Resultado inconclusivo
+      // (null/undefined) mantém o padrão "disponível" do modal — o usuário
+      // confere no próprio CharacterModal antes de salvar.
+      soulwar: prefill.soulwarCompleted === true ? false : true,
+      sanguine: prefill.sanguineCompleted === true ? false : true,
+      valorPago: 0,
+      dropSW: 0,
+      dropBakra: 0,
+      valorVenda: 0,
+      vendido: false,
+      aVenda: false,
+      shared: true,
+      dataCompra: todayIsoDate(),
+      dataVenda: "",
+      ownerUid: currentUser.uid,
+      ownerName: displayUserName,
+      // ITENS DA CONSULTA associados ao personagem (importação automática):
+      // reaproveitados da última consulta — nenhum fetch/leitura extra. O
+      // Boss os revê depois em Meus Personagens → Disponíveis → Itens → Ver.
+      bazaarItems: prefill.items,
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    setCharacterModalMode("create");
+    setEditing(prefilledCharacter);
+    setBazaarPurchaseModalActive(true);
+    setModalOpen(true);
+    return { ok: true };
   }
 
   /**
@@ -4307,6 +4391,7 @@ export default function App() {
       return { ...d, characters };
     });
     setModalOpen(false);
+    setBazaarPurchaseModalActive(false);
   }
 
   function openNegotiatedCharacterForEdit(characterId: string) {
@@ -4960,7 +5045,7 @@ export default function App() {
                   <AcquiredCharactersPanel acquisitions={demoData.acquisitions} buyerDetails={demoData.acquisitionBuyerDetails} originalCharacters={demoData.characters} currentUserUid={currentUser?.uid || ""} />
                 )
               ) : charsView === "disponiveis" ? (
-                <CharTable key="chars-active" characters={ativos} activeParties={activeParties} onAdd={openAdd} onEdit={openEdit} onDelete={handleDelete} onToggleShare={handleToggleShare} onToggleShareAll={handleToggleShareAll} onNoteChange={handleNoteChange} onCharacterInlineChange={handleCharacterInlineChange} probableMarkers={probableMarkers} negotiatedCharacterIds={negotiatedOriginalCharacterIds} lockedQuestFinancialIds={negotiatedOriginalCharacterIds} />
+                <CharTable key="chars-active" characters={ativos} activeParties={activeParties} onAdd={openAdd} onEdit={openEdit} onDelete={handleDelete} onToggleShare={handleToggleShare} onToggleShareAll={handleToggleShareAll} onNoteChange={handleNoteChange} onCharacterInlineChange={handleCharacterInlineChange} probableMarkers={probableMarkers} negotiatedCharacterIds={negotiatedOriginalCharacterIds} lockedQuestFinancialIds={negotiatedOriginalCharacterIds} showBazaarItemsColumn={userProfile?.role === "Boss"} onViewBazaarItems={(c) => setBazaarItemsViewCharacter(c)} />
               ) : charsView === "vendidos" ? (
                 <CharTable key="chars-history" characters={vendidos} showSaleDate onEdit={openEdit} onDelete={handleDelete} onNoteChange={handleNoteChange} onCharacterInlineChange={handleCharacterInlineChange} negotiatedCharacterIds={negotiatedOriginalCharacterIds} lockedQuestFinancialIds={negotiatedOriginalCharacterIds} />
               ) : (
@@ -5310,7 +5395,7 @@ export default function App() {
             {demoData ? (
               <BazarPanel key="bazar-demo" sharedCharacters={demoData.bazaarSharedCharacters} waitingList={demoData.waitingList} activeParties={demoData.parties} personalCharacters={demoData.characters} accounts={["Conta 1", "Conta 2", "Conta 3"]} demoBazaar={demoData.bazaar} />
             ) : (
-              <BazarPanel key="bazar-real" sharedCharacters={availableCharactersForParty} waitingList={availableWaitingListForParty} activeParties={cloudParties} personalCharacters={data.characters} accounts={accounts} onAddCharacterFromBazaar={addCharacterFromBazaar} />
+              <BazarPanel key="bazar-real" sharedCharacters={availableCharactersForParty} waitingList={availableWaitingListForParty} activeParties={cloudParties} personalCharacters={data.characters} accounts={accounts} onAddCharacterFromBazaar={addCharacterFromBazaar} onOpenBazaarItemsPurchase={openBazaarItemsPurchaseModal} />
             )}
           </div>
         ) : null}
@@ -5507,11 +5592,21 @@ export default function App() {
         accounts={accounts}
         servers={servers}
         onSave={handleSave}
-        onClose={() => setModalOpen(false)}
+        onClose={() => { setModalOpen(false); setBazaarPurchaseModalActive(false); }}
         mode={characterModalMode}
+        highlightFields={bazaarPurchaseModalActive ? ["account", "valorPago"] : []}
         lockedQuestFinancialFields={!!editing && negotiatedOriginalCharacterIds.has(editing.id)}
         negotiatedToOtherUser={!!editing && negotiatedOriginalCharacterIds.has(editing.id)}
       />
+      {/* Itens do Bazaar do personagem (EXCLUSIVO DO BOSS): coluna "Itens" de
+          Meus Personagens → Disponíveis. Snapshot local — nenhuma consulta. */}
+      {userProfile?.role === "Boss" && bazaarItemsViewCharacter && (
+        <CharacterBazaarItemsModal
+          character={bazaarItemsViewCharacter}
+          coinRate={loadItemsCoinRate()}
+          onClose={() => setBazaarItemsViewCharacter(null)}
+        />
+      )}
       <CurrencyCalculator open={calcOpen} onClose={() => setCalcOpen(false)} focusSignal={calcFocusSignal} />
       <ImbuementsModal open={imbueOpen} onClose={() => setImbueOpen(false)} />
       <RtcImportModal open={rtcImportOpen} onClose={() => setRtcImportOpen(false)} />

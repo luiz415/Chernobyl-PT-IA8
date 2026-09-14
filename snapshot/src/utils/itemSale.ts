@@ -161,13 +161,18 @@ export function formatRateKkDisplay(value: number | undefined): string {
   return String(value).replace(".", ",");
 }
 
-/** Formata um valor em kk/k (pt-BR, até 2 casas quando fracionário). */
-export function formatKkValue(value: number, suffix: "k" | "kk" = "kk"): string {
+/**
+ * Formata um valor em kk/k (pt-BR, até 2 casas quando fracionário).
+ * `trimZeros` (opt-in — usado pela guia Bazaar → Itens, onde os valores têm
+ * 1 casa decimal): remove zeros à direita ("1,5kk" em vez de "1,50kk").
+ * O default preserva o comportamento histórico (registros de venda etc.).
+ */
+export function formatKkValue(value: number, suffix: "k" | "kk" = "kk", trimZeros = false): string {
   if (!Number.isFinite(value)) return `0${suffix}`;
   const rounded = Math.round(value * 100) / 100;
   const text = Number.isInteger(rounded)
     ? rounded.toLocaleString("de-DE")
-    : rounded.toLocaleString("de-DE", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    : rounded.toLocaleString("de-DE", trimZeros ? { maximumFractionDigits: 2 } : { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   return `${text}${suffix}`;
 }
 

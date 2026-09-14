@@ -22,7 +22,11 @@
 
 // `walkJson` é exportado pelo módulo do método novo exatamente para reuso:
 // varredura defensiva com trava de profundidade/nós e proteção contra ciclos.
-const { walkJson } = require('./electron-bazaar-new.cjs');
+// `deriveQuestsFromApiPayload` é a MESMA função usada pela consulta de quests:
+// aqui ela roda sobre o payload JÁ BAIXADO de cada leilão (zero fetch extra)
+// para o fluxo "Comprado" da guia Itens registrar as quests REAIS do
+// personagem — nunca assumidas como disponíveis.
+const { walkJson, deriveQuestsFromApiPayload } = require('./electron-bazaar-new.cjs');
 
 /** Mesma normalização de `normalizeWatchedItemName` (src/utils/bazaarWatchedItems.ts). */
 function normalizeItemName(value) {
@@ -458,6 +462,10 @@ function registerBazaarItemsMethod(deps) {
             // ADITIVO: ouro e skills lidos do MESMO payload já baixado —
             // nenhuma chamada extra, nenhum efeito no fluxo existente.
             const extra = collectGoldAndSkills(outcome.data);
+            // ADITIVO: quests derivadas do MESMO payload pela MESMA função da
+            // consulta de quests (bosstiary) — nenhuma chamada extra. true =
+            // quest JÁ FEITA; false = disponível; null = inconclusivo.
+            const quests = deriveQuestsFromApiPayload(outcome.data);
             analyzedCount += 1;
             if (matches.length > 0) matchedCharacters += 1;
             details[key] = {
@@ -467,6 +475,8 @@ function registerBazaarItemsMethod(deps) {
               gold: extra.gold,
               skills: extra.skills,
               extraPaths: extra.paths,
+              soulwarCompleted: quests.soulwarCompleted,
+              sanguineCompleted: quests.sanguineCompleted,
               fetchedAt: Date.now(),
             };
           } else {

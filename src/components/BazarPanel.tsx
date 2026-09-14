@@ -15,7 +15,7 @@ import OverviewFiltersModal from "./OverviewFiltersModal";
 import UserFilterModal from "./UserFilterModal";
 import { DEFAULT_OVERVIEW_FILTERS, useOverviewFilters } from "../hooks/useOverviewFilters";
 import { FilterDateMax, FilterInline, FilterMulti, FilterNumber } from "./FilterTypes";
-import type { Character, PartyTab, WaitingService, Vocation } from "../types";
+import type { BazaarItemsPurchasePrefill, Character, PartyTab, WaitingService, Vocation } from "../types";
 import { useAuth } from "../context/AuthContext";
 import { getManualSyncCooldownRemainingMs, markManualSyncAttempt, publishOfficialBazaarList, readOfficialBazaarCache, removeBazaarInterest, removeBazaarInterestsForAuctions, setBazaarInterest, syncBazaarInterests, syncOfficialBazaarList, type BazaarInterestMap, type OfficialBazaarMetadata } from "../services/bazaarOfficialService";
 import { applyValueOverlay, buildValueOverlay, clearBazaarValueOverlay, computeAutoRemoveAuctions, parseAutoRemoveLimit, readBazaarValueOverlay, sanitizeAutoRemoveLimit, saveBazaarValueOverlay } from "../utils/bazaarValueRefresh";
@@ -975,6 +975,12 @@ interface BazarPanelProps {
   accounts?: string[];
   onAddCharacterFromBazaar?: (character: BazaarCharacterPurchase) => { ok: boolean; error?: string };
   /**
+   * "Comprado" da guia ITENS: abre o CharacterModal COMPLETO no App já
+   * pré-preenchido com os dados da consulta (quests reais + itens). Fluxo
+   * separado do formulário inline das quests — mesma persistência final.
+   */
+  onOpenBazaarItemsPurchase?: (prefill: BazaarItemsPurchasePrefill) => { ok: boolean; error?: string };
+  /**
    * MODO DEMONSTRATIVO DO TUTORIAL: leilões/interesses/notificações fictícios
    * exibidos no lugar dos caches reais. Quando presente, o gate VIP é
    * ignorado (o tutorial precisa mostrar o painel por dentro para qualquer
@@ -989,7 +995,7 @@ interface BazarPanelProps {
   };
 }
 
-function BazarPanelContent({ sharedCharacters = [], waitingList = [], activeParties = [], personalCharacters = [], accounts = [], onAddCharacterFromBazaar, demoBazaar }: BazarPanelProps) {
+function BazarPanelContent({ sharedCharacters = [], waitingList = [], activeParties = [], personalCharacters = [], accounts = [], onAddCharacterFromBazaar, onOpenBazaarItemsPurchase, demoBazaar }: BazarPanelProps) {
   // MODO DEMO (tutorial): dados fictícios, sem consultas nem persistência.
   const demoMode = !!demoBazaar;
   // demo: ref inicia VAZIA — os filtros de consulta persistidos do usuário
@@ -2892,6 +2898,10 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
               // (bloqueia o próprio Consultar).
               onRunningChange={setIsItemsQueryRunning}
               isQuestsQueryRunning={isLoading || isCheckingDetails}
+              // Coluna "Comprado" da guia Itens: nomes já cadastrados (mesma
+              // fonte da guia Quests) + abertura do CharacterModal completo.
+              personalCharacterNames={personalCharacterNameSet}
+              onOpenPurchaseModal={onOpenBazaarItemsPurchase}
             />
           </div>
         )}

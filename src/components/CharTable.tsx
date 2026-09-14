@@ -39,6 +39,15 @@ interface Props {
   negotiatedCharacterIds?: ReadonlySet<string>;
   /** Personagens do dono original cujos resultados de Quest pertencem ao comprador. */
   lockedQuestFinancialIds?: ReadonlySet<string>;
+  /**
+   * Coluna "ITENS" (EXCLUSIVA DO BOSS — o App só ativa quando o usuário é
+   * Boss): botão "Ver" abre o modal com o snapshot dos itens do Bazaar
+   * associados ao personagem na compra (`bazaarItems`). Personagem sem
+   * snapshot exibe "—". A coluna nem sequer é montada para outros usuários.
+   */
+  showBazaarItemsColumn?: boolean;
+  /** Abre o modal de itens do personagem (fornecido pelo App). */
+  onViewBazaarItems?: (c: Character) => void;
 }
 
 const NUMERIC_COLUMNS = new Set(["level", "valorPago", "dropSW", "dropBakra", "valorVenda", "total"]);
@@ -51,7 +60,7 @@ const DEFAULT_COL_WIDTHS: Record<string, number> = {
   account: 95, personagem: 100, servidor: 65, voc: 42, level: 48,
   soulwar: 45, sanguine: 45, pt: 45, dropSW: 70, dropBakra: 75, total: 75,
   dataCompra: 80, valorPago: 75, dataVenda: 80, vendido: 55, shared: 40,
-  itemDropadoSW: 140, itemDropadoSG: 140,
+  itemDropadoSW: 140, itemDropadoSG: 140, bazaarItems: 55,
 };
 
 export const SOULWAR_ITEMS = [
@@ -274,7 +283,7 @@ function NoteCellInput({ value, onChange }: { value: string; onChange: (v: strin
 
 const EMPTY_NEGOTIATED_CHARACTER_IDS: ReadonlySet<string> = new Set();
 
-export default function CharTable({ characters, activeParties = [], readOnly, showSaleDate, onAdd, onEdit, onDelete, onToggleShare, onToggleShareAll: _onToggleShareAll, onNoteChange, onCharacterInlineChange, probableMarkers = {}, negotiatedCharacterIds = EMPTY_NEGOTIATED_CHARACTER_IDS, lockedQuestFinancialIds = EMPTY_NEGOTIATED_CHARACTER_IDS }: Props) {
+export default function CharTable({ characters, activeParties = [], readOnly, showSaleDate, onAdd, onEdit, onDelete, onToggleShare, onToggleShareAll: _onToggleShareAll, onNoteChange, onCharacterInlineChange, probableMarkers = {}, negotiatedCharacterIds = EMPTY_NEGOTIATED_CHARACTER_IDS, lockedQuestFinancialIds = EMPTY_NEGOTIATED_CHARACTER_IDS, showBazaarItemsColumn = false, onViewBazaarItems }: Props) {
   const tableScope = showSaleDate ? "history" : "active";
   const storageKey = (key: string) => `table_${tableScope}_${key}`;
   const defaultSortStack: SortEntry[] = showSaleDate ? [{ key: "dataVenda", dir: "desc" }] : [{ key: "account", dir: "asc" }];
@@ -734,7 +743,28 @@ export default function CharTable({ characters, activeParties = [], readOnly, sh
         );
       },
     }] : []),
-  ], [accountVisible, personagemVisible, showSaleDate, copiedId, copiedCharId, onToggleShare, characterInParty, onCharacterInlineChange, probableMarkers, negotiatedCharacterIds, lockedQuestFinancialIds]);
+    // ── ITENS (EXCLUSIVA DO BOSS) ─────────────────────────────────────────
+    // Só é MONTADA quando o App a ativa (usuário Boss, aba Disponíveis).
+    // "Ver" abre o modal com o snapshot dos itens do Bazaar importados na
+    // compra do personagem — mesmo visual do modal Detalhes da guia Itens.
+    // Sem snapshot associado, exibe "—".
+    ...(showBazaarItemsColumn && !showSaleDate ? [{
+      key: "bazaarItems", label: "Itens", align: "center" as const,
+      get: (c: Character) => (c.bazaarItems ? 1 : 0),
+      render: (c: Character) => c.bazaarItems ? (
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); onViewBazaarItems?.(c); }}
+          className="inline-flex items-center gap-1 rounded border border-fuchsia-500/30 bg-fuchsia-500/10 px-1.5 py-0.5 text-[9px] font-black text-fuchsia-300 hover:bg-fuchsia-500/20 transition-colors cursor-pointer"
+          title="Ver os itens do Bazaar associados a este personagem na compra (sem nova consulta)"
+        >
+          <Eye size={10} /> Ver
+        </button>
+      ) : (
+        <span className="text-slate-600" title="Sem itens do Bazaar associados a este personagem">—</span>
+      ),
+    }] : []),
+  ], [accountVisible, personagemVisible, showSaleDate, copiedId, copiedCharId, onToggleShare, characterInParty, onCharacterInlineChange, probableMarkers, negotiatedCharacterIds, lockedQuestFinancialIds, showBazaarItemsColumn, onViewBazaarItems]);
 
   const orderedColumns = useMemo(() => {
     const baseCols = [...columns];

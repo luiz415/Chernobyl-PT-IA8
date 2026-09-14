@@ -104,8 +104,64 @@ export interface Character {
    */
   itemSaleSW?: ItemSaleRecord;
   itemSaleSG?: ItemSaleRecord;
+  /**
+   * ITENS DO BAZAAR importados na compra (Bazaar → Itens → "Comprado").
+   * Snapshot LOCAL da consulta que originou o cadastro — nenhuma nova
+   * consulta é necessária para exibi-lo (Meus Personagens → Disponíveis →
+   * Itens → Ver). EXCLUSIVO DO BOSS: o fluxo que o grava só existe no
+   * painel de itens (gate Boss) e a publicação em sharedCharacters REMOVE
+   * este campo (usuários comuns nunca recebem os dados).
+   */
+  bazaarItems?: CharacterBazaarItemsSnapshot;
   createdAt: number;
   updatedAt: number;
+}
+
+/**
+ * Snapshot dos itens encontrados na consulta do Bazaar (guia Itens) no
+ * momento da compra do personagem. Espelha os campos exibidos no modal
+ * "Detalhes" do painel — mesma experiência visual ao reabrir depois.
+ */
+export interface CharacterBazaarItemsSnapshot {
+  /** Servidor usado na valoração (lista de preços daquele servidor). */
+  server: string;
+  /** Total automático calculado na consulta (matches + ouro). */
+  totalKk: number;
+  /** Parcela de ouro (kk) incluída no total, quando havia. */
+  goldKk?: number;
+  /** Correção manual do total feita pelo usuário ANTES da compra (se havia). */
+  manualTotalKk?: number | null;
+  /** Itens casados com a Lista de Itens na consulta original. */
+  matches: Array<{
+    foundName: string;
+    watchedName: string;
+    baseValueKk: number;
+    tier: number;
+    unitValueKk: number;
+    amount: number;
+    totalKk: number;
+  }>;
+  /** Quando o snapshot foi capturado (clique em "Comprado"). */
+  capturedAtMs: number;
+}
+
+/**
+ * Dados que a guia Bazaar → Itens envia ao App no clique em "Comprado":
+ * tudo REAPROVEITADO da última consulta (nenhum fetch novo). O App monta o
+ * Character pré-preenchido e abre o CharacterModal COMPLETO para o usuário
+ * confirmar conta/valor e salvar em Meus Personagens.
+ */
+export interface BazaarItemsPurchasePrefill {
+  name: string;
+  level: number;
+  server: string;
+  /** Vocação como veio do Bazaar (ex.: "Elite Knight") — mapeada no App. */
+  vocation: string;
+  /** Quests REAIS da consulta: true = já feita (indisponível); null = inconclusivo. */
+  soulwarCompleted?: boolean | null;
+  sanguineCompleted?: boolean | null;
+  /** Itens encontrados na consulta — associados ao personagem ao salvar. */
+  items: CharacterBazaarItemsSnapshot;
 }
 
 /**

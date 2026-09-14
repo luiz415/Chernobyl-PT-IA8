@@ -89,6 +89,14 @@ export interface BazaarItemsCharacterResult {
   goldKk?: number;
   /** Skills inteiras encontradas na página do leilão. */
   skills?: ItemsCharacterSkills;
+  /**
+   * QUESTS derivadas do MESMO payload do leilão (bosstiary), pela MESMA
+   * função das quests (deriveQuestsFromApiPayload — zero fetch extra):
+   * true = quest JÁ FEITA (indisponível); false = disponível; null/ausente =
+   * inconclusivo (a resposta não trouxe bosstiary reconhecível).
+   */
+  soulwarCompleted?: boolean | null;
+  sanguineCompleted?: boolean | null;
   /** Valor (bid) do personagem NO MOMENTO da consulta — só exibição. */
   bid?: number;
   /** Encerramento do leilão (s ou ms, normalizado na exibição) — só exibição. */
@@ -215,11 +223,11 @@ function sanitizeWatchedItem(raw: unknown): WatchedItem | null {
   const name = String(item.name ?? "").trim();
   const valueKk = Number(item.valueKk);
   if (!name || !Number.isFinite(valueKk) || valueKk <= 0) return null;
-  // Valores em kk são INTEIROS (regra da interface). Itens legados com casas
-  // decimais são arredondados na leitura — o cálculo em si não muda. Um item
-  // que arredonde para 0 (ex.: 0,4kk legado) deixa de ser válido.
-  const rounded = Math.round(valueKk);
-  if (rounded < 1) return null;
+  // Valores em kk aceitam UMA casa decimal (ex.: 1,5kk). A leitura pisa
+  // qualquer precisão extra para 1 casa — importações/legados com mais casas
+  // são arredondados; um item que arredonde para 0 deixa de ser válido.
+  const rounded = Math.round(valueKk * 10) / 10;
+  if (rounded < 0.1) return null;
   const id = String(item.id ?? "").trim() || `wi_${Math.random().toString(36).slice(2, 10)}`;
   const updatedAtMs = Number(item.updatedAtMs);
   return {
