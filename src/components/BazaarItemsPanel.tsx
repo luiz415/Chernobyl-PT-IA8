@@ -16,7 +16,7 @@
 
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { AlertTriangle, ArrowDownUp, Check, Coins, Copy, Download, ExternalLink, Eye, FlagTriangleRight, Globe, ListChecks, Package, Pencil, Plus, RefreshCw, RotateCcw, Search, Sparkles, Square, Star, Trash2, Upload, X } from "lucide-react";
+import { AlertTriangle, ArrowDown, ArrowDownUp, ArrowUp, Check, Coins, Copy, Download, ExternalLink, Eye, FlagTriangleRight, Globe, ListChecks, Package, Pencil, Plus, RefreshCw, RotateCcw, Search, Sparkles, Square, Star, Trash2, Upload, X } from "lucide-react";
 import BazaarBrowserModal, { BAZAAR_BROWSER_KEY, BAZAAR_BROWSER_ORDER_KEY, BAZAAR_RETRY_BROWSERS_KEY, BAZAAR_RETRY_COUNTS_KEY, BAZAAR_SPEED_MODE_KEY, DEFAULT_BROWSER_ORDER, normalizeRetryCounts } from "./BazaarBrowserModal";
 // Mesmos componentes de filtro da tabela de QUESTS (FilterTypes é a fonte
 // única — nenhuma implementação paralela) e as MESMAS classes de célula
@@ -203,6 +203,21 @@ const EMPTY_DRAFT: ItemDraft = { id: null, name: "", valueKk: "" };
 type ItemsSortKey = "name" | "server" | "auctionEndTs" | "bid" | "totalKk" | "rc" | "potential";
 type ItemsSortDir = "asc" | "desc";
 
+/**
+ * ORDENAÇÃO COM ATÉ 2 CRITÉRIOS — mesma estratégia do sortStack do CharTable
+ * (limite de 2; ao ativar um 3º, o MAIS ANTIGO sai). A ordem do array é a
+ * ordem de ATIVAÇÃO: o índice 0 é o critério PRINCIPAL e o índice 1 é o
+ * desempate (ex.: Potencial ↓ e depois Encerra ↑ ⇒ Potencial decide;
+ * Encerra desempata). Ciclo de clique: asc → desc → remove (padrão do
+ * sortStack existente no sistema).
+ */
+interface ItemsSortEntry {
+  key: ItemsSortKey;
+  dir: ItemsSortDir;
+}
+
+const MAX_ITEMS_SORT_ENTRIES = 2;
+
 interface ItemsTableFilters {
   name: string;
   servers: string[];
@@ -213,6 +228,13 @@ interface ItemsTableFilters {
   kkOperator: "gte" | "lte";
   rcValue: number | null;
   rcOperator: "gte" | "lte";
+  /**
+   * Filtro da coluna POTENCIAL — compara o PERCENTUAL numérico real
+   * (potentialPercent, o mesmo número exibido/ordenado), nunca o texto ou a
+   * cor. Aceita negativos (ex.: ≥ -20 ou ≤ 50).
+   */
+  potentialValue: number | null;
+  potentialOperator: "gte" | "lte";
   /** Exibe apenas leilões marcados como "Tenho Interesse" (estado LOCAL). */
   onlyMyInterests: boolean;
 }
@@ -230,6 +252,8 @@ function defaultItemsTableFilters(): ItemsTableFilters {
     kkOperator: "gte",
     rcValue: null,
     rcOperator: "gte",
+    potentialValue: null,
+    potentialOperator: "gte",
     onlyMyInterests: false,
   };
 }
@@ -467,12 +491,12 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
   // como tableFilters/sortKey/sortDir do BazarPanel. Tudo derivado/local:
   // nenhum efeito sobre a consulta, os cálculos ou os dados persistidos.
   const [tableFilters, setTableFilters] = useState<ItemsTableFilters>(() => readItemsTableFilters());
-  // ORDENAÇÃO PADRÃO — mesma das QUESTS: "Encerra" crescente (cronológica)
-  // na abertura do painel; clicar em outra coluna passa a ordenar
-  // EXCLUSIVAMENTE por ela (a prioridade permanente de "Encerra" foi
-  // removida — comportamento idêntico ao sortKey/sortDir do BazarPanel).
-  const [sortKey, setSortKey] = useState<ItemsSortKey>("auctionEndTs");
-  const [sortDir, setSortDir] = useState<ItemsSortDir>("asc");
+  // ORDENAÇÃO — agora uma PILHA com ATÉ 2 critérios simultâneos (mesma
+  // estratégia do sortStack do CharTable). Padrão na abertura: "Encerra"
+  // crescente (cronológica) como único critério — comportamento inicial
+  // idêntico ao anterior. Índice 0 = critério PRINCIPAL; índice 1 =
+  // desempate. Volátil por sessão, como antes.
+  const [sortStack, setSortStack] = useState<ItemsSortEntry[]>([{ key: "auctionEndTs", dir: "asc" }]);
 
   // ── "Ocultar encerrados / Exibir todos" — mesmo comportamento das QUESTS ──
   // Preferência persistida por dispositivo (default oculta) + relógio de 15s
@@ -518,13 +542,27 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
   }
 
   /** Mesma alternância das quests: 1º clique ordena asc, 2º inverte. */
+  /**
+   * CICLO DE CLIQUE por coluna — MESMA estratégia do sortStack do CharTable:
+   *  • coluna inativa → entra como asc; com 2 ativas, o MAIS ANTIGO sai
+   *    (nunca mais de 2 critérios simultâneos);
+   *  • coluna ativa em asc → vira desc;
+   *  • coluna ativa em desc → sai da pilha (desativa a ordenação dela).
+   * A posição no array preserva a prioridade: quem entrou primeiro continua
+   * sendo o critério PRINCIPAL até ser removido.
+   */
   function toggleSort(key: ItemsSortKey) {
-    if (sortKey === key) {
-      setSortDir(prev => prev === "asc" ? "desc" : "asc");
-    } else {
-      setSortKey(key);
-      setSortDir("asc");
-    }
+    setSortStack(prev => {
+      const existing = prev.find(entry => entry.key === key);
+      if (!existing) {
+        const baseStack = prev.length >= MAX_ITEMS_SORT_ENTRIES ? prev.slice(1) : prev;
+        return [...baseStack, { key, dir: "asc" as const }];
+      }
+      if (existing.dir === "asc") {
+        return prev.map(entry => entry.key === key ? { ...entry, dir: "desc" as const } : entry);
+      }
+      return prev.filter(entry => entry.key !== key);
+    });
   }
 
   // ── Estado da consulta ─────────────────────────────────────────────────────
@@ -1420,6 +1458,17 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
           if (tableFilters.rcOperator === "lte" && rc > tableFilters.rcValue) return false;
         }
       }
+      if (tableFilters.potentialValue !== null) {
+        // POTENCIAL: compara o PERCENTUAL numérico REAL (potentialPercent —
+        // o MESMO número da célula e da ordenação), nunca o texto/cor.
+        // Linha sem percentual ("—": sem cotação ou sem valor do personagem)
+        // é eliminada quando o filtro está ativo — não há número honesto
+        // para comparar (mesmo racional do RC, que não inventa valor).
+        const pct = potentialPercent(result, coinRate);
+        if (pct === null) return false;
+        if (tableFilters.potentialOperator === "gte" && pct < tableFilters.potentialValue) return false;
+        if (tableFilters.potentialOperator === "lte" && pct > tableFilters.potentialValue) return false;
+      }
       if (tableFilters.onlyMyInterests) {
         const auctionKey = result.id || result.url || result.name;
         if (!itemInterests.includes(auctionKey)) return false;
@@ -1429,36 +1478,38 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
       return true;
     });
 
-    // ORDENAÇÃO — MESMO comportamento da guia de QUESTS: a coluna ativa é o
-    // ÚNICO critério (strings por localeCompare pt-BR, números por
-    // subtração; asc/desc pela direção escolhida). "Encerra" continua sendo
-    // a ordenação PADRÃO na abertura do painel (sortKey inicial), mas clicar
-    // em outra coluna passa a ordenar EXCLUSIVAMENTE por ela — a prioridade
-    // permanente de "Encerra" foi removida a pedido.
+    // ORDENAÇÃO — até 2 critérios simultâneos (sortStack): o índice 0 é o
+    // critério PRINCIPAL; o índice 1 só desempata quando o principal empata.
+    // Cada critério compara EXATAMENTE como antes (strings por localeCompare
+    // pt-BR, números por subtração, "Encerra" pelo timestamp normalizado,
+    // Potencial pelo percentual numérico real com sentinela finita, KK/RC
+    // pelo valor efetivo) — apenas a composição em cascata é nova.
     const sorted = [...filtered];
     const endTsOf = (r: BazaarItemsCharacterResult) => normalizeAuctionEndTimestamp(r.auctionEndTs ?? null) || 0;
-    sorted.sort((a, b) => {
-      if (sortKey === "auctionEndTs") {
+    const compareBy = (entry: ItemsSortEntry, a: BazaarItemsCharacterResult, b: BazaarItemsCharacterResult): number => {
+      // Lógica ESPECIAL de "Encerra" preservada: timestamp normalizado
+      // (s/ms) — mesma normalização de sempre, agora como um dos critérios.
+      if (entry.key === "auctionEndTs") {
         const endCmp = endTsOf(a) - endTsOf(b);
-        return sortDir === "asc" ? endCmp : -endCmp;
+        return entry.dir === "asc" ? endCmp : -endCmp;
       }
       let av: string | number;
       let bv: string | number;
-      if (sortKey === "rc") {
+      if (entry.key === "rc") {
         av = coinRate > 0 ? computeItemRC(coinRate, effectiveTotalKk(a)) : 0;
         bv = coinRate > 0 ? computeItemRC(coinRate, effectiveTotalKk(b)) : 0;
-      } else if (sortKey === "potential") {
+      } else if (entry.key === "potential") {
         // Ordena pelo VALOR NUMÉRICO real do percentual, nunca pela cor.
         // Sem percentual (cotação/valor ausente), empata no fundo:
         // sentinela finita — evita o NaN de (-Inf) − (-Inf) no comparador.
         av = potentialPercent(a, coinRate) ?? -1e15;
         bv = potentialPercent(b, coinRate) ?? -1e15;
-      } else if (sortKey === "totalKk") {
+      } else if (entry.key === "totalKk") {
         av = effectiveTotalKk(a);
         bv = effectiveTotalKk(b);
       } else {
-        av = a[sortKey] ?? 0;
-        bv = b[sortKey] ?? 0;
+        av = a[entry.key] ?? 0;
+        bv = b[entry.key] ?? 0;
       }
       let cmp = 0;
       if (typeof av === "string" || typeof bv === "string") {
@@ -1466,10 +1517,19 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
       } else {
         cmp = Number(av || 0) - Number(bv || 0);
       }
-      return sortDir === "asc" ? cmp : -cmp;
-    });
+      return entry.dir === "asc" ? cmp : -cmp;
+    };
+    if (sortStack.length > 0) {
+      sorted.sort((a, b) => {
+        for (const entry of sortStack) {
+          const cmp = compareBy(entry, a, b);
+          if (cmp !== 0) return cmp;
+        }
+        return 0;
+      });
+    }
     return sorted;
-  }, [visibleResults, tableFilters, sortKey, sortDir, coinRate, itemInterests, timezoneOffsetMinutes, hideEndedResults, currentUnixTs]);
+  }, [visibleResults, tableFilters, sortStack, coinRate, itemInterests, timezoneOffsetMinutes, hideEndedResults, currentUnixTs]);
 
   const hasActiveTableFilters = !!(
     tableFilters.name.trim() ||
@@ -1477,6 +1537,7 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
     tableFilters.bidValue !== null ||
     tableFilters.kkValue !== null ||
     tableFilters.rcValue !== null ||
+    tableFilters.potentialValue !== null ||
     !!tableFilters.endUntil ||
     tableFilters.onlyMyInterests
   );
@@ -1489,16 +1550,36 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
    *  atualizada: só o CONTEÚDO das linhas dessa coluna fica à esquerda).
    *  `title` permite tooltip explicativo (ex.: Potencial). */
   function SortHeader({ label, column, title }: { label: string; column: ItemsSortKey; title?: string }) {
-    const isActive = sortKey === column;
+    const entryIndex = sortStack.findIndex(entry => entry.key === column);
+    const entry = entryIndex >= 0 ? sortStack[entryIndex] : null;
+    // PRIORIDADE VISÍVEL quando há 2 critérios ativos: "1" = principal,
+    // "2" = desempate (mesma convenção do sortStack do CharTable). Seta
+    // âmbar direcional (↑ asc / ↓ desc) na coluna ativa; ícone neutro
+    // apagado nas demais — padrão visual do painel preservado.
+    const priorityBadge = entry && sortStack.length > 1 ? String(entryIndex + 1) : null;
+    const sortHint = entry
+      ? `Ordenando ${entryIndex === 0 ? "1º critério" : "2º critério (desempate)"} (${entry.dir === "asc" ? "crescente" : "decrescente"}) — clique para ${entry.dir === "asc" ? "inverter" : "remover"}`
+      : "Clique para ordenar por esta coluna (até 2 colunas simultâneas)";
     return (
       <th
         className={`${STICKY_HEAD_CELL_CLASS} h-10 px-1 py-2 text-center align-middle cursor-pointer select-none`}
         onClick={() => toggleSort(column)}
-        title={title}
+        title={title ? `${title}\n\n${sortHint}` : sortHint}
       >
         <span className="inline-flex w-full items-center justify-center gap-1 leading-none">
           {label}
-          <ArrowDownUp size={10} className={isActive ? "text-amber-400" : "text-slate-600"} />
+          {entry ? (
+            <span className="inline-flex items-center gap-0.5 flex-shrink-0">
+              {entry.dir === "asc"
+                ? <ArrowUp size={10} className="text-amber-400" />
+                : <ArrowDown size={10} className="text-amber-400" />}
+              {priorityBadge && (
+                <span className="text-[8px] font-bold text-amber-400/80 tabular-nums min-w-[8px] text-center leading-none" aria-label={`Prioridade ${priorityBadge}`}>{priorityBadge}</span>
+              )}
+            </span>
+          ) : (
+            <ArrowDownUp size={10} className="text-slate-600" />
+          )}
         </span>
       </th>
     );
@@ -1857,8 +1938,11 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                 <th className={`${STICKY_FILTER_CELL_CLASS} h-10 px-1 py-1.5 align-middle`}><div className="flex w-full items-center justify-center [&>button]:w-full [&>button]:max-w-[80px]"><FilterNumber label="Valor" value={tableFilters.bidValue} operator={tableFilters.bidOperator} onChange={(value, operator) => updateTableFilters({ bidValue: value, bidOperator: operator })} placeholder="Valor" /></div></th>
                 <th className={`${STICKY_FILTER_CELL_CLASS} h-10 px-1 py-1.5 align-middle`}><div className="flex w-full items-center justify-center [&>button]:w-full [&>button]:max-w-[80px]"><FilterNumber label="Valor Itens (KK)" value={tableFilters.kkValue} operator={tableFilters.kkOperator} onChange={(value, operator) => updateTableFilters({ kkValue: value, kkOperator: operator })} placeholder="KK" /></div></th>
                 <th className={`${STICKY_FILTER_CELL_CLASS} h-10 px-1 py-1.5 align-middle`}><div className="flex w-full items-center justify-center [&>button]:w-full [&>button]:max-w-[80px]"><FilterNumber label="Valor Itens (RC)" value={tableFilters.rcValue} operator={tableFilters.rcOperator} onChange={(value, operator) => updateTableFilters({ rcValue: value, rcOperator: operator })} placeholder="RC" /></div></th>
-                {/* Potencial e Skills: sem filtro próprio. */}
-                <th className={`${STICKY_FILTER_CELL_CLASS} h-10 px-1 py-1.5 text-center align-middle text-[10px] text-slate-600`}>—</th>
+                {/* POTENCIAL: filtro numérico — MESMO componente (FilterNumber)
+                    e comportamento dos demais; compara o PERCENTUAL real da
+                    coluna (aceita negativos, ex.: ≥ -20). */}
+                <th className={`${STICKY_FILTER_CELL_CLASS} h-10 px-1 py-1.5 align-middle`}><div className="flex w-full items-center justify-center [&>button]:w-full [&>button]:max-w-[80px]"><FilterNumber label="Potencial (%)" value={tableFilters.potentialValue} operator={tableFilters.potentialOperator} onChange={(value, operator) => updateTableFilters({ potentialValue: value, potentialOperator: operator })} placeholder="%" /></div></th>
+                {/* Skills e Detalhes: sem filtro próprio. */}
                 <th className={`${STICKY_FILTER_CELL_CLASS} h-10 px-1 py-1.5 text-center align-middle text-[10px] text-slate-600`}>—</th>
                 <th className={`${STICKY_FILTER_CELL_CLASS} h-10 px-1 py-1.5 text-center align-middle text-[10px] text-slate-600`}>—</th>
                 <th className={`${STICKY_FILTER_CELL_CLASS} h-10 px-1 py-1.5 text-center align-middle`}>
