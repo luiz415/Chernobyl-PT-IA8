@@ -157,6 +157,128 @@ function buildAuctionApiUrl(apiBase, id) {
 }
 
 // ============================================================================
+// OURO E SKILLS DO PERSONAGEM (extração ADITIVA do mesmo payload JSON)
+// ----------------------------------------------------------------------------
+// O payload completo do leilão já chega em collectItemMatches — estas funções
+// apenas LEEM mais dois grupos de informação do MESMO JSON, sem nenhuma
+// chamada extra, sem tocar no fluxo de fetch/fila/sessão.
+//
+// O schema exato da rota `/api/bazaar/{ID}` não é assumido (mesma postura de
+// collectItemMatches): a varredura é defensiva via walkJson, reconhecendo os
+// formatos plausíveis por CHAVE DE OBJETO e por PAR rótulo/valor. Os caminhos
+// onde cada dado foi encontrado são devolvidos em `paths` e registrados no
+// diagnóstico — é o que permite confirmar o schema real na primeira execução
+// e ajustar os hints com dado na mão, nunca com chute.
+// ============================================================================
+
+/**
+ * Chaves de objeto que carregam o OURO da página do leilão.
+ * "coins"/"coinAmount" NÃO entram aqui de propósito: no Bazaar isso é
+ * Tibia/Rubini Coin (moeda da loja), não o ouro do personagem — usar essas
+ * chaves duplicaria/contaminaria o valor.
+ */
+const GOLD_KEY_HINTS = /^(gold|goldAmount|gold_amount|goldCount|gold_count|totalGold|total_gold|money|balance)$/i;
+/** Rótulos textuais que identificam o ouro num par rótulo/valor. */
+const GOLD_LABEL_HINTS = /^(gold|ouro)$/i;
+
+/** Skills reconhecidas: chave canônica -> hints de CHAVE e de RÓTULO. */
+const SKILL_DEFS = [
+  { key: 'axe', keyHint: /^(axe|axeFighting|axe_fighting|skillAxe|skill_axe)$/i, labelHint: /^axe(\s+fighting)?$/i },
+  { key: 'club', keyHint: /^(club|clubFighting|club_fighting|skillClub|skill_club)$/i, labelHint: /^club(\s+fighting)?$/i },
+  { key: 'sword', keyHint: /^(sword|swordFighting|sword_fighting|skillSword|skill_sword)$/i, labelHint: /^sword(\s+fighting)?$/i },
+  { key: 'distance', keyHint: /^(distance|distanceFighting|distance_fighting|skillDistance|skill_distance|skillDist|skill_dist)$/i, labelHint: /^distance(\s+fighting)?$/i },
+  { key: 'shielding', keyHint: /^(shielding|shield|skillShielding|skill_shielding)$/i, labelHint: /^shielding$/i },
+  { key: 'fist', keyHint: /^(fist|fistFighting|fist_fighting|skillFist|skill_fist)$/i, labelHint: /^fist(\s+fighting)?$/i },
+  { key: 'magic', keyHint: /^(magic|magicLevel|magic_level|magLevel|mag_level|mlevel|skillMagic|skill_magic)$/i, labelHint: /^magic(\s+level)?$/i },
+];
+
+/** Chaves que carregam o VALOR numérico num objeto de skill ({ name, level }). */
+const SKILL_VALUE_KEYS = ['level', 'value', 'base', 'skillLevel', 'skill_level', 'amount'];
+/** Chaves que carregam o RÓTULO num par rótulo/valor. */
+const LABEL_KEYS = ['name', 'label', 'skill', 'type', 'title', 'key'];
+
+/** Valor numérico >= 0 de um campo (aceita número ou string "1.100.000"). */
+function parseLooseNumber(raw) {
+  if (typeof raw === 'number' && Number.isFinite(raw) && raw >= 0) return raw;
+  if (typeof raw === 'string') {
+    const cleaned = raw.replace(/[.,\s]/g, '');
+    if (/^\d+$/.test(cleaned)) return Number(cleaned);
+  }
+  return null;
+}
+
+/**
+ * Extrai OURO (inteiro, em gold) e SKILLS (inteiras) do payload do leilão.
+ *
+ * Dois formatos reconhecidos, nas seções NÃO ignoradas (a vitrine
+ * `highlightItems`/`highlightAugments` é pulada como em collectItemMatches):
+ *
+ *   1. CAMPO DIRETO: `{ gold: 1100000 }`, `{ magicLevel: 112 }`,
+ *      `{ skills: { axe: 119, ... } }` — casamento pelo NOME DA CHAVE;
+ *   2. PAR RÓTULO/VALOR: `{ name: "Magic Level", level: 112 }`,
+ *      `{ skill: "Axe Fighting", value: 119 }` — casamento pelo RÓTULO.
+ *
+ * Primeira ocorrência VÁLIDA vence (walk determinístico raiz→folhas); os
+ * caminhos ficam em `paths` para diagnóstico. Skills são pisadas para
+ * inteiro (a página pode trazer progresso fracionário).
+ */
+function collectGoldAndSkills(payload) {
+  let gold = null;
+  const skills = {};
+  const paths = {};
+
+  walkJson(payload, (node, path) => {
+    if (IGNORED_SECTION_KEYS.has(pathRootSegment(path))) return;
+    if (!node || typeof node !== 'object' || Array.isArray(node)) return;
+
+    const keys = Object.keys(node);
+
+    // Formato 1 — campos diretos pelo nome da chave.
+    for (const key of keys) {
+      const value = parseLooseNumber(node[key]);
+      if (value === null) continue;
+      if (gold === null && GOLD_KEY_HINTS.test(key)) {
+        gold = Math.floor(value);
+        paths.gold = path ? `${path}.${key}` : key;
+        continue;
+      }
+      for (const def of SKILL_DEFS) {
+        if (skills[def.key] === undefined && def.keyHint.test(key) && value > 0) {
+          skills[def.key] = Math.floor(value);
+          paths[def.key] = path ? `${path}.${key}` : key;
+        }
+      }
+    }
+
+    // Formato 2 — par rótulo/valor ({ name: "Axe Fighting", level: 119 }).
+    const labelKey = LABEL_KEYS.find(k => typeof node[k] === 'string' && node[k].trim());
+    if (!labelKey) return;
+    const label = node[labelKey].trim();
+    const numeric = (() => {
+      for (const vk of SKILL_VALUE_KEYS) {
+        const v = parseLooseNumber(node[vk]);
+        if (v !== null) return v;
+      }
+      return null;
+    })();
+    if (numeric === null) return;
+    if (gold === null && GOLD_LABEL_HINTS.test(label)) {
+      gold = Math.floor(numeric);
+      paths.gold = `${path}(label)`;
+      return;
+    }
+    for (const def of SKILL_DEFS) {
+      if (skills[def.key] === undefined && def.labelHint.test(label) && numeric > 0) {
+        skills[def.key] = Math.floor(numeric);
+        paths[def.key] = `${path}(label)`;
+      }
+    }
+  });
+
+  return { gold: gold === null ? 0 : gold, skills, paths };
+}
+
+// ============================================================================
 // REGISTRO
 // ============================================================================
 function registerBazaarItemsMethod(deps) {
@@ -327,9 +449,20 @@ function registerBazaarItemsMethod(deps) {
 
           if (outcome.ok) {
             const matches = collectItemMatches(outcome.data, watchSet);
+            // ADITIVO: ouro e skills lidos do MESMO payload já baixado —
+            // nenhuma chamada extra, nenhum efeito no fluxo existente.
+            const extra = collectGoldAndSkills(outcome.data);
             analyzedCount += 1;
             if (matches.length > 0) matchedCharacters += 1;
-            details[key] = { id: key, method: 'items_api_json_v2', matches, fetchedAt: Date.now() };
+            details[key] = {
+              id: key,
+              method: 'items_api_json_v2',
+              matches,
+              gold: extra.gold,
+              skills: extra.skills,
+              extraPaths: extra.paths,
+              fetchedAt: Date.now(),
+            };
           } else {
             failureReasons[outcome.reason] = (failureReasons[outcome.reason] || 0) + 1;
             details[key] = { id: key, error: outcome.reason, failureReason: outcome.reason, fetchedAt: Date.now() };
@@ -406,5 +539,6 @@ module.exports = {
   normalizeItemName,
   parseTieredName,
   collectItemMatches,
+  collectGoldAndSkills,
   buildAuctionApiUrl,
 };

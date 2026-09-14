@@ -62,6 +62,7 @@ import {
   saveWatchedItemsByServer,
   type BazaarItemsCharacterResult,
   type BazaarItemsLastQuery,
+  type ItemsCharacterSkills,
   type RawItemMatch,
   type WatchedItem,
   type WatchedItemsByServer,
@@ -97,7 +98,15 @@ interface ItemsFetchResult {
 interface ItemsDetailsResult {
   ok: boolean;
   error?: string;
-  details: Record<string, { id: string; matches?: RawItemMatch[]; error?: string }>;
+  details: Record<string, {
+    id: string;
+    matches?: RawItemMatch[];
+    /** Ouro da página do leilão, em gold (inteiro). */
+    gold?: number;
+    /** Skills inteiras da página (chaves canônicas do Electron). */
+    skills?: ItemsCharacterSkills;
+    error?: string;
+  }>;
   analyzedCount?: number;
   failedCount?: number;
   stoppedManually?: boolean;
@@ -250,6 +259,54 @@ function effectiveTotalKk(result: BazaarItemsCharacterResult): number {
 function hasManualTotalKk(result: BazaarItemsCharacterResult): boolean {
   const manual = Number(result.manualTotalKk);
   return Number.isFinite(manual) && manual > 0;
+}
+
+// ── Coluna "SKILLS" ──────────────────────────────────────────────────────────
+// Skills RELEVANTES por vocação (requisito): EK = Axe/Club/Sword/Shielding;
+// RP = Distance/Magic Level; ED e MS = Magic Level; MK = Fist/Magic Level.
+// Abreviações compactas de uma linha; valor ausente na página = "—" (nunca
+// um zero inventado). O casamento da vocação é por SUBSTRING da string do
+// scraper ("Elite Knight", "Royal Paladin", ...), cobrindo promovidas e não
+// promovidas ("Knight" casa com "Elite Knight" e "Knight").
+
+interface SkillDisplayDef {
+  key: keyof ItemsCharacterSkills;
+  /** Abreviação exibida (compacta, 1 linha). */
+  abbr: string;
+  /** Nome completo (tooltip). */
+  full: string;
+}
+
+const SKILL_DISPLAY: Record<string, SkillDisplayDef[]> = {
+  knight: [
+    { key: "axe", abbr: "Axe", full: "Axe Fighting" },
+    { key: "club", abbr: "Club", full: "Club Fighting" },
+    { key: "sword", abbr: "Sword", full: "Sword Fighting" },
+    { key: "shielding", abbr: "Shield", full: "Shielding" },
+  ],
+  paladin: [
+    { key: "distance", abbr: "Dist", full: "Distance Fighting" },
+    { key: "magic", abbr: "ML", full: "Magic Level" },
+  ],
+  druid: [
+    { key: "magic", abbr: "ML", full: "Magic Level" },
+  ],
+  sorcerer: [
+    { key: "magic", abbr: "ML", full: "Magic Level" },
+  ],
+  monk: [
+    { key: "fist", abbr: "Fist", full: "Fist Fighting" },
+    { key: "magic", abbr: "ML", full: "Magic Level" },
+  ],
+};
+
+/** Skills a exibir para a vocação do personagem (null = vocação desconhecida). */
+function skillDefsForVocation(vocation: string): SkillDisplayDef[] | null {
+  const text = String(vocation || "").toLowerCase();
+  for (const [hint, defs] of Object.entries(SKILL_DISPLAY)) {
+    if (text.includes(hint)) return defs;
+  }
+  return null;
 }
 
 // ── Coluna "POTENCIAL" ───────────────────────────────────────────────────────
@@ -887,6 +944,11 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
         if (!detail || detail.error || !Array.isArray(detail.matches) || detail.matches.length === 0) continue;
         const { matches, totalKk } = buildCharacterMatches(detail.matches, getServerIndex(String(auction.server || "")));
         if (matches.length === 0) continue;
+        // OURO: lido pelo Electron da MESMA página (nenhuma etapa extra) e
+        // somado UMA única vez ao total — 1.000.000 gold = 1kk. RC e
+        // Potencial derivam de totalKk, então herdam a soma sem mudança.
+        const goldRaw = Number(detail.gold || 0);
+        const goldKk = Number.isFinite(goldRaw) && goldRaw > 0 ? Math.round((goldRaw / 1_000_000) * 100) / 100 : 0;
         results.push({
           id: String(auction.id || ""),
           name: String(auction.name || ""),
@@ -895,7 +957,9 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
           vocation: String(auction.vocation || ""),
           server: String(auction.server || ""),
           matches,
-          totalKk,
+          totalKk: Math.round((totalKk + goldKk) * 100) / 100,
+          ...(goldKk > 0 ? { goldKk } : {}),
+          ...(detail.skills && Object.keys(detail.skills).length > 0 ? { skills: detail.skills } : {}),
           // Dados de EXIBIÇÃO da listagem no momento da consulta (valor do
           // personagem e encerramento) — nenhum efeito no cálculo dos itens.
           bid: Number(auction.bid || 0),
@@ -1201,19 +1265,18 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
    *  SortHeader das quests: a seta âmbar indica APENAS a coluna ativa (o
    *  único critério de ordenação). "Encerra" é só o padrão inicial — clicar
    *  em outra coluna transfere a ordenação exclusivamente para ela.
-   *  `align="left"` — EXCLUSIVO da coluna "Personagem", a única da tabela
-   *  alinhada à esquerda (cabeçalho, filtro e células); as demais seguem
-   *  centralizadas. `title` permite tooltip explicativo (ex.: Potencial). */
-  function SortHeader({ label, column, align = "center", title }: { label: string; column: ItemsSortKey; align?: "center" | "left"; title?: string }) {
+   *  TODOS os títulos são CENTRALIZADOS (inclusive "Personagem" — regra
+   *  atualizada: só o CONTEÚDO das linhas dessa coluna fica à esquerda).
+   *  `title` permite tooltip explicativo (ex.: Potencial). */
+  function SortHeader({ label, column, title }: { label: string; column: ItemsSortKey; title?: string }) {
     const isActive = sortKey === column;
-    const isLeft = align === "left";
     return (
       <th
-        className={`${STICKY_HEAD_CELL_CLASS} h-10 py-2 align-middle cursor-pointer select-none ${isLeft ? "px-2 text-left" : "px-1 text-center"}`}
+        className={`${STICKY_HEAD_CELL_CLASS} h-10 px-1 py-2 text-center align-middle cursor-pointer select-none`}
         onClick={() => toggleSort(column)}
         title={title}
       >
-        <span className={`inline-flex w-full items-center gap-1 leading-none ${isLeft ? "justify-start" : "justify-center"}`}>
+        <span className="inline-flex w-full items-center justify-center gap-1 leading-none">
           {label}
           <ArrowDownUp size={10} className={isActive ? "text-amber-400" : "text-slate-600"} />
         </span>
@@ -1496,16 +1559,16 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                 com o BazarPanel — fonte única de estilo. */}
             <thead className="text-[10px] uppercase tracking-wider text-slate-400">
               <tr>
-                {/* "Personagem" é a ÚNICA coluna alinhada à esquerda
-                    (cabeçalho, filtro e células) — todas as demais seguem
-                    a regra de centralização da tabela. */}
-                <SortHeader label="Personagem" column="name" align="left" />
+                {/* TÍTULO de "Personagem" CENTRALIZADO (regra atualizada);
+                    só o CONTEÚDO das linhas dessa coluna fica à esquerda. */}
+                <SortHeader label="Personagem" column="name" />
                 <SortHeader label="Servidor" column="server" />
                 <SortHeader label="Encerra" column="auctionEndTs" />
                 <SortHeader label="Valor" column="bid" />
                 <SortHeader label="Valor Itens (KK)" column="totalKk" />
                 <SortHeader label="Valor Itens (RC)" column="rc" />
                 <SortHeader label="Potencial" column="potential" title="Percentual da oportunidade: (Valor Itens efetivo − valor do personagem) ÷ valor do personagem, na mesma unidade (kk, pela cotação do coin). Positivo (verde) = itens valem mais que o preço; negativo (vermelho) = personagem custa mais que os itens." />
+                <th className={`${STICKY_HEAD_CELL_CLASS} h-10 px-1 py-2 text-center align-middle leading-none`} title="Skills inteiras da página do leilão, conforme a vocação: EK = Axe/Club/Sword/Shield; RP = Dist/ML; ED e MS = ML; MK = Fist/ML.">Skills</th>
                 <th className={`${STICKY_HEAD_CELL_CLASS} h-10 px-1 py-2 text-center align-middle leading-none`}>Detalhes</th>
                 <th className={`${STICKY_HEAD_CELL_CLASS} h-10 px-1 py-2 text-center align-middle leading-none`}>Tenho Interesse</th>
                 <th className={`${STICKY_HEAD_CELL_CLASS} h-10 px-1 py-2 text-center align-middle leading-none`}>Link</th>
@@ -1536,7 +1599,8 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                 <th className={`${STICKY_FILTER_CELL_CLASS} h-10 px-1 py-1.5 align-middle`}><div className="flex w-full items-center justify-center [&>button]:w-full [&>button]:max-w-[80px]"><FilterNumber label="Valor" value={tableFilters.bidValue} operator={tableFilters.bidOperator} onChange={(value, operator) => updateTableFilters({ bidValue: value, bidOperator: operator })} placeholder="Valor" /></div></th>
                 <th className={`${STICKY_FILTER_CELL_CLASS} h-10 px-1 py-1.5 align-middle`}><div className="flex w-full items-center justify-center [&>button]:w-full [&>button]:max-w-[80px]"><FilterNumber label="Valor Itens (KK)" value={tableFilters.kkValue} operator={tableFilters.kkOperator} onChange={(value, operator) => updateTableFilters({ kkValue: value, kkOperator: operator })} placeholder="KK" /></div></th>
                 <th className={`${STICKY_FILTER_CELL_CLASS} h-10 px-1 py-1.5 align-middle`}><div className="flex w-full items-center justify-center [&>button]:w-full [&>button]:max-w-[80px]"><FilterNumber label="Valor Itens (RC)" value={tableFilters.rcValue} operator={tableFilters.rcOperator} onChange={(value, operator) => updateTableFilters({ rcValue: value, rcOperator: operator })} placeholder="RC" /></div></th>
-                {/* Potencial: sem filtro próprio (ordenação pelo cabeçalho). */}
+                {/* Potencial e Skills: sem filtro próprio. */}
+                <th className={`${STICKY_FILTER_CELL_CLASS} h-10 px-1 py-1.5 text-center align-middle text-[10px] text-slate-600`}>—</th>
                 <th className={`${STICKY_FILTER_CELL_CLASS} h-10 px-1 py-1.5 text-center align-middle text-[10px] text-slate-600`}>—</th>
                 <th className={`${STICKY_FILTER_CELL_CLASS} h-10 px-1 py-1.5 text-center align-middle text-[10px] text-slate-600`}>—</th>
                 <th className={`${STICKY_FILTER_CELL_CLASS} h-10 px-1 py-1.5 text-center align-middle`}>
@@ -1568,7 +1632,7 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                 // usuário não perca o acesso ao botão de limpar justamente
                 // quando os filtros não retornam resultados.
                 <tr>
-                  <td colSpan={10} className="px-4 py-10 text-center align-middle text-sm text-slate-500">
+                  <td colSpan={11} className="px-4 py-10 text-center align-middle text-sm text-slate-500">
                     <div className="flex flex-col items-center justify-center gap-3">
                       <span>Nenhum personagem encontrado para os filtros atuais.</span>
                       {hasActiveTableFilters && (
@@ -1739,6 +1803,31 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                         —
                       </span>
                     )}
+                  </td>
+                  <td className="px-1.5 py-1.5 text-center">
+                    {/* SKILLS — pares "Abrev valor" em UMA linha compacta,
+                        conforme a vocação (EK/RP/ED/MS/MK). Valores INTEIROS
+                        lidos da página do leilão; skill que não veio na
+                        resposta = "—" no lugar do número (nunca um zero
+                        inventado). Vocação fora do mapa = célula "—". */}
+                    {(() => {
+                      const defs = skillDefsForVocation(result.vocation);
+                      if (!defs) return <span className="text-slate-600">—</span>;
+                      return (
+                        <span className="inline-flex flex-wrap items-center justify-center gap-x-1.5 gap-y-0.5 whitespace-nowrap font-mono text-[9px] leading-none">
+                          {defs.map(def => {
+                            const value = result.skills?.[def.key];
+                            const hasValue = Number.isFinite(value) && (value as number) > 0;
+                            return (
+                              <span key={def.key} title={`${def.full}${hasValue ? `: ${Math.floor(value as number)}` : ": não informado na página"}`} className="inline-flex items-baseline gap-0.5">
+                                <span className="text-slate-500">{def.abbr}</span>
+                                <span className={hasValue ? "font-bold text-sky-300" : "text-slate-600"}>{hasValue ? Math.floor(value as number) : "—"}</span>
+                              </span>
+                            );
+                          })}
+                        </span>
+                      );
+                    })()}
                   </td>
                   <td className="px-2 py-1.5 text-center">
                     <button
@@ -2166,6 +2255,11 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
 
               <div className="rounded-lg border border-fuchsia-500/25 bg-fuchsia-500/5 px-3 py-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px]">
                 <span className="text-slate-300">Total do personagem: <span className="font-mono font-bold text-amber-200">{formatKkValue(detailResult.totalKk, "kk")}</span></span>
+                {(detailResult.goldKk || 0) > 0 && (
+                  <span className="text-slate-300" title="Ouro lido na página do leilão, convertido para kk (1.000.000 gold = 1kk) e já somado ao total acima — uma única vez.">
+                    Inclui Ouro: <span className="font-mono font-bold text-yellow-300">{formatKkValue(detailResult.goldKk || 0, "kk")}</span>
+                  </span>
+                )}
                 {coinRate > 0 ? (
                   <span className="text-slate-300" title={`floor((${detailResult.totalKk} / ${coinRate}) × 1000) — mesma fórmula de conversão do restante do aplicativo`}>
                     Em RC (coin a {coinRateText}k): <span className="font-mono font-bold text-emerald-300">{computeItemRC(coinRate, detailResult.totalKk).toLocaleString("de-DE")} RC</span>

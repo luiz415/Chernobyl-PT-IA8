@@ -63,6 +63,13 @@ export interface CharacterItemMatch {
   totalKk: number;
 }
 
+/**
+ * Skills inteiras lidas da página do leilão (chaves canônicas do Electron:
+ * axe/club/sword/distance/shielding/fist/magic). Campo ausente = a skill
+ * não veio na resposta (a exibição mostra "—", nunca inventa 0).
+ */
+export type ItemsCharacterSkills = Partial<Record<"axe" | "club" | "sword" | "distance" | "shielding" | "fist" | "magic", number>>;
+
 /** Resultado de UM personagem na consulta de itens. */
 export interface BazaarItemsCharacterResult {
   id: string;
@@ -72,7 +79,16 @@ export interface BazaarItemsCharacterResult {
   vocation: string;
   server: string;
   matches: CharacterItemMatch[];
+  /**
+   * TOTAL da coluna "Valor Itens (KK)" = soma dos matches + `goldKk`.
+   * O ouro entra UMA única vez (aqui); `goldKk` guarda a parcela para a
+   * exibição e para a reprecificação não perdê-la nem duplicá-la.
+   */
   totalKk: number;
+  /** Ouro da página convertido para kk (1.000.000 gold = 1kk). */
+  goldKk?: number;
+  /** Skills inteiras encontradas na página do leilão. */
+  skills?: ItemsCharacterSkills;
   /** Valor (bid) do personagem NO MOMENTO da consulta — só exibição. */
   bid?: number;
   /** Encerramento do leilão (s ou ms, normalizado na exibição) — só exibição. */
@@ -356,7 +372,10 @@ export function repriceQueryResultsForServerItem(
       return { ...match, baseValueKk: newBaseValueKk, unitValueKk, totalKk };
     });
     if (!touched) return result;
-    const totalKk = Math.round(matches.reduce((sum, item) => sum + item.totalKk, 0) * 100) / 100;
+    // Total = matches reprecificados + parcela de OURO do personagem (que
+    // não depende de preço de item — preservada, nunca duplicada).
+    const goldKk = Number.isFinite(result.goldKk) && (result.goldKk || 0) > 0 ? (result.goldKk as number) : 0;
+    const totalKk = Math.round((matches.reduce((sum, item) => sum + item.totalKk, 0) + goldKk) * 100) / 100;
     return { ...result, matches, totalKk };
   });
 }
