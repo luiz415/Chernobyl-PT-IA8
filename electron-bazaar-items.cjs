@@ -435,6 +435,9 @@ function registerBazaarItemsMethod(deps) {
       try {
         sendProgress(event.sender, buildProgress('details', 'Itens: consultando personagens via API...', 0, list.length, {
           methodLabel: 'Itens (API JSON)',
+          // Progresso pertence à GUIA ITENS: o renderer usa este carimbo para
+          // exibir cada consulta somente na própria guia.
+          scope: 'itens',
         }));
 
         for (let index = 0; index < list.length; index++) {
@@ -474,6 +477,7 @@ function registerBazaarItemsMethod(deps) {
           sendProgress(event.sender, buildProgress('details', 'Itens: consultando personagens via API...', index + 1, list.length, {
             methodLabel: 'Itens (API JSON)',
             apiResolved: analyzedCount,
+            scope: 'itens',
           }));
 
           if (index < list.length - 1) await page.waitForTimeout(currentGapMs());

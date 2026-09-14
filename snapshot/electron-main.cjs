@@ -400,6 +400,10 @@ let rubinotUseCleanProfile = false;
 let rubinotCleanProfileDir = '';
 let rubinotQueue = Promise.resolve();
 let rubinotProgressState = { active: false, stage: '', message: '', processed: 0, total: 0, percent: 0, startedAt: 0, updatedAt: 0, reason: '' };
+// ORIGEM da consulta em curso ('quests' | 'itens') — carimbada em TODO evento
+// de progresso para que cada guia do renderer exiba SOMENTE a própria
+// consulta (a listagem `rubinot-bazaar-fetch` é compartilhada pelas duas).
+let rubinotProgressScope = 'quests';
 const rubinotDetailsCache = new Map();
 const rubinotDetailsInFlight = new Map();
 const RUBINOT_DETAILS_TTL_MS = 6 * 60 * 60 * 1000;
@@ -455,6 +459,9 @@ function sendRubinotProgress(sender, payload) {
       label: RUBINOT_BROWSERS[entry.browser]?.label || entry.browser,
       attempts: entry.attempts,
     })),
+    // Guia dona da consulta — o payload pode sobrescrever (o canal de itens
+    // marca 'itens' nos próprios eventos).
+    scope: rubinotProgressScope,
     ...payload,
     active: true,
     startedAt: rubinotProgressState.active && rubinotProgressState.startedAt ? rubinotProgressState.startedAt : now,
@@ -4929,6 +4936,10 @@ ipcMain.handle('rubinot-bazaar-fetch', async (event, payload = {}) => {
   // O navegador escolhido no modal vale para toda a consulta (listagem +
   // detalhes), então é guardado no estado do processo principal.
   rubinotSelectedBrowser = resolveRubinotBrowserKey(payload?.browser);
+  // Guia DONA desta execução ('quests' padrão; o painel de itens envia
+  // 'itens') — carimbada em todos os eventos de progresso da listagem para o
+  // renderer separar o que é de cada guia. Não altera a consulta em nada.
+  rubinotProgressScope = payload?.progressScope === 'itens' ? 'itens' : 'quests';
   // Limite de encerramento (epoch em segundos) que habilita a parada antecipada.
   const endUntilTs = Number(payload?.endUntilTs || 0);
   // Perfil limpo vale para toda a consulta (listagem + detalhes).

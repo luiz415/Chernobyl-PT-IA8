@@ -163,6 +163,12 @@ interface BazaarProgressEvent {
   startedAt?: number;
   updatedAt?: number;
   reason?: string;
+  /**
+   * GUIA DONA da consulta ('quests' | 'itens') — carimbado pelo processo
+   * principal em todo evento. Cada guia só exibe o próprio progresso;
+   * ausência do campo (versões antigas) = 'quests'.
+   */
+  scope?: string;
   /** Falhas já detectadas que serão reenviadas ao segundo navegador. */
   retryPending?: number;
   /** true quando a passada em curso JÁ É o retry com o navegador secundário. */
@@ -928,6 +934,10 @@ function formatProgressMessage(progress: BazaarProgressEvent): string {
 }
 
 function isActiveProgress(progress: BazaarProgressEvent | null | undefined): progress is BazaarProgressEvent {
+  // `scope === 'itens'` pertence à consulta da GUIA ITENS: o painel de
+  // quests IGNORA esses eventos (progresso independente por guia). Eventos
+  // sem scope (compatibilidade) continuam tratados como quests.
+  if (progress?.scope === "itens") return false;
   return !!progress?.active && !!progress.message && (progress.stage === "bazaar" || progress.stage === "details");
 }
 
@@ -1168,11 +1178,28 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
   // permissão mude com o painel aberto.
   const [panelMode, setPanelMode] = useState<"quests" | "itens">("quests");
   const showItemsMode = panelMode === "itens" && isBossUser && !demoMode;
+  // Consulta da GUIA ITENS em andamento (reportada pelo BazaarItemsPanel via
+  // onRunningChange) — bloqueia o "Consultar Bazaar" das QUESTS enquanto
+  // roda, exatamente como a consulta de quests bloqueia o da guia Itens.
+  const [isItemsQueryRunning, setIsItemsQueryRunning] = useState(false);
+  // O painel de ITENS permanece MONTADO (oculto via CSS) depois da primeira
+  // visita: trocar de guia durante uma consulta de itens NÃO desmonta o
+  // componente — a consulta continua, o progresso não se perde e o navegador
+  // não é fechado prematuramente. (O estado das quests vive neste componente,
+  // que nunca desmonta — o mesmo já valia para o caminho inverso.)
+  const [itemsPanelMounted, setItemsPanelMounted] = useState(false);
   useEffect(() => {
     // Permissão revogada (ou tutorial ativado) com o modo itens aberto:
     // volta imediatamente para o painel de quests.
     if (panelMode === "itens" && (!isBossUser || demoMode)) setPanelMode("quests");
   }, [panelMode, isBossUser, demoMode]);
+  // Primeira visita à guia Itens marca o painel para permanecer montado
+  // (oculto via CSS quando o usuário volta às quests). Perda de permissão
+  // desmonta de verdade — o gate continua real.
+  useEffect(() => {
+    if (showItemsMode) setItemsPanelMounted(true);
+    if (!isBossUser || demoMode) { setItemsPanelMounted(false); setIsItemsQueryRunning(false); }
+  }, [showItemsMode, isBossUser, demoMode]);
   const needsQuestDetails = soulwarFilter !== "all" || sanguineFilter !== "all";
   // Quais quests os filtros atuais realmente exigem. Uma quest em "Todas" não
   // é consultada e a coluna correspondente mostra "Não verificado".
@@ -1364,6 +1391,11 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
     try {
       const { ipcRenderer } = (window as any).require("electron");
       const applyProgress = (progress: BazaarProgressEvent) => {
+        // Progresso da GUIA ITENS (scope 'itens'): NUNCA toca nos estados
+        // das quests — nem os eventos ativos nem o de finalização
+        // (active=false), que senão zeraria isLoading/queryStatus de uma
+        // consulta de quests. Cada guia exibe SOMENTE a própria consulta.
+        if (progress?.scope === "itens") return;
         if (progress && progress.active === false) {
           setIsLoading(false);
           setIsCheckingDetails(false);
@@ -1917,7 +1949,7 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
       setError("A atualização de valores precisa ser executada no aplicativo Desktop (Electron).");
       return;
     }
-    if (isLoading || isOfficialSyncing || isValueRefreshing) return;
+    if (isLoading || isOfficialSyncing || isValueRefreshing || isItemsQueryRunning) return;
     const officialCache = readOfficialBazaarCache();
     const officialVersion = officialCache?.metadata?.version || officialMetadata?.version || "";
     const officialAuctions = officialCache?.characters || [];
@@ -2027,6 +2059,13 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
       setError("Apenas usuários Boss podem iniciar uma nova consulta do Bazaar.");
       return;
     }
+    // Consulta da GUIA ITENS em andamento: o navegador está em uso — o
+    // "Consultar Bazaar" fica bloqueado nas DUAS guias até ela terminar.
+    if (isItemsQueryRunning) {
+      setError("Há uma consulta de Itens em andamento. Aguarde a finalização para iniciar uma nova consulta.");
+      return;
+    }
+    if (isLoading || isCheckingDetails) return;
     if (!isElectron) {
       setError("A consulta direta ao Rubinot precisa ser executada no aplicativo Desktop (Electron).");
       return;
@@ -2065,6 +2104,13 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
     }
     if (!isElectron) {
       setError("A consulta direta ao Rubinot precisa ser executada no aplicativo Desktop (Electron).");
+      return;
+    }
+    // Proteção REAL contra consultas simultâneas (não apenas visual): outra
+    // instância do controle não consegue disparar enquanto uma consulta de
+    // quests OU de itens estiver em andamento.
+    if (isLoading || isCheckingDetails || isItemsQueryRunning) {
+      setError("Já existe uma consulta do Bazaar em andamento. Aguarde a finalização.");
       return;
     }
 
@@ -2441,7 +2487,7 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
 
   useEffect(() => {
     function handleAutoBazaarRun(event: Event) {
-      if (!isBossUser || !isElectron || isLoading || isCheckingDetails) return;
+      if (!isBossUser || !isElectron || isLoading || isCheckingDetails || isItemsQueryRunning) return;
       const notificationId = (event as CustomEvent).detail?.notificationId;
       if (!notificationId) return;
       autoBazaarNotificationInFlightRef.current = String(notificationId);
@@ -2457,7 +2503,7 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
     }
     window.addEventListener("auto-bazaar-run-request", handleAutoBazaarRun);
     return () => window.removeEventListener("auto-bazaar-run-request", handleAutoBazaarRun);
-  }, [isBossUser, isElectron, isLoading, isCheckingDetails, serverSelectionMode, selectedServers, vocationLevels, maxValue, soulwarFilter, sanguineFilter, endUntil, timezoneOffsetMinutes]);
+  }, [isBossUser, isElectron, isLoading, isCheckingDetails, isItemsQueryRunning, serverSelectionMode, selectedServers, vocationLevels, maxValue, soulwarFilter, sanguineFilter, endUntil, timezoneOffsetMinutes]);
 
   function updateTableFilters(patch: Partial<BazaarTableFilters>) {
     setTableFilters(prev => ({ ...prev, ...patch }));
@@ -2709,11 +2755,17 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
             gate e o useEffect derruba o modo se a permissão mudar. */}
         {isBossUser && !demoMode && (
           <div className="absolute left-2 top-2 z-20 inline-flex items-center rounded-xl border border-[var(--th-line)]/60 bg-[var(--th-n-base)]/90 backdrop-blur-md p-0.5 shadow-lg shadow-black/40">
+            {/* Alternância SEMPRE liberada — inclusive durante consultas.
+                Trocar de guia não cancela, não reinicia e não fecha o
+                navegador: a consulta roda no processo principal e o
+                progresso é reconstruído ao voltar (current-progress). O
+                painel de itens permanece MONTADO via CSS (hidden) durante a
+                própria consulta, então o executeItemsQuery nunca é
+                interrompido pela troca. */}
             <button
               type="button"
               onClick={() => setPanelMode("quests")}
-              disabled={isLoading || isCheckingDetails}
-              className={`inline-flex h-6 items-center gap-1 px-2 rounded-[10px] text-[9px] font-black uppercase tracking-wide transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${
+              className={`inline-flex h-6 items-center gap-1 px-2 rounded-[10px] text-[9px] font-black uppercase tracking-wide transition-all cursor-pointer ${
                 !showItemsMode
                   ? "bg-amber-500/20 border border-amber-400/40 text-amber-200 shadow-[0_0_10px_color-mix(in_oklab,var(--color-amber-500)_18%,transparent)]"
                   : "border border-transparent text-slate-400 hover:text-amber-300 hover:bg-amber-500/10"
@@ -2725,8 +2777,7 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
             <button
               type="button"
               onClick={() => setPanelMode("itens")}
-              disabled={isLoading || isCheckingDetails}
-              className={`inline-flex h-6 items-center gap-1 px-2 rounded-[10px] text-[9px] font-black uppercase tracking-wide transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${
+              className={`inline-flex h-6 items-center gap-1 px-2 rounded-[10px] text-[9px] font-black uppercase tracking-wide transition-all cursor-pointer ${
                 showItemsMode
                   ? "bg-fuchsia-500/20 border border-fuchsia-400/40 text-fuchsia-200 shadow-[0_0_10px_color-mix(in_oklab,var(--color-fuchsia-500)_18%,transparent)]"
                   : "border border-transparent text-slate-400 hover:text-fuchsia-300 hover:bg-fuchsia-500/10"
@@ -2748,24 +2799,39 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
             Mesmo cartão compacto do seletor segmentado, para um padrão
             visual consistente entre os dois painéis. */}
         {isBossUser && !demoMode && (
-          showItemsMode ? (
+          <>
+            {/* O contêiner do portal dos botões do modo ITENS existe nos
+                DOIS modos (oculto nas quests) — assim o BazaarItemsPanel,
+                que agora permanece MONTADO durante a troca de guia, nunca
+                perde a referência do portal. */}
             <div
               id="bazaar-items-title-actions"
-              className="absolute right-2 top-2 z-20 inline-flex items-center gap-1.5 rounded-xl border border-[var(--th-line)]/60 bg-[var(--th-n-base)]/90 backdrop-blur-md p-0.5 shadow-lg shadow-black/40 empty:hidden"
+              className={showItemsMode
+                ? "absolute right-2 top-2 z-20 inline-flex items-center gap-1.5 rounded-xl border border-[var(--th-line)]/60 bg-[var(--th-n-base)]/90 backdrop-blur-md p-0.5 shadow-lg shadow-black/40 empty:hidden"
+                : "hidden"}
             />
-          ) : (
-            <div className="absolute right-2 top-2 z-20 inline-flex items-center gap-1.5 rounded-xl border border-[var(--th-line)]/60 bg-[var(--th-n-base)]/90 backdrop-blur-md p-0.5 shadow-lg shadow-black/40">
-              <button type="button" onClick={openSearchFiltersModal} disabled={isLoading || isCheckingDetails} className="inline-flex h-7 items-center gap-1 px-2.5 rounded-lg border border-amber-500/25 bg-amber-500/10 text-amber-300 text-[10px] font-black transition-all cursor-pointer hover:bg-amber-500/20 disabled:opacity-50 disabled:cursor-not-allowed">
-                <Filter size={12} /> Filtros Consulta
-              </button>
-              {isElectron && (
-                <button type="button" onClick={requestBazaarQuery} disabled={isLoading || isOfficialSyncing} className="inline-flex h-7 items-center gap-1 px-2.5 rounded-lg bg-gradient-to-r from-amber-700/80 to-amber-600/80 hover:from-amber-600 hover:to-amber-500 border border-amber-500/40 text-black text-[10px] font-black transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed shadow-md shadow-amber-900/15">
-                  <RefreshCw size={12} className={isLoading ? "animate-spin" : ""} />
-                  {isLoading ? "Consultando..." : "Consultar Bazaar"}
+            {!showItemsMode && (
+              <div className="absolute right-2 top-2 z-20 inline-flex items-center gap-1.5 rounded-xl border border-[var(--th-line)]/60 bg-[var(--th-n-base)]/90 backdrop-blur-md p-0.5 shadow-lg shadow-black/40">
+                <button type="button" onClick={openSearchFiltersModal} disabled={isLoading || isCheckingDetails} className="inline-flex h-7 items-center gap-1 px-2.5 rounded-lg border border-amber-500/25 bg-amber-500/10 text-amber-300 text-[10px] font-black transition-all cursor-pointer hover:bg-amber-500/20 disabled:opacity-50 disabled:cursor-not-allowed">
+                  <Filter size={12} /> Filtros Consulta
                 </button>
-              )}
-            </div>
-          )
+                {isElectron && (
+                  <button
+                    type="button"
+                    onClick={requestBazaarQuery}
+                    // Bloqueado também enquanto a consulta da GUIA ITENS
+                    // roda — nenhuma consulta nova com o navegador em uso.
+                    disabled={isLoading || isOfficialSyncing || isItemsQueryRunning}
+                    title={isItemsQueryRunning ? "Consulta de Itens em andamento — aguarde a finalização." : undefined}
+                    className="inline-flex h-7 items-center gap-1 px-2.5 rounded-lg bg-gradient-to-r from-amber-700/80 to-amber-600/80 hover:from-amber-600 hover:to-amber-500 border border-amber-500/40 text-black text-[10px] font-black transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed shadow-md shadow-amber-900/15"
+                  >
+                    <RefreshCw size={12} className={isLoading ? "animate-spin" : ""} />
+                    {isLoading ? "Consultando..." : "Consultar Bazaar"}
+                  </button>
+                )}
+              </div>
+            )}
+          </>
         )}
 
         <div className="relative mx-auto w-full max-w-3xl flex items-center justify-center overflow-hidden rounded-2xl border border-amber-500/35 bg-[linear-gradient(135deg,color-mix(in_oklab,var(--th-brand)_94%,transparent),color-mix(in_oklab,var(--th-brand)_72%,transparent),color-mix(in_oklab,var(--th-brand)_94%,transparent))] backdrop-blur-md px-3 py-2 shadow-[0_14px_36px_rgba(0,0,0,0.34),0_0_28px_color-mix(in_oklab,var(--color-amber-500)_10%,transparent)] min-h-[46px] transition-all duration-500">
@@ -2798,26 +2864,38 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
             Modo "itens" (novo, exclusivo Boss): componente próprio, 100%
             local. Modo "quests": todo o conteúdo atual, intacto. O modo
             itens NUNCA monta sem Boss — `showItemsMode` já embute o gate. */}
-        {showItemsMode ? (
-          <BazaarItemsPanel
-            isBossUser={isBossUser}
-            isElectron={isElectron}
-            timezoneOffsetMinutes={timezoneOffsetMinutes}
-            // Botão "Link": EXATAMENTE o mesmo mecanismo do painel de quests —
-            // mesmo estado compartilhado de aberturas (openedLinksState),
-            // mesma marcação e mesmo openExternal. Um personagem aberto em um
-            // painel aparece como "Aberto" também no outro.
-            getLinkState={getBazaarLinkState}
-            openLink={(auctionKey, url) => {
-              markBazaarLinkOpened(auctionKey);
-              openExternal(url);
-            }}
-            // Botão "Ver": mesmo mecanismo de histórico do Link (opened +
-            // último), em registro separado — "Visto"/"Último Aberto".
-            getViewState={getBazaarDetailViewState}
-            markViewed={markBazaarDetailViewed}
-          />
-        ) : (
+        {itemsPanelMounted && (
+          // MONTADO após a primeira visita; oculto via CSS fora do modo
+          // itens ("hidden"). Assim, alternar de guia DURANTE uma consulta
+          // de itens não desmonta o componente: a consulta continua, o
+          // progresso segue ao vivo e o navegador só fecha no final normal.
+          <div className={showItemsMode ? "flex-1 min-h-0 flex flex-col" : "hidden"}>
+            <BazaarItemsPanel
+              isBossUser={isBossUser}
+              isElectron={isElectron}
+              timezoneOffsetMinutes={timezoneOffsetMinutes}
+              // Botão "Link": EXATAMENTE o mesmo mecanismo do painel de quests —
+              // mesmo estado compartilhado de aberturas (openedLinksState),
+              // mesma marcação e mesmo openExternal. Um personagem aberto em um
+              // painel aparece como "Aberto" também no outro.
+              getLinkState={getBazaarLinkState}
+              openLink={(auctionKey, url) => {
+                markBazaarLinkOpened(auctionKey);
+                openExternal(url);
+              }}
+              // Botão "Ver": mesmo mecanismo de histórico do Link (opened +
+              // último), em registro separado — "Visto"/"Último Aberto".
+              getViewState={getBazaarDetailViewState}
+              markViewed={markBazaarDetailViewed}
+              // Bloqueio CRUZADO das consultas: itens avisa quando roda
+              // (bloqueia o Consultar das quests) e recebe se quests roda
+              // (bloqueia o próprio Consultar).
+              onRunningChange={setIsItemsQueryRunning}
+              isQuestsQueryRunning={isLoading || isCheckingDetails}
+            />
+          </div>
+        )}
+        {!showItemsMode && (
         <>
         {error && (
           <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-300 flex items-center gap-2">

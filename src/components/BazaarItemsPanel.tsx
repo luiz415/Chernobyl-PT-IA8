@@ -121,6 +121,12 @@ interface ItemsProgressEvent {
   processed?: number;
   total?: number;
   percent?: number;
+  /**
+   * GUIA DONA da consulta ('quests' | 'itens') — carimbo do processo
+   * principal. Esta guia SÓ exibe eventos scope 'itens'; o progresso das
+   * quests nunca aparece aqui (e vice-versa).
+   */
+  scope?: string;
 }
 
 interface Props {
@@ -142,6 +148,16 @@ interface Props {
   getViewState?: (auctionKey: string) => "open" | "opened" | "last";
   /** Registra a visualização do modal Detalhes (local por usuário, como o Link). */
   markViewed?: (auctionKey: string) => void;
+  /**
+   * Avisa o BazarPanel quando a consulta de ITENS começa/termina — usado
+   * para bloquear o "Consultar Bazaar" das quests enquanto ela roda.
+   */
+  onRunningChange?: (running: boolean) => void;
+  /**
+   * Consulta de QUESTS em andamento — bloqueia o "Consultar Bazaar" desta
+   * guia (o navegador é compartilhado; nunca duas consultas ao mesmo tempo).
+   */
+  isQuestsQueryRunning?: boolean;
 }
 
 /** Entrada em edição no modal da Lista de Itens. */
@@ -392,7 +408,7 @@ interface ItemsLocalNotification {
   auctionId?: string;
 }
 
-export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffsetMinutes, getLinkState, openLink, getViewState, markViewed }: Props) {
+export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffsetMinutes, getLinkState, openLink, getViewState, markViewed, onRunningChange, isQuestsQueryRunning }: Props) {
   const { currentUser } = useAuth();
   const currentUid = currentUser?.uid || "";
 
@@ -487,6 +503,13 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
   // ── Estado da consulta ─────────────────────────────────────────────────────
   const [isBrowserModalOpen, setIsBrowserModalOpen] = useState(false);
   const [isRunning, setIsRunning] = useState(false);
+  // Reporta início/fim da consulta ao BazarPanel (bloqueio cruzado do
+  // "Consultar Bazaar" das quests). Efeito, para cobrir também o unmount.
+  useEffect(() => {
+    onRunningChange?.(isRunning);
+    return () => { if (isRunning) onRunningChange?.(false); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isRunning]);
   const [statusText, setStatusText] = useState("");
   const [progress, setProgress] = useState<ItemsProgressEvent | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -642,21 +665,31 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
     window.setTimeout(() => setCopiedKey(current => (current === key ? null : current)), 1500);
   }
 
-  // Progresso do processo principal — o mesmo canal usado pelas quests. Só é
-  // exibido enquanto ESTA consulta roda (isRunning), então não interfere no
-  // modo de quests.
+  // Progresso do processo principal — o mesmo canal usado pelas quests,
+  // FILTRADO pelo carimbo de origem: esta guia só consome eventos
+  // scope 'itens' (o progresso das quests nunca aparece aqui). Na montagem,
+  // o estado atual é reconstruído via current-progress — mesmo mecanismo
+  // usado pelas quests ao trocar de painel.
   useEffect(() => {
     if (!isElectron) return;
     try {
       const { ipcRenderer } = (window as any).require("electron");
-      const handleProgress = (_event: unknown, event: ItemsProgressEvent) => {
+      const applyProgress = (event: ItemsProgressEvent) => {
+        // Eventos de OUTRA guia (quests/sem carimbo 'itens'): ignorados por
+        // completo — inclusive o de finalização, que não pode apagar o
+        // progresso de uma consulta de itens em curso.
+        if (event?.scope !== "itens") return;
         if (!event || event.active === false) {
           setProgress(null);
           return;
         }
         setProgress(event);
       };
+      const handleProgress = (_event: unknown, event: ItemsProgressEvent) => applyProgress(event);
       ipcRenderer.on("rubinot-bazaar-progress", handleProgress);
+      ipcRenderer.invoke("rubinot-bazaar-current-progress")
+        .then((event: ItemsProgressEvent) => applyProgress(event))
+        .catch(() => {});
       return () => {
         ipcRenderer.removeListener("rubinot-bazaar-progress", handleProgress);
       };
@@ -848,6 +881,10 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
   function requestItemsQuery() {
     if (!isBossUser) { setError("Apenas usuários Boss podem consultar itens no Bazaar."); return; }
     if (!isElectron) { setError("A consulta de itens precisa ser executada no aplicativo Desktop (Electron)."); return; }
+    // Bloqueio CRUZADO: consulta de QUESTS em andamento usa o mesmo
+    // navegador — o "Consultar Bazaar" fica bloqueado nas duas guias.
+    if (isQuestsQueryRunning) { setError("Há uma consulta de Quests em andamento. Aguarde a finalização para iniciar uma nova consulta."); return; }
+    if (isRunning) return;
     if (totalWatchedCount === 0) { setError("Cadastre pelo menos um item na Lista de Itens antes de consultar."); return; }
     if (!endUntil || !parseDateTimeLocalWithOffset(endUntil, timezoneOffsetMinutes)) {
       setError("Informe o filtro de data (Encerra até) antes de consultar.");
@@ -875,8 +912,9 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
     retryCounts: BazaarRetryCounts;
   }) {
     // Reconferência do gate: o painel nunca deveria estar montado sem Boss,
-    // mas a restrição é REAL, não apenas visual.
-    if (!isBossUser || !isElectron || isRunning) return;
+    // mas a restrição é REAL, não apenas visual. A guarda contra consulta de
+    // QUESTS em andamento também é real — nunca duas consultas no navegador.
+    if (!isBossUser || !isElectron || isRunning || isQuestsQueryRunning) return;
 
     const endLimit = parseDateTimeLocalWithOffset(endUntil, timezoneOffsetMinutes);
     if (!endLimit) { setError("Filtro de data inválido."); return; }
@@ -900,6 +938,9 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
         browserOrder: options.browserOrder || loadUIState<string[]>(BAZAAR_BROWSER_ORDER_KEY, DEFAULT_BROWSER_ORDER),
         retryBrowsers: options.retryBrowsers || loadUIState<string[]>(BAZAAR_RETRY_BROWSERS_KEY, []),
         retryCounts: options.retryCounts || normalizeRetryCounts(loadUIState<BazaarRetryCounts | null>(BAZAAR_RETRY_COUNTS_KEY, null)),
+        // Carimba a listagem como consulta da GUIA ITENS: o progresso dela
+        // aparece SÓ aqui (a guia de quests ignora eventos scope 'itens').
+        progressScope: "itens",
       }) as ItemsFetchResult;
 
       if (!response?.ok || response?.cancelled) {
@@ -1012,6 +1053,10 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
     } catch (err) {
       setError(String((err as Error)?.message || err));
     } finally {
+      // Fecha o navegador ao FINAL da consulta — MESMO mecanismo das quests
+      // (closeRubinotBrowserFromRenderer no finally do handleFetchBazaar).
+      // Roda em qualquer desfecho: sucesso, erro ou parada manual.
+      await closeRubinotBrowserFromRenderer("consulta-itens-finalizada");
       setIsRunning(false);
       setProgress(null);
       setStatusText("");
@@ -1036,7 +1081,7 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
   async function handleRefreshItemValues() {
     if (!isBossUser) { setError("Apenas usuários Boss podem atualizar os valores do Bazaar."); return; }
     if (!isElectron) { setError("A atualização de valores precisa ser executada no aplicativo Desktop (Electron)."); return; }
-    if (isRunning || isValueRefreshing) return;
+    if (isRunning || isValueRefreshing || isQuestsQueryRunning) return;
     const current = lastQuery;
     if (!current || current.results.length === 0) {
       setError("Não há consulta de itens carregada para atualizar valores.");
@@ -1064,6 +1109,8 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
         retryBrowsers: loadUIState<string[]>(BAZAAR_RETRY_BROWSERS_KEY, []),
         retryCounts: normalizeRetryCounts(loadUIState<BazaarRetryCounts | null>(BAZAAR_RETRY_COUNTS_KEY, null)),
         autoRun: false,
+        // Releitura pertence à GUIA ITENS — progresso não vaza para quests.
+        progressScope: "itens",
       }) as ItemsFetchResult;
       if (!response?.ok || response?.cancelled || !Array.isArray(response.auctions)) {
         setError(response?.error || "Não foi possível reler a listagem do Bazaar. Os valores atuais foram mantidos.");
@@ -1368,6 +1415,16 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
   // somem.
   const titleActions = (
     <>
+      {/* ORDEM: Lista de Itens → Consultar Bazaar (posições trocadas a
+          pedido; tamanho, função e estilo dos botões inalterados). */}
+      <button
+        type="button"
+        onClick={() => { setIsItemsModalOpen(true); setImportFeedback(null); setScopePicker(null); cancelInlineEdit(); }}
+        className="inline-flex h-7 items-center gap-1 px-2.5 rounded-lg border border-fuchsia-500/25 bg-fuchsia-500/10 text-fuchsia-300 text-[10px] font-black transition-all cursor-pointer hover:bg-fuchsia-500/20"
+        title="Itens monitorados na consulta: nome e valor base em kk, por servidor"
+      >
+        <ListChecks size={12} /> Lista de Itens ({totalWatchedCount})
+      </button>
       {isElectron && (isRunning ? (
         <button
           type="button"
@@ -1381,19 +1438,15 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
         <button
           type="button"
           onClick={requestItemsQuery}
-          className="inline-flex h-7 items-center gap-1 px-2.5 rounded-lg bg-gradient-to-r from-fuchsia-700/80 to-fuchsia-600/80 hover:from-fuchsia-600 hover:to-fuchsia-500 border border-fuchsia-500/40 text-white text-[10px] font-black transition-all cursor-pointer shadow-md shadow-fuchsia-900/15"
+          // Bloqueado em tempo real enquanto a consulta de QUESTS roda —
+          // o navegador é um só; nenhuma consulta simultânea.
+          disabled={!!isQuestsQueryRunning}
+          title={isQuestsQueryRunning ? "Consulta de Quests em andamento — aguarde a finalização." : undefined}
+          className="inline-flex h-7 items-center gap-1 px-2.5 rounded-lg bg-gradient-to-r from-fuchsia-700/80 to-fuchsia-600/80 hover:from-fuchsia-600 hover:to-fuchsia-500 border border-fuchsia-500/40 text-white text-[10px] font-black transition-all cursor-pointer shadow-md shadow-fuchsia-900/15 disabled:opacity-50 disabled:cursor-not-allowed"
         >
           <RefreshCw size={12} /> Consultar Bazaar
         </button>
       ))}
-      <button
-        type="button"
-        onClick={() => { setIsItemsModalOpen(true); setImportFeedback(null); setScopePicker(null); cancelInlineEdit(); }}
-        className="inline-flex h-7 items-center gap-1 px-2.5 rounded-lg border border-fuchsia-500/25 bg-fuchsia-500/10 text-fuchsia-300 text-[10px] font-black transition-all cursor-pointer hover:bg-fuchsia-500/20"
-        title="Itens monitorados na consulta: nome e valor base em kk, por servidor"
-      >
-        <ListChecks size={12} /> Lista de Itens ({totalWatchedCount})
-      </button>
     </>
   );
 
@@ -1612,7 +1665,33 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
       {/* A tabela exibe `visibleResults` — o derivado do "Pesquisar Item".
           Sem pesquisa, visibleResults === results (todos os personagens). */}
       <div className="flex-1 min-h-0 overflow-auto custom-scrollbar rounded-lg border border-[var(--th-line)]/60 bg-[var(--th-n-base)]/80">
-        {visibleResults.length === 0 ? (
+        {isRunning ? (
+          /* PROGRESSO EM TEMPO REAL na área da tabela — MESMO padrão do
+             painel de quests (ícone girando em card, mensagem, barra com
+             percentual e contagem processados/total), na paleta fúcsia da
+             guia Itens. Alimentado pelos eventos scope 'itens' do canal
+             rubinot-bazaar-progress (listagem + análise individual). */
+          <div className="h-full flex flex-col items-center justify-center text-center p-8 text-slate-500 gap-4">
+            <div className="w-14 h-14 rounded-2xl border border-fuchsia-500/30 bg-fuchsia-500/10 flex items-center justify-center shadow-[0_0_28px_color-mix(in_oklab,var(--color-fuchsia-500)_10%,transparent)]">
+              <RefreshCw size={24} className="text-fuchsia-300 animate-spin" />
+            </div>
+            <div className="w-full max-w-md space-y-3">
+              <div className="text-sm font-black text-fuchsia-200">{progress?.message || statusText || "Consultando Bazaar..."}</div>
+              <div className="space-y-1.5">
+                <div className="h-2 rounded-full bg-black/40 border border-white/10 overflow-hidden">
+                  <div className="h-full rounded-full bg-gradient-to-r from-fuchsia-600 to-fuchsia-300 transition-all duration-300" style={{ width: `${(progress?.total || 0) > 0 ? Math.min(100, Math.max(0, progress?.percent || 0)) : 0}%` }} />
+                </div>
+                <div className="flex items-center justify-between text-[11px] text-slate-400 font-mono">
+                  <span>{(progress?.total || 0) > 0 ? `${Math.min(100, Math.max(0, progress?.percent || 0))}%` : "—"}</span>
+                  <span>{(progress?.total || 0) > 0 ? `${progress?.processed || 0} / ${progress?.total} personagem(ns)` : "Preparando..."}</span>
+                </div>
+              </div>
+              <p className="text-[10px] text-slate-500 leading-relaxed">
+                Você pode alternar para a guia Quests durante a consulta — ela continua normalmente e o resultado aparece aqui ao final.
+              </p>
+            </div>
+          </div>
+        ) : visibleResults.length === 0 ? (
           <div className="h-full flex items-center justify-center p-6">
             <div className="text-center space-y-2 max-w-md">
               <Package size={28} className="mx-auto text-fuchsia-400/60" />
