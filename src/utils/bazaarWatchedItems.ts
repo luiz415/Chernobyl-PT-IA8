@@ -381,6 +381,42 @@ export function repriceQueryResultsForServerItem(
 }
 
 /**
+ * "ATUALIZAR" DO MODAL DETALHES — propaga o valor de UM item para TODAS as
+ * listas de servidores. Regras de eficiência (as listas são 100% locais —
+ * localStorage —, mas o princípio de "só gravar o necessário" vale igual):
+ *   • altera SOMENTE o item de nome casado (normalizeWatchedItemName) —
+ *     nenhum outro item de nenhuma lista é tocado;
+ *   • servidor cuja lista NÃO contém o item permanece intacto (a propagação
+ *     não cria o item onde ele nunca foi cadastrado);
+ *   • servidor que JÁ está no valor novo não é regravado (updatedAtMs
+ *     preservado — mesma regra "data só muda se o valor mudou" da edição);
+ *   • se nada mudou, devolve o MESMO mapa (referência), sinalizando ao
+ *     chamador que nenhuma persistência/reprecificação é necessária.
+ */
+export function propagateWatchedItemValueToAllServers(
+  map: WatchedItemsByServer,
+  watchedName: string,
+  valueKk: number,
+  nowMs: number,
+): { map: WatchedItemsByServer; changedServers: string[] } {
+  const nameKey = normalizeWatchedItemName(watchedName);
+  const next: WatchedItemsByServer = {};
+  const changedServers: string[] = [];
+  for (const [server, items] of Object.entries(map || {})) {
+    let touched = false;
+    const list = (items || []).map(item => {
+      if (normalizeWatchedItemName(item.name) !== nameKey) return item;
+      if (item.valueKk === valueKk) return item;
+      touched = true;
+      return { ...item, valueKk, updatedAtMs: nowMs };
+    });
+    if (touched) changedServers.push(server);
+    next[server] = touched ? list : items;
+  }
+  return changedServers.length > 0 ? { map: next, changedServers } : { map, changedServers };
+}
+
+/**
  * Mescla de importação (mesma regra que o painel sempre usou): itens novos
  * entram; nomes já existentes têm o valor ATUALIZADO pelo arquivo quando
  * diferente (a importação é a fonte mais recente) — com a data do arquivo

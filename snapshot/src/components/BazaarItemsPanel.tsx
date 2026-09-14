@@ -14,7 +14,7 @@
 //   4. casamento com a Lista de Itens + Tier (+20%/nível) + kk→RC locais.
 // ============================================================================
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { AlertTriangle, ArrowDownUp, Check, Coins, Copy, Download, ExternalLink, Eye, FlagTriangleRight, Globe, ListChecks, Package, Pencil, Plus, RefreshCw, RotateCcw, Search, Sparkles, Square, Star, Trash2, Upload, X } from "lucide-react";
 import BazaarBrowserModal, { BAZAAR_BROWSER_KEY, BAZAAR_BROWSER_ORDER_KEY, BAZAAR_RETRY_BROWSERS_KEY, BAZAAR_RETRY_COUNTS_KEY, BAZAAR_SPEED_MODE_KEY, DEFAULT_BROWSER_ORDER, normalizeRetryCounts } from "./BazaarBrowserModal";
@@ -55,6 +55,7 @@ import {
   mergeWatchedLists,
   normalizeWatchedItemName,
   parseWatchlistImportAny,
+  propagateWatchedItemValueToAllServers,
   repriceQueryResultsForServerItem,
   saveItemsCoinRate,
   saveItemsInterests,
@@ -445,6 +446,11 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
     return () => window.clearInterval(interval);
   }, []);
 
+  // Timer do feedback "Atualizar" (modal Detalhes) — limpo no unmount.
+  useEffect(() => () => {
+    if (detailApplyTimerRef.current !== null) window.clearTimeout(detailApplyTimerRef.current);
+  }, []);
+
   function updateTableFilters(patch: Partial<ItemsTableFilters>) {
     setTableFilters(prev => ({ ...prev, ...patch }));
   }
@@ -497,6 +503,12 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
   // os personagens DESSE servidor na última consulta.
   const [detailEdit, setDetailEdit] = useState<{ matchIndex: number; value: string } | null>(null);
   const [detailEditError, setDetailEditError] = useState<string | null>(null);
+  // ── "Atualizar" (modal Detalhes): propagação GLOBAL do valor do item ──────
+  // Índice do match em CONFIRMAÇÃO inline (1º clique NUNCA aplica — exige
+  // Confirmar explícito na própria linha) e feedback pós-aplicação (2,5s).
+  const [detailApply, setDetailApply] = useState<number | null>(null);
+  const [detailApplyDone, setDetailApplyDone] = useState<{ matchIndex: number; count: number } | null>(null);
+  const detailApplyTimerRef = useRef<number | null>(null);
   // Feedback "Copiado!" (1,5s) — mesmo padrão dos demais botões de copiar do
   // aplicativo (AvailableCharacter/CharTable). Uma chave por origem da cópia.
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
@@ -1139,6 +1151,54 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
     }
     setDetailEdit(null);
     setDetailEditError(null);
+  }
+
+  /**
+   * "ATUALIZAR" (modal Detalhes) — após o CONFIRMAR da confirmação inline,
+   * propaga o valor BASE atual do item (o exibido na coluna "Base (kk)",
+   * que vem da lista do servidor do personagem) para o MESMO item em TODAS
+   * as listas de servidores. Eficiência: o helper puro devolve quais
+   * servidores realmente mudaram — listas já no valor novo não são
+   * regravadas e a reprecificação da última consulta roda SÓ para os
+   * servidores alterados. Zero Firestore (listas são 100% locais).
+   */
+  function applyDetailGlobalValue(matchIndex: number) {
+    if (!detailResult) return;
+    const match = detailResult.matches[matchIndex];
+    if (!match) { setDetailApply(null); return; }
+    const valueKk = match.baseValueKk;
+    const now = Date.now();
+
+    const { map, changedServers } = propagateWatchedItemValueToAllServers(watchedByServer, match.watchedName, valueKk, now);
+    if (changedServers.length > 0) {
+      // Uma única gravação do mapa completo (mesma chave/formato de sempre).
+      persistAllServerItems(map);
+      // Reprecifica a última consulta apenas nos servidores que mudaram —
+      // correções manuais de KK e parcela de Ouro permanecem intactas.
+      if (lastQuery) {
+        let repriced = lastQuery.results;
+        for (const server of changedServers) {
+          repriced = repriceQueryResultsForServerItem(repriced, server, match.watchedName, valueKk);
+        }
+        const updated: BazaarItemsLastQuery = { ...lastQuery, results: repriced };
+        saveItemsLastQuery(updated);
+        setLastQuery(updated);
+        // Modal permanece aberto já refletindo os números novos.
+        const detailKey = detailResult.id || detailResult.url || detailResult.name;
+        const refreshed = repriced.find(result => (result.id || result.url || result.name) === detailKey);
+        if (refreshed) setDetailResult(refreshed);
+      }
+    }
+
+    // Feedback inline (2,5s): quantos servidores foram efetivamente
+    // atualizados — 0 significa que todos já estavam no valor.
+    setDetailApply(null);
+    setDetailApplyDone({ matchIndex, count: changedServers.length });
+    if (detailApplyTimerRef.current !== null) window.clearTimeout(detailApplyTimerRef.current);
+    detailApplyTimerRef.current = window.setTimeout(() => {
+      setDetailApplyDone(null);
+      detailApplyTimerRef.current = null;
+    }, 2500);
   }
 
   // ── Derivados de exibição ──────────────────────────────────────────────────
@@ -1832,7 +1892,7 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                   <td className="px-2 py-1.5 text-center">
                     <button
                       type="button"
-                      onClick={() => setDetailResult(result)}
+                      onClick={() => { setDetailResult(result); setDetailApply(null); setDetailApplyDone(null); }}
                       className="inline-flex items-center gap-1 rounded border border-fuchsia-500/30 bg-fuchsia-500/10 px-1.5 py-0.5 text-[9px] font-black text-fuchsia-300 hover:bg-fuchsia-500/20 transition-colors cursor-pointer"
                     >
                       <Eye size={10} /> Ver
@@ -2160,7 +2220,7 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
       {detailResult && (
         <div
           className="app-modal-overlay fixed inset-0 z-[1200] flex items-center justify-center bg-black/70 backdrop-blur-sm"
-          onMouseDown={event => { if (event.target === event.currentTarget) { setDetailResult(null); setDetailEdit(null); setDetailEditError(null); } }}
+          onMouseDown={event => { if (event.target === event.currentTarget) { setDetailResult(null); setDetailEdit(null); setDetailEditError(null); setDetailApply(null); setDetailApplyDone(null); } }}
         >
           <div className="app-modal-frame w-full max-w-xl max-h-[88vh] flex flex-col rounded-xl border border-fuchsia-500/30 bg-[var(--th-bg-raised)] shadow-2xl shadow-black/60 overflow-hidden">
             <div className="flex-shrink-0 flex items-center justify-between gap-2 px-4 py-3 border-b border-[var(--th-line)]/40">
@@ -2172,13 +2232,32 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                     <Globe size={9} /> {detailResult.server}
                   </span>
                 )}
-                {detailResult.url && (
-                  <a href={detailResult.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-sky-300 hover:text-sky-200 font-bold text-[10px] underline flex-shrink-0">
-                    <ExternalLink size={10} /> Abrir leilão
-                  </a>
-                )}
+                {detailResult.url && (() => {
+                  // Abertura do personagem — EXATAMENTE o mesmo mecanismo do
+                  // botão da coluna "Link" da tabela principal (openLink
+                  // compartilhado: marca o estado de aberto e usa o navegador
+                  // PADRÃO via openExternal — nunca <a target="_blank">).
+                  const detailAuctionKey = detailResult.id || detailResult.url || detailResult.name;
+                  const detailLinkState = getLinkState ? getLinkState(detailAuctionKey) : "open";
+                  const detailLinkLabel = detailLinkState === "last" ? "Último Aberto" : detailLinkState === "opened" ? "Aberto" : "Abrir leilão";
+                  const detailLinkClass = detailLinkState === "last"
+                    ? "border-amber-400/45 bg-amber-500/15 text-amber-200 hover:bg-amber-500/25"
+                    : detailLinkState === "opened"
+                      ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/18"
+                      : "border-amber-600/30 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20";
+                  return (
+                    <button
+                      type="button"
+                      onClick={() => (openLink ? openLink(detailAuctionKey, detailResult.url) : openExternalUrl(detailResult.url))}
+                      title={detailLinkState === "last" ? "Último personagem aberto" : detailLinkState === "opened" ? "Este link já foi aberto neste dispositivo" : "Abrir personagem no Bazaar (navegador padrão)"}
+                      className={`inline-flex items-center gap-0.5 rounded-lg border px-1.5 py-0.5 text-[9px] font-black transition-colors cursor-pointer flex-shrink-0 ${detailLinkClass}`}
+                    >
+                      <ExternalLink size={10} className="flex-shrink-0" /> {detailLinkLabel}
+                    </button>
+                  );
+                })()}
               </div>
-              <button type="button" onClick={() => { setDetailResult(null); setDetailEdit(null); setDetailEditError(null); }} className="p-1 rounded text-slate-400 hover:text-white hover:bg-white/10 transition-colors cursor-pointer flex-shrink-0" title="Fechar">
+              <button type="button" onClick={() => { setDetailResult(null); setDetailEdit(null); setDetailEditError(null); setDetailApply(null); setDetailApplyDone(null); }} className="p-1 rounded text-slate-400 hover:text-white hover:bg-white/10 transition-colors cursor-pointer flex-shrink-0" title="Fechar">
                 <X size={15} />
               </button>
             </div>
@@ -2194,6 +2273,7 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                     <th className="px-1.5 py-1.5 text-right">Pós-Tier (kk)</th>
                     <th className="px-1.5 py-1.5 text-center">Qtd</th>
                     <th className="px-1.5 py-1.5 text-right">Total (kk)</th>
+                    <th className="px-1.5 py-1.5 text-center">Atualizar</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -2201,8 +2281,12 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                     const isEditingMatch = detailEdit?.matchIndex === index;
                     // Chave do feedback de cópia — uma por linha do modal.
                     const detailCopyKey = `detail_item_${index}`;
+                    // Confirmação/feedback do "Atualizar" — por linha.
+                    const isConfirmingApply = detailApply === index;
+                    const applyDone = detailApplyDone?.matchIndex === index ? detailApplyDone : null;
                     return (
-                    <tr key={`${match.foundName}-${index}`} className={`border-b border-[var(--th-line)]/25 ${isEditingMatch ? "bg-fuchsia-500/5" : ""}`}>
+                    <Fragment key={`${match.foundName}-${index}`}>
+                    <tr className={`border-b border-[var(--th-line)]/25 ${isEditingMatch ? "bg-fuchsia-500/5" : ""} ${isConfirmingApply ? "!border-b-0 bg-amber-500/5" : ""}`}>
                       <td className="px-1.5 py-1.5 text-left">
                         {/* Nome do item = botão de COPIAR — mesmo padrão dos
                             demais copiar do app (copyText: hover revela o
@@ -2277,7 +2361,65 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                           </span>
                         )}
                       </td>
+                      <td className="px-1.5 py-1.5 text-center">
+                        {/* "ATUALIZAR" — propaga o valor BASE atual deste item
+                            para TODAS as listas de servidores. O 1º clique
+                            NUNCA aplica: abre a confirmação inline abaixo da
+                            linha (Confirmar/Cancelar). */}
+                        {applyDone ? (
+                          <span className="inline-flex items-center gap-1 rounded px-1 py-0.5 text-[9px] font-black text-emerald-300 bg-emerald-500/15" title={applyDone.count > 0 ? `Valor aplicado em ${applyDone.count} servidor(es)` : "Todos os servidores já estavam com este valor"}>
+                            <Check size={10} strokeWidth={3} /> {applyDone.count > 0 ? `${applyDone.count} atualizado(s)` : "Já atualizado"}
+                          </span>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => setDetailApply(prev => (prev === index ? null : index))}
+                            className={`inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[9px] font-black transition-colors cursor-pointer ${
+                              isConfirmingApply
+                                ? "border-amber-400/60 bg-amber-500/20 text-amber-200"
+                                : "border-amber-600/30 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20"
+                            }`}
+                            title={`Aplicar o valor base atual (${formatKkValue(match.baseValueKk, "kk")}) de "${match.watchedName}" à Lista de Itens de TODOS os servidores (pede confirmação)`}
+                          >
+                            <RefreshCw size={9} className="flex-shrink-0" /> Atualizar
+                          </button>
+                        )}
+                      </td>
                     </tr>
+                    {/* Confirmação INLINE (sem segundo modal): linha compacta
+                        logo abaixo do item, deixando explícito o alcance
+                        GLOBAL da ação. Confirmar aplica; Cancelar descarta. */}
+                    {isConfirmingApply && (
+                      <tr className="border-b border-[var(--th-line)]/25 bg-amber-500/5">
+                        <td colSpan={8} className="px-1.5 pb-1.5 pt-0">
+                          <div className="flex flex-wrap items-center justify-end gap-x-2 gap-y-1 rounded-md border border-amber-400/30 bg-amber-500/10 px-2 py-1">
+                            <AlertTriangle size={10} className="flex-shrink-0 text-amber-300" />
+                            <span className="text-[9px] font-bold text-amber-200">
+                              Aplicar <span className="font-mono text-amber-100">{formatKkValue(match.baseValueKk, "kk")}</span> a "{match.watchedName}" em <span className="uppercase">todos os servidores</span>?
+                            </span>
+                            <span className="inline-flex items-center gap-1">
+                              <button
+                                type="button"
+                                onClick={() => applyDetailGlobalValue(index)}
+                                className="inline-flex items-center gap-1 rounded-md border border-emerald-500/40 bg-emerald-500/15 px-1.5 py-0.5 text-[9px] font-black text-emerald-300 hover:bg-emerald-500/25 transition-colors cursor-pointer"
+                                title="Confirmar: atualiza este item nas Listas de Itens de todos os servidores"
+                              >
+                                <Check size={10} strokeWidth={3} /> Confirmar
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setDetailApply(null)}
+                                className="inline-flex items-center gap-1 rounded-md border border-white/15 bg-white/5 px-1.5 py-0.5 text-[9px] font-black text-slate-300 hover:bg-white/10 hover:text-white transition-colors cursor-pointer"
+                                title="Cancelar: nenhuma alteração é feita"
+                              >
+                                <X size={10} /> Cancelar
+                              </button>
+                            </span>
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                    </Fragment>
                     );
                   })}
                 </tbody>
