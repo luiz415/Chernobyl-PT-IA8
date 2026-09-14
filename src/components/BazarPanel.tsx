@@ -246,6 +246,11 @@ const BAZAR_HIDE_ENDED_KEY = "rubinot_bazaar_hide_ended_auctions";
 const BAZAAR_AUTO_REMOVE_ENABLED_KEY = "rubinot_bazaar_auto_remove_interest_enabled";
 const BAZAAR_AUTO_REMOVE_LIMIT_KEY = "rubinot_bazaar_auto_remove_interest_limit";
 const BAZAR_OPENED_LINKS_KEY_PREFIX = "rubinot_bazaar_opened_links";
+// Histórico do botão "Ver" (modal Detalhes do painel de ITENS) — MESMA
+// estrutura/lógica do histórico do "Link" (BazaarOpenedLinksState), apenas
+// com chave própria para que "Visto" (Ver) e "Aberto" (Link) não se misturem.
+// Local por usuário (localStorage) — zero Firestore, como no Link.
+const BAZAR_VIEWED_DETAILS_KEY_PREFIX = "rubinot_bazaar_items_viewed_details";
 // Valor pessoal por usuário: guarda apenas a última conta escolhida no fluxo
 // de compra inline, sem criar configuração de perfil nem estrutura de contas.
 const BAZAR_LAST_PURCHASE_ACCOUNT_KEY_PREFIX = "rubinot_bazaar_last_purchase_account";
@@ -387,8 +392,8 @@ function defaultBazaarOpenedLinksState(): BazaarOpenedLinksState {
   return { opened: {}, lastOpenedAuctionId: "" };
 }
 
-function getBazaarOpenedLinksKey(uid?: string): string {
-  return `${BAZAR_OPENED_LINKS_KEY_PREFIX}_${uid || "local"}`;
+function getBazaarOpenedLinksKey(uid?: string, prefix: string = BAZAR_OPENED_LINKS_KEY_PREFIX): string {
+  return `${prefix}_${uid || "local"}`;
 }
 
 function getBazaarLastPurchaseAccountKey(uid?: string): string {
@@ -409,9 +414,9 @@ function saveBazaarLastPurchaseAccount(uid: string | undefined, account: string)
   saveUIState(key, normalized);
 }
 
-function readBazaarOpenedLinksState(uid?: string): BazaarOpenedLinksState {
+function readBazaarOpenedLinksState(uid?: string, prefix: string = BAZAR_OPENED_LINKS_KEY_PREFIX): BazaarOpenedLinksState {
   try {
-    const raw = localStorage.getItem(getBazaarOpenedLinksKey(uid));
+    const raw = localStorage.getItem(getBazaarOpenedLinksKey(uid, prefix));
     const parsed = raw ? JSON.parse(raw) : null;
     if (!parsed || typeof parsed !== "object") return defaultBazaarOpenedLinksState();
     return {
@@ -423,9 +428,9 @@ function readBazaarOpenedLinksState(uid?: string): BazaarOpenedLinksState {
   }
 }
 
-function saveBazaarOpenedLinksState(uid: string | undefined, state: BazaarOpenedLinksState) {
+function saveBazaarOpenedLinksState(uid: string | undefined, state: BazaarOpenedLinksState, prefix: string = BAZAR_OPENED_LINKS_KEY_PREFIX) {
   try {
-    localStorage.setItem(getBazaarOpenedLinksKey(uid), JSON.stringify(state));
+    localStorage.setItem(getBazaarOpenedLinksKey(uid, prefix), JSON.stringify(state));
   } catch {}
 }
 
@@ -1023,6 +1028,9 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
   const [officialMetadata, setOfficialMetadata] = useState<OfficialBazaarMetadata | null>(() => readOfficialBazaarCache()?.metadata || null);
   const [bazaarInterests, setBazaarInterests] = useState<BazaarInterestMap>({});
   const [openedLinksState, setOpenedLinksState] = useState<BazaarOpenedLinksState>(() => defaultBazaarOpenedLinksState());
+  // Histórico do "Ver" (Detalhes do painel de ITENS) — MESMA máquina de
+  // estados do "Link" (opened + lastOpened), em chave própria por usuário.
+  const [viewedDetailsState, setViewedDetailsState] = useState<BazaarOpenedLinksState>(() => defaultBazaarOpenedLinksState());
   // Valor de lance digitado por personagem (rascunho local; nunca persistido
   // e nunca enviado ao RubinOT — serve apenas para montar a URL oficial).
   const [bidDrafts, setBidDrafts] = useState<Record<string, string>>({});
@@ -1173,6 +1181,7 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
 
   useEffect(() => {
     setOpenedLinksState(readBazaarOpenedLinksState(currentUser?.uid));
+    setViewedDetailsState(readBazaarOpenedLinksState(currentUser?.uid, BAZAR_VIEWED_DETAILS_KEY_PREFIX));
   }, [currentUser?.uid]);
 
   // Troca de usuário nunca reaproveita a conta anterior: cada UID possui
@@ -2541,6 +2550,27 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
     return openedLinksState.opened[auctionKey] ? "opened" : "open";
   }
 
+  // ── Histórico do "Ver" (Detalhes/itens) — ESPELHO do mecanismo do Link ────
+  // Mesmas funções de leitura/gravação/estado (reutilizadas com prefixo
+  // próprio), mesma máquina "open|opened|last". Local por usuário.
+  function markBazaarDetailViewed(auctionKey: string) {
+    if (!auctionKey) return;
+    setViewedDetailsState(prev => {
+      const next = {
+        opened: { ...prev.opened, [auctionKey]: Date.now() },
+        lastOpenedAuctionId: auctionKey,
+      };
+      saveBazaarOpenedLinksState(currentUser?.uid, next, BAZAR_VIEWED_DETAILS_KEY_PREFIX);
+      return next;
+    });
+  }
+
+  function getBazaarDetailViewState(auctionKey: string): "open" | "opened" | "last" {
+    if (!auctionKey) return "open";
+    if (viewedDetailsState.lastOpenedAuctionId === auctionKey) return "last";
+    return viewedDetailsState.opened[auctionKey] ? "opened" : "open";
+  }
+
   function openAuctionLink(auction: BazaarAuction) {
     const auctionKey = getAuctionKey(auction);
     markBazaarLinkOpened(auctionKey);
@@ -2782,6 +2812,10 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
               markBazaarLinkOpened(auctionKey);
               openExternal(url);
             }}
+            // Botão "Ver": mesmo mecanismo de histórico do Link (opened +
+            // último), em registro separado — "Visto"/"Último Aberto".
+            getViewState={getBazaarDetailViewState}
+            markViewed={markBazaarDetailViewed}
           />
         ) : (
         <>

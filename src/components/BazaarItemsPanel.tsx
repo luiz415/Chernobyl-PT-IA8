@@ -134,6 +134,14 @@ interface Props {
   getLinkState?: (auctionKey: string) => "open" | "opened" | "last";
   /** Marca o leilão como aberto e abre no navegador padrão (mesmo fluxo das quests). */
   openLink?: (auctionKey: string, url: string) => void;
+  /**
+   * Histórico do botão "Ver" (modal Detalhes) — MESMA máquina de estados do
+   * Link ("open" | "opened" | "last"), em registro próprio do BazarPanel:
+   * "opened" = já visto ("Visto"), "last" = último aberto ("Último Aberto").
+   */
+  getViewState?: (auctionKey: string) => "open" | "opened" | "last";
+  /** Registra a visualização do modal Detalhes (local por usuário, como o Link). */
+  markViewed?: (auctionKey: string) => void;
 }
 
 /** Entrada em edição no modal da Lista de Itens. */
@@ -301,6 +309,13 @@ const SKILL_DISPLAY: Record<string, SkillDisplayDef[]> = {
   ],
 };
 
+/**
+ * CORTE DE EXIBIÇÃO das skills: valor abaixo deste mínimo NÃO aparece na
+ * coluna "Skills" (vale para todas as vocações e todas as skills). O dado
+ * continua sendo lido/persistido normalmente — a regra é só de exibição.
+ */
+const MIN_DISPLAY_SKILL = 20;
+
 /** Skills a exibir para a vocação do personagem (null = vocação desconhecida). */
 function skillDefsForVocation(vocation: string): SkillDisplayDef[] | null {
   const text = String(vocation || "").toLowerCase();
@@ -377,7 +392,7 @@ interface ItemsLocalNotification {
   auctionId?: string;
 }
 
-export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffsetMinutes, getLinkState, openLink }: Props) {
+export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffsetMinutes, getLinkState, openLink, getViewState, markViewed }: Props) {
   const { currentUser } = useAuth();
   const currentUid = currentUser?.uid || "";
 
@@ -1867,21 +1882,29 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                   <td className="px-1.5 py-1.5 text-center">
                     {/* SKILLS — pares "Abrev valor" em UMA linha compacta,
                         conforme a vocação (EK/RP/ED/MS/MK). Valores INTEIROS
-                        lidos da página do leilão; skill que não veio na
-                        resposta = "—" no lugar do número (nunca um zero
-                        inventado). Vocação fora do mapa = célula "—". */}
+                        lidos da página do leilão. REGRA DE CORTE: skill com
+                        valor < 20 NÃO é exibida (vale para todas as vocações
+                        e skills); skill ausente também não aparece (nunca um
+                        zero inventado). Se NENHUMA skill da vocação atingir
+                        20 (ou nada tiver vindo), a célula mostra "—". */}
                     {(() => {
                       const defs = skillDefsForVocation(result.vocation);
                       if (!defs) return <span className="text-slate-600">—</span>;
+                      const visible = defs.filter(def => {
+                        const value = result.skills?.[def.key];
+                        return Number.isFinite(value) && (value as number) >= MIN_DISPLAY_SKILL;
+                      });
+                      if (visible.length === 0) {
+                        return <span className="text-slate-600" title={`Nenhuma skill com valor ≥ ${MIN_DISPLAY_SKILL} para exibir`}>—</span>;
+                      }
                       return (
                         <span className="inline-flex flex-wrap items-center justify-center gap-x-1.5 gap-y-0.5 whitespace-nowrap font-mono text-[9px] leading-none">
-                          {defs.map(def => {
-                            const value = result.skills?.[def.key];
-                            const hasValue = Number.isFinite(value) && (value as number) > 0;
+                          {visible.map(def => {
+                            const value = Math.floor(result.skills?.[def.key] as number);
                             return (
-                              <span key={def.key} title={`${def.full}${hasValue ? `: ${Math.floor(value as number)}` : ": não informado na página"}`} className="inline-flex items-baseline gap-0.5">
+                              <span key={def.key} title={`${def.full}: ${value}`} className="inline-flex items-baseline gap-0.5">
                                 <span className="text-slate-500">{def.abbr}</span>
-                                <span className={hasValue ? "font-bold text-sky-300" : "text-slate-600"}>{hasValue ? Math.floor(value as number) : "—"}</span>
+                                <span className="font-bold text-sky-300">{value}</span>
                               </span>
                             );
                           })}
@@ -1890,13 +1913,34 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                     })()}
                   </td>
                   <td className="px-2 py-1.5 text-center">
-                    <button
-                      type="button"
-                      onClick={() => { setDetailResult(result); setDetailApply(null); setDetailApplyDone(null); }}
-                      className="inline-flex items-center gap-1 rounded border border-fuchsia-500/30 bg-fuchsia-500/10 px-1.5 py-0.5 text-[9px] font-black text-fuchsia-300 hover:bg-fuchsia-500/20 transition-colors cursor-pointer"
-                    >
-                      <Eye size={10} /> Ver
-                    </button>
+                    {/* "Ver" com HISTÓRICO — mesmo mecanismo do botão Link
+                        (open|opened|last, estado compartilhado do BazarPanel,
+                        local por usuário): nunca visto = "Ver" (fúcsia);
+                        já visto = "Visto" (verde, como "Aberto" do Link);
+                        último aberto = "Último Aberto" (âmbar destacado,
+                        idêntico à regra do Link). */}
+                    {(() => {
+                      const viewState = getViewState ? getViewState(auctionKey) : "open";
+                      const viewLabel = viewState === "last" ? "Último Aberto" : viewState === "opened" ? "Visto" : "Ver";
+                      const viewClass = viewState === "last"
+                        ? "border-amber-400/45 bg-amber-500/15 text-amber-200 hover:bg-amber-500/25 shadow-[0_0_12px_color-mix(in_oklab,var(--color-amber-500)_16%,transparent)]"
+                        : viewState === "opened"
+                          ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/18"
+                          : "border-fuchsia-500/30 bg-fuchsia-500/10 text-fuchsia-300 hover:bg-fuchsia-500/20";
+                      return (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (markViewed) markViewed(auctionKey);
+                            setDetailResult(result); setDetailApply(null); setDetailApplyDone(null);
+                          }}
+                          title={viewState === "last" ? "Último personagem cujos detalhes foram abertos" : viewState === "opened" ? "Detalhes já visualizados neste dispositivo" : "Ver detalhes dos itens do personagem"}
+                          className={`inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[9px] font-black transition-colors cursor-pointer ${viewClass}`}
+                        >
+                          <Eye size={10} /> <span className="truncate">{viewLabel}</span>
+                        </button>
+                      );
+                    })()}
                   </td>
                   <td className="px-2 py-1.5 text-center">
                     {/* "Tenho Interesse" — MESMO padrão visual do botão das

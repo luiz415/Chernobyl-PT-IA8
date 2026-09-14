@@ -186,7 +186,10 @@ const SKILL_DEFS = [
   { key: 'axe', keyHint: /^(axe|axeFighting|axe_fighting|skillAxe|skill_axe)$/i, labelHint: /^axe(\s+fighting)?$/i },
   { key: 'club', keyHint: /^(club|clubFighting|club_fighting|skillClub|skill_club)$/i, labelHint: /^club(\s+fighting)?$/i },
   { key: 'sword', keyHint: /^(sword|swordFighting|sword_fighting|skillSword|skill_sword)$/i, labelHint: /^sword(\s+fighting)?$/i },
-  { key: 'distance', keyHint: /^(distance|distanceFighting|distance_fighting|skillDistance|skill_distance|skillDist|skill_dist)$/i, labelHint: /^distance(\s+fighting)?$/i },
+  // DISTANCE: hints ampliados ("dist", "distanceLevel", rótulos com sufixos
+  // como "Distance Fighting Skill") — era a única skill sem retorno; as
+  // demais permanecem com os hints originais (não alterar o que funciona).
+  { key: 'distance', keyHint: /^(dist|distance|distFighting|dist_fighting|distanceFighting|distance_fighting|distanceLevel|distance_level|skillDistance|skill_distance|skillDist|skill_dist)$/i, labelHint: /^dist(ance)?([\s._-]*(fighting|level|skill))*$/i },
   { key: 'shielding', keyHint: /^(shielding|shield|skillShielding|skill_shielding)$/i, labelHint: /^shielding$/i },
   { key: 'fist', keyHint: /^(fist|fistFighting|fist_fighting|skillFist|skill_fist)$/i, labelHint: /^fist(\s+fighting)?$/i },
   { key: 'magic', keyHint: /^(magic|magicLevel|magic_level|magLevel|mag_level|mlevel|skillMagic|skill_magic)$/i, labelHint: /^magic(\s+level)?$/i },
