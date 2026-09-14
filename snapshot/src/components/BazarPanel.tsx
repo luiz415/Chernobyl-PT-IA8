@@ -447,8 +447,12 @@ function saveBazaarOpenedLinksState(uid: string | undefined, state: BazaarOpened
 // menus de filtro, que são renderizados via portal com z-[600]/z-[700] em
 // FilterTypes.tsx — por isso os dropdowns continuam abrindo por cima.
 // ============================================================================
-const STICKY_HEAD_CELL_CLASS = "sticky top-0 z-20 bg-[var(--th-bg-base)] shadow-[inset_0_-1px_0_color-mix(in_oklab,var(--th-brand)_80%,transparent)]";
-const STICKY_FILTER_CELL_CLASS = "sticky top-10 z-20 bg-[var(--th-bg-base)] shadow-[inset_0_1px_0_color-mix(in_oklab,var(--th-brand)_50%,transparent),inset_0_-1px_0_color-mix(in_oklab,var(--th-brand)_80%,transparent)]";
+// Exportadas para o BazaarItemsPanel: a tabela do modo ITENS usa o MESMO
+// padrão visual de cabeçalho/filtros desta tabela (fonte única de estilo —
+// nada de cópia paralela). Referenciadas apenas em tempo de render, então o
+// ciclo de import BazarPanel ⇄ BazaarItemsPanel é inofensivo.
+export const STICKY_HEAD_CELL_CLASS = "sticky top-0 z-20 bg-[var(--th-bg-base)] shadow-[inset_0_-1px_0_color-mix(in_oklab,var(--th-brand)_80%,transparent)]";
+export const STICKY_FILTER_CELL_CLASS = "sticky top-10 z-20 bg-[var(--th-bg-base)] shadow-[inset_0_1px_0_color-mix(in_oklab,var(--th-brand)_50%,transparent),inset_0_-1px_0_color-mix(in_oklab,var(--th-brand)_80%,transparent)]";
 
 function defaultBazarTableFilters(): BazaarTableFilters {
   return {

@@ -14,10 +14,15 @@
 //   4. casamento com a Lista de Itens + Tier (+20%/nível) + kk→RC locais.
 // ============================================================================
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { AlertTriangle, Check, Coins, Copy, Download, ExternalLink, Eye, FlagTriangleRight, ListChecks, Package, Pencil, Plus, RefreshCw, Search, Sparkles, Square, Trash2, Upload, X } from "lucide-react";
+import { AlertTriangle, ArrowDownUp, Check, Coins, Copy, Download, ExternalLink, Eye, FlagTriangleRight, ListChecks, Package, Pencil, Plus, RefreshCw, RotateCcw, Search, Sparkles, Square, Star, Trash2, Upload, X } from "lucide-react";
 import BazaarBrowserModal, { BAZAAR_BROWSER_KEY, BAZAAR_BROWSER_ORDER_KEY, BAZAAR_RETRY_BROWSERS_KEY, BAZAAR_RETRY_COUNTS_KEY, BAZAAR_SPEED_MODE_KEY, DEFAULT_BROWSER_ORDER, normalizeRetryCounts } from "./BazaarBrowserModal";
+// Mesmos componentes de filtro da tabela de QUESTS (FilterTypes é a fonte
+// única — nenhuma implementação paralela) e as MESMAS classes de célula
+// sticky do cabeçalho exportadas pelo BazarPanel (fonte única de estilo).
+import { FilterDateMax, FilterInline, FilterMulti, FilterNumber } from "./FilterTypes";
+import { STICKY_FILTER_CELL_CLASS, STICKY_HEAD_CELL_CLASS } from "./BazarPanel";
 import type { BazaarRetryCounts, BazaarSpeedMode } from "./BazaarBrowserModal";
 import { loadUIState } from "../storage";
 import { computeItemRC, formatKkValue } from "../utils/itemSale";
@@ -116,6 +121,67 @@ interface ItemDraft {
 
 const EMPTY_DRAFT: ItemDraft = { id: null, name: "", valueKk: "" };
 
+// ── Filtros/ordenação da TABELA de resultados — mesmo padrão das QUESTS ─────
+// Cópia fiel do desenho de BazaarTableFilters/SortKey do BazarPanel, com os
+// campos ADAPTADOS às colunas desta tabela (Personagem, Servidor, Encerra,
+// Valor, Valor Itens em KK e em RC). Mesmo comportamento: filtros persistidos
+// no localStorage (chave própria do modo itens), ordenação volátil por sessão.
+type ItemsSortKey = "name" | "server" | "auctionEndTs" | "bid" | "totalKk" | "rc";
+type ItemsSortDir = "asc" | "desc";
+
+interface ItemsTableFilters {
+  name: string;
+  servers: string[];
+  endUntil: string;
+  bidValue: number | null;
+  bidOperator: "gte" | "lte";
+  kkValue: number | null;
+  kkOperator: "gte" | "lte";
+  rcValue: number | null;
+  rcOperator: "gte" | "lte";
+  /** Exibe apenas leilões marcados como "Tenho Interesse" (estado LOCAL). */
+  onlyMyInterests: boolean;
+}
+
+const ITEMS_TABLE_FILTERS_KEY = "rubinot_bazaar_items_table_filters";
+
+function defaultItemsTableFilters(): ItemsTableFilters {
+  return {
+    name: "",
+    servers: [],
+    endUntil: "",
+    bidValue: null,
+    bidOperator: "lte",
+    kkValue: null,
+    kkOperator: "gte",
+    rcValue: null,
+    rcOperator: "gte",
+    onlyMyInterests: false,
+  };
+}
+
+function readItemsTableFilters(): ItemsTableFilters {
+  try {
+    const raw = localStorage.getItem(ITEMS_TABLE_FILTERS_KEY);
+    const parsed = raw ? JSON.parse(raw) : {};
+    const saved = parsed && typeof parsed === "object" ? parsed : {};
+    return {
+      ...defaultItemsTableFilters(),
+      ...saved,
+      // Mesma migração segura das quests: só `true` ativa o filtro.
+      onlyMyInterests: saved.onlyMyInterests === true,
+    };
+  } catch {
+    return defaultItemsTableFilters();
+  }
+}
+
+function saveItemsTableFilters(filters: ItemsTableFilters) {
+  try {
+    localStorage.setItem(ITEMS_TABLE_FILTERS_KEY, JSON.stringify(filters));
+  } catch {}
+}
+
 /**
  * Prefixo dos ids de alerta do canal de ITENS (definido no serviço de
  * alertas). Distingue os chips deste painel dos chips do painel de quests —
@@ -149,6 +215,36 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
   // sobre os resultados já obtidos — nunca dispara nova consulta nem altera
   // os dados persistidos (lastQuery/localStorage permanecem intactos).
   const [resultsSearch, setResultsSearch] = useState("");
+
+  // ── Filtros/ordenação da tabela — mesmo funcionamento das QUESTS ──────────
+  // Filtros persistidos (localStorage) e ordenação por sessão, exatamente
+  // como tableFilters/sortKey/sortDir do BazarPanel. Tudo derivado/local:
+  // nenhum efeito sobre a consulta, os cálculos ou os dados persistidos.
+  const [tableFilters, setTableFilters] = useState<ItemsTableFilters>(() => readItemsTableFilters());
+  const [sortKey, setSortKey] = useState<ItemsSortKey>("totalKk");
+  const [sortDir, setSortDir] = useState<ItemsSortDir>("desc");
+
+  useEffect(() => {
+    saveItemsTableFilters(tableFilters);
+  }, [tableFilters]);
+
+  function updateTableFilters(patch: Partial<ItemsTableFilters>) {
+    setTableFilters(prev => ({ ...prev, ...patch }));
+  }
+
+  function resetTableFilters() {
+    setTableFilters(defaultItemsTableFilters());
+  }
+
+  /** Mesma alternância das quests: 1º clique ordena asc, 2º inverte. */
+  function toggleSort(key: ItemsSortKey) {
+    if (sortKey === key) {
+      setSortDir(prev => prev === "asc" ? "desc" : "asc");
+    } else {
+      setSortKey(key);
+      setSortDir("asc");
+    }
+  }
 
   // ── Estado da consulta ─────────────────────────────────────────────────────
   const [isBrowserModalOpen, setIsBrowserModalOpen] = useState(false);
@@ -573,6 +669,98 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
         || normalizeWatchedItemName(match.watchedName).includes(resultsSearchTerm)))
     : results;
 
+  // ── Filtros de coluna + ordenação — MESMA lógica de filteredAuctions das
+  // QUESTS, adaptada às colunas desta tabela. Composta SOBRE o "Pesquisar
+  // Item" (visibleResults): os dois convivem, como múltiplos filtros nas
+  // quests. Derivado puro — resultados originais/persistidos intactos.
+  const serverOptions = useMemo(() => {
+    const set = new Set<string>();
+    results.forEach(result => { if (result.server) set.add(result.server); });
+    return Array.from(set).sort((a, b) => a.localeCompare(b, "pt-BR"));
+  }, [results]);
+
+  const filteredResults = useMemo(() => {
+    const tableEndLimit = tableFilters.endUntil ? parseDateTimeLocalWithOffset(tableFilters.endUntil, timezoneOffsetMinutes) : 0;
+    const filtered = visibleResults.filter(result => {
+      if (tableFilters.name.trim() && !result.name.toLowerCase().includes(tableFilters.name.trim().toLowerCase())) return false;
+      if (tableFilters.servers.length > 0 && !tableFilters.servers.includes(result.server)) return false;
+      const bid = Number(result.bid || 0);
+      if (tableFilters.bidValue !== null) {
+        if (tableFilters.bidOperator === "gte" && bid < tableFilters.bidValue) return false;
+        if (tableFilters.bidOperator === "lte" && bid > tableFilters.bidValue) return false;
+      }
+      if (tableFilters.kkValue !== null) {
+        if (tableFilters.kkOperator === "gte" && result.totalKk < tableFilters.kkValue) return false;
+        if (tableFilters.kkOperator === "lte" && result.totalKk > tableFilters.kkValue) return false;
+      }
+      if (tableFilters.rcValue !== null) {
+        // RC depende da cotação atual do coin — sem cotação não há valor de
+        // RC exibido (coluna mostra "—"), então o filtro não elimina nada.
+        if (coinRate > 0) {
+          const rc = computeItemRC(coinRate, result.totalKk);
+          if (tableFilters.rcOperator === "gte" && rc < tableFilters.rcValue) return false;
+          if (tableFilters.rcOperator === "lte" && rc > tableFilters.rcValue) return false;
+        }
+      }
+      if (tableFilters.onlyMyInterests) {
+        const auctionKey = result.id || result.url || result.name;
+        if (!itemInterests.includes(auctionKey)) return false;
+      }
+      const auctionEndTs = normalizeAuctionEndTimestamp(result.auctionEndTs ?? null);
+      if (tableEndLimit > 0 && auctionEndTs && auctionEndTs > tableEndLimit) return false;
+      return true;
+    });
+
+    // Mesma comparação das quests: strings por localeCompare pt-BR, números
+    // por subtração; asc/desc pela direção ativa. "rc" ordena pelo valor em
+    // RC (proporcional ao KK — floor((totalKk/coinRate)*1000)).
+    const sorted = [...filtered];
+    sorted.sort((a, b) => {
+      let av: string | number;
+      let bv: string | number;
+      if (sortKey === "rc") {
+        av = coinRate > 0 ? computeItemRC(coinRate, a.totalKk) : 0;
+        bv = coinRate > 0 ? computeItemRC(coinRate, b.totalKk) : 0;
+      } else if (sortKey === "auctionEndTs") {
+        av = normalizeAuctionEndTimestamp(a.auctionEndTs ?? null) || 0;
+        bv = normalizeAuctionEndTimestamp(b.auctionEndTs ?? null) || 0;
+      } else {
+        av = a[sortKey] ?? 0;
+        bv = b[sortKey] ?? 0;
+      }
+      let cmp = 0;
+      if (typeof av === "string" || typeof bv === "string") {
+        cmp = String(av).localeCompare(String(bv), "pt-BR");
+      } else {
+        cmp = Number(av || 0) - Number(bv || 0);
+      }
+      return sortDir === "asc" ? cmp : -cmp;
+    });
+    return sorted;
+  }, [visibleResults, tableFilters, sortKey, sortDir, coinRate, itemInterests, timezoneOffsetMinutes]);
+
+  const hasActiveTableFilters = !!(
+    tableFilters.name.trim() ||
+    tableFilters.servers.length > 0 ||
+    tableFilters.bidValue !== null ||
+    tableFilters.kkValue !== null ||
+    tableFilters.rcValue !== null ||
+    !!tableFilters.endUntil ||
+    tableFilters.onlyMyInterests
+  );
+
+  /** Cabeçalho ordenável — mesmo componente/visual do SortHeader das quests. */
+  function SortHeader({ label, column }: { label: string; column: ItemsSortKey }) {
+    return (
+      <th className={`${STICKY_HEAD_CELL_CLASS} h-10 px-1 py-2 text-center align-middle cursor-pointer select-none`} onClick={() => toggleSort(column)}>
+        <span className="inline-flex w-full items-center justify-center gap-1 leading-none">
+          {label}
+          <ArrowDownUp size={10} className={sortKey === column ? "text-amber-400" : "text-slate-600"} />
+        </span>
+      </th>
+    );
+  }
+
   // ── Botões de ação do painel — canto superior DIREITO do cabeçalho ────────
   // Injetados via portal no cartão reservado pelo BazarPanel FORA do quadro
   // do título (mesma linha, espelho do seletor de painéis à esquerda).
@@ -808,21 +996,95 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
           </div>
         ) : (
           <table className="w-full text-[11px]">
-            <thead className="sticky top-0 bg-[var(--th-n-raised)]/95 backdrop-blur-sm z-10">
-              <tr className="text-[9px] uppercase tracking-wider text-slate-400">
-                <th className="px-2 py-2 text-left">Personagem</th>
-                <th className="px-2 py-2 text-center">Servidor</th>
-                <th className="px-2 py-2 text-center">Encerra</th>
-                <th className="px-2 py-2 text-center">Valor</th>
-                <th className="px-2 py-2 text-right">Valor Itens (KK)</th>
-                <th className="px-2 py-2 text-right">Valor Itens (RC)</th>
-                <th className="px-2 py-2 text-center">Detalhes</th>
-                <th className="px-2 py-2 text-center">Tenho Interesse</th>
-                <th className="px-2 py-2 text-center">Link</th>
+            {/* Cabeçalho em DUAS linhas fixas — MESMO padrão da tabela de
+                quests: linha 1 = títulos ordenáveis (SortHeader, seta âmbar
+                na coluna ativa), linha 2 = filtros por coluna (mesmos
+                componentes de FilterTypes). Classes sticky compartilhadas
+                com o BazarPanel — fonte única de estilo. */}
+            <thead className="text-[10px] uppercase tracking-wider text-slate-400">
+              <tr>
+                <SortHeader label="Personagem" column="name" />
+                <SortHeader label="Servidor" column="server" />
+                <SortHeader label="Encerra" column="auctionEndTs" />
+                <SortHeader label="Valor" column="bid" />
+                <SortHeader label="Valor Itens (KK)" column="totalKk" />
+                <SortHeader label="Valor Itens (RC)" column="rc" />
+                <th className={`${STICKY_HEAD_CELL_CLASS} h-10 px-1 py-2 text-center align-middle leading-none`}>Detalhes</th>
+                <th className={`${STICKY_HEAD_CELL_CLASS} h-10 px-1 py-2 text-center align-middle leading-none`}>Tenho Interesse</th>
+                <th className={`${STICKY_HEAD_CELL_CLASS} h-10 px-1 py-2 text-center align-middle leading-none`}>Link</th>
+              </tr>
+              <tr className="h-10 normal-case tracking-normal">
+                <th className={`${STICKY_FILTER_CELL_CLASS} h-10 px-1 py-1.5 align-middle`}>
+                  <div className="flex w-full items-center justify-center gap-1">
+                    <button
+                      type="button"
+                      onClick={resetTableFilters}
+                      disabled={!hasActiveTableFilters}
+                      className={`h-6 w-6 flex-shrink-0 rounded flex items-center justify-center transition-all ${
+                        hasActiveTableFilters
+                          ? "bg-amber-500 text-black font-bold shadow-sm shadow-amber-500/20 animate-pulse cursor-pointer"
+                          : "bg-white/5 text-slate-600 cursor-default"
+                      }`}
+                      title="Limpar todos os filtros"
+                    >
+                      <RotateCcw size={11} />
+                    </button>
+                    <div className="flex min-w-0 flex-1 items-center justify-center [&>div]:w-full [&>div]:max-w-[112px]"><FilterInline value={tableFilters.name} onChange={value => updateTableFilters({ name: value })} placeholder="Personagem" maxWidth="100%" /></div>
+                  </div>
+                </th>
+                <th className={`${STICKY_FILTER_CELL_CLASS} h-10 px-1 py-1.5 align-middle`}><div className="flex w-full items-center justify-center [&>button]:w-full [&>button]:max-w-[96px]"><FilterMulti label="Servidor" options={serverOptions} selected={tableFilters.servers} onApply={values => updateTableFilters({ servers: values })} placeholder="Servidor" searchable /></div></th>
+                <th className={`${STICKY_FILTER_CELL_CLASS} h-10 px-1 py-1.5 align-middle`}><div className="flex w-full items-center justify-center [&>div]:w-full [&>div]:max-w-[122px]"><FilterDateMax label="Encerra até" value={tableFilters.endUntil} onChange={value => updateTableFilters({ endUntil: value })} placeholder="Encerra" /></div></th>
+                <th className={`${STICKY_FILTER_CELL_CLASS} h-10 px-1 py-1.5 align-middle`}><div className="flex w-full items-center justify-center [&>button]:w-full [&>button]:max-w-[80px]"><FilterNumber label="Valor" value={tableFilters.bidValue} operator={tableFilters.bidOperator} onChange={(value, operator) => updateTableFilters({ bidValue: value, bidOperator: operator })} placeholder="Valor" /></div></th>
+                <th className={`${STICKY_FILTER_CELL_CLASS} h-10 px-1 py-1.5 align-middle`}><div className="flex w-full items-center justify-center [&>button]:w-full [&>button]:max-w-[80px]"><FilterNumber label="Valor Itens (KK)" value={tableFilters.kkValue} operator={tableFilters.kkOperator} onChange={(value, operator) => updateTableFilters({ kkValue: value, kkOperator: operator })} placeholder="KK" /></div></th>
+                <th className={`${STICKY_FILTER_CELL_CLASS} h-10 px-1 py-1.5 align-middle`}><div className="flex w-full items-center justify-center [&>button]:w-full [&>button]:max-w-[80px]"><FilterNumber label="Valor Itens (RC)" value={tableFilters.rcValue} operator={tableFilters.rcOperator} onChange={(value, operator) => updateTableFilters({ rcValue: value, rcOperator: operator })} placeholder="RC" /></div></th>
+                <th className={`${STICKY_FILTER_CELL_CLASS} h-10 px-1 py-1.5 text-center align-middle text-[10px] text-slate-600`}>—</th>
+                <th className={`${STICKY_FILTER_CELL_CLASS} h-10 px-1 py-1.5 text-center align-middle`}>
+                  <button
+                    type="button"
+                    aria-label="Filtrar somente meus interesses"
+                    aria-pressed={tableFilters.onlyMyInterests}
+                    onClick={() => updateTableFilters({ onlyMyInterests: !tableFilters.onlyMyInterests })}
+                    title={tableFilters.onlyMyInterests
+                      ? "Exibindo somente os personagens em que você marcou interesse"
+                      : "Exibir somente os personagens em que você marcou interesse"}
+                    className={`inline-flex h-7 items-center justify-center gap-1 rounded-md border px-2 text-[10px] font-black transition-all cursor-pointer ${
+                      tableFilters.onlyMyInterests
+                        ? "border-cyan-400/55 bg-cyan-500/20 text-cyan-100 shadow-[0_0_12px_rgba(34,211,238,0.18)]"
+                        : "border-white/10 bg-white/5 text-slate-400 hover:border-cyan-400/35 hover:bg-cyan-500/10 hover:text-cyan-200"
+                    }`}
+                  >
+                    <Star size={11} fill={tableFilters.onlyMyInterests ? "currentColor" : "none"} />
+                    <span>Meus</span>
+                  </button>
+                </th>
+                <th className={`${STICKY_FILTER_CELL_CLASS} h-10 px-1 py-1.5 text-center align-middle`}>{hasActiveTableFilters && <button type="button" onClick={resetTableFilters} className="inline-flex h-7 items-center justify-center rounded border border-white/10 bg-white/5 px-2 text-[10px] text-slate-400 hover:text-white hover:bg-white/10 transition-colors cursor-pointer">Resetar</button>}</th>
               </tr>
             </thead>
             <tbody>
-              {visibleResults.map(result => {
+              {filteredResults.length === 0 && (
+                // Estado vazio DENTRO da tabela — mesmo desenho das quests:
+                // cabeçalho e linha de filtros seguem visíveis para que o
+                // usuário não perca o acesso ao botão de limpar justamente
+                // quando os filtros não retornam resultados.
+                <tr>
+                  <td colSpan={9} className="px-4 py-10 text-center align-middle text-sm text-slate-500">
+                    <div className="flex flex-col items-center justify-center gap-3">
+                      <span>Nenhum personagem encontrado para os filtros atuais.</span>
+                      {hasActiveTableFilters && (
+                        <button
+                          type="button"
+                          onClick={resetTableFilters}
+                          className="inline-flex h-7 items-center justify-center gap-1 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 text-[10px] font-black text-amber-300 hover:bg-amber-500/20 transition-colors cursor-pointer"
+                          title="Limpar todos os filtros"
+                        >
+                          <RotateCcw size={11} /> Limpar filtros
+                        </button>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              )}
+              {filteredResults.map(result => {
                 const auctionKey = result.id || result.url || result.name;
                 const copyKey = `res_${auctionKey}`;
                 // "Tenho Interesse" — estado 100% LOCAL (localStorage por uid).
