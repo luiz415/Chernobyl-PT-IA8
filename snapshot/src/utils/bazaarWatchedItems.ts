@@ -11,9 +11,19 @@
 // ============================================================================
 
 import { loadUIState, saveUIState } from "../storage";
+import { OFFICIAL_SERVERS, normalizeServerName } from "../constants/servers";
 
 // ── Persistência (somente configurações e resultado local) ──────────────────
 export const BAZAAR_WATCHED_ITEMS_KEY = "rubinot_bazaar_watched_items";
+/**
+ * LISTAS DE PREÇOS POR SERVIDOR — formato atual: um único mapa
+ * `{ "<servidor oficial>": WatchedItem[] }`. Estrutura escalável
+ * (Servidor → lista de itens → preço): novos servidores entram sem nenhuma
+ * lógica individual. A chave LEGADA acima (lista única) é migrada UMA vez
+ * para todos os servidores (era o comportamento vigente: mesma lista usada
+ * para todos) e preservada como backup — nunca mais escrita.
+ */
+export const BAZAAR_WATCHED_ITEMS_BY_SERVER_KEY = "rubinot_bazaar_watched_items_by_server";
 export const BAZAAR_ITEMS_COIN_RATE_KEY = "rubinot_bazaar_items_coin_rate";
 export const BAZAAR_ITEMS_LAST_QUERY_KEY = "rubinot_bazaar_items_last_query";
 /**
@@ -227,6 +237,164 @@ export function saveWatchedItems(items: WatchedItem[]): void {
   saveUIState(BAZAAR_WATCHED_ITEMS_KEY, sanitizeWatchedItems(items));
 }
 
+// ============================================================================
+// LISTAS DE PREÇOS POR SERVIDOR
+// ----------------------------------------------------------------------------
+// Estrutura: `{ "<servidor oficial>": WatchedItem[] }` — cada servidor tem
+// itens, valores e datas de atualização PRÓPRIOS. O cálculo de um personagem
+// usa SEMPRE a lista do servidor dele; item sem preço no servidor NÃO usa o
+// preço de outro servidor como fallback (simplesmente não é contabilizado,
+// mesmo comportamento de item fora da lista).
+//
+// MIGRAÇÃO: na primeira leitura sem o mapa novo, a lista única legada é
+// copiada para TODOS os servidores oficiais — exatamente o comportamento
+// vigente até aqui (uma lista valia para todos). A chave legada permanece
+// como estava (backup), nunca mais é escrita.
+// ============================================================================
+
+export type WatchedItemsByServer = Record<string, WatchedItem[]>;
+
+/** Nome canônico do servidor (fonte única em constants/servers). */
+export function canonicalServerKey(server: string): string {
+  const normalized = normalizeServerName(String(server || ""));
+  return normalized || String(server || "").trim();
+}
+
+export function sanitizeWatchedItemsByServer(raw: unknown): WatchedItemsByServer {
+  const out: WatchedItemsByServer = {};
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return out;
+  for (const [server, list] of Object.entries(raw as Record<string, unknown>)) {
+    const key = canonicalServerKey(server);
+    if (!key) continue;
+    const items = sanitizeWatchedItems(list);
+    if (items.length === 0) continue;
+    if (!out[key]) {
+      out[key] = items;
+      continue;
+    }
+    // Duas chaves que normalizam para o mesmo servidor (ex.: alias legado):
+    // mescla sem duplicar nomes — a primeira ocorrência prevalece.
+    const seen = new Set(out[key].map(item => normalizeWatchedItemName(item.name)));
+    for (const item of items) {
+      const nameKey = normalizeWatchedItemName(item.name);
+      if (seen.has(nameKey)) continue;
+      seen.add(nameKey);
+      out[key].push(item);
+    }
+  }
+  return out;
+}
+
+export function loadWatchedItemsByServer(): WatchedItemsByServer {
+  const raw = loadUIState<unknown>(BAZAAR_WATCHED_ITEMS_BY_SERVER_KEY, null);
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+    return sanitizeWatchedItemsByServer(raw);
+  }
+  // Migração única: a lista legada (que valia para TODOS os servidores)
+  // vira a lista inicial de cada servidor — a partir daí, cada um evolui
+  // de forma independente.
+  const legacy = sanitizeWatchedItems(loadUIState<unknown>(BAZAAR_WATCHED_ITEMS_KEY, []));
+  const seeded: WatchedItemsByServer = {};
+  if (legacy.length > 0) {
+    for (const server of OFFICIAL_SERVERS) {
+      seeded[server] = legacy.map(item => ({ ...item }));
+    }
+    saveUIState(BAZAAR_WATCHED_ITEMS_BY_SERVER_KEY, seeded);
+  }
+  return seeded;
+}
+
+export function saveWatchedItemsByServer(map: WatchedItemsByServer): void {
+  saveUIState(BAZAAR_WATCHED_ITEMS_BY_SERVER_KEY, sanitizeWatchedItemsByServer(map));
+}
+
+/** Lista de preços de UM servidor (vazia quando não há nada cadastrado). */
+export function getServerWatchedItems(map: WatchedItemsByServer, server: string): WatchedItem[] {
+  return map[canonicalServerKey(server)] || [];
+}
+
+/**
+ * União dos nomes monitorados (normalizados) de TODOS os servidores — é o
+ * conjunto enviado à consulta: a consulta ENCONTRA os itens; o preço aplicado
+ * depois é sempre o do servidor do personagem.
+ */
+export function collectAllWatchKeys(map: WatchedItemsByServer): string[] {
+  const seen = new Set<string>();
+  for (const items of Object.values(map)) {
+    for (const item of items) {
+      const key = normalizeWatchedItemName(item.name);
+      if (key) seen.add(key);
+    }
+  }
+  return Array.from(seen);
+}
+
+/**
+ * Reprecifica um item nos resultados persistidos da última consulta,
+ * SOMENTE para os personagens do servidor indicado (edição pelo modal
+ * "Detalhes"): matches do item ganham novo `baseValueKk`, o `unitValueKk`
+ * é recalculado pela MESMA regra de Tier (+20%/nível) e os totais do
+ * personagem são refeitos. Personagens de OUTROS servidores e correções
+ * manuais (`manualTotalKk`) não são tocados.
+ */
+export function repriceQueryResultsForServerItem(
+  results: BazaarItemsCharacterResult[],
+  server: string,
+  watchedName: string,
+  newBaseValueKk: number,
+): BazaarItemsCharacterResult[] {
+  const serverKey = canonicalServerKey(server);
+  const nameKey = normalizeWatchedItemName(watchedName);
+  return (Array.isArray(results) ? results : []).map(result => {
+    if (canonicalServerKey(result.server) !== serverKey) return result;
+    let touched = false;
+    const matches = (result.matches || []).map(match => {
+      if (normalizeWatchedItemName(match.watchedName) !== nameKey) return match;
+      touched = true;
+      const unitValueKk = computeTieredValueKk(newBaseValueKk, match.tier);
+      const totalKk = Math.round(unitValueKk * match.amount * 100) / 100;
+      return { ...match, baseValueKk: newBaseValueKk, unitValueKk, totalKk };
+    });
+    if (!touched) return result;
+    const totalKk = Math.round(matches.reduce((sum, item) => sum + item.totalKk, 0) * 100) / 100;
+    return { ...result, matches, totalKk };
+  });
+}
+
+/**
+ * Mescla de importação (mesma regra que o painel sempre usou): itens novos
+ * entram; nomes já existentes têm o valor ATUALIZADO pelo arquivo quando
+ * diferente (a importação é a fonte mais recente) — com a data do arquivo
+ * quando presente, senão `nowMs`.
+ */
+export function mergeWatchedLists(
+  current: WatchedItem[],
+  incoming: WatchedItem[],
+  nowMs = Date.now(),
+): { merged: WatchedItem[]; added: number; updated: number } {
+  const merged = [...current];
+  let added = 0;
+  let updated = 0;
+  for (const item of incoming) {
+    const key = normalizeWatchedItemName(item.name);
+    const existingIndex = merged.findIndex(entry => normalizeWatchedItemName(entry.name) === key);
+    if (existingIndex >= 0) {
+      if (merged[existingIndex].valueKk !== item.valueKk) {
+        merged[existingIndex] = {
+          ...merged[existingIndex],
+          valueKk: item.valueKk,
+          updatedAtMs: item.updatedAtMs || nowMs,
+        };
+        updated += 1;
+      }
+    } else {
+      merged.push({ ...item });
+      added += 1;
+    }
+  }
+  return { merged, added, updated };
+}
+
 export function loadItemsCoinRate(): number {
   const value = Number(loadUIState<unknown>(BAZAAR_ITEMS_COIN_RATE_KEY, 0));
   return Number.isFinite(value) && value > 0 ? value : 0;
@@ -291,19 +459,52 @@ export function saveItemsInterests(uid: string, auctionIds: string[]): void {
 // EXPORTAR / IMPORTAR a Lista de Itens (arquivo JSON)
 // ============================================================================
 
-export function exportWatchlistJson(items: WatchedItem[]): string {
+function serializeWatchedItem(item: WatchedItem): { name: string; valueKk: number; updatedAtMs?: number } {
+  return {
+    name: item.name,
+    valueKk: item.valueKk,
+    // Preserva a data da última atualização de valor no arquivo, para que
+    // um import em outro dispositivo mantenha o histórico visível.
+    ...(item.updatedAtMs ? { updatedAtMs: item.updatedAtMs } : {}),
+  };
+}
+
+/**
+ * Exportação "Apenas Este Servidor": mantém o formato v1 (compatível com
+ * versões anteriores do importador) acrescido do campo informativo `server`.
+ */
+export function exportWatchlistJson(items: WatchedItem[], server?: string): string {
   return JSON.stringify(
     {
       kind: "bazaar-watched-items",
       version: 1,
       exportedAt: new Date().toISOString(),
-      items: items.map(item => ({
-        name: item.name,
-        valueKk: item.valueKk,
-        // Preserva a data da última atualização de valor no arquivo, para que
-        // um import em outro dispositivo mantenha o histórico visível.
-        ...(item.updatedAtMs ? { updatedAtMs: item.updatedAtMs } : {}),
-      })),
+      ...(server ? { server } : {}),
+      items: items.map(serializeWatchedItem),
+    },
+    null,
+    2,
+  );
+}
+
+/**
+ * Exportação "Todos Servidores": UM único documento com a lista de CADA
+ * servidor, preservando a estrutura Servidor → Item → Valor.
+ */
+export function exportWatchlistByServerJson(map: WatchedItemsByServer): string {
+  const servers: Record<string, ReturnType<typeof serializeWatchedItem>[]> = {};
+  for (const server of Object.keys(map).sort((a, b) => a.localeCompare(b, "pt-BR"))) {
+    const items = map[server];
+    if (!items || items.length === 0) continue;
+    servers[server] = items.map(serializeWatchedItem);
+  }
+  return JSON.stringify(
+    {
+      kind: "bazaar-watched-items",
+      version: 2,
+      scope: "all-servers",
+      exportedAt: new Date().toISOString(),
+      servers,
     },
     null,
     2,
@@ -321,4 +522,36 @@ export function parseWatchlistImport(text: string): { items: WatchedItem[]; erro
   } catch {
     return { items: [], error: "Arquivo inválido: não foi possível ler o JSON." };
   }
+}
+
+/**
+ * Interpreta QUALQUER arquivo de lista suportado e classifica o conteúdo:
+ * - `kind: "multi"` — arquivo v2 "Todos Servidores" (`servers` = mapa
+ *   Servidor → itens, já saneado e com nomes de servidor canônicos);
+ * - `kind: "single"` — formato v1 / array puro (uma lista, sem servidor
+ *   embutido para restauração — o destino é escolhido pelo usuário).
+ */
+export function parseWatchlistImportAny(text: string):
+  | { kind: "multi"; servers: WatchedItemsByServer; error: null }
+  | { kind: "single"; items: WatchedItem[]; error: null }
+  | { kind: "error"; error: string } {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(String(text || ""));
+  } catch {
+    return { kind: "error", error: "Arquivo inválido: não foi possível ler o JSON." };
+  }
+  const obj = parsed && typeof parsed === "object" && !Array.isArray(parsed)
+    ? (parsed as Record<string, unknown>)
+    : null;
+  if (obj && obj.servers && typeof obj.servers === "object" && !Array.isArray(obj.servers)) {
+    const servers = sanitizeWatchedItemsByServer(obj.servers);
+    if (Object.keys(servers).length === 0) {
+      return { kind: "error", error: "Nenhum item válido no arquivo (cada item precisa de nome e valor em kk > 0)." };
+    }
+    return { kind: "multi", servers, error: null };
+  }
+  const single = parseWatchlistImport(text);
+  if (single.error) return { kind: "error", error: single.error };
+  return { kind: "single", items: single.items, error: null };
 }

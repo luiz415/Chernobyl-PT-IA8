@@ -16,7 +16,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { AlertTriangle, ArrowDownUp, Check, Coins, Copy, Download, ExternalLink, Eye, FlagTriangleRight, ListChecks, Package, Pencil, Plus, RefreshCw, RotateCcw, Search, Sparkles, Square, Star, Trash2, Upload, X } from "lucide-react";
+import { AlertTriangle, ArrowDownUp, Check, Coins, Copy, Download, ExternalLink, Eye, FlagTriangleRight, Globe, ListChecks, Package, Pencil, Plus, RefreshCw, RotateCcw, Search, Sparkles, Square, Star, Trash2, Upload, X } from "lucide-react";
 import BazaarBrowserModal, { BAZAAR_BROWSER_KEY, BAZAAR_BROWSER_ORDER_KEY, BAZAAR_RETRY_BROWSERS_KEY, BAZAAR_RETRY_COUNTS_KEY, BAZAAR_SPEED_MODE_KEY, DEFAULT_BROWSER_ORDER, normalizeRetryCounts } from "./BazaarBrowserModal";
 // Mesmos componentes de filtro da tabela de QUESTS (FilterTypes é a fonte
 // única — nenhuma implementação paralela) e as MESMAS classes de célula
@@ -43,22 +43,32 @@ import { openExternalUrl } from "../utils/openExternal";
 import {
   buildCharacterMatches,
   buildWatchlistIndex,
+  canonicalServerKey,
+  collectAllWatchKeys,
+  exportWatchlistByServerJson,
   exportWatchlistJson,
+  getServerWatchedItems,
   loadItemsCoinRate,
   loadItemsInterests,
   loadItemsLastQuery,
-  loadWatchedItems,
+  loadWatchedItemsByServer,
+  mergeWatchedLists,
   normalizeWatchedItemName,
-  parseWatchlistImport,
+  parseWatchlistImportAny,
+  repriceQueryResultsForServerItem,
   saveItemsCoinRate,
   saveItemsInterests,
   saveItemsLastQuery,
-  saveWatchedItems,
+  saveWatchedItemsByServer,
   type BazaarItemsCharacterResult,
   type BazaarItemsLastQuery,
   type RawItemMatch,
   type WatchedItem,
+  type WatchedItemsByServer,
 } from "../utils/bazaarWatchedItems";
+// Fonte ÚNICA de servidores (mesma lista/normalização do restante do app):
+// as Listas de Itens agora são POR SERVIDOR, chaveadas pelo nome oficial.
+import { SERVER_OPTIONS } from "../constants/servers";
 import { syncBazaarItemsEndingAlerts } from "../services/bazaarInterestNotificationService";
 import { useAuth } from "../context/AuthContext";
 
@@ -206,6 +216,25 @@ function saveItemsHideEndedPreference(value: boolean) {
   try { localStorage.setItem(ITEMS_HIDE_ENDED_KEY, JSON.stringify(value)); } catch {}
 }
 
+// ── Servidor selecionado no modal "Lista de Itens" ──────────────────────────
+// Cada servidor tem a SUA lista de preços; o seletor do modal define qual
+// lista está sendo exibida/editada (e o alvo do escopo "Apenas Este
+// Servidor" no exportar/importar). Preferência persistida por dispositivo.
+const ITEMS_SELECTED_SERVER_KEY = "rubinot_bazaar_items_selected_server";
+
+function readItemsSelectedServer(): string {
+  try {
+    const raw = localStorage.getItem(ITEMS_SELECTED_SERVER_KEY);
+    const value = raw ? String(JSON.parse(raw) || "") : "";
+    if (value && SERVER_OPTIONS.includes(value)) return value;
+  } catch {}
+  return SERVER_OPTIONS[0] || "";
+}
+
+function saveItemsSelectedServer(value: string) {
+  try { localStorage.setItem(ITEMS_SELECTED_SERVER_KEY, JSON.stringify(value)); } catch {}
+}
+
 /**
  * Valor EFETIVO do "Valor Itens (KK)" de um personagem: a correção MANUAL
  * (quando presente e válida) tem prioridade sobre o total calculado pela
@@ -245,7 +274,18 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
   const currentUid = currentUser?.uid || "";
 
   // ── Configurações locais ───────────────────────────────────────────────────
-  const [watchedItems, setWatchedItems] = useState<WatchedItem[]>(() => loadWatchedItems());
+  // LISTAS DE PREÇOS POR SERVIDOR: `watchedByServer` é a fonte oficial
+  // (Servidor → itens/valores/datas próprios). `selectedServer` define qual
+  // lista o modal "Lista de Itens" exibe/edita. `watchedItems` é DERIVADO —
+  // a lista do servidor selecionado — para que todo o CRUD/pesquisa/modal
+  // existente continue operando sem lógica paralela.
+  const [watchedByServer, setWatchedByServer] = useState<WatchedItemsByServer>(() => loadWatchedItemsByServer());
+  const [selectedServer, setSelectedServer] = useState<string>(() => readItemsSelectedServer());
+  const watchedItems = getServerWatchedItems(watchedByServer, selectedServer);
+
+  useEffect(() => {
+    saveItemsSelectedServer(selectedServer);
+  }, [selectedServer]);
   const [coinRateText, setCoinRateText] = useState<string>(() => {
     const rate = loadItemsCoinRate();
     return rate > 0 ? String(rate).replace(".", ",") : "";
@@ -336,7 +376,20 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
   const [inlineEditError, setInlineEditError] = useState<string | null>(null);
   const [importFeedback, setImportFeedback] = useState<string | null>(null);
   const importInputRef = useRef<HTMLInputElement | null>(null);
+  // ── Escopo do Exportar/Importar ────────────────────────────────────────────
+  // Clicar em Exportar/Importar abre uma ETAPA compacta de escolha do escopo
+  // ("Todos Servidores" | "Apenas Este Servidor") no lugar dos botões — o
+  // fluxo original continua o mesmo, apenas com esta etapa antes de executar.
+  const [scopePicker, setScopePicker] = useState<"export" | "import" | null>(null);
+  // Escopo escolhido para a importação — consumido quando o arquivo chega.
+  const importScopeRef = useRef<"all" | "current">("current");
   const [detailResult, setDetailResult] = useState<BazaarItemsCharacterResult | null>(null);
+  // ── Edição de valor no modal "Detalhes" ────────────────────────────────────
+  // Lápis na coluna "Total (kk)": edita o valor BASE do item NA LISTA DO
+  // SERVIDOR do personagem visualizado (fonte única de preço) e reprecifica
+  // os personagens DESSE servidor na última consulta.
+  const [detailEdit, setDetailEdit] = useState<{ matchIndex: number; value: string } | null>(null);
+  const [detailEditError, setDetailEditError] = useState<string | null>(null);
   // Feedback "Copiado!" (1,5s) — mesmo padrão dos demais botões de copiar do
   // aplicativo (AvailableCharacter/CharTable). Uma chave por origem da cópia.
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
@@ -478,10 +531,26 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
     }
   }, [isElectron]);
 
-  // ── Lista de Itens: CRUD local ─────────────────────────────────────────────
+  // ── Lista de Itens: CRUD local (sempre na lista do servidor SELECIONADO) ──
   function persistItems(next: WatchedItem[]) {
-    setWatchedItems(next);
-    saveWatchedItems(next);
+    persistServerItems(selectedServer, next);
+  }
+
+  /** Grava a lista de UM servidor no mapa oficial (fonte única de preços). */
+  function persistServerItems(server: string, next: WatchedItem[]) {
+    const key = canonicalServerKey(server);
+    if (!key) return;
+    const map: WatchedItemsByServer = { ...watchedByServer };
+    if (next.length > 0) map[key] = next;
+    else delete map[key];
+    saveWatchedItemsByServer(map);
+    setWatchedByServer(map);
+  }
+
+  /** Grava o mapa COMPLETO (importação "Todos Servidores"). */
+  function persistAllServerItems(map: WatchedItemsByServer) {
+    saveWatchedItemsByServer(map);
+    setWatchedByServer(map);
   }
 
   /** Formulário superior — EXCLUSIVO para ADICIONAR novos itens. */
@@ -540,65 +609,112 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
     if (inlineEdit?.id === id) cancelInlineEdit();
   }
 
-  function handleExport() {
+  /** Baixa um JSON — mesmo mecanismo de download usado desde a v1. */
+  function downloadJsonFile(content: string, filename: string) {
+    const blob = new Blob([content], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = filename;
+    document.body.appendChild(anchor);
+    anchor.click();
+    document.body.removeChild(anchor);
+    URL.revokeObjectURL(url);
+  }
+
+  /**
+   * EXPORTAR com escopo:
+   *  • "all" — UM único arquivo (v2) com a lista de CADA servidor, estrutura
+   *    Servidor → Item → Valor preservada;
+   *  • "current" — apenas a lista do servidor selecionado (formato v1
+   *    compatível, com o campo informativo `server`).
+   */
+  function handleExport(scope: "all" | "current") {
+    setScopePicker(null);
     try {
-      const blob = new Blob([exportWatchlistJson(watchedItems)], { type: "application/json" });
-      const url = URL.createObjectURL(blob);
-      const anchor = document.createElement("a");
-      anchor.href = url;
-      anchor.download = `bazaar-lista-de-itens-${new Date().toISOString().slice(0, 10)}.json`;
-      document.body.appendChild(anchor);
-      anchor.click();
-      document.body.removeChild(anchor);
-      URL.revokeObjectURL(url);
+      const dateLabel = new Date().toISOString().slice(0, 10);
+      if (scope === "all") {
+        downloadJsonFile(
+          exportWatchlistByServerJson(watchedByServer),
+          `bazaar-lista-de-itens-todos-servidores-${dateLabel}.json`,
+        );
+      } else {
+        const serverSlug = selectedServer.toLowerCase().replace(/\s+/g, "-");
+        downloadJsonFile(
+          exportWatchlistJson(watchedItems, selectedServer),
+          `bazaar-lista-de-itens-${serverSlug}-${dateLabel}.json`,
+        );
+      }
     } catch {
       setImportFeedback("Não foi possível exportar a lista.");
     }
   }
 
+  /**
+   * IMPORTAR com escopo (escolhido ANTES de abrir o seletor de arquivo):
+   *  • "all" — arquivo v2 restaura cada lista no servidor CORRESPONDENTE
+   *    (mesma mescla de sempre, servidor a servidor); arquivo antigo (v1)
+   *    não tem servidores embutidos → orienta a usar "Apenas Este Servidor";
+   *  • "current" — o conteúdo entra SOMENTE na lista do servidor selecionado
+   *    (de um v2, usa a lista desse mesmo servidor no arquivo), sem tocar
+   *    nos demais.
+   */
   function handleImportFile(file: File | null) {
     if (!file) return;
+    const scope = importScopeRef.current;
     const reader = new FileReader();
     reader.onload = () => {
-      const { items, error: importError } = parseWatchlistImport(String(reader.result || ""));
-      if (importError) { setImportFeedback(importError); return; }
-      // Mescla: itens do arquivo entram; nomes já existentes têm o valor
-      // ATUALIZADO pelo arquivo (importação é a fonte mais recente).
-      const merged = [...watchedItems];
-      let added = 0;
-      let updated = 0;
+      const parsed = parseWatchlistImportAny(String(reader.result || ""));
+      if (parsed.kind === "error") { setImportFeedback(parsed.error); return; }
       const now = Date.now();
-      for (const incoming of items) {
-        const key = normalizeWatchedItemName(incoming.name);
-        const existingIndex = merged.findIndex(item => normalizeWatchedItemName(item.name) === key);
-        if (existingIndex >= 0) {
-          if (merged[existingIndex].valueKk !== incoming.valueKk) {
-            merged[existingIndex] = {
-              ...merged[existingIndex],
-              valueKk: incoming.valueKk,
-              // Valor alterado pelo import também conta como atualização:
-              // usa a data do arquivo quando presente, senão o momento atual.
-              updatedAtMs: incoming.updatedAtMs || now,
-            };
-            updated += 1;
-          }
-        } else {
-          merged.push(incoming);
-          added += 1;
+      if (scope === "all") {
+        if (parsed.kind !== "multi") {
+          setImportFeedback("Este arquivo contém uma única lista (sem servidores). Use \u201CApenas Este Servidor\u201D para importá-lo no servidor selecionado.");
+          return;
         }
+        const map: WatchedItemsByServer = { ...watchedByServer };
+        let added = 0;
+        let updated = 0;
+        let serversTouched = 0;
+        for (const [server, incoming] of Object.entries(parsed.servers)) {
+          const result = mergeWatchedLists(map[server] || [], incoming, now);
+          map[server] = result.merged;
+          added += result.added;
+          updated += result.updated;
+          serversTouched += 1;
+        }
+        persistAllServerItems(map);
+        setImportFeedback(`Importação concluída (${serversTouched} servidor(es)): ${added} novo(s), ${updated} atualizado(s).`);
+        return;
       }
+      // Escopo "current": somente a lista do servidor selecionado muda.
+      const incoming = parsed.kind === "multi"
+        ? getServerWatchedItems(parsed.servers, selectedServer)
+        : parsed.items;
+      if (incoming.length === 0) {
+        setImportFeedback(`O arquivo não contém itens para ${selectedServer}.`);
+        return;
+      }
+      const { merged, added, updated } = mergeWatchedLists(watchedItems, incoming, now);
       persistItems(merged);
-      setImportFeedback(`Importação concluída: ${added} novo(s), ${updated} atualizado(s).`);
+      setImportFeedback(`Importação concluída em ${selectedServer}: ${added} novo(s), ${updated} atualizado(s).`);
     };
     reader.onerror = () => setImportFeedback("Não foi possível ler o arquivo.");
     reader.readAsText(file);
   }
 
+  // Total de itens cadastrados somando TODAS as listas por servidor —
+  // usado no gate da consulta e no contador do botão "Lista de Itens".
+  const totalWatchedCount = useMemo(
+    () => Object.values(watchedByServer).reduce((sum, list) => sum + list.length, 0),
+    [watchedByServer],
+  );
+
   // ── Consulta ───────────────────────────────────────────────────────────────
   function requestItemsQuery() {
     if (!isBossUser) { setError("Apenas usuários Boss podem consultar itens no Bazaar."); return; }
     if (!isElectron) { setError("A consulta de itens precisa ser executada no aplicativo Desktop (Electron)."); return; }
-    if (watchedItems.length === 0) { setError("Cadastre pelo menos um item na Lista de Itens antes de consultar."); return; }
+    if (totalWatchedCount === 0) { setError("Cadastre pelo menos um item na Lista de Itens antes de consultar."); return; }
     if (!endUntil || !parseDateTimeLocalWithOffset(endUntil, timezoneOffsetMinutes)) {
       setError("Informe o filtro de data (Encerra até) antes de consultar.");
       return;
@@ -688,8 +804,11 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
       }
 
       // Etapa 3 — itens por API JSON (canal exclusivo, sem método antigo).
+      // Os watchKeys são a UNIÃO dos itens de TODOS os servidores: a consulta
+      // ENCONTRA os itens normalmente (script inalterado); o preço aplicado
+      // na etapa 4 é sempre o da lista do servidor do personagem.
       setStatusText(`Analisando itens de ${eligible.length} personagem(ns) elegível(is)...`);
-      const watchKeys = watchedItems.map(item => normalizeWatchedItemName(item.name)).filter(Boolean);
+      const watchKeys = collectAllWatchKeys(watchedByServer);
       const detailsResponse = await ipcRenderer.invoke("rubinot-bazaar-items-v2", eligible, { watchKeys }) as ItemsDetailsResult;
 
       if (!detailsResponse?.ok) {
@@ -697,14 +816,26 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
         return;
       }
 
-      // Etapa 4 — casamento com a Lista de Itens e totais (tudo local).
-      const index = buildWatchlistIndex(watchedItems);
+      // Etapa 4 — casamento com a Lista de Itens DO SERVIDOR do personagem.
+      // Um índice por servidor (cache local): item sem preço na lista do
+      // servidor do personagem NÃO é contabilizado — sem fallback de preço
+      // de outro servidor.
+      const indexByServer = new Map<string, Map<string, WatchedItem>>();
+      const getServerIndex = (server: string) => {
+        const serverKey = canonicalServerKey(server);
+        let index = indexByServer.get(serverKey);
+        if (!index) {
+          index = buildWatchlistIndex(getServerWatchedItems(watchedByServer, serverKey));
+          indexByServer.set(serverKey, index);
+        }
+        return index;
+      };
       const results: BazaarItemsCharacterResult[] = [];
       for (const auction of eligible) {
         const key = auction.id || auction.name || auction.url;
         const detail = key ? detailsResponse.details?.[key] : null;
         if (!detail || detail.error || !Array.isArray(detail.matches) || detail.matches.length === 0) continue;
-        const { matches, totalKk } = buildCharacterMatches(detail.matches, index);
+        const { matches, totalKk } = buildCharacterMatches(detail.matches, getServerIndex(String(auction.server || "")));
         if (matches.length === 0) continue;
         results.push({
           id: String(auction.id || ""),
@@ -837,6 +968,63 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
     saveItemsLastQuery(updated);
     setLastQuery(updated);
     setKkEdit(null);
+  }
+
+  /**
+   * EDIÇÃO PELO MODAL "DETALHES": salva o novo valor BASE do item na Lista
+   * de Itens do SERVIDOR do personagem visualizado (MESMA fonte de preço do
+   * modal Lista de Itens — nenhuma tabela paralela) e reprecifica na hora os
+   * personagens DESSE servidor na última consulta (Tier +20%/nível e RC
+   * derivam normalmente do novo valor). Outros servidores não mudam.
+   */
+  function saveDetailEdit() {
+    if (!detailResult || !detailEdit) return;
+    const match = detailResult.matches[detailEdit.matchIndex];
+    if (!match) { setDetailEdit(null); return; }
+    const rawValue = detailEdit.value.trim();
+    if (!/^\d+$/.test(rawValue)) { setDetailEditError("Informe o valor em kk usando somente números inteiros."); return; }
+    const valueKk = Number(rawValue);
+    if (!Number.isSafeInteger(valueKk) || valueKk <= 0) { setDetailEditError("Informe o valor em kk (inteiro, maior que zero)."); return; }
+
+    const server = String(detailResult.server || "");
+    const serverKey = canonicalServerKey(server);
+    const nameKey = normalizeWatchedItemName(match.watchedName);
+    const now = Date.now();
+
+    // 1) Fonte oficial: a Lista de Itens DO SERVIDOR do personagem. Item já
+    //    listado tem o valor atualizado (data só muda se o valor mudou);
+    //    item ainda sem preço neste servidor é ADICIONADO à lista dele.
+    const serverItems = getServerWatchedItems(watchedByServer, serverKey);
+    const existingIndex = serverItems.findIndex(item => normalizeWatchedItemName(item.name) === nameKey);
+    let nextServerItems: WatchedItem[];
+    if (existingIndex >= 0) {
+      nextServerItems = serverItems.map((item, index) => {
+        if (index !== existingIndex) return item;
+        const valueChanged = item.valueKk !== valueKk;
+        return { ...item, valueKk, updatedAtMs: valueChanged ? now : item.updatedAtMs };
+      });
+    } else {
+      nextServerItems = [
+        ...serverItems,
+        { id: `wi_${now.toString(36)}_${Math.random().toString(36).slice(2, 7)}`, name: match.watchedName, valueKk, updatedAtMs: now },
+      ];
+    }
+    persistServerItems(serverKey, nextServerItems);
+
+    // 2) Reprecifica a última consulta SOMENTE para personagens deste
+    //    servidor (correções manuais de KK permanecem intactas).
+    if (lastQuery) {
+      const repricedResults = repriceQueryResultsForServerItem(lastQuery.results, serverKey, match.watchedName, valueKk);
+      const updated: BazaarItemsLastQuery = { ...lastQuery, results: repricedResults };
+      saveItemsLastQuery(updated);
+      setLastQuery(updated);
+      // Mantém o modal aberto já com os números novos do personagem.
+      const detailKey = detailResult.id || detailResult.url || detailResult.name;
+      const refreshed = repricedResults.find(result => (result.id || result.url || result.name) === detailKey);
+      if (refreshed) setDetailResult(refreshed);
+    }
+    setDetailEdit(null);
+    setDetailEditError(null);
   }
 
   // ── Derivados de exibição ──────────────────────────────────────────────────
@@ -1004,11 +1192,11 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
       ))}
       <button
         type="button"
-        onClick={() => { setIsItemsModalOpen(true); setImportFeedback(null); cancelInlineEdit(); }}
+        onClick={() => { setIsItemsModalOpen(true); setImportFeedback(null); setScopePicker(null); cancelInlineEdit(); }}
         className="inline-flex h-7 items-center gap-1 px-2.5 rounded-lg border border-fuchsia-500/25 bg-fuchsia-500/10 text-fuchsia-300 text-[10px] font-black transition-all cursor-pointer hover:bg-fuchsia-500/20"
-        title="Itens monitorados na consulta: nome e valor base em kk"
+        title="Itens monitorados na consulta: nome e valor base em kk, por servidor"
       >
-        <ListChecks size={12} /> Lista de Itens ({watchedItems.length})
+        <ListChecks size={12} /> Lista de Itens ({totalWatchedCount})
       </button>
     </>
   );
@@ -1511,7 +1699,7 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
               <div className="flex items-center gap-2 min-w-0">
                 <ListChecks size={16} className="text-fuchsia-400 flex-shrink-0" />
                 <span className="text-sm font-bold text-fuchsia-300 uppercase tracking-wider truncate">Lista de Itens</span>
-                <span className="text-[10px] text-slate-500 font-mono">({watchedItems.length})</span>
+                <span className="text-[10px] text-slate-500 font-mono" title={`${watchedItems.length} item(ns) em ${selectedServer} · ${totalWatchedCount} no total (todos os servidores)`}>({watchedItems.length})</span>
               </div>
               <button type="button" onClick={() => setIsItemsModalOpen(false)} className="p-1 rounded text-slate-400 hover:text-white hover:bg-white/10 transition-colors cursor-pointer flex-shrink-0" title="Fechar">
                 <X size={15} />
@@ -1522,6 +1710,32 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                 pesquisa/exportar/importar ficam SEMPRE visíveis — a rolagem
                 vertical pertence exclusivamente à área da lista, abaixo. */}
             <div className="flex-shrink-0 px-4 pt-3 pb-2 space-y-3 border-b border-[var(--th-line)]/30">
+              {/* ── SELETOR DE SERVIDOR — cada servidor tem a SUA lista ─────
+                  Define qual lista está sendo exibida/editada abaixo (e o
+                  alvo do escopo "Apenas Este Servidor" no exportar/importar).
+                  O cálculo dos personagens usa SEMPRE a lista do servidor de
+                  cada personagem, independente do selecionado aqui. */}
+              <label className="flex items-center gap-2 text-[10px]">
+                <span className="inline-flex items-center gap-1 font-black uppercase tracking-wider text-slate-400 flex-shrink-0">
+                  <Globe size={11} className="text-fuchsia-400" /> Servidor
+                </span>
+                <select
+                  value={selectedServer}
+                  onChange={event => { setSelectedServer(event.target.value); cancelInlineEdit(); setImportFeedback(null); setScopePicker(null); }}
+                  title="Cada servidor tem a própria Lista de Itens (preços independentes). O cálculo de cada personagem usa sempre a lista do servidor dele."
+                  className="h-8 flex-1 min-w-0 rounded-md border border-fuchsia-500/40 bg-black/35 px-2 text-[11px] font-bold text-fuchsia-200 outline-none focus:border-fuchsia-400 cursor-pointer"
+                >
+                  {SERVER_OPTIONS.map(server => {
+                    const count = getServerWatchedItems(watchedByServer, server).length;
+                    return (
+                      <option key={server} value={server}>
+                        {server}{count > 0 ? ` (${count})` : ""}
+                      </option>
+                    );
+                  })}
+                </select>
+              </label>
+
               {/* Formulário: EXCLUSIVO para adicionar novos itens — a edição
                   de itens existentes é INLINE, na própria linha da lista. */}
               <form
@@ -1570,12 +1784,58 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                     className="h-8 w-full rounded-md border border-[var(--th-line)]/70 bg-black/35 pl-7 pr-2 text-[11px] text-white outline-none focus:border-fuchsia-600/60"
                   />
                 </div>
-                <button type="button" onClick={handleExport} disabled={watchedItems.length === 0} className="inline-flex h-8 items-center gap-1 px-2.5 rounded-lg border border-sky-500/30 bg-sky-500/10 text-sky-300 text-[10px] font-black transition-all cursor-pointer hover:bg-sky-500/20 disabled:opacity-40 disabled:cursor-not-allowed" title="Baixa a lista em um arquivo JSON">
-                  <Download size={12} /> Exportar
-                </button>
-                <button type="button" onClick={() => importInputRef.current?.click()} className="inline-flex h-8 items-center gap-1 px-2.5 rounded-lg border border-emerald-500/30 bg-emerald-500/10 text-emerald-300 text-[10px] font-black transition-all cursor-pointer hover:bg-emerald-500/20" title="Importa itens de um arquivo JSON exportado anteriormente">
-                  <Upload size={12} /> Importar
-                </button>
+                {/* ETAPA DE ESCOPO — clicar em Exportar/Importar troca o par
+                    de botões pelo seletor compacto "Todos Servidores" |
+                    "Apenas Este Servidor" (mesmo lugar, mesmo fluxo; o ✗
+                    cancela e volta aos botões originais). */}
+                {scopePicker ? (
+                  <span className="inline-flex items-center gap-1">
+                    <span className={`inline-flex items-center gap-1 text-[9px] font-black uppercase tracking-wide ${scopePicker === "export" ? "text-sky-300" : "text-emerald-300"}`}>
+                      {scopePicker === "export" ? <Download size={11} /> : <Upload size={11} />}
+                      {scopePicker === "export" ? "Exportar:" : "Importar:"}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (scopePicker === "export") { handleExport("all"); }
+                        else { importScopeRef.current = "all"; setScopePicker(null); importInputRef.current?.click(); }
+                      }}
+                      disabled={scopePicker === "export" && totalWatchedCount === 0}
+                      className="inline-flex h-8 items-center gap-1 px-2 rounded-lg border border-fuchsia-500/35 bg-fuchsia-500/10 text-fuchsia-300 text-[10px] font-black transition-all cursor-pointer hover:bg-fuchsia-500/20 disabled:opacity-40 disabled:cursor-not-allowed"
+                      title={scopePicker === "export"
+                        ? "Um único arquivo com as listas de TODOS os servidores (estrutura Servidor → Item → Valor)"
+                        : "Restaura cada item na lista do servidor correspondente do arquivo"}
+                    >
+                      <Globe size={11} /> Todos Servidores
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (scopePicker === "export") { handleExport("current"); }
+                        else { importScopeRef.current = "current"; setScopePicker(null); importInputRef.current?.click(); }
+                      }}
+                      disabled={scopePicker === "export" && watchedItems.length === 0}
+                      className="inline-flex h-8 items-center gap-1 px-2 rounded-lg border border-amber-500/35 bg-amber-500/10 text-amber-300 text-[10px] font-black transition-all cursor-pointer hover:bg-amber-500/20 disabled:opacity-40 disabled:cursor-not-allowed"
+                      title={scopePicker === "export"
+                        ? `Somente os itens e valores de ${selectedServer}`
+                        : `Importa somente para ${selectedServer} — os demais servidores não são alterados`}
+                    >
+                      Apenas Este Servidor ({selectedServer})
+                    </button>
+                    <button type="button" onClick={() => setScopePicker(null)} className="p-1 rounded text-slate-400 hover:text-white hover:bg-white/10 transition-colors cursor-pointer" title="Cancelar">
+                      <X size={13} />
+                    </button>
+                  </span>
+                ) : (
+                  <>
+                    <button type="button" onClick={() => setScopePicker("export")} disabled={totalWatchedCount === 0} className="inline-flex h-8 items-center gap-1 px-2.5 rounded-lg border border-sky-500/30 bg-sky-500/10 text-sky-300 text-[10px] font-black transition-all cursor-pointer hover:bg-sky-500/20 disabled:opacity-40 disabled:cursor-not-allowed" title="Baixa a lista em um arquivo JSON (todos os servidores ou apenas o selecionado)">
+                      <Download size={12} /> Exportar
+                    </button>
+                    <button type="button" onClick={() => setScopePicker("import")} className="inline-flex h-8 items-center gap-1 px-2.5 rounded-lg border border-emerald-500/30 bg-emerald-500/10 text-emerald-300 text-[10px] font-black transition-all cursor-pointer hover:bg-emerald-500/20" title="Importa itens de um arquivo JSON exportado anteriormente (todos os servidores ou apenas o selecionado)">
+                      <Upload size={12} /> Importar
+                    </button>
+                  </>
+                )}
                 <input
                   ref={importInputRef}
                   type="file"
@@ -1597,7 +1857,7 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
               {/* Lista */}
               {filteredItems.length === 0 ? (
                 <p className="text-[11px] text-slate-500 text-center py-4">
-                  {watchedItems.length === 0 ? "Nenhum item cadastrado ainda." : "Nenhum item corresponde à pesquisa."}
+                  {watchedItems.length === 0 ? `Nenhum item cadastrado ainda em ${selectedServer}.` : "Nenhum item corresponde à pesquisa."}
                 </p>
               ) : (
                 <div className="space-y-1">
@@ -1700,13 +1960,18 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
               <div className="flex items-center gap-2 min-w-0">
                 <Package size={16} className="text-fuchsia-400 flex-shrink-0" />
                 <span className="text-sm font-bold text-fuchsia-300 truncate">{detailResult.name || "Personagem"}</span>
+                {detailResult.server && (
+                  <span className="inline-flex items-center gap-1 rounded border border-fuchsia-500/30 bg-fuchsia-500/10 px-1.5 py-0.5 text-[9px] font-black uppercase tracking-wide text-fuchsia-300 flex-shrink-0" title="Os valores desta tabela vêm da Lista de Itens deste servidor">
+                    <Globe size={9} /> {detailResult.server}
+                  </span>
+                )}
                 {detailResult.url && (
                   <a href={detailResult.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-sky-300 hover:text-sky-200 font-bold text-[10px] underline flex-shrink-0">
                     <ExternalLink size={10} /> Abrir leilão
                   </a>
                 )}
               </div>
-              <button type="button" onClick={() => setDetailResult(null)} className="p-1 rounded text-slate-400 hover:text-white hover:bg-white/10 transition-colors cursor-pointer flex-shrink-0" title="Fechar">
+              <button type="button" onClick={() => { setDetailResult(null); setDetailEdit(null); setDetailEditError(null); }} className="p-1 rounded text-slate-400 hover:text-white hover:bg-white/10 transition-colors cursor-pointer flex-shrink-0" title="Fechar">
                 <X size={15} />
               </button>
             </div>
@@ -1725,8 +1990,10 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                   </tr>
                 </thead>
                 <tbody>
-                  {detailResult.matches.map((match, index) => (
-                    <tr key={`${match.foundName}-${index}`} className="border-b border-[var(--th-line)]/25">
+                  {detailResult.matches.map((match, index) => {
+                    const isEditingMatch = detailEdit?.matchIndex === index;
+                    return (
+                    <tr key={`${match.foundName}-${index}`} className={`border-b border-[var(--th-line)]/25 ${isEditingMatch ? "bg-fuchsia-500/5" : ""}`}>
                       <td className="px-1.5 py-1.5 font-bold text-slate-100">{match.foundName}</td>
                       <td className="px-1.5 py-1.5 text-slate-300">{match.watchedName}</td>
                       <td className="px-1.5 py-1.5 text-right font-mono text-slate-200">{formatKkValue(match.baseValueKk, "kk")}</td>
@@ -1737,11 +2004,59 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                       </td>
                       <td className="px-1.5 py-1.5 text-right font-mono text-slate-200">{formatKkValue(match.unitValueKk, "kk")}</td>
                       <td className="px-1.5 py-1.5 text-center font-mono text-slate-200">{match.amount}</td>
-                      <td className="px-1.5 py-1.5 text-right font-mono font-bold text-amber-200">{formatKkValue(match.totalKk, "kk")}</td>
+                      <td className="px-1.5 py-1.5 text-right font-mono font-bold text-amber-200">
+                        {/* EDITAR VALOR DO ITEM (por servidor) — o lápis edita
+                            o valor BASE deste item na Lista de Itens do
+                            SERVIDOR deste personagem (fonte única de preço).
+                            Salvar atualiza a lista do servidor e reprecifica
+                            na hora os personagens dele; outros servidores
+                            permanecem intactos. Enter salva, Esc cancela. */}
+                        {isEditingMatch ? (
+                          <span className="inline-flex items-center justify-end gap-1">
+                            <input
+                              type="text"
+                              inputMode="numeric"
+                              autoFocus
+                              value={detailEdit.value}
+                              onChange={event => { setDetailEdit(prev => (prev ? { ...prev, value: sanitizeIntegerKk(event.target.value) } : prev)); setDetailEditError(null); }}
+                              onKeyDown={event => {
+                                if (event.key === "Enter") { event.preventDefault(); saveDetailEdit(); }
+                                if (event.key === "Escape") { event.preventDefault(); setDetailEdit(null); setDetailEditError(null); }
+                              }}
+                              placeholder="Base (kk)"
+                              title={`Novo valor BASE (kk inteiros) de "${match.watchedName}" em ${detailResult.server}. Enter salva, Esc cancela.`}
+                              className="h-6 w-16 rounded-md border border-fuchsia-500/60 bg-black/35 px-1.5 text-right font-mono text-[10px] text-amber-200 outline-none focus:border-fuchsia-400"
+                            />
+                            <button type="button" onClick={saveDetailEdit} className="p-0.5 rounded text-emerald-300 hover:bg-emerald-500/15 transition-colors cursor-pointer" title={`Salvar novo valor base na Lista de Itens de ${detailResult.server}`}>
+                              <Check size={12} strokeWidth={3} />
+                            </button>
+                            <button type="button" onClick={() => { setDetailEdit(null); setDetailEditError(null); }} className="p-0.5 rounded text-slate-400 hover:text-white hover:bg-white/10 transition-colors cursor-pointer" title="Cancelar">
+                              <X size={12} />
+                            </button>
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center justify-end gap-1">
+                            <span>{formatKkValue(match.totalKk, "kk")}</span>
+                            <button
+                              type="button"
+                              onClick={() => { setDetailEdit({ matchIndex: index, value: String(match.baseValueKk) }); setDetailEditError(null); }}
+                              className="p-0.5 rounded text-sky-300 hover:bg-sky-500/15 transition-colors cursor-pointer"
+                              title={`Editar o valor base de "${match.watchedName}" na Lista de Itens de ${detailResult.server} (atualiza a lista do servidor e os cálculos dos personagens dele)`}
+                            >
+                              <Pencil size={10} />
+                            </button>
+                          </span>
+                        )}
+                      </td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
+
+              {detailEditError && (
+                <p role="alert" className="text-[10px] font-medium text-rose-300">{detailEditError}</p>
+              )}
 
               <div className="rounded-lg border border-fuchsia-500/25 bg-fuchsia-500/5 px-3 py-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px]">
                 <span className="text-slate-300">Total do personagem: <span className="font-mono font-bold text-amber-200">{formatKkValue(detailResult.totalKk, "kk")}</span></span>
