@@ -266,13 +266,8 @@ function bidValueKk(result: BazaarItemsCharacterResult, coinRate: number): numbe
 }
 
 /**
- * SCORE do potencial (kk): Valor Itens EFETIVO − Valor do personagem em kk.
- * Positivo = os itens valem mais do que o preço pedido (oportunidade);
- * negativo = o personagem custa mais do que os itens valem. Usa o MESMO
- * valor efetivo da coluna KK (correção manual > calculado). É este número
- * real que a ordenação da coluna usa — a cor é só a representação visual.
- * Sem cotação do coin não há como comparar as unidades → null (indicador
- * neutro; nenhuma escala é inventada).
+ * Diferença do potencial em kk (Valor Itens EFETIVO − personagem em kk) —
+ * usada como informação complementar no tooltip da coluna.
  */
 function potentialScoreKk(result: BazaarItemsCharacterResult, coinRate: number): number | null {
   if (coinRate <= 0) return null;
@@ -280,40 +275,31 @@ function potentialScoreKk(result: BazaarItemsCharacterResult, coinRate: number):
 }
 
 /**
- * ESCALA da cor — dinâmica por consulta, com âncora semântica fixa:
+ * PERCENTUAL do potencial: (Valor Itens EFETIVO − personagem) ÷ personagem.
+ * É o retorno sobre o preço pago — a fórmula dos exemplos do requisito:
+ * personagem 100kk / itens 150kk → +50%; personagem 150kk / itens 100kk →
+ * −33,3%. Positivo = itens valem mais que o preço (verde); negativo =
+ * personagem custa mais que os itens (vermelho). Usa o MESMO valor efetivo
+ * da coluna KK (correção manual > calculado). É este número real que a
+ * ordenação da coluna usa.
  *
- *   • diff = 0 é SEMPRE o ponto médio (amarelo): itens valem o preço;
- *   • a amplitude vem dos personagens da CONSULTA ATUAL (não faixas fixas),
- *     normalizada pelo PERCENTIL 90 dos |diffs| — outliers além do P90
- *     saturam no extremo da cor em vez de comprimir todos os demais no
- *     centro (distorção clássica do min/max puro);
- *   • piso de 1kk na amplitude evita divisão por ~0 quando todos os diffs
- *     são quase iguais.
- *
- * Retorna a amplitude (kk) que mapeia diff→cor: t = 0.5 + diff/(2·amp).
+ * Sem cotação do coin (não dá para pôr bid e kk na mesma unidade) ou sem
+ * valor de personagem > 0 (divisão inválida) → null: a coluna exibe "—"
+ * (dado indisponível), nunca um número enganoso. 1 casa decimal.
  */
-function computePotentialScaleKk(results: BazaarItemsCharacterResult[], coinRate: number): number {
-  const magnitudes = results
-    .map(result => potentialScoreKk(result, coinRate))
-    .filter((score): score is number => score !== null)
-    .map(Math.abs)
-    .sort((a, b) => a - b);
-  if (magnitudes.length === 0) return 1;
-  const p90Index = Math.min(magnitudes.length - 1, Math.floor(magnitudes.length * 0.9));
-  return Math.max(1, magnitudes[p90Index]);
+function potentialPercent(result: BazaarItemsCharacterResult, coinRate: number): number | null {
+  if (coinRate <= 0) return null;
+  const bidKk = bidValueKk(result, coinRate);
+  if (bidKk <= 0) return null;
+  return Math.round(((effectiveTotalKk(result) - bidKk) / bidKk) * 1000) / 10;
 }
 
-/**
- * Cor do indicador: gradiente contínuo VERMELHO ESCURO (t=0, pior) →
- * âmbar (t=0.5, neutro) → VERDE VIVO (t=1, melhor), interpolado em HSL
- * (hue 0→130; extremo positivo mais claro/vivo, negativo mais escuro).
- */
-function potentialColor(t: number): string {
-  const clamped = Math.max(0, Math.min(1, t));
-  const hue = Math.round(clamped * 130);
-  const saturation = Math.round(72 + clamped * 13);
-  const lightness = Math.round(30 + clamped * 15);
-  return `hsl(${hue}, ${saturation}%, ${lightness}%)`;
+/** "+50%" / "-33,3%" / "0%" — vírgula pt-BR, sem casa decimal desnecessária. */
+function formatPotentialPercent(percent: number): string {
+  const sign = percent > 0 ? "+" : percent < 0 ? "-" : "";
+  const abs = Math.abs(percent);
+  const text = Number.isInteger(abs) ? String(abs) : abs.toFixed(1).replace(".", ",");
+  return `${sign}${text}%`;
 }
 
 /**
@@ -366,10 +352,10 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
   // como tableFilters/sortKey/sortDir do BazarPanel. Tudo derivado/local:
   // nenhum efeito sobre a consulta, os cálculos ou os dados persistidos.
   const [tableFilters, setTableFilters] = useState<ItemsTableFilters>(() => readItemsTableFilters());
-  // ORDENAÇÃO PADRÃO — mesma das QUESTS: "Encerra" crescente (cronológica),
-  // ativa desde a abertura do painel. "Encerra" permanece o PRIMEIRO critério
-  // mesmo quando outra coluna é ordenada (a outra vira critério secundário) —
-  // ver o comparador em filteredResults.
+  // ORDENAÇÃO PADRÃO — mesma das QUESTS: "Encerra" crescente (cronológica)
+  // na abertura do painel; clicar em outra coluna passa a ordenar
+  // EXCLUSIVAMENTE por ela (a prioridade permanente de "Encerra" foi
+  // removida — comportamento idêntico ao sortKey/sortDir do BazarPanel).
   const [sortKey, setSortKey] = useState<ItemsSortKey>("auctionEndTs");
   const [sortDir, setSortDir] = useState<ItemsSortDir>("asc");
 
@@ -1159,33 +1145,30 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
       return true;
     });
 
-    // Mesma comparação das quests: strings por localeCompare pt-BR, números
-    // por subtração; asc/desc pela direção ativa. "rc" ordena pelo valor em
-    // RC (proporcional ao KK efetivo — floor((kk/coinRate)*1000)).
-    //
-    // "ENCERRA" É O CRITÉRIO PRIORITÁRIO: a ordenação cronológica crescente
-    // vem SEMPRE primeiro; a coluna escolhida pelo usuário só desempata
-    // entre leilões com o MESMO encerramento (critério secundário). Quando a
-    // própria coluna ativa é "Encerra", a direção escolhida (asc/desc) manda.
+    // ORDENAÇÃO — MESMO comportamento da guia de QUESTS: a coluna ativa é o
+    // ÚNICO critério (strings por localeCompare pt-BR, números por
+    // subtração; asc/desc pela direção escolhida). "Encerra" continua sendo
+    // a ordenação PADRÃO na abertura do painel (sortKey inicial), mas clicar
+    // em outra coluna passa a ordenar EXCLUSIVAMENTE por ela — a prioridade
+    // permanente de "Encerra" foi removida a pedido.
     const sorted = [...filtered];
     const endTsOf = (r: BazaarItemsCharacterResult) => normalizeAuctionEndTimestamp(r.auctionEndTs ?? null) || 0;
     sorted.sort((a, b) => {
-      const endCmp = endTsOf(a) - endTsOf(b);
-      if (sortKey === "auctionEndTs") return sortDir === "asc" ? endCmp : -endCmp;
-      // Critério primário fixo: Encerra crescente (mesma ordem padrão das quests).
-      if (endCmp !== 0) return endCmp;
-      // Critério secundário: a coluna ativada pelo usuário.
+      if (sortKey === "auctionEndTs") {
+        const endCmp = endTsOf(a) - endTsOf(b);
+        return sortDir === "asc" ? endCmp : -endCmp;
+      }
       let av: string | number;
       let bv: string | number;
       if (sortKey === "rc") {
         av = coinRate > 0 ? computeItemRC(coinRate, effectiveTotalKk(a)) : 0;
         bv = coinRate > 0 ? computeItemRC(coinRate, effectiveTotalKk(b)) : 0;
       } else if (sortKey === "potential") {
-        // Ordena pelo VALOR NUMÉRICO real do potencial (kk), nunca pela cor.
-        // Sem score (cotação ausente), empata: sentinela finita — evita o
-        // NaN de (-Inf) − (-Inf) no comparador.
-        av = potentialScoreKk(a, coinRate) ?? -1e15;
-        bv = potentialScoreKk(b, coinRate) ?? -1e15;
+        // Ordena pelo VALOR NUMÉRICO real do percentual, nunca pela cor.
+        // Sem percentual (cotação/valor ausente), empata no fundo:
+        // sentinela finita — evita o NaN de (-Inf) − (-Inf) no comparador.
+        av = potentialPercent(a, coinRate) ?? -1e15;
+        bv = potentialPercent(b, coinRate) ?? -1e15;
       } else if (sortKey === "totalKk") {
         av = effectiveTotalKk(a);
         bv = effectiveTotalKk(b);
@@ -1204,16 +1187,6 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
     return sorted;
   }, [visibleResults, tableFilters, sortKey, sortDir, coinRate, itemInterests, timezoneOffsetMinutes, hideEndedResults, currentUnixTs]);
 
-  // ── Escala do POTENCIAL — derivada da CONSULTA ATUAL (nunca faixas fixas).
-  // Calculada sobre TODOS os resultados (não só os filtrados): a cor de um
-  // personagem não muda quando os filtros escondem os demais. Recalcula
-  // automaticamente quando resultados, correções manuais (lastQuery) ou a
-  // cotação do coin mudarem — derivado puro, mesmo padrão dos demais.
-  const potentialScaleKk = useMemo(
-    () => computePotentialScaleKk(results, coinRate),
-    [results, coinRate],
-  );
-
   const hasActiveTableFilters = !!(
     tableFilters.name.trim() ||
     tableFilters.servers.length > 0 ||
@@ -1224,20 +1197,21 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
     tableFilters.onlyMyInterests
   );
 
-  /** Cabeçalho ordenável — mesmo componente/visual do SortHeader das quests.
-   *  "Encerra" (auctionEndTs) mostra o indicador SEMPRE ativo: é o critério
-   *  prioritário permanente da ordenação (as demais colunas desempatam).
+  /** Cabeçalho ordenável — mesmo componente/visual/comportamento do
+   *  SortHeader das quests: a seta âmbar indica APENAS a coluna ativa (o
+   *  único critério de ordenação). "Encerra" é só o padrão inicial — clicar
+   *  em outra coluna transfere a ordenação exclusivamente para ela.
    *  `align="left"` — EXCLUSIVO da coluna "Personagem", a única da tabela
    *  alinhada à esquerda (cabeçalho, filtro e células); as demais seguem
    *  centralizadas. `title` permite tooltip explicativo (ex.: Potencial). */
   function SortHeader({ label, column, align = "center", title }: { label: string; column: ItemsSortKey; align?: "center" | "left"; title?: string }) {
-    const isActive = sortKey === column || column === "auctionEndTs";
+    const isActive = sortKey === column;
     const isLeft = align === "left";
     return (
       <th
         className={`${STICKY_HEAD_CELL_CLASS} h-10 py-2 align-middle cursor-pointer select-none ${isLeft ? "px-2 text-left" : "px-1 text-center"}`}
         onClick={() => toggleSort(column)}
-        title={column === "auctionEndTs" ? "Ordenação cronológica sempre ativa (critério prioritário)" : title}
+        title={title}
       >
         <span className={`inline-flex w-full items-center gap-1 leading-none ${isLeft ? "justify-start" : "justify-center"}`}>
           {label}
@@ -1531,7 +1505,7 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                 <SortHeader label="Valor" column="bid" />
                 <SortHeader label="Valor Itens (KK)" column="totalKk" />
                 <SortHeader label="Valor Itens (RC)" column="rc" />
-                <SortHeader label="Potencial" column="potential" title="Potencial da oportunidade: Valor Itens (KK) efetivo − valor do personagem convertido em kk pela cotação do coin. Verde vivo = itens valem muito mais que o preço; vermelho escuro = preço acima do valor dos itens. Escala relativa aos personagens da consulta atual." />
+                <SortHeader label="Potencial" column="potential" title="Percentual da oportunidade: (Valor Itens efetivo − valor do personagem) ÷ valor do personagem, na mesma unidade (kk, pela cotação do coin). Positivo (verde) = itens valem mais que o preço; negativo (vermelho) = personagem custa mais que os itens." />
                 <th className={`${STICKY_HEAD_CELL_CLASS} h-10 px-1 py-2 text-center align-middle leading-none`}>Detalhes</th>
                 <th className={`${STICKY_HEAD_CELL_CLASS} h-10 px-1 py-2 text-center align-middle leading-none`}>Tenho Interesse</th>
                 <th className={`${STICKY_HEAD_CELL_CLASS} h-10 px-1 py-2 text-center align-middle leading-none`}>Link</th>
@@ -1620,14 +1594,12 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                 // RC/exibição/badge derivam deste valor.
                 const effectiveKk = effectiveTotalKk(result);
                 const isManualKk = hasManualTotalKk(result);
-                // POTENCIAL: score real em kk (itens efetivos − personagem
-                // em kk) e posição 0..1 na escala dinâmica da consulta.
-                // Recalculado a cada render — correção manual do KK, edição
-                // de preço e "Atualizar Valores" refletem na hora.
-                const potentialScore = potentialScoreKk(result, coinRate);
-                const potentialT = potentialScore !== null
-                  ? 0.5 + potentialScore / (2 * potentialScaleKk)
-                  : null;
+                // POTENCIAL: percentual real ((itens − personagem) ÷
+                // personagem) e diferença em kk para o tooltip. Recalculado
+                // a cada render — correção manual do KK, edição de preço e
+                // "Atualizar Valores" refletem na hora.
+                const potentialPct = potentialPercent(result, coinRate);
+                const potentialDiffKk = potentialScoreKk(result, coinRate);
                 // Estado do link — MESMO mecanismo do painel de quests
                 // (openedLinksState compartilhado via props).
                 const linkState = getLinkState ? getLinkState(auctionKey) : "open";
@@ -1736,25 +1708,36 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                     {coinRate > 0 ? computeItemRC(coinRate, effectiveKk).toLocaleString("de-DE") : "—"}
                   </td>
                   <td className="px-2 py-1.5 text-center">
-                    {/* POTENCIAL — círculo compacto com gradiente contínuo
-                        verde vivo (alto) → vermelho escuro (baixo). A cor é
-                        só a representação; o número real (kk) fica no
-                        tooltip e é o que a ordenação usa. Sem cotação do
-                        coin não há comparação de unidades → indicador
-                        neutro. */}
-                    {potentialT !== null && potentialScore !== null ? (
+                    {/* POTENCIAL — o PERCENTUAL é o destaque principal:
+                        positivo (itens > personagem) em VERDE, negativo
+                        (personagem > itens) em VERMELHO, com um ponto de
+                        cor compacto como reforço visual. O tooltip traz a
+                        conta completa (kk). Sem cotação do coin ou sem
+                        valor do personagem não há percentual honesto →
+                        "—" (dado indisponível), nunca um número enganoso. */}
+                    {potentialPct !== null ? (
                       <span
-                        aria-label={`Potencial: ${potentialScore >= 0 ? "+" : "−"}${formatKkValue(Math.abs(potentialScore), "kk")}`}
-                        title={`Potencial: ${potentialScore >= 0 ? "+" : "−"}${formatKkValue(Math.abs(potentialScore), "kk")} (Valor Itens ${formatKkValue(effectiveKk, "kk")}${isManualKk ? " manual" : ""} − personagem ${formatKkValue(bidValueKk(result, coinRate), "kk")})`}
-                        className="inline-block h-3.5 w-3.5 rounded-full border border-black/40 shadow-[inset_0_1px_1px_rgba(255,255,255,0.25)]"
-                        style={{ backgroundColor: potentialColor(potentialT) }}
-                      />
+                        aria-label={`Potencial: ${formatPotentialPercent(potentialPct)}`}
+                        title={`Potencial: ${formatPotentialPercent(potentialPct)} — Valor Itens ${formatKkValue(effectiveKk, "kk")}${isManualKk ? " (manual)" : ""} vs personagem ${formatKkValue(bidValueKk(result, coinRate), "kk")}${potentialDiffKk !== null ? ` (diferença ${potentialDiffKk >= 0 ? "+" : "−"}${formatKkValue(Math.abs(potentialDiffKk), "kk")})` : ""}`}
+                        className={`inline-flex items-center justify-center gap-1 rounded border px-1.5 py-0.5 font-mono text-[10px] font-black ${
+                          potentialPct > 0
+                            ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-300"
+                            : potentialPct < 0
+                              ? "border-rose-500/30 bg-rose-500/10 text-rose-300"
+                              : "border-slate-500/30 bg-slate-500/10 text-slate-300"
+                        }`}
+                      >
+                        <span className={`inline-block h-1.5 w-1.5 flex-shrink-0 rounded-full ${potentialPct > 0 ? "bg-emerald-400" : potentialPct < 0 ? "bg-rose-400" : "bg-slate-400"}`} />
+                        {formatPotentialPercent(potentialPct)}
+                      </span>
                     ) : (
                       <span
                         aria-label="Potencial indisponível"
-                        title="Informe a cotação do coin no quadro para calcular o potencial (compara o valor dos itens com o preço do personagem na mesma unidade)."
-                        className="inline-block h-3.5 w-3.5 rounded-full border border-slate-600/60 bg-slate-700/40"
-                      />
+                        title="Sem dados para calcular o potencial: informe a cotação do coin no quadro e verifique se o personagem tem valor de leilão."
+                        className="font-mono text-[10px] font-bold text-slate-600"
+                      >
+                        —
+                      </span>
                     )}
                   </td>
                   <td className="px-2 py-1.5 text-center">
