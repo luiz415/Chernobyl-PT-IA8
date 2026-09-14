@@ -1887,8 +1887,15 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
       </div>
 
       {/* ── Modal: Lista de Itens (CRUD + exportar/importar) ───────────────── */}
+      {/* Fechar ao clicar FORA do conteúdo — MESMO mecanismo dos demais
+          modais do app (onMouseDown no overlay + target === currentTarget:
+          cliques dentro do quadro nunca fecham; arrastar seleção de texto
+          para fora também não, porque o mousedown nasce dentro). */}
       {isItemsModalOpen && (
-        <div className="app-modal-overlay fixed inset-0 z-[1200] flex items-center justify-center bg-black/70 backdrop-blur-sm">
+        <div
+          className="app-modal-overlay fixed inset-0 z-[1200] flex items-center justify-center bg-black/70 backdrop-blur-sm"
+          onMouseDown={event => { if (event.target === event.currentTarget) setIsItemsModalOpen(false); }}
+        >
           <div className="app-modal-frame w-full max-w-lg max-h-[88vh] flex flex-col rounded-xl border border-fuchsia-500/30 bg-[var(--th-bg-raised)] shadow-2xl shadow-black/60 overflow-hidden">
             <div className="flex-shrink-0 flex items-center justify-between gap-2 px-4 py-3 border-b border-[var(--th-line)]/40">
               <div className="flex items-center gap-2 min-w-0">
@@ -2148,8 +2155,13 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
       )}
 
       {/* ── Modal: detalhes do personagem (botão Ver) ──────────────────────── */}
+      {/* Clique fora fecha (mesmo mecanismo padrão) e descarta edição de
+          valor em andamento — idêntico ao botão Fechar do cabeçalho. */}
       {detailResult && (
-        <div className="app-modal-overlay fixed inset-0 z-[1200] flex items-center justify-center bg-black/70 backdrop-blur-sm">
+        <div
+          className="app-modal-overlay fixed inset-0 z-[1200] flex items-center justify-center bg-black/70 backdrop-blur-sm"
+          onMouseDown={event => { if (event.target === event.currentTarget) { setDetailResult(null); setDetailEdit(null); setDetailEditError(null); } }}
+        >
           <div className="app-modal-frame w-full max-w-xl max-h-[88vh] flex flex-col rounded-xl border border-fuchsia-500/30 bg-[var(--th-bg-raised)] shadow-2xl shadow-black/60 overflow-hidden">
             <div className="flex-shrink-0 flex items-center justify-between gap-2 px-4 py-3 border-b border-[var(--th-line)]/40">
               <div className="flex items-center gap-2 min-w-0">
@@ -2187,9 +2199,31 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                 <tbody>
                   {detailResult.matches.map((match, index) => {
                     const isEditingMatch = detailEdit?.matchIndex === index;
+                    // Chave do feedback de cópia — uma por linha do modal.
+                    const detailCopyKey = `detail_item_${index}`;
                     return (
                     <tr key={`${match.foundName}-${index}`} className={`border-b border-[var(--th-line)]/25 ${isEditingMatch ? "bg-fuchsia-500/5" : ""}`}>
-                      <td className="px-1.5 py-1.5 font-bold text-slate-100">{match.foundName}</td>
+                      <td className="px-1.5 py-1.5 text-left">
+                        {/* Nome do item = botão de COPIAR — mesmo padrão dos
+                            demais copiar do app (copyText: hover revela o
+                            ícone, 1,5s de "Copiado!"). Copia EXATAMENTE o
+                            nome exibido (com [Tier x] quando presente) —
+                            sem valor, quantidade ou qualquer outro dado. */}
+                        <button
+                          type="button"
+                          onClick={() => copyText(detailCopyKey, match.foundName)}
+                          className={`group inline-flex max-w-full min-w-0 items-center gap-1 rounded px-1 py-0.5 text-left font-bold transition-colors cursor-copy ${
+                            copiedKey === detailCopyKey ? "bg-emerald-500/20 text-emerald-300" : "text-slate-100 hover:bg-white/10 hover:text-white"
+                          }`}
+                          title={copiedKey === detailCopyKey ? "Nome copiado" : `Copiar "${match.foundName}"`}
+                        >
+                          {copiedKey === detailCopyKey ? (
+                            <><Check size={10} className="flex-shrink-0 text-emerald-400" /><span>Copiado!</span></>
+                          ) : (
+                            <><span className="truncate">{match.foundName}</span><Copy size={9} className="flex-shrink-0 opacity-0 group-hover:opacity-70 transition-opacity" /></>
+                          )}
+                        </button>
+                      </td>
                       <td className="px-1.5 py-1.5 text-slate-300">{match.watchedName}</td>
                       <td className="px-1.5 py-1.5 text-right font-mono text-slate-200">{formatKkValue(match.baseValueKk, "kk")}</td>
                       <td className="px-1.5 py-1.5 text-center font-mono">
