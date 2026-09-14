@@ -21,7 +21,7 @@ import CharacterModal from "./components/CharacterModal";
 import CharacterBazaarItemsModal from "./components/CharacterBazaarItemsModal";
 // Cotação do coin persistida pela guia Bazaar → Itens (local) — usada apenas
 // para a conversão em RC no modal de itens do personagem (Boss).
-import { loadItemsCoinRate } from "./utils/bazaarWatchedItems";
+import { loadItemsCoinRate, loadItemsLastQuery, loadItemsInterests } from "./utils/bazaarWatchedItems";
 import CurrencyCalculator from "./components/CurrencyCalculator";
 import ImbuementsModal from "./components/ImbuementsModal";
 import RtcImportModal from "./components/RtcImportModal";
@@ -61,7 +61,7 @@ import {
   registerPushForUser,
   unregisterPushForUser,
 } from "./services/pushNotificationService";
-import { syncBazaarEndingAlerts, stopBazaarEndingAlerts } from "./services/bazaarInterestNotificationService";
+import { syncBazaarEndingAlerts, stopBazaarEndingAlerts, syncBazaarItemsEndingAlerts, stopBazaarItemsEndingAlerts } from "./services/bazaarInterestNotificationService";
 import { readOfficialBazaarCache, readBazaarInterestsCache } from "./services/bazaarOfficialService";
 import { normalizeServerName } from "./constants/servers";
 import { syncNotificationPrefsToCloud } from "./services/notificationPrefsSyncService";
@@ -888,19 +888,44 @@ export default function App() {
     const uid = currentUser?.uid || "";
     if (!uid) {
       stopBazaarEndingAlerts();
+      stopBazaarItemsEndingAlerts();
       return;
     }
     try {
       const cache = readOfficialBazaarCache();
-      if (!cache) return;
-      const interests = readBazaarInterestsCache(cache.version)?.interests || {};
-      syncBazaarEndingAlerts({
-        characters: cache.characters,
-        interestsByAuctionId: interests,
-        currentUserUid: uid,
-        bazaarVersion: cache.version,
-      });
+      if (cache) {
+        const interests = readBazaarInterestsCache(cache.version)?.interests || {};
+        syncBazaarEndingAlerts({
+          characters: cache.characters,
+          interestsByAuctionId: interests,
+          currentUserUid: uid,
+          bazaarVersion: cache.version,
+        });
+      }
     } catch { /* cache ilegível: o painel realimenta ao abrir */ }
+    // CANAL DE ITENS — boot espelhado e INDEPENDENTE do de quests: alimenta a
+    // fila própria com a última consulta LOCAL da guia Itens + interesses
+    // LOCAIS (localStorage — zero Firestore). Sem este boot, os alertas de
+    // itens só funcionavam depois de o usuário visitar a guia Itens na
+    // sessão; agora ambos os canais nascem juntos com o app, cada um com a
+    // sua fila (a guia realimenta com dados frescos quando aberta).
+    try {
+      const itemsQuery = loadItemsLastQuery();
+      if (itemsQuery && Array.isArray(itemsQuery.results)) {
+        syncBazaarItemsEndingAlerts({
+          characters: itemsQuery.results.map(result => ({
+            id: result.id || result.url || result.name,
+            name: result.name,
+            server: result.server,
+            auctionEndTs: result.auctionEndTs ?? null,
+            url: result.url,
+          })),
+          interestedAuctionIds: loadItemsInterests(uid),
+          currentUserUid: uid,
+          bazaarVersion: `items_${itemsQuery.completedAtMs}`,
+        });
+      }
+    } catch { /* cache ilegível: a guia Itens realimenta ao abrir */ }
   }, [currentUser?.uid]);
 
   // ── PUSH (Web Push/FCM): entrega com a aba/app fechado ────────────────────

@@ -228,6 +228,14 @@ interface BazaarOpenedLinksState {
   lastOpenedAuctionId: string;
 }
 
+/**
+ * Prefixo dos ids de alerta do CANAL DE ITENS (definido no serviço de
+ * alertas — bazaarInterestNotificationService). Este painel (quests) usa o
+ * prefixo apenas para EXCLUIR os alertas da guia Itens dos seus chips: cada
+ * guia exibe somente as notificações do próprio canal.
+ */
+const ITEMS_CHANNEL_ALERT_ID_PREFIX = "bazaar_items_ending_";
+
 interface LocalBazaarNotification {
   id: string;
   title: string;
@@ -1481,6 +1489,13 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
     if (demoMode) return; // demo: chips fictícios já semeados; sem listener real
     const handleLocalNotification = (event: Event) => {
       const detail = (event as CustomEvent).detail || {};
+      // INDEPENDÊNCIA ENTRE GUIAS: o MESMO evento transporta os alertas dos
+      // dois canais (quests e itens). Os do canal de ITENS carregam o
+      // prefixo próprio no id — pertencem EXCLUSIVAMENTE à guia Itens e
+      // nunca viram chip aqui (a guia Itens faz o filtro espelhado,
+      // aceitando SÓ os prefixados). Sem este guard, um alerta de item
+      // apareceria indevidamente no painel de quests.
+      if (String(detail.id || "").startsWith(ITEMS_CHANNEL_ALERT_ID_PREFIX)) return;
       const notification: LocalBazaarNotification = {
         id: String(detail.id || detail.auctionId || `${Date.now()}_${Math.random().toString(36).slice(2)}`),
         title: detail.title || "Leilão encerrando",
@@ -1518,7 +1533,9 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
     try {
       const nowMs = Date.now();
       const seeded: LocalBazaarNotification[] = loadNotifications()
-        .filter(n => n?.type === "bazaar_interest_ending" && Number(n?.scheduledTime || 0) > nowMs)
+        // Mesmo guard do listener: alertas do canal de ITENS (id prefixado)
+        // pertencem à guia Itens — a semeadura das quests não os recupera.
+        .filter(n => n?.type === "bazaar_interest_ending" && Number(n?.scheduledTime || 0) > nowMs && !String(n?.id || "").startsWith(ITEMS_CHANNEL_ALERT_ID_PREFIX))
         .map(n => ({
           id: String(n.id),
           title: n.title || "Leilão encerrando",

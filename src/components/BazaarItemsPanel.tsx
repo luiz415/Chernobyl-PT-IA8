@@ -24,7 +24,7 @@ import BazaarBrowserModal, { BAZAAR_BROWSER_KEY, BAZAAR_BROWSER_ORDER_KEY, BAZAA
 import { FilterDateMax, FilterInline, FilterMulti, FilterNumber } from "./FilterTypes";
 import { STICKY_FILTER_CELL_CLASS, STICKY_HEAD_CELL_CLASS, closeRubinotBrowserFromRenderer, isAuctionVisibleWithEndedGrace } from "./BazarPanel";
 import type { BazaarRetryCounts, BazaarSpeedMode } from "./BazaarBrowserModal";
-import { loadUIState } from "../storage";
+import { loadUIState, loadNotifications } from "../storage";
 import { computeItemRC, formatKkValue as formatKkValueBase } from "../utils/itemSale";
 
 /**
@@ -73,6 +73,7 @@ import {
   saveWatchedItemsByServer,
   type BazaarItemsCharacterResult,
   type BazaarItemsLastQuery,
+  type CharacterItemMatch,
   type ItemsCharacterSkills,
   type RawItemMatch,
   type WatchedItem,
@@ -601,9 +602,10 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
   const importScopeRef = useRef<"all" | "current">("current");
   const [detailResult, setDetailResult] = useState<BazaarItemsCharacterResult | null>(null);
   // ── Edição de valor no modal "Detalhes" ────────────────────────────────────
-  // Lápis na coluna "Total (kk)": edita o valor BASE do item NA LISTA DO
+  // Lápis na coluna "Base (kk)": edita o valor BASE do item NA LISTA DO
   // SERVIDOR do personagem visualizado (fonte única de preço) e reprecifica
-  // os personagens DESSE servidor na última consulta.
+  // os personagens DESSE servidor na última consulta. A coluna Total é
+  // somente leitura — o total (Tier × quantidade) NUNCA alimenta a lista.
   const [detailEdit, setDetailEdit] = useState<{ matchIndex: number; value: string } | null>(null);
   const [detailEditError, setDetailEditError] = useState<string | null>(null);
   // ── "Atualizar" (modal Detalhes): propagação GLOBAL do valor do item ──────
@@ -678,6 +680,37 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
       });
     };
     window.addEventListener("bazaar-interest-local-notification", handleLocalNotification);
+
+    // ── SEMEADURA NA MONTAGEM — mesma recuperação do painel de quests, no
+    // canal de ITENS. O agendador dispara o evento no MINUTO do alerta, mas
+    // este painel só é montado na primeira visita à guia Itens: alertas
+    // disparados antes disso perderiam o chip (a notificação do centro/
+    // desktop sai normalmente — o caminho do centro vive no App). A
+    // recuperação lê as notificações pendentes já persistidas pelo centro
+    // (localStorage "tibia_notifications") e materializa os chips DESTE
+    // canal — somente ids com o prefixo de itens; os das quests ficam com o
+    // painel de quests (filtro espelhado ao de lá).
+    try {
+      const nowMs = Date.now();
+      const seeded: ItemsLocalNotification[] = loadNotifications()
+        .filter(n => n?.type === "bazaar_interest_ending" && Number(n?.scheduledTime || 0) > nowMs && String(n?.id || "").startsWith(ITEMS_ALERT_ID_PREFIX))
+        .map(n => ({
+          id: String(n.id),
+          title: n.title || "Leilão encerrando",
+          body: n.body || "Um leilão de interesse está perto de encerrar.",
+          url: n.url,
+          expiresAtMs: Number(n.scheduledTime || 0) || undefined,
+          auctionId: String(n.auctionId || "") || undefined,
+        }));
+      if (seeded.length > 0) {
+        setItemsNotifications(prev => {
+          const byId = new Map<string, ItemsLocalNotification>();
+          [...seeded, ...prev].forEach(item => byId.set(item.id, item));
+          return Array.from(byId.values()).sort((a, b) => (a.expiresAtMs || 0) - (b.expiresAtMs || 0));
+        });
+      }
+    } catch { /* semeadura é acessória — o listener segue funcionando */ }
+
     return () => window.removeEventListener("bazaar-interest-local-notification", handleLocalNotification);
   }, []);
 
@@ -1299,11 +1332,29 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
    * regravadas e a reprecificação da última consulta roda SÓ para os
    * servidores alterados. Zero Firestore (listas são 100% locais).
    */
+  /**
+   * VALOR BASE OFICIAL de um match do modal Detalhes — SEMPRE o valor
+   * cadastrado na Lista de Itens do SERVIDOR do personagem (fonte única de
+   * preço), nunca o Valor Total (que embute Tier × quantidade) e nunca a
+   * correção manual de KK do personagem. O snapshot da consulta
+   * (`match.baseValueKk`) fica de fallback apenas para o caso raro de o item
+   * ter sido removido da lista depois da consulta.
+   */
+  function resolveDetailBaseValueKk(match: CharacterItemMatch): number {
+    if (!detailResult) return match.baseValueKk;
+    const serverItems = getServerWatchedItems(watchedByServer, canonicalServerKey(String(detailResult.server || "")));
+    const nameKey = normalizeWatchedItemName(match.watchedName);
+    const listed = serverItems.find(item => normalizeWatchedItemName(item.name) === nameKey);
+    return listed ? listed.valueKk : match.baseValueKk;
+  }
+
   function applyDetailGlobalValue(matchIndex: number) {
     if (!detailResult) return;
     const match = detailResult.matches[matchIndex];
     if (!match) { setDetailApply(null); return; }
-    const { changedServers } = propagateItemValueGlobally(match.watchedName, match.baseValueKk);
+    // EXCLUSIVAMENTE o valor BASE da Lista de Itens do servidor — jamais o
+    // Valor Total do personagem (Tier × quantidade) ou a correção manual.
+    const { changedServers } = propagateItemValueGlobally(match.watchedName, resolveDetailBaseValueKk(match));
 
     // Feedback inline (2,5s): quantos servidores foram efetivamente
     // atualizados — 0 significa que todos já estavam no valor.
@@ -2661,11 +2712,15 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
               <table className="w-full text-[10px]">
                 <thead>
                   <tr className="text-[8px] uppercase tracking-wider text-slate-400 border-b border-[var(--th-line)]/40">
+                    {/* Colunas "Item da lista" e "Pós-Tier (kk)" foram REMOVIDAS
+                        da exibição (os dados/cálculos internos permanecem —
+                        watchedName segue nas chaves/títulos e unitValueKk segue
+                        alimentando o totalKk). Layout compacto: o valor BASE
+                        (o cadastrado na Lista de Itens do servidor) é editável
+                        AQUI, na própria coluna Base; o Total é só calculado. */}
                     <th className="px-1.5 py-1.5 text-left">Item encontrado</th>
-                    <th className="px-1.5 py-1.5 text-left">Item da lista</th>
                     <th className="px-1.5 py-1.5 text-right">Base (kk)</th>
                     <th className="px-1.5 py-1.5 text-center">Tier</th>
-                    <th className="px-1.5 py-1.5 text-right">Pós-Tier (kk)</th>
                     <th className="px-1.5 py-1.5 text-center">Qtd</th>
                     <th className="px-1.5 py-1.5 text-right">Total (kk)</th>
                     <th className="px-1.5 py-1.5 text-center">Atualizar</th>
@@ -2679,6 +2734,10 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                     // Confirmação/feedback do "Atualizar" — por linha.
                     const isConfirmingApply = detailApply === index;
                     const applyDone = detailApplyDone?.matchIndex === index ? detailApplyDone : null;
+                    // Valor BASE oficial da linha — o da Lista de Itens do
+                    // servidor (o snapshot da consulta é só fallback). É o
+                    // ÚNICO valor que o "Atualizar" propaga.
+                    const rowBaseValueKk = resolveDetailBaseValueKk(match);
                     return (
                     <Fragment key={`${match.foundName}-${index}`}>
                     <tr className={`border-b border-[var(--th-line)]/25 ${isEditingMatch ? "bg-fuchsia-500/5" : ""} ${isConfirmingApply ? "!border-b-0 bg-amber-500/5" : ""}`}>
@@ -2703,22 +2762,16 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                           )}
                         </button>
                       </td>
-                      <td className="px-1.5 py-1.5 text-slate-300">{match.watchedName}</td>
-                      <td className="px-1.5 py-1.5 text-right font-mono text-slate-200">{formatKkValue(match.baseValueKk, "kk")}</td>
-                      <td className="px-1.5 py-1.5 text-center font-mono">
-                        {match.tier > 0
-                          ? <span className="text-fuchsia-300 font-bold" title={`+${match.tier * 20}% sobre o valor base`}>{match.tier}</span>
-                          : <span className="text-slate-600">—</span>}
-                      </td>
-                      <td className="px-1.5 py-1.5 text-right font-mono text-slate-200">{formatKkValue(match.unitValueKk, "kk")}</td>
-                      <td className="px-1.5 py-1.5 text-center font-mono text-slate-200">{match.amount}</td>
-                      <td className="px-1.5 py-1.5 text-right font-mono font-bold text-amber-200">
-                        {/* EDITAR VALOR DO ITEM (por servidor) — o lápis edita
-                            o valor BASE deste item na Lista de Itens do
-                            SERVIDOR deste personagem (fonte única de preço).
-                            Salvar atualiza a lista do servidor e reprecifica
-                            na hora os personagens dele; outros servidores
-                            permanecem intactos. Enter salva, Esc cancela. */}
+                      <td className="px-1.5 py-1.5 text-right font-mono text-slate-200">
+                        {/* VALOR BASE — o valor cadastrado na Lista de Itens do
+                            SERVIDOR deste personagem (fonte única de preço). A
+                            EDIÇÃO mora AQUI (antes ficava na coluna Total, o
+                            que induzia a digitar o total como base): o lápis
+                            edita o BASE deste item na lista do servidor,
+                            reprecificando na hora os personagens dele; outros
+                            servidores permanecem intactos. É ESTE valor — e
+                            somente ele — que o botão "Atualizar" propaga.
+                            Enter salva, Esc cancela. */}
                         {isEditingMatch ? (
                           <span className="inline-flex items-center justify-end gap-1">
                             <input
@@ -2744,10 +2797,10 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                           </span>
                         ) : (
                           <span className="inline-flex items-center justify-end gap-1">
-                            <span>{formatKkValue(match.totalKk, "kk")}</span>
+                            <span title={`Valor BASE de "${match.watchedName}" na Lista de Itens de ${detailResult.server} — é este valor que o "Atualizar" propaga`}>{formatKkValue(rowBaseValueKk, "kk")}</span>
                             <button
                               type="button"
-                              onClick={() => { setDetailEdit({ matchIndex: index, value: String(match.baseValueKk).replace(".", ",") }); setDetailEditError(null); }}
+                              onClick={() => { setDetailEdit({ matchIndex: index, value: String(rowBaseValueKk).replace(".", ",") }); setDetailEditError(null); }}
                               className="p-0.5 rounded text-sky-300 hover:bg-sky-500/15 transition-colors cursor-pointer"
                               title={`Editar o valor base de "${match.watchedName}" na Lista de Itens de ${detailResult.server} (atualiza a lista do servidor e os cálculos dos personagens dele)`}
                             >
@@ -2755,6 +2808,18 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                             </button>
                           </span>
                         )}
+                      </td>
+                      <td className="px-1.5 py-1.5 text-center font-mono">
+                        {match.tier > 0
+                          ? <span className="text-fuchsia-300 font-bold" title={`+${match.tier * 20}% sobre o valor base`}>{match.tier}</span>
+                          : <span className="text-slate-600">—</span>}
+                      </td>
+                      <td className="px-1.5 py-1.5 text-center font-mono text-slate-200">{match.amount}</td>
+                      <td className="px-1.5 py-1.5 text-right font-mono font-bold text-amber-200">
+                        {/* TOTAL — apenas CALCULADO (base × Tier × quantidade).
+                            Não há edição aqui: o total NUNCA alimenta a Lista
+                            de Itens nem o botão "Atualizar". */}
+                        <span title={`base ${formatKkValue(match.baseValueKk, "kk")} × (1 + 0,2 × ${match.tier}) × ${match.amount} — somente leitura`}>{formatKkValue(match.totalKk, "kk")}</span>
                       </td>
                       <td className="px-1.5 py-1.5 text-center">
                         {/* "ATUALIZAR" — propaga o valor BASE atual deste item
@@ -2774,7 +2839,7 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                                 ? "border-amber-400/60 bg-amber-500/20 text-amber-200"
                                 : "border-amber-600/30 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20"
                             }`}
-                            title={`Aplicar o valor base atual (${formatKkValue(match.baseValueKk, "kk")}) de "${match.watchedName}" à Lista de Itens de TODOS os servidores (pede confirmação)`}
+                            title={`Aplicar o valor BASE atual (${formatKkValue(rowBaseValueKk, "kk")} — o da Lista de Itens, nunca o Valor Total) de "${match.watchedName}" à Lista de Itens de TODOS os servidores (pede confirmação)`}
                           >
                             <RefreshCw size={9} className="flex-shrink-0" /> Atualizar
                           </button>
@@ -2786,11 +2851,11 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                         GLOBAL da ação. Confirmar aplica; Cancelar descarta. */}
                     {isConfirmingApply && (
                       <tr className="border-b border-[var(--th-line)]/25 bg-amber-500/5">
-                        <td colSpan={8} className="px-1.5 pb-1.5 pt-0">
+                        <td colSpan={6} className="px-1.5 pb-1.5 pt-0">
                           <div className="flex flex-wrap items-center justify-end gap-x-2 gap-y-1 rounded-md border border-amber-400/30 bg-amber-500/10 px-2 py-1">
                             <AlertTriangle size={10} className="flex-shrink-0 text-amber-300" />
                             <span className="text-[9px] font-bold text-amber-200">
-                              Aplicar <span className="font-mono text-amber-100">{formatKkValue(match.baseValueKk, "kk")}</span> a "{match.watchedName}" em <span className="uppercase">todos os servidores</span>?
+                              Aplicar o valor base <span className="font-mono text-amber-100">{formatKkValue(rowBaseValueKk, "kk")}</span> a "{match.watchedName}" em <span className="uppercase">todos os servidores</span>?
                             </span>
                             <span className="inline-flex items-center gap-1">
                               <button
