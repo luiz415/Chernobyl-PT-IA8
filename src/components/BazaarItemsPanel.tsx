@@ -140,7 +140,7 @@ const EMPTY_DRAFT: ItemDraft = { id: null, name: "", valueKk: "" };
 // campos ADAPTADOS às colunas desta tabela (Personagem, Servidor, Encerra,
 // Valor, Valor Itens em KK e em RC). Mesmo comportamento: filtros persistidos
 // no localStorage (chave própria do modo itens), ordenação volátil por sessão.
-type ItemsSortKey = "name" | "server" | "auctionEndTs" | "bid" | "totalKk" | "rc";
+type ItemsSortKey = "name" | "server" | "auctionEndTs" | "bid" | "totalKk" | "rc" | "potential";
 type ItemsSortDir = "asc" | "desc";
 
 interface ItemsTableFilters {
@@ -250,6 +250,70 @@ function effectiveTotalKk(result: BazaarItemsCharacterResult): number {
 function hasManualTotalKk(result: BazaarItemsCharacterResult): boolean {
   const manual = Number(result.manualTotalKk);
   return Number.isFinite(manual) && manual > 0;
+}
+
+// ── Coluna "POTENCIAL" ───────────────────────────────────────────────────────
+// Compara o VALOR DOS ITENS com o PREÇO DO PERSONAGEM na mesma unidade (kk).
+// O bid do leilão é em coins; a conversão coins→kk usa a MESMA cotação do
+// coin já usada pelo kk→RC do painel (computeItemRC é kk→coins; aqui é o
+// caminho inverso: coins × cotação ÷ 1000). Nenhuma regra nova de conversão.
+
+/** Valor do personagem (bid em coins) convertido para kk pela cotação. */
+function bidValueKk(result: BazaarItemsCharacterResult, coinRate: number): number {
+  const bid = Number(result.bid || 0);
+  if (!Number.isFinite(bid) || bid <= 0 || coinRate <= 0) return 0;
+  return Math.round(bid * coinRate) / 1000;
+}
+
+/**
+ * SCORE do potencial (kk): Valor Itens EFETIVO − Valor do personagem em kk.
+ * Positivo = os itens valem mais do que o preço pedido (oportunidade);
+ * negativo = o personagem custa mais do que os itens valem. Usa o MESMO
+ * valor efetivo da coluna KK (correção manual > calculado). É este número
+ * real que a ordenação da coluna usa — a cor é só a representação visual.
+ * Sem cotação do coin não há como comparar as unidades → null (indicador
+ * neutro; nenhuma escala é inventada).
+ */
+function potentialScoreKk(result: BazaarItemsCharacterResult, coinRate: number): number | null {
+  if (coinRate <= 0) return null;
+  return Math.round((effectiveTotalKk(result) - bidValueKk(result, coinRate)) * 100) / 100;
+}
+
+/**
+ * ESCALA da cor — dinâmica por consulta, com âncora semântica fixa:
+ *
+ *   • diff = 0 é SEMPRE o ponto médio (amarelo): itens valem o preço;
+ *   • a amplitude vem dos personagens da CONSULTA ATUAL (não faixas fixas),
+ *     normalizada pelo PERCENTIL 90 dos |diffs| — outliers além do P90
+ *     saturam no extremo da cor em vez de comprimir todos os demais no
+ *     centro (distorção clássica do min/max puro);
+ *   • piso de 1kk na amplitude evita divisão por ~0 quando todos os diffs
+ *     são quase iguais.
+ *
+ * Retorna a amplitude (kk) que mapeia diff→cor: t = 0.5 + diff/(2·amp).
+ */
+function computePotentialScaleKk(results: BazaarItemsCharacterResult[], coinRate: number): number {
+  const magnitudes = results
+    .map(result => potentialScoreKk(result, coinRate))
+    .filter((score): score is number => score !== null)
+    .map(Math.abs)
+    .sort((a, b) => a - b);
+  if (magnitudes.length === 0) return 1;
+  const p90Index = Math.min(magnitudes.length - 1, Math.floor(magnitudes.length * 0.9));
+  return Math.max(1, magnitudes[p90Index]);
+}
+
+/**
+ * Cor do indicador: gradiente contínuo VERMELHO ESCURO (t=0, pior) →
+ * âmbar (t=0.5, neutro) → VERDE VIVO (t=1, melhor), interpolado em HSL
+ * (hue 0→130; extremo positivo mais claro/vivo, negativo mais escuro).
+ */
+function potentialColor(t: number): string {
+  const clamped = Math.max(0, Math.min(1, t));
+  const hue = Math.round(clamped * 130);
+  const saturation = Math.round(72 + clamped * 13);
+  const lightness = Math.round(30 + clamped * 15);
+  return `hsl(${hue}, ${saturation}%, ${lightness}%)`;
 }
 
 /**
@@ -1116,6 +1180,12 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
       if (sortKey === "rc") {
         av = coinRate > 0 ? computeItemRC(coinRate, effectiveTotalKk(a)) : 0;
         bv = coinRate > 0 ? computeItemRC(coinRate, effectiveTotalKk(b)) : 0;
+      } else if (sortKey === "potential") {
+        // Ordena pelo VALOR NUMÉRICO real do potencial (kk), nunca pela cor.
+        // Sem score (cotação ausente), empata: sentinela finita — evita o
+        // NaN de (-Inf) − (-Inf) no comparador.
+        av = potentialScoreKk(a, coinRate) ?? -1e15;
+        bv = potentialScoreKk(b, coinRate) ?? -1e15;
       } else if (sortKey === "totalKk") {
         av = effectiveTotalKk(a);
         bv = effectiveTotalKk(b);
@@ -1134,6 +1204,16 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
     return sorted;
   }, [visibleResults, tableFilters, sortKey, sortDir, coinRate, itemInterests, timezoneOffsetMinutes, hideEndedResults, currentUnixTs]);
 
+  // ── Escala do POTENCIAL — derivada da CONSULTA ATUAL (nunca faixas fixas).
+  // Calculada sobre TODOS os resultados (não só os filtrados): a cor de um
+  // personagem não muda quando os filtros escondem os demais. Recalcula
+  // automaticamente quando resultados, correções manuais (lastQuery) ou a
+  // cotação do coin mudarem — derivado puro, mesmo padrão dos demais.
+  const potentialScaleKk = useMemo(
+    () => computePotentialScaleKk(results, coinRate),
+    [results, coinRate],
+  );
+
   const hasActiveTableFilters = !!(
     tableFilters.name.trim() ||
     tableFilters.servers.length > 0 ||
@@ -1146,16 +1226,20 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
 
   /** Cabeçalho ordenável — mesmo componente/visual do SortHeader das quests.
    *  "Encerra" (auctionEndTs) mostra o indicador SEMPRE ativo: é o critério
-   *  prioritário permanente da ordenação (as demais colunas desempatam). */
-  function SortHeader({ label, column }: { label: string; column: ItemsSortKey }) {
+   *  prioritário permanente da ordenação (as demais colunas desempatam).
+   *  `align="left"` — EXCLUSIVO da coluna "Personagem", a única da tabela
+   *  alinhada à esquerda (cabeçalho, filtro e células); as demais seguem
+   *  centralizadas. `title` permite tooltip explicativo (ex.: Potencial). */
+  function SortHeader({ label, column, align = "center", title }: { label: string; column: ItemsSortKey; align?: "center" | "left"; title?: string }) {
     const isActive = sortKey === column || column === "auctionEndTs";
+    const isLeft = align === "left";
     return (
       <th
-        className={`${STICKY_HEAD_CELL_CLASS} h-10 px-1 py-2 text-center align-middle cursor-pointer select-none`}
+        className={`${STICKY_HEAD_CELL_CLASS} h-10 py-2 align-middle cursor-pointer select-none ${isLeft ? "px-2 text-left" : "px-1 text-center"}`}
         onClick={() => toggleSort(column)}
-        title={column === "auctionEndTs" ? "Ordenação cronológica sempre ativa (critério prioritário)" : undefined}
+        title={column === "auctionEndTs" ? "Ordenação cronológica sempre ativa (critério prioritário)" : title}
       >
-        <span className="inline-flex w-full items-center justify-center gap-1 leading-none">
+        <span className={`inline-flex w-full items-center gap-1 leading-none ${isLeft ? "justify-start" : "justify-center"}`}>
           {label}
           <ArrowDownUp size={10} className={isActive ? "text-amber-400" : "text-slate-600"} />
         </span>
@@ -1438,19 +1522,25 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                 com o BazarPanel — fonte única de estilo. */}
             <thead className="text-[10px] uppercase tracking-wider text-slate-400">
               <tr>
-                <SortHeader label="Personagem" column="name" />
+                {/* "Personagem" é a ÚNICA coluna alinhada à esquerda
+                    (cabeçalho, filtro e células) — todas as demais seguem
+                    a regra de centralização da tabela. */}
+                <SortHeader label="Personagem" column="name" align="left" />
                 <SortHeader label="Servidor" column="server" />
                 <SortHeader label="Encerra" column="auctionEndTs" />
                 <SortHeader label="Valor" column="bid" />
                 <SortHeader label="Valor Itens (KK)" column="totalKk" />
                 <SortHeader label="Valor Itens (RC)" column="rc" />
+                <SortHeader label="Potencial" column="potential" title="Potencial da oportunidade: Valor Itens (KK) efetivo − valor do personagem convertido em kk pela cotação do coin. Verde vivo = itens valem muito mais que o preço; vermelho escuro = preço acima do valor dos itens. Escala relativa aos personagens da consulta atual." />
                 <th className={`${STICKY_HEAD_CELL_CLASS} h-10 px-1 py-2 text-center align-middle leading-none`}>Detalhes</th>
                 <th className={`${STICKY_HEAD_CELL_CLASS} h-10 px-1 py-2 text-center align-middle leading-none`}>Tenho Interesse</th>
                 <th className={`${STICKY_HEAD_CELL_CLASS} h-10 px-1 py-2 text-center align-middle leading-none`}>Link</th>
               </tr>
               <tr className="h-10 normal-case tracking-normal">
-                <th className={`${STICKY_FILTER_CELL_CLASS} h-10 px-1 py-1.5 align-middle`}>
-                  <div className="flex w-full items-center justify-center gap-1">
+                {/* Filtro da coluna Personagem — ALINHADO À ESQUERDA, como
+                    todo o conteúdo da coluna (única exceção à centralização). */}
+                <th className={`${STICKY_FILTER_CELL_CLASS} h-10 px-2 py-1.5 align-middle text-left`}>
+                  <div className="flex w-full items-center justify-start gap-1">
                     <button
                       type="button"
                       onClick={resetTableFilters}
@@ -1464,7 +1554,7 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                     >
                       <RotateCcw size={11} />
                     </button>
-                    <div className="flex min-w-0 flex-1 items-center justify-center [&>div]:w-full [&>div]:max-w-[112px]"><FilterInline value={tableFilters.name} onChange={value => updateTableFilters({ name: value })} placeholder="Personagem" maxWidth="100%" /></div>
+                    <div className="flex min-w-0 flex-1 items-center justify-start [&>div]:w-full [&>div]:max-w-[112px]"><FilterInline value={tableFilters.name} onChange={value => updateTableFilters({ name: value })} placeholder="Personagem" maxWidth="100%" /></div>
                   </div>
                 </th>
                 <th className={`${STICKY_FILTER_CELL_CLASS} h-10 px-1 py-1.5 align-middle`}><div className="flex w-full items-center justify-center [&>button]:w-full [&>button]:max-w-[96px]"><FilterMulti label="Servidor" options={serverOptions} selected={tableFilters.servers} onApply={values => updateTableFilters({ servers: values })} placeholder="Servidor" searchable /></div></th>
@@ -1472,6 +1562,8 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                 <th className={`${STICKY_FILTER_CELL_CLASS} h-10 px-1 py-1.5 align-middle`}><div className="flex w-full items-center justify-center [&>button]:w-full [&>button]:max-w-[80px]"><FilterNumber label="Valor" value={tableFilters.bidValue} operator={tableFilters.bidOperator} onChange={(value, operator) => updateTableFilters({ bidValue: value, bidOperator: operator })} placeholder="Valor" /></div></th>
                 <th className={`${STICKY_FILTER_CELL_CLASS} h-10 px-1 py-1.5 align-middle`}><div className="flex w-full items-center justify-center [&>button]:w-full [&>button]:max-w-[80px]"><FilterNumber label="Valor Itens (KK)" value={tableFilters.kkValue} operator={tableFilters.kkOperator} onChange={(value, operator) => updateTableFilters({ kkValue: value, kkOperator: operator })} placeholder="KK" /></div></th>
                 <th className={`${STICKY_FILTER_CELL_CLASS} h-10 px-1 py-1.5 align-middle`}><div className="flex w-full items-center justify-center [&>button]:w-full [&>button]:max-w-[80px]"><FilterNumber label="Valor Itens (RC)" value={tableFilters.rcValue} operator={tableFilters.rcOperator} onChange={(value, operator) => updateTableFilters({ rcValue: value, rcOperator: operator })} placeholder="RC" /></div></th>
+                {/* Potencial: sem filtro próprio (ordenação pelo cabeçalho). */}
+                <th className={`${STICKY_FILTER_CELL_CLASS} h-10 px-1 py-1.5 text-center align-middle text-[10px] text-slate-600`}>—</th>
                 <th className={`${STICKY_FILTER_CELL_CLASS} h-10 px-1 py-1.5 text-center align-middle text-[10px] text-slate-600`}>—</th>
                 <th className={`${STICKY_FILTER_CELL_CLASS} h-10 px-1 py-1.5 text-center align-middle`}>
                   <button
@@ -1502,7 +1594,7 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                 // usuário não perca o acesso ao botão de limpar justamente
                 // quando os filtros não retornam resultados.
                 <tr>
-                  <td colSpan={9} className="px-4 py-10 text-center align-middle text-sm text-slate-500">
+                  <td colSpan={10} className="px-4 py-10 text-center align-middle text-sm text-slate-500">
                     <div className="flex flex-col items-center justify-center gap-3">
                       <span>Nenhum personagem encontrado para os filtros atuais.</span>
                       {hasActiveTableFilters && (
@@ -1528,6 +1620,14 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                 // RC/exibição/badge derivam deste valor.
                 const effectiveKk = effectiveTotalKk(result);
                 const isManualKk = hasManualTotalKk(result);
+                // POTENCIAL: score real em kk (itens efetivos − personagem
+                // em kk) e posição 0..1 na escala dinâmica da consulta.
+                // Recalculado a cada render — correção manual do KK, edição
+                // de preço e "Atualizar Valores" refletem na hora.
+                const potentialScore = potentialScoreKk(result, coinRate);
+                const potentialT = potentialScore !== null
+                  ? 0.5 + potentialScore / (2 * potentialScaleKk)
+                  : null;
                 // Estado do link — MESMO mecanismo do painel de quests
                 // (openedLinksState compartilhado via props).
                 const linkState = getLinkState ? getLinkState(auctionKey) : "open";
@@ -1540,16 +1640,17 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                 return (
                 <tr key={auctionKey} className="border-t border-[var(--th-line)]/40 hover:bg-white/[0.03]">
                   {/* CENTRALIZAÇÃO: todas as células da tabela são
-                      text-center (cabeçalho, filtros e dados) — requisito
-                      de consistência visual da guia. */}
-                  <td className="px-2 py-1.5 text-center">
+                      text-center (cabeçalho, filtros e dados) — EXCETO a
+                      coluna "Personagem", a ÚNICA alinhada à esquerda
+                      (cabeçalho, filtro, nome, level e demais elementos). */}
+                  <td className="px-2 py-1.5 text-left">
                     {/* Nome + level como botão de copiar — mesmo padrão visual
                         dos copiar de personagem do app (hover revela o ícone,
                         1,5s de "Copiado!"). Copia "Nome, Lv X". */}
                     <button
                       type="button"
                       onClick={() => copyText(copyKey, result.level ? `${result.name}, Lv ${result.level}` : result.name)}
-                      className={`group inline-flex max-w-[220px] items-center justify-center gap-1 rounded px-1 py-0.5 font-bold transition-colors cursor-copy ${
+                      className={`group inline-flex max-w-[220px] items-center justify-start gap-1 rounded px-1 py-0.5 font-bold transition-colors cursor-copy ${
                         copiedKey === copyKey ? "bg-emerald-500/20 text-emerald-300" : "text-slate-100 hover:bg-white/10 hover:text-white"
                       }`}
                       title={copiedKey === copyKey ? "Copiado" : `Copiar "${result.name}${result.level ? `, Lv ${result.level}` : ""}"`}
@@ -1560,7 +1661,7 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                         <><span className="truncate">{result.name || "—"}</span><Copy size={10} className="flex-shrink-0 opacity-0 group-hover:opacity-70 transition-opacity" /></>
                       )}
                     </button>
-                    <div className="text-[9px] text-slate-500 px-1 text-center">
+                    <div className="text-[9px] text-slate-500 px-1 text-left">
                       {[result.vocation, result.level ? `Lv ${result.level}` : ""].filter(Boolean).join(" · ")}
                     </div>
                   </td>
@@ -1633,6 +1734,28 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                   </td>
                   <td className="px-2 py-1.5 text-center font-mono font-bold text-emerald-300" title={isManualKk ? "RC calculado sobre o valor corrigido manualmente" : undefined}>
                     {coinRate > 0 ? computeItemRC(coinRate, effectiveKk).toLocaleString("de-DE") : "—"}
+                  </td>
+                  <td className="px-2 py-1.5 text-center">
+                    {/* POTENCIAL — círculo compacto com gradiente contínuo
+                        verde vivo (alto) → vermelho escuro (baixo). A cor é
+                        só a representação; o número real (kk) fica no
+                        tooltip e é o que a ordenação usa. Sem cotação do
+                        coin não há comparação de unidades → indicador
+                        neutro. */}
+                    {potentialT !== null && potentialScore !== null ? (
+                      <span
+                        aria-label={`Potencial: ${potentialScore >= 0 ? "+" : "−"}${formatKkValue(Math.abs(potentialScore), "kk")}`}
+                        title={`Potencial: ${potentialScore >= 0 ? "+" : "−"}${formatKkValue(Math.abs(potentialScore), "kk")} (Valor Itens ${formatKkValue(effectiveKk, "kk")}${isManualKk ? " manual" : ""} − personagem ${formatKkValue(bidValueKk(result, coinRate), "kk")})`}
+                        className="inline-block h-3.5 w-3.5 rounded-full border border-black/40 shadow-[inset_0_1px_1px_rgba(255,255,255,0.25)]"
+                        style={{ backgroundColor: potentialColor(potentialT) }}
+                      />
+                    ) : (
+                      <span
+                        aria-label="Potencial indisponível"
+                        title="Informe a cotação do coin no quadro para calcular o potencial (compara o valor dos itens com o preço do personagem na mesma unidade)."
+                        className="inline-block h-3.5 w-3.5 rounded-full border border-slate-600/60 bg-slate-700/40"
+                      />
+                    )}
                   </td>
                   <td className="px-2 py-1.5 text-center">
                     <button
