@@ -67,6 +67,13 @@ export interface BazaarItemsCharacterResult {
   bid?: number;
   /** Encerramento do leilão (s ou ms, normalizado na exibição) — só exibição. */
   auctionEndTs?: number | null;
+  /**
+   * CORREÇÃO MANUAL do "Valor Itens (KK)" (feita pelo usuário após conferir
+   * o personagem). Quando presente (> 0), tem PRIORIDADE sobre `totalKk` em
+   * exibição, filtros, ordenação e no cálculo de RC. O cálculo automático
+   * (`totalKk`) NUNCA é apagado — remover a correção volta ao automático.
+   */
+  manualTotalKk?: number | null;
 }
 
 /** Resumo persistido da última consulta de itens (local, nunca Firestore). */

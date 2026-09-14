@@ -22,10 +22,14 @@ import BazaarBrowserModal, { BAZAAR_BROWSER_KEY, BAZAAR_BROWSER_ORDER_KEY, BAZAA
 // única — nenhuma implementação paralela) e as MESMAS classes de célula
 // sticky do cabeçalho exportadas pelo BazarPanel (fonte única de estilo).
 import { FilterDateMax, FilterInline, FilterMulti, FilterNumber } from "./FilterTypes";
-import { STICKY_FILTER_CELL_CLASS, STICKY_HEAD_CELL_CLASS } from "./BazarPanel";
+import { STICKY_FILTER_CELL_CLASS, STICKY_HEAD_CELL_CLASS, closeRubinotBrowserFromRenderer, isAuctionVisibleWithEndedGrace } from "./BazarPanel";
 import type { BazaarRetryCounts, BazaarSpeedMode } from "./BazaarBrowserModal";
 import { loadUIState } from "../storage";
 import { computeItemRC, formatKkValue } from "../utils/itemSale";
+// "Atualizar Valores" — MESMO mecanismo das quests: os helpers puros do
+// overlay (cruzamento lista antiga × listagem nova) são reutilizados como
+// estão; aqui a aplicação é sobre os resultados LOCAIS da última consulta.
+import { applyValueOverlay, buildValueOverlay } from "../utils/bazaarValueRefresh";
 import {
   formatAuctionEnd,
   formatDateTimeWithOffset,
@@ -182,6 +186,43 @@ function saveItemsTableFilters(filters: ItemsTableFilters) {
   } catch {}
 }
 
+// ── "Ocultar encerrados / Exibir todos" — mesma preferência das QUESTS ──────
+// Mesmo comportamento/persistência de readHideEndedAuctionsPreference do
+// BazarPanel (default = ocultar), em chave própria do modo itens. A regra de
+// visibilidade é a MESMA função exportada pelo BazarPanel (carência de 5
+// minutos após o encerramento).
+const ITEMS_HIDE_ENDED_KEY = "rubinot_bazaar_items_hide_ended";
+
+function readItemsHideEndedPreference(): boolean {
+  try {
+    const raw = localStorage.getItem(ITEMS_HIDE_ENDED_KEY);
+    return raw === null ? true : JSON.parse(raw) !== false;
+  } catch {
+    return true;
+  }
+}
+
+function saveItemsHideEndedPreference(value: boolean) {
+  try { localStorage.setItem(ITEMS_HIDE_ENDED_KEY, JSON.stringify(value)); } catch {}
+}
+
+/**
+ * Valor EFETIVO do "Valor Itens (KK)" de um personagem: a correção MANUAL
+ * (quando presente e válida) tem prioridade sobre o total calculado pela
+ * consulta. Fonte única — exibição, filtros, ordenação e o cálculo de RC
+ * passam todos por aqui.
+ */
+function effectiveTotalKk(result: BazaarItemsCharacterResult): number {
+  const manual = Number(result.manualTotalKk);
+  return Number.isFinite(manual) && manual > 0 ? manual : result.totalKk;
+}
+
+/** true quando o personagem tem correção manual ativa no KK. */
+function hasManualTotalKk(result: BazaarItemsCharacterResult): boolean {
+  const manual = Number(result.manualTotalKk);
+  return Number.isFinite(manual) && manual > 0;
+}
+
 /**
  * Prefixo dos ids de alerta do canal de ITENS (definido no serviço de
  * alertas). Distingue os chips deste painel dos chips do painel de quests —
@@ -221,12 +262,41 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
   // como tableFilters/sortKey/sortDir do BazarPanel. Tudo derivado/local:
   // nenhum efeito sobre a consulta, os cálculos ou os dados persistidos.
   const [tableFilters, setTableFilters] = useState<ItemsTableFilters>(() => readItemsTableFilters());
-  const [sortKey, setSortKey] = useState<ItemsSortKey>("totalKk");
-  const [sortDir, setSortDir] = useState<ItemsSortDir>("desc");
+  // ORDENAÇÃO PADRÃO — mesma das QUESTS: "Encerra" crescente (cronológica),
+  // ativa desde a abertura do painel. "Encerra" permanece o PRIMEIRO critério
+  // mesmo quando outra coluna é ordenada (a outra vira critério secundário) —
+  // ver o comparador em filteredResults.
+  const [sortKey, setSortKey] = useState<ItemsSortKey>("auctionEndTs");
+  const [sortDir, setSortDir] = useState<ItemsSortDir>("asc");
+
+  // ── "Ocultar encerrados / Exibir todos" — mesmo comportamento das QUESTS ──
+  // Preferência persistida por dispositivo (default oculta) + relógio de 15s
+  // (mesmo intervalo do BazarPanel) para a lista reagir a encerramentos sem
+  // interação do usuário. Regra de visibilidade = MESMA função das quests.
+  const [hideEndedResults, setHideEndedResults] = useState(() => readItemsHideEndedPreference());
+  const [currentUnixTs, setCurrentUnixTs] = useState(() => Math.floor(Date.now() / 1000));
+
+  // ── "Atualizar Valores" — mesmo fluxo das QUESTS, sobre a lista local ─────
+  const [isValueRefreshing, setIsValueRefreshing] = useState(false);
+  const [valueRefreshStatus, setValueRefreshStatus] = useState("");
+
+  // ── Edição MANUAL do "Valor Itens (KK)" — modal por personagem ────────────
+  const [kkEdit, setKkEdit] = useState<{ auctionKey: string; value: string } | null>(null);
 
   useEffect(() => {
     saveItemsTableFilters(tableFilters);
   }, [tableFilters]);
+
+  useEffect(() => {
+    saveItemsHideEndedPreference(hideEndedResults);
+  }, [hideEndedResults]);
+
+  useEffect(() => {
+    const updateCurrentTime = () => setCurrentUnixTs(Math.floor(Date.now() / 1000));
+    updateCurrentTime();
+    const interval = window.setInterval(updateCurrentTime, 15 * 1000);
+    return () => window.clearInterval(interval);
+  }, []);
 
   function updateTableFilters(patch: Partial<ItemsTableFilters>) {
     setTableFilters(prev => ({ ...prev, ...patch }));
@@ -676,6 +746,99 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
     }
   }
 
+  /**
+   * ATUALIZAR VALORES — MESMA função/comportamento/lógica das QUESTS
+   * (handleRefreshValues do BazarPanel), aplicada à lista LOCAL de itens:
+   *
+   *   • relê SOMENTE a listagem do Bazaar (`rubinot-bazaar-fetch`, mesma
+   *     infraestrutura/fila/navegador; SEM nova análise de itens);
+   *   • cruza com os personagens da última consulta usando os MESMOS
+   *     helpers puros das quests (buildValueOverlay/applyValueOverlay);
+   *   • atualiza os valores (bid) apenas dos leilões reencontrados;
+   *     não reencontrados (encerrados) mantêm os valores originais;
+   *   • persiste no próprio lastQuery local (este modo é 100% local — o
+   *     análogo do overlay por versão das quests; NADA no Firestore).
+   *
+   * Itens/Tier/KK/RC NÃO são retocados: só o valor do personagem.
+   */
+  async function handleRefreshItemValues() {
+    if (!isBossUser) { setError("Apenas usuários Boss podem atualizar os valores do Bazaar."); return; }
+    if (!isElectron) { setError("A atualização de valores precisa ser executada no aplicativo Desktop (Electron)."); return; }
+    if (isRunning || isValueRefreshing) return;
+    const current = lastQuery;
+    if (!current || current.results.length === 0) {
+      setError("Não há consulta de itens carregada para atualizar valores.");
+      return;
+    }
+    setError(null);
+    setIsValueRefreshing(true);
+    setValueRefreshStatus("Relendo a listagem do Bazaar...");
+    try {
+      const { ipcRenderer } = (window as any).require("electron");
+      // Parada antecipada — mesma otimização das quests: a listagem é
+      // ordenada por encerramento; o maior encerramento da lista local
+      // (+ folga de 5 min) cobre todos os personagens que interessam.
+      let maxEndTs = 0;
+      current.results.forEach(result => {
+        const ts = normalizeAuctionEndTimestamp(result.auctionEndTs ?? null);
+        if (ts && ts > maxEndTs) maxEndTs = ts;
+      });
+      const response = await ipcRenderer.invoke("rubinot-bazaar-fetch", {
+        browser: loadUIState(BAZAAR_BROWSER_KEY, "webkit"),
+        endUntilTs: maxEndTs > 0 ? maxEndTs + 5 * 60 : 0,
+        cleanProfile: false,
+        speedMode: loadUIState<BazaarSpeedMode>(BAZAAR_SPEED_MODE_KEY, "moderado"),
+        browserOrder: loadUIState<string[]>(BAZAAR_BROWSER_ORDER_KEY, DEFAULT_BROWSER_ORDER),
+        retryBrowsers: loadUIState<string[]>(BAZAAR_RETRY_BROWSERS_KEY, []),
+        retryCounts: normalizeRetryCounts(loadUIState<BazaarRetryCounts | null>(BAZAAR_RETRY_COUNTS_KEY, null)),
+        autoRun: false,
+      }) as ItemsFetchResult;
+      if (!response?.ok || response?.cancelled || !Array.isArray(response.auctions)) {
+        setError(response?.error || "Não foi possível reler a listagem do Bazaar. Os valores atuais foram mantidos.");
+        return;
+      }
+
+      // MESMOS helpers das quests: overlay {auctionKey → novo bid} apenas
+      // dos personagens reencontrados; aplicação devolve novos objetos só
+      // onde houve mudança.
+      const { values, matchedCount } = buildValueOverlay(current.results, response.auctions);
+      const updatedResults = applyValueOverlay(current.results, values);
+      const updated: BazaarItemsLastQuery = { ...current, results: updatedResults };
+      saveItemsLastQuery(updated);
+      setLastQuery(updated);
+      setValueRefreshStatus(`Valores atualizados localmente: ${matchedCount} de ${current.results.length} leilões reencontrados.`);
+    } catch (err) {
+      setError(String((err as Error)?.message || err) || "Erro ao atualizar os valores do Bazaar.");
+    } finally {
+      await closeRubinotBrowserFromRenderer("atualizar-valores-itens-finalizado");
+      setIsValueRefreshing(false);
+    }
+  }
+
+  /**
+   * CORREÇÃO MANUAL do "Valor Itens (KK)": grava `manualTotalKk` no
+   * personagem dentro do lastQuery local (persistido). O total calculado
+   * (`totalKk`) NUNCA é tocado — valor vazio/zero REMOVE a correção e o
+   * personagem volta ao automático. RC/filtros/ordenação usam o efetivo.
+   */
+  function applyManualKk(auctionKey: string, rawValue: string) {
+    if (!lastQuery) return;
+    const clean = rawValue.trim();
+    const manual = clean === "" ? null : Number(clean);
+    if (manual !== null && (!Number.isSafeInteger(manual) || manual < 0)) return;
+    const updated: BazaarItemsLastQuery = {
+      ...lastQuery,
+      results: lastQuery.results.map(result => {
+        const key = result.id || result.url || result.name;
+        if (key !== auctionKey) return result;
+        return { ...result, manualTotalKk: manual && manual > 0 ? manual : null };
+      }),
+    };
+    saveItemsLastQuery(updated);
+    setLastQuery(updated);
+    setKkEdit(null);
+  }
+
   // ── Derivados de exibição ──────────────────────────────────────────────────
   const filteredItems = itemsSearch.trim()
     ? watchedItems.filter(item => normalizeWatchedItemName(item.name).includes(normalizeWatchedItemName(itemsSearch)))
@@ -711,6 +874,8 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
   const filteredResults = useMemo(() => {
     const tableEndLimit = tableFilters.endUntil ? parseDateTimeLocalWithOffset(tableFilters.endUntil, timezoneOffsetMinutes) : 0;
     const filtered = visibleResults.filter(result => {
+      // "Ocultar encerrados" — MESMA regra das quests (carência de 5 min).
+      if (hideEndedResults && !isAuctionVisibleWithEndedGrace(result, currentUnixTs)) return false;
       if (tableFilters.name.trim() && !result.name.toLowerCase().includes(tableFilters.name.trim().toLowerCase())) return false;
       if (tableFilters.servers.length > 0 && !tableFilters.servers.includes(result.server)) return false;
       const bid = Number(result.bid || 0);
@@ -718,15 +883,17 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
         if (tableFilters.bidOperator === "gte" && bid < tableFilters.bidValue) return false;
         if (tableFilters.bidOperator === "lte" && bid > tableFilters.bidValue) return false;
       }
+      // Filtros de KK/RC usam o valor EFETIVO: correção manual > calculado.
+      const kk = effectiveTotalKk(result);
       if (tableFilters.kkValue !== null) {
-        if (tableFilters.kkOperator === "gte" && result.totalKk < tableFilters.kkValue) return false;
-        if (tableFilters.kkOperator === "lte" && result.totalKk > tableFilters.kkValue) return false;
+        if (tableFilters.kkOperator === "gte" && kk < tableFilters.kkValue) return false;
+        if (tableFilters.kkOperator === "lte" && kk > tableFilters.kkValue) return false;
       }
       if (tableFilters.rcValue !== null) {
         // RC depende da cotação atual do coin — sem cotação não há valor de
         // RC exibido (coluna mostra "—"), então o filtro não elimina nada.
         if (coinRate > 0) {
-          const rc = computeItemRC(coinRate, result.totalKk);
+          const rc = computeItemRC(coinRate, kk);
           if (tableFilters.rcOperator === "gte" && rc < tableFilters.rcValue) return false;
           if (tableFilters.rcOperator === "lte" && rc > tableFilters.rcValue) return false;
         }
@@ -742,17 +909,28 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
 
     // Mesma comparação das quests: strings por localeCompare pt-BR, números
     // por subtração; asc/desc pela direção ativa. "rc" ordena pelo valor em
-    // RC (proporcional ao KK — floor((totalKk/coinRate)*1000)).
+    // RC (proporcional ao KK efetivo — floor((kk/coinRate)*1000)).
+    //
+    // "ENCERRA" É O CRITÉRIO PRIORITÁRIO: a ordenação cronológica crescente
+    // vem SEMPRE primeiro; a coluna escolhida pelo usuário só desempata
+    // entre leilões com o MESMO encerramento (critério secundário). Quando a
+    // própria coluna ativa é "Encerra", a direção escolhida (asc/desc) manda.
     const sorted = [...filtered];
+    const endTsOf = (r: BazaarItemsCharacterResult) => normalizeAuctionEndTimestamp(r.auctionEndTs ?? null) || 0;
     sorted.sort((a, b) => {
+      const endCmp = endTsOf(a) - endTsOf(b);
+      if (sortKey === "auctionEndTs") return sortDir === "asc" ? endCmp : -endCmp;
+      // Critério primário fixo: Encerra crescente (mesma ordem padrão das quests).
+      if (endCmp !== 0) return endCmp;
+      // Critério secundário: a coluna ativada pelo usuário.
       let av: string | number;
       let bv: string | number;
       if (sortKey === "rc") {
-        av = coinRate > 0 ? computeItemRC(coinRate, a.totalKk) : 0;
-        bv = coinRate > 0 ? computeItemRC(coinRate, b.totalKk) : 0;
-      } else if (sortKey === "auctionEndTs") {
-        av = normalizeAuctionEndTimestamp(a.auctionEndTs ?? null) || 0;
-        bv = normalizeAuctionEndTimestamp(b.auctionEndTs ?? null) || 0;
+        av = coinRate > 0 ? computeItemRC(coinRate, effectiveTotalKk(a)) : 0;
+        bv = coinRate > 0 ? computeItemRC(coinRate, effectiveTotalKk(b)) : 0;
+      } else if (sortKey === "totalKk") {
+        av = effectiveTotalKk(a);
+        bv = effectiveTotalKk(b);
       } else {
         av = a[sortKey] ?? 0;
         bv = b[sortKey] ?? 0;
@@ -766,7 +944,7 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
       return sortDir === "asc" ? cmp : -cmp;
     });
     return sorted;
-  }, [visibleResults, tableFilters, sortKey, sortDir, coinRate, itemInterests, timezoneOffsetMinutes]);
+  }, [visibleResults, tableFilters, sortKey, sortDir, coinRate, itemInterests, timezoneOffsetMinutes, hideEndedResults, currentUnixTs]);
 
   const hasActiveTableFilters = !!(
     tableFilters.name.trim() ||
@@ -778,13 +956,20 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
     tableFilters.onlyMyInterests
   );
 
-  /** Cabeçalho ordenável — mesmo componente/visual do SortHeader das quests. */
+  /** Cabeçalho ordenável — mesmo componente/visual do SortHeader das quests.
+   *  "Encerra" (auctionEndTs) mostra o indicador SEMPRE ativo: é o critério
+   *  prioritário permanente da ordenação (as demais colunas desempatam). */
   function SortHeader({ label, column }: { label: string; column: ItemsSortKey }) {
+    const isActive = sortKey === column || column === "auctionEndTs";
     return (
-      <th className={`${STICKY_HEAD_CELL_CLASS} h-10 px-1 py-2 text-center align-middle cursor-pointer select-none`} onClick={() => toggleSort(column)}>
+      <th
+        className={`${STICKY_HEAD_CELL_CLASS} h-10 px-1 py-2 text-center align-middle cursor-pointer select-none`}
+        onClick={() => toggleSort(column)}
+        title={column === "auctionEndTs" ? "Ordenação cronológica sempre ativa (critério prioritário)" : undefined}
+      >
         <span className="inline-flex w-full items-center justify-center gap-1 leading-none">
           {label}
-          <ArrowDownUp size={10} className={sortKey === column ? "text-amber-400" : "text-slate-600"} />
+          <ArrowDownUp size={10} className={isActive ? "text-amber-400" : "text-slate-600"} />
         </span>
       </th>
     );
@@ -949,6 +1134,39 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
           {resultsSearchTerm && (
             <span className="text-[9px] font-bold text-fuchsia-300">
               {visibleResults.length} de {results.length} {results.length === 1 ? "personagem" : "personagens"}
+            </span>
+          )}
+
+          {/* OCULTAR ENCERRADOS / EXIBIR TODOS — mesmo botão das quests
+              (mesmo visual/alternância/carência de 5 min), aplicado à lista
+              local de itens. Preferência persistida por dispositivo. */}
+          <button
+            type="button"
+            onClick={() => setHideEndedResults(prev => !prev)}
+            className={`inline-flex h-7 items-center gap-1 rounded-md border px-2.5 text-[10px] font-black transition-colors cursor-pointer ${hideEndedResults ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20" : "border-amber-500/25 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20"}`}
+            title={hideEndedResults ? "Mostrar também leilões encerrados" : "Ocultar leilões encerrados"}
+          >
+            {hideEndedResults ? "Ocultar encerrados" : "Exibir todos"}
+          </button>
+
+          {/* ATUALIZAR VALORES — mesma função das quests: relê SÓ a listagem
+              do Bazaar e atualiza os valores dos leilões APENAS localmente
+              (nenhuma nova análise de itens; nada no Firestore). */}
+          {isElectron && isBossUser && (
+            <button
+              type="button"
+              onClick={() => { void handleRefreshItemValues(); }}
+              disabled={isValueRefreshing || isRunning}
+              className="inline-flex h-7 items-center justify-center gap-1 rounded-md border border-sky-500/30 bg-sky-500/10 px-2.5 text-[10px] font-black text-sky-300 hover:bg-sky-500/20 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+              title="Relê a listagem do Bazaar e atualiza os valores dos leilões da última consulta apenas neste dispositivo"
+            >
+              {isValueRefreshing && <RefreshCw size={11} className="animate-spin" />}
+              {isValueRefreshing ? "Atualizando..." : "Atualizar Valores"}
+            </button>
+          )}
+          {valueRefreshStatus && (
+            <span className="max-w-[260px] text-[8px] font-bold leading-tight text-sky-300/80" role="status">
+              {valueRefreshStatus}
             </span>
           )}
 
@@ -1118,6 +1336,10 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                 const copyKey = `res_${auctionKey}`;
                 // "Tenho Interesse" — estado 100% LOCAL (localStorage por uid).
                 const isInterested = itemInterests.includes(auctionKey);
+                // KK EFETIVO: correção manual (quando ativa) > calculado.
+                // RC/exibição/badge derivam deste valor.
+                const effectiveKk = effectiveTotalKk(result);
+                const isManualKk = hasManualTotalKk(result);
                 // Estado do link — MESMO mecanismo do painel de quests
                 // (openedLinksState compartilhado via props).
                 const linkState = getLinkState ? getLinkState(auctionKey) : "open";
@@ -1129,14 +1351,17 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                     : "border-amber-600/30 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20";
                 return (
                 <tr key={auctionKey} className="border-t border-[var(--th-line)]/40 hover:bg-white/[0.03]">
-                  <td className="px-2 py-1.5">
+                  {/* CENTRALIZAÇÃO: todas as células da tabela são
+                      text-center (cabeçalho, filtros e dados) — requisito
+                      de consistência visual da guia. */}
+                  <td className="px-2 py-1.5 text-center">
                     {/* Nome + level como botão de copiar — mesmo padrão visual
                         dos copiar de personagem do app (hover revela o ícone,
                         1,5s de "Copiado!"). Copia "Nome, Lv X". */}
                     <button
                       type="button"
                       onClick={() => copyText(copyKey, result.level ? `${result.name}, Lv ${result.level}` : result.name)}
-                      className={`group inline-flex max-w-[220px] items-center gap-1 rounded px-1 py-0.5 font-bold transition-colors cursor-copy ${
+                      className={`group inline-flex max-w-[220px] items-center justify-center gap-1 rounded px-1 py-0.5 font-bold transition-colors cursor-copy ${
                         copiedKey === copyKey ? "bg-emerald-500/20 text-emerald-300" : "text-slate-100 hover:bg-white/10 hover:text-white"
                       }`}
                       title={copiedKey === copyKey ? "Copiado" : `Copiar "${result.name}${result.level ? `, Lv ${result.level}` : ""}"`}
@@ -1147,7 +1372,7 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                         <><span className="truncate">{result.name || "—"}</span><Copy size={10} className="flex-shrink-0 opacity-0 group-hover:opacity-70 transition-opacity" /></>
                       )}
                     </button>
-                    <div className="text-[9px] text-slate-500 px-1">
+                    <div className="text-[9px] text-slate-500 px-1 text-center">
                       {[result.vocation, result.level ? `Lv ${result.level}` : ""].filter(Boolean).join(" · ")}
                     </div>
                   </td>
@@ -1158,9 +1383,68 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                   <td className="px-2 py-1.5 text-center font-mono text-emerald-300" title="Valor do personagem no momento da consulta">
                     {Number.isFinite(result.bid) && (result.bid || 0) > 0 ? `${(result.bid || 0).toLocaleString("de-DE")} coins` : "—"}
                   </td>
-                  <td className="px-2 py-1.5 text-right font-mono font-bold text-amber-200">{formatKkValue(result.totalKk, "kk")}</td>
-                  <td className="px-2 py-1.5 text-right font-mono font-bold text-emerald-300">
-                    {coinRate > 0 ? computeItemRC(coinRate, result.totalKk).toLocaleString("de-DE") : "—"}
+                  <td className="px-2 py-1.5 text-center font-mono font-bold text-amber-200">
+                    {/* VALOR ITENS (KK) — correção MANUAL tem prioridade sobre
+                        o calculado. Em edição: input inline + ✓/✗ (Enter/Esc).
+                        Fora dela: valor efetivo + lápis; quando manual, badge
+                        "manual" (título mostra o calculado) + botão de reset
+                        para voltar ao automático. */}
+                    {kkEdit?.auctionKey === auctionKey ? (
+                      <span className="inline-flex items-center justify-center gap-1">
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          autoFocus
+                          value={kkEdit.value}
+                          onChange={event => setKkEdit(prev => (prev ? { ...prev, value: event.target.value.replace(/\D+/g, "").slice(0, 9) } : prev))}
+                          onKeyDown={event => {
+                            if (event.key === "Enter") { event.preventDefault(); applyManualKk(auctionKey, kkEdit.value); }
+                            if (event.key === "Escape") { event.preventDefault(); setKkEdit(null); }
+                          }}
+                          placeholder="kk"
+                          title="Correção manual em kk inteiros. Vazio = volta ao valor calculado. Enter salva, Esc cancela."
+                          className="h-6 w-16 rounded-md border border-fuchsia-500/60 bg-black/35 px-1.5 text-center font-mono text-[11px] text-amber-200 outline-none focus:border-fuchsia-400"
+                        />
+                        <button type="button" onClick={() => applyManualKk(auctionKey, kkEdit.value)} className="p-0.5 rounded text-emerald-300 hover:bg-emerald-500/15 transition-colors cursor-pointer" title="Salvar correção manual">
+                          <Check size={12} strokeWidth={3} />
+                        </button>
+                        <button type="button" onClick={() => setKkEdit(null)} className="p-0.5 rounded text-slate-400 hover:text-white hover:bg-white/10 transition-colors cursor-pointer" title="Cancelar">
+                          <X size={12} />
+                        </button>
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center justify-center gap-1">
+                        <span title={isManualKk ? `Valor corrigido manualmente (calculado pela consulta: ${formatKkValue(result.totalKk, "kk")})` : "Valor calculado pela consulta"}>
+                          {formatKkValue(effectiveKk, "kk")}
+                        </span>
+                        {isManualKk && (
+                          <span className="rounded border border-fuchsia-500/40 bg-fuchsia-500/15 px-1 py-px text-[7px] font-black uppercase tracking-wide text-fuchsia-300" title={`Correção manual ativa (calculado: ${formatKkValue(result.totalKk, "kk")})`}>
+                            manual
+                          </span>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => setKkEdit({ auctionKey, value: isManualKk ? String(effectiveKk) : "" })}
+                          className="p-0.5 rounded text-sky-300 hover:bg-sky-500/15 transition-colors cursor-pointer"
+                          title="Editar: corrigir manualmente o Valor Itens (KK) deste personagem (prioridade sobre o calculado; o RC passa a usar o valor corrigido)"
+                        >
+                          <Pencil size={11} />
+                        </button>
+                        {isManualKk && (
+                          <button
+                            type="button"
+                            onClick={() => applyManualKk(auctionKey, "")}
+                            className="p-0.5 rounded text-slate-500 hover:text-amber-300 hover:bg-amber-500/10 transition-colors cursor-pointer"
+                            title={`Remover correção manual e voltar ao valor calculado (${formatKkValue(result.totalKk, "kk")})`}
+                          >
+                            <RotateCcw size={11} />
+                          </button>
+                        )}
+                      </span>
+                    )}
+                  </td>
+                  <td className="px-2 py-1.5 text-center font-mono font-bold text-emerald-300" title={isManualKk ? "RC calculado sobre o valor corrigido manualmente" : undefined}>
+                    {coinRate > 0 ? computeItemRC(coinRate, effectiveKk).toLocaleString("de-DE") : "—"}
                   </td>
                   <td className="px-2 py-1.5 text-center">
                     <button

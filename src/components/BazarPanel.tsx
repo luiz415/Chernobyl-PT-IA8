@@ -682,8 +682,12 @@ function isAuctionStillActive(auction: BazaarAuction, nowUnixTs: number): boolea
   return auctionEndTs > nowUnixTs;
 }
 
-function isAuctionVisibleWithEndedGrace(auction: BazaarAuction, nowUnixTs: number): boolean {
-  const auctionEndTs = normalizeAuctionEndTimestamp(auction.auctionEndTs);
+// Exportada para o BazaarItemsPanel: o botão "Ocultar encerrados / Exibir
+// todos" do modo itens usa EXATAMENTE a mesma regra de visibilidade (mesma
+// carência de 5 minutos após o encerramento). Assinatura estrutural — aceita
+// qualquer objeto com `auctionEndTs`.
+export function isAuctionVisibleWithEndedGrace(auction: { auctionEndTs?: number | null }, nowUnixTs: number): boolean {
+  const auctionEndTs = normalizeAuctionEndTimestamp(auction.auctionEndTs ?? null);
   if (!auctionEndTs) return true;
   return auctionEndTs + BAZAR_ENDED_VISIBILITY_GRACE_SECONDS > nowUnixTs;
 }
@@ -732,7 +736,9 @@ function openExternal(url: string) {
   window.open(url, "_blank", "noopener,noreferrer");
 }
 
-async function closeRubinotBrowserFromRenderer(reason: string) {
+// Exportada para o BazaarItemsPanel (Atualizar Valores do modo itens usa o
+// MESMO encerramento de navegador) — referência em runtime, ciclo inofensivo.
+export async function closeRubinotBrowserFromRenderer(reason: string) {
   try {
     const electronRequire = (window as any).require;
     if (!electronRequire) return;
