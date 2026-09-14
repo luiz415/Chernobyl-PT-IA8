@@ -1940,8 +1940,10 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                 <th className={`${STICKY_FILTER_CELL_CLASS} h-10 px-1 py-1.5 align-middle`}><div className="flex w-full items-center justify-center [&>button]:w-full [&>button]:max-w-[80px]"><FilterNumber label="Valor Itens (RC)" value={tableFilters.rcValue} operator={tableFilters.rcOperator} onChange={(value, operator) => updateTableFilters({ rcValue: value, rcOperator: operator })} placeholder="RC" /></div></th>
                 {/* POTENCIAL: filtro numérico — MESMO componente (FilterNumber)
                     e comportamento dos demais; compara o PERCENTUAL real da
-                    coluna (aceita negativos, ex.: ≥ -20). */}
-                <th className={`${STICKY_FILTER_CELL_CLASS} h-10 px-1 py-1.5 align-middle`}><div className="flex w-full items-center justify-center [&>button]:w-full [&>button]:max-w-[80px]"><FilterNumber label="Potencial (%)" value={tableFilters.potentialValue} operator={tableFilters.potentialOperator} onChange={(value, operator) => updateTableFilters({ potentialValue: value, potentialOperator: operator })} placeholder="%" /></div></th>
+                    coluna. `allowNegative`: o campo aceita DIGITAR números
+                    negativos ("-20") para considerar também personagens com
+                    percentual negativo (ex.: ≥ -20 ou ≤ -10). */}
+                <th className={`${STICKY_FILTER_CELL_CLASS} h-10 px-1 py-1.5 align-middle`}><div className="flex w-full items-center justify-center [&>button]:w-full [&>button]:max-w-[80px]"><FilterNumber label="Potencial (%)" value={tableFilters.potentialValue} operator={tableFilters.potentialOperator} onChange={(value, operator) => updateTableFilters({ potentialValue: value, potentialOperator: operator })} placeholder="%" allowNegative /></div></th>
                 {/* Skills e Detalhes: sem filtro próprio. */}
                 <th className={`${STICKY_FILTER_CELL_CLASS} h-10 px-1 py-1.5 text-center align-middle text-[10px] text-slate-600`}>—</th>
                 <th className={`${STICKY_FILTER_CELL_CLASS} h-10 px-1 py-1.5 text-center align-middle text-[10px] text-slate-600`}>—</th>
