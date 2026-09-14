@@ -258,6 +258,12 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
   const [itemsSearch, setItemsSearch] = useState("");
   const [draft, setDraft] = useState<ItemDraft>(EMPTY_DRAFT);
   const [draftError, setDraftError] = useState<string | null>(null);
+  // ── Edição INLINE do valor (modal Lista de Itens) ──────────────────────────
+  // O botão "Editar" transforma o VALOR do item em um campo editável na
+  // própria linha — o formulário "Adicionar item" é exclusivo para NOVOS
+  // itens. Apenas uma linha em edição por vez; o nome não é alterado aqui.
+  const [inlineEdit, setInlineEdit] = useState<{ id: string; valueKk: string } | null>(null);
+  const [inlineEditError, setInlineEditError] = useState<string | null>(null);
   const [importFeedback, setImportFeedback] = useState<string | null>(null);
   const importInputRef = useRef<HTMLInputElement | null>(null);
   const [detailResult, setDetailResult] = useState<BazaarItemsCharacterResult | null>(null);
@@ -408,6 +414,7 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
     saveWatchedItems(next);
   }
 
+  /** Formulário superior — EXCLUSIVO para ADICIONAR novos itens. */
   function submitDraft() {
     const name = draft.name.trim();
     // Valores em kk são INTEIROS: o input já bloqueia não-dígitos, mas a
@@ -418,27 +425,49 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
     const valueKk = Number(rawValue);
     if (!Number.isSafeInteger(valueKk) || valueKk <= 0) { setDraftError("Informe o valor em kk (inteiro, maior que zero)."); return; }
     const key = normalizeWatchedItemName(name);
-    const duplicated = watchedItems.some(item => item.id !== draft.id && normalizeWatchedItemName(item.name) === key);
+    const duplicated = watchedItems.some(item => normalizeWatchedItemName(item.name) === key);
     if (duplicated) { setDraftError("Este item já está na lista."); return; }
     const now = Date.now();
-    if (draft.id) {
-      persistItems(watchedItems.map(item => {
-        if (item.id !== draft.id) return item;
-        // "Atualizado dia..." só muda quando o VALOR muda de fato — renomear
-        // sem alterar o valor preserva a data anterior.
-        const valueChanged = item.valueKk !== valueKk;
-        return { ...item, name, valueKk, updatedAtMs: valueChanged ? now : item.updatedAtMs };
-      }));
-    } else {
-      persistItems([...watchedItems, { id: `wi_${now.toString(36)}_${Math.random().toString(36).slice(2, 7)}`, name, valueKk, updatedAtMs: now }]);
-    }
+    persistItems([...watchedItems, { id: `wi_${now.toString(36)}_${Math.random().toString(36).slice(2, 7)}`, name, valueKk, updatedAtMs: now }]);
     setDraft(EMPTY_DRAFT);
     setDraftError(null);
   }
 
+  /** Abre a edição INLINE do valor na linha do item (uma linha por vez). */
+  function startInlineEdit(item: WatchedItem) {
+    setInlineEdit({ id: item.id, valueKk: String(item.valueKk) });
+    setInlineEditError(null);
+  }
+
+  function cancelInlineEdit() {
+    setInlineEdit(null);
+    setInlineEditError(null);
+  }
+
+  /**
+   * Salva o valor editado inline. Mesmas regras do fluxo anterior de edição:
+   * kk inteiro > 0; "Atualizado dia..." só muda quando o VALOR muda de fato
+   * (salvar sem alterar preserva a data anterior). O nome NUNCA muda aqui.
+   */
+  function saveInlineEdit() {
+    if (!inlineEdit) return;
+    const rawValue = inlineEdit.valueKk.trim();
+    if (!/^\d+$/.test(rawValue)) { setInlineEditError("Informe o valor em kk usando somente números inteiros."); return; }
+    const valueKk = Number(rawValue);
+    if (!Number.isSafeInteger(valueKk) || valueKk <= 0) { setInlineEditError("Informe o valor em kk (inteiro, maior que zero)."); return; }
+    const now = Date.now();
+    persistItems(watchedItems.map(item => {
+      if (item.id !== inlineEdit.id) return item;
+      const valueChanged = item.valueKk !== valueKk;
+      return { ...item, valueKk, updatedAtMs: valueChanged ? now : item.updatedAtMs };
+    }));
+    setInlineEdit(null);
+    setInlineEditError(null);
+  }
+
   function removeItem(id: string) {
     persistItems(watchedItems.filter(item => item.id !== id));
-    if (draft.id === id) { setDraft(EMPTY_DRAFT); setDraftError(null); }
+    if (inlineEdit?.id === id) cancelInlineEdit();
   }
 
   function handleExport() {
@@ -790,7 +819,7 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
       ))}
       <button
         type="button"
-        onClick={() => { setIsItemsModalOpen(true); setImportFeedback(null); }}
+        onClick={() => { setIsItemsModalOpen(true); setImportFeedback(null); cancelInlineEdit(); }}
         className="inline-flex h-7 items-center gap-1 px-2.5 rounded-lg border border-fuchsia-500/25 bg-fuchsia-500/10 text-fuchsia-300 text-[10px] font-black transition-all cursor-pointer hover:bg-fuchsia-500/20"
         title="Itens monitorados na consulta: nome e valor base em kk"
       >
@@ -1206,13 +1235,14 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
             </div>
 
             <div className="flex-1 min-h-0 overflow-auto custom-scrollbar px-4 py-3 space-y-3">
-              {/* Formulário: adicionar/editar */}
+              {/* Formulário: EXCLUSIVO para adicionar novos itens — a edição
+                  de itens existentes é INLINE, na própria linha da lista. */}
               <form
                 onSubmit={event => { event.preventDefault(); submitDraft(); }}
                 className="rounded-lg border border-[var(--th-line)]/50 bg-black/20 p-2.5 space-y-1.5"
               >
                 <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
-                  {draft.id ? "Editar item" : "Adicionar item"}
+                  Adicionar item
                 </div>
                 <div className="flex flex-wrap items-center gap-1.5">
                   <input
@@ -1232,13 +1262,8 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                     className="h-8 w-24 rounded-md border border-[var(--th-line)]/70 bg-black/35 px-2 text-[11px] text-white outline-none focus:border-fuchsia-600/60"
                   />
                   <button type="submit" className="inline-flex h-8 items-center gap-1 px-2.5 rounded-lg border border-fuchsia-500/40 bg-fuchsia-600/70 hover:bg-fuchsia-500/70 text-white text-[10px] font-black transition-all cursor-pointer">
-                    <Plus size={12} /> {draft.id ? "Salvar" : "Adicionar"}
+                    <Plus size={12} /> Adicionar
                   </button>
-                  {draft.id && (
-                    <button type="button" onClick={() => { setDraft(EMPTY_DRAFT); setDraftError(null); }} className="inline-flex h-8 items-center px-2 rounded-lg border border-[var(--th-line)]/60 text-slate-300 text-[10px] font-bold hover:bg-white/5 transition-all cursor-pointer">
-                      Cancelar
-                    </button>
-                  )}
                 </div>
                 {draftError && <p role="alert" className="text-[10px] font-medium text-rose-300">{draftError}</p>}
                 <p className="text-[9px] text-slate-500 leading-relaxed">
@@ -1286,8 +1311,12 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                 <div className="space-y-1">
                   {filteredItems.map(item => {
                     const copyKey = `item_${item.id}`;
+                    // Linha em edição INLINE: o valor vira campo editável na
+                    // própria linha (borda fúcsia destaca o estado).
+                    const isEditing = inlineEdit?.id === item.id;
                     return (
-                    <div key={item.id} className="flex items-center gap-2 rounded-lg border border-[var(--th-line)]/40 bg-black/20 px-2.5 py-1.5">
+                    <div key={item.id} className={`rounded-lg border bg-black/20 px-2.5 py-1.5 ${isEditing ? "border-fuchsia-500/50" : "border-[var(--th-line)]/40"}`}>
+                    <div className="flex items-center gap-2">
                       <div className="flex-1 min-w-0 flex items-center gap-1">
                         {/* Nome = botão de copiar (SOMENTE o nome exato, sem
                             valor/Tier/data). Mesmo padrão visual dos demais
@@ -1317,13 +1346,50 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                           <span className="flex-shrink-0 text-[8px] leading-tight text-slate-500 whitespace-nowrap">(Sem registro de atualização)</span>
                         )}
                       </div>
-                      <span className="font-mono text-[11px] text-amber-200 flex-shrink-0">{formatKkValue(item.valueKk, "kk")}</span>
-                      <button type="button" onClick={() => { setDraft({ id: item.id, name: item.name, valueKk: String(item.valueKk) }); setDraftError(null); }} className="p-1 rounded text-sky-300 hover:bg-sky-500/15 transition-colors cursor-pointer flex-shrink-0" title="Editar">
-                        <Pencil size={12} />
-                      </button>
-                      <button type="button" onClick={() => removeItem(item.id)} className="p-1 rounded text-rose-300 hover:bg-rose-500/15 transition-colors cursor-pointer flex-shrink-0" title="Remover">
-                        <Trash2 size={12} />
-                      </button>
+                      {isEditing ? (
+                        <>
+                          {/* Valor em EDIÇÃO INLINE: input compacto no lugar do
+                              valor + ✓ salvar (verde) e ✗ cancelar (cinza) —
+                              mesmos ícones/cores dos demais confirmar/fechar
+                              do app. Enter salva, Esc cancela. */}
+                          <input
+                            type="text"
+                            inputMode="numeric"
+                            autoFocus
+                            value={inlineEdit.valueKk}
+                            onChange={event => { setInlineEdit(prev => (prev ? { ...prev, valueKk: sanitizeIntegerKk(event.target.value) } : prev)); setInlineEditError(null); }}
+                            onKeyDown={event => {
+                              if (event.key === "Enter") { event.preventDefault(); saveInlineEdit(); }
+                              if (event.key === "Escape") { event.preventDefault(); cancelInlineEdit(); }
+                            }}
+                            placeholder="Valor (kk)"
+                            title="Somente números inteiros (sem casas decimais). Enter salva, Esc cancela."
+                            className="h-7 w-20 flex-shrink-0 rounded-md border border-fuchsia-500/60 bg-black/35 px-1.5 text-right font-mono text-[11px] text-amber-200 outline-none focus:border-fuchsia-400"
+                          />
+                          <button type="button" onClick={saveInlineEdit} className="p-1 rounded text-emerald-300 hover:bg-emerald-500/15 transition-colors cursor-pointer flex-shrink-0" title="Salvar novo valor">
+                            <Check size={13} strokeWidth={3} />
+                          </button>
+                          <button type="button" onClick={cancelInlineEdit} className="p-1 rounded text-slate-400 hover:text-white hover:bg-white/10 transition-colors cursor-pointer flex-shrink-0" title="Cancelar edição">
+                            <X size={13} />
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          <span className="font-mono text-[11px] text-amber-200 flex-shrink-0">{formatKkValue(item.valueKk, "kk")}</span>
+                          <button type="button" onClick={() => startInlineEdit(item)} className="p-1 rounded text-sky-300 hover:bg-sky-500/15 transition-colors cursor-pointer flex-shrink-0" title="Editar valor nesta linha">
+                            <Pencil size={12} />
+                          </button>
+                          <button type="button" onClick={() => removeItem(item.id)} className="p-1 rounded text-rose-300 hover:bg-rose-500/15 transition-colors cursor-pointer flex-shrink-0" title="Remover">
+                            <Trash2 size={12} />
+                          </button>
+                        </>
+                      )}
+                    </div>
+                    {/* Erro de validação da edição inline — dentro da própria
+                        linha, compacto, mesmo tom dos erros do modal. */}
+                    {isEditing && inlineEditError && (
+                      <p role="alert" className="mt-1 text-[10px] font-medium text-rose-300">{inlineEditError}</p>
+                    )}
                     </div>
                     );
                   })}
