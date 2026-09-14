@@ -57,6 +57,27 @@ const ITEM_AMOUNT_KEYS = ['amount', 'count', 'quantity', 'stack', 'total'];
 /** Chaves que costumam carregar o TIER como campo separado. */
 const ITEM_TIER_KEYS = ['tier', 'upgradeTier', 'upgrade_tier', 'classificationTier'];
 
+/**
+ * Seções do payload que devem ser IGNORADAS por completo na contagem.
+ *
+ * `highlightItems` é a área de "itens destacados" que o proprietário da
+ * oferta escolhe exibir no topo da página. Confirmado com o JSON real da
+ * rota `/api/bazaar/{ID}` (leilão 283062): os itens dessa seção REPETEM
+ * entradas que já constam na lista normal `items[]` (ex.: "soulshell"
+ * tier 1 presente nas duas) — contá-los duplicava o valor do personagem.
+ * Regra do negócio: o item só conta quando aparece na lista normal; o
+ * destaque é apenas vitrine. `highlightAugments` é o complemento textual
+ * da mesma vitrine ("1189 Level" etc.) e é ignorado pelo mesmo motivo.
+ */
+const IGNORED_SECTION_KEYS = new Set(['highlightItems', 'highlightAugments']);
+
+/** Primeiro segmento do caminho gerado pelo walkJson ("a.b[0].c" -> "a"). */
+function pathRootSegment(path) {
+  const text = String(path || '');
+  const cut = text.search(/[.[]/);
+  return cut === -1 ? text : text.slice(0, cut);
+}
+
 function readNumericField(node, keys) {
   for (const key of keys) {
     const value = Number(node[key]);
@@ -80,6 +101,10 @@ function readNumericField(node, keys) {
  * exatamente a regra da Lista de Itens no renderer.
  *
  * Ocorrências idênticas (mesma chave base + tier + nome) são somadas.
+ *
+ * EXCLUSÃO: nós dentro das seções de DESTAQUE (`highlightItems`/
+ * `highlightAugments`) são pulados — são vitrine do proprietário e repetem
+ * itens que já constam na lista normal (ver IGNORED_SECTION_KEYS).
  */
 function collectItemMatches(payload, watchKeySet) {
   const found = new Map();
@@ -102,6 +127,11 @@ function collectItemMatches(payload, watchKeySet) {
   };
 
   walkJson(payload, (node, path) => {
+    // Seções de DESTAQUE ignoradas por inteiro: qualquer nó cujo caminho
+    // comece em "highlightItems"/"highlightAugments" não conta. O walkJson
+    // não permite podar a descida, então o corte é feito aqui, por caminho —
+    // vale para o nó raiz da seção e para todos os descendentes.
+    if (IGNORED_SECTION_KEYS.has(pathRootSegment(path))) return;
     if (typeof node === 'string') {
       // Somente elementos DIRETOS de arrays: o caminho termina em "[n]".
       if (/\]$/.test(path)) register(node, 0, 0);
