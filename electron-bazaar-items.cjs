@@ -477,6 +477,13 @@ function registerBazaarItemsMethod(deps) {
               extraPaths: extra.paths,
               soulwarCompleted: quests.soulwarCompleted,
               sanguineCompleted: quests.sanguineCompleted,
+              // ADITIVO: contadores de bosses das quests — a MESMA função
+              // (deriveQuestsFromApiPayload) já os calcula do MESMO payload;
+              // aqui apenas deixamos de descartá-los, para a guia Itens
+              // exibir o padrão "X/Y" idêntico ao da guia Quests. Nenhuma
+              // chamada extra ao site. Inconclusivo => undefined (omitido).
+              soulWarBossCount: quests.soulWarBossCount,
+              sanguineBossCount: quests.sanguineBossCount,
               fetchedAt: Date.now(),
             };
           } else {

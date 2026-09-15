@@ -22,7 +22,12 @@ import BazaarBrowserModal, { BAZAAR_BROWSER_KEY, BAZAAR_BROWSER_ORDER_KEY, BAZAA
 // única — nenhuma implementação paralela) e as MESMAS classes de célula
 // sticky do cabeçalho exportadas pelo BazarPanel (fonte única de estilo).
 import { FilterDateMax, FilterInline, FilterMulti, FilterNumber } from "./FilterTypes";
-import { STICKY_FILTER_CELL_CLASS, STICKY_HEAD_CELL_CLASS, closeRubinotBrowserFromRenderer, isAuctionVisibleWithEndedGrace } from "./BazarPanel";
+// `formatQuestStatus`/`isQuestSuspicious`/`QuestBossCounter` são OS MESMOS
+// helpers/componente das colunas SW/SG da guia Quests (fonte única — nenhuma
+// segunda implementação): as colunas SW/SG desta guia apenas os alimentam com
+// as quests já derivadas pela consulta de itens (mesmo payload, mesma função
+// do Electron — zero consultas extras).
+import { STICKY_FILTER_CELL_CLASS, STICKY_HEAD_CELL_CLASS, closeRubinotBrowserFromRenderer, formatQuestStatus, isAuctionVisibleWithEndedGrace, isQuestSuspicious, QuestBossCounter, type BazaarQuestStatusDetail } from "./BazarPanel";
 import type { BazaarRetryCounts, BazaarSpeedMode } from "./BazaarBrowserModal";
 import { loadUIState, loadNotifications } from "../storage";
 import { computeItemRC, formatKkValue as formatKkValueBase } from "../utils/itemSale";
@@ -57,6 +62,8 @@ import {
   buildWatchlistIndex,
   canonicalServerKey,
   collectAllWatchKeys,
+  effectiveTotalKk,
+  hasManualTotalKk,
   exportWatchlistByServerJson,
   exportWatchlistJson,
   getServerWatchedItems,
@@ -124,6 +131,9 @@ interface ItemsDetailsResult {
     /** Quests REAIS do payload (deriveQuestsFromApiPayload): true = feita. */
     soulwarCompleted?: boolean | null;
     sanguineCompleted?: boolean | null;
+    /** Contadores de bosses ("X/Y") — mesma função, mesmo payload. */
+    soulWarBossCount?: number;
+    sanguineBossCount?: number;
     error?: string;
   }>;
   analyzedCount?: number;
@@ -323,21 +333,31 @@ function saveItemsSelectedServer(value: string) {
   try { localStorage.setItem(ITEMS_SELECTED_SERVER_KEY, JSON.stringify(value)); } catch {}
 }
 
-/**
- * Valor EFETIVO do "Valor Itens (KK)" de um personagem: a correção MANUAL
- * (quando presente e válida) tem prioridade sobre o total calculado pela
- * consulta. Fonte única — exibição, filtros, ordenação e o cálculo de RC
- * passam todos por aqui.
- */
-function effectiveTotalKk(result: BazaarItemsCharacterResult): number {
-  const manual = Number(result.manualTotalKk);
-  return Number.isFinite(manual) && manual > 0 ? manual : result.totalKk;
-}
+// `effectiveTotalKk`/`hasManualTotalKk` moraram aqui até a integração
+// Quests↔Itens; foram PROMOVIDAS para `src/utils/bazaarWatchedItems.ts`
+// (fonte única) porque a guia Quests também precisa do MESMO valor efetivo
+// na coluna "Valor Itens (kk)" — nenhuma lógica paralela. A importação no
+// topo mantém todos os usos deste arquivo inalterados.
 
-/** true quando o personagem tem correção manual ativa no KK. */
-function hasManualTotalKk(result: BazaarItemsCharacterResult): boolean {
-  const manual = Number(result.manualTotalKk);
-  return Number.isFinite(manual) && manual > 0;
+// ── Colunas "SW"/"SG" ────────────────────────────────────────────────────────
+// Shape esperado pelos helpers de quest da guia Quests (formatQuestStatus /
+// isQuestSuspicious / QuestBossCounter), montado a partir do resultado da
+// consulta de ITENS — que já traz as quests derivadas do MESMO payload pela
+// MESMA função do Electron (deriveQuestsFromApiPayload). Consulta antiga
+// persistida SEM os campos de quest => undefined (a célula mostra "—",
+// nunca um resultado inventado).
+function questDetailFromItemsResult(result: BazaarItemsCharacterResult): BazaarQuestStatusDetail | undefined {
+  if (result.soulwarCompleted === undefined && result.sanguineCompleted === undefined) return undefined;
+  return {
+    soulwarCompleted: result.soulwarCompleted ?? null,
+    sanguineCompleted: result.sanguineCompleted ?? null,
+    // Contadores ausentes (consulta anterior ao campo ou payload inconclusivo)
+    // ficam undefined — o QuestBossCounter exibe "0/Y" apagado, como a guia
+    // Quests faz com detail sem contadores. Totais padrão (6/5) vêm do
+    // próprio helper getQuestBossCount — fonte única.
+    ...(typeof result.soulWarBossCount === "number" ? { soulWarBossCount: result.soulWarBossCount } : {}),
+    ...(typeof result.sanguineBossCount === "number" ? { sanguineBossCount: result.sanguineBossCount } : {}),
+  };
 }
 
 // ── Coluna "SKILLS" ──────────────────────────────────────────────────────────
@@ -1166,6 +1186,11 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
           // abre com o padrão (usuário confere).
           ...(detail.soulwarCompleted !== undefined ? { soulwarCompleted: detail.soulwarCompleted } : {}),
           ...(detail.sanguineCompleted !== undefined ? { sanguineCompleted: detail.sanguineCompleted } : {}),
+          // CONTADORES de bosses das quests — mesmos dados da MESMA função
+          // (deriveQuestsFromApiPayload) sobre o MESMO payload; alimentam o
+          // "X/Y" das colunas SW/SG desta guia (padrão da guia Quests).
+          ...(typeof detail.soulWarBossCount === "number" ? { soulWarBossCount: detail.soulWarBossCount } : {}),
+          ...(typeof detail.sanguineBossCount === "number" ? { sanguineBossCount: detail.sanguineBossCount } : {}),
           // Dados de EXIBIÇÃO da listagem no momento da consulta (valor do
           // personagem e encerramento) — nenhum efeito no cálculo dos itens.
           bid: Number(auction.bid || 0),
@@ -2098,6 +2123,14 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                 <SortHeader label="Valor Itens (RC)" column="rc" />
                 <SortHeader label="Potencial" column="potential" title="Percentual da oportunidade: (Valor Itens efetivo − valor do personagem) ÷ valor do personagem, na mesma unidade (kk, pela cotação do coin). Positivo (verde) = itens valem mais que o preço; negativo (vermelho) = personagem custa mais que os itens." />
                 <th className={`${STICKY_HEAD_CELL_CLASS} h-10 px-1 py-2 text-center align-middle leading-none`} title="Skills inteiras da página do leilão, conforme a vocação: EK = Axe/Club/Sword/Shield; RP = Dist/ML; ED e MS = ML; MK = Fist/ML.">Skills</th>
+                {/* SW/SG — disponibilidade das quests Soul War e Sanguine,
+                    derivada do MESMO payload desta consulta pela MESMA função
+                    da guia Quests (deriveQuestsFromApiPayload no Electron) e
+                    exibida pelos MESMOS helpers/componente (formatQuestStatus
+                    + QuestBossCounter importados do BazarPanel) — nenhuma
+                    consulta extra, nenhuma segunda implementação. */}
+                <th className={`${STICKY_HEAD_CELL_CLASS} h-10 px-1 py-2 text-center align-middle leading-none`} title="Quest Soul War — mesma verificação da guia Quests, derivada do payload desta própria consulta (sem consulta extra). Concl. = já feita (indisponível para o comprador); Disp. = disponível.">SW</th>
+                <th className={`${STICKY_HEAD_CELL_CLASS} h-10 px-1 py-2 text-center align-middle leading-none`} title="Quest Sanguine — mesma verificação da guia Quests, derivada do payload desta própria consulta (sem consulta extra). Concl. = já feita (indisponível para o comprador); Disp. = disponível.">SG</th>
                 <th className={`${STICKY_HEAD_CELL_CLASS} h-10 px-1 py-2 text-center align-middle leading-none`}>Detalhes</th>
                 <th className={`${STICKY_HEAD_CELL_CLASS} h-10 px-1 py-2 text-center align-middle leading-none`}>Tenho Interesse</th>
                 <th className={`${STICKY_HEAD_CELL_CLASS} h-10 px-1 py-2 text-center align-middle leading-none`}>Link</th>
@@ -2136,7 +2169,9 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                     negativos ("-20") para considerar também personagens com
                     percentual negativo (ex.: ≥ -20 ou ≤ -10). */}
                 <th className={`${STICKY_FILTER_CELL_CLASS} h-10 px-1 py-1.5 align-middle`}><div className="flex w-full items-center justify-center [&>button]:w-full [&>button]:max-w-[80px]"><FilterNumber label="Potencial (%)" value={tableFilters.potentialValue} operator={tableFilters.potentialOperator} onChange={(value, operator) => updateTableFilters({ potentialValue: value, potentialOperator: operator })} placeholder="%" allowNegative /></div></th>
-                {/* Skills e Detalhes: sem filtro próprio. */}
+                {/* Skills, SW, SG e Detalhes: sem filtro próprio. */}
+                <th className={`${STICKY_FILTER_CELL_CLASS} h-10 px-1 py-1.5 text-center align-middle text-[10px] text-slate-600`}>—</th>
+                <th className={`${STICKY_FILTER_CELL_CLASS} h-10 px-1 py-1.5 text-center align-middle text-[10px] text-slate-600`}>—</th>
                 <th className={`${STICKY_FILTER_CELL_CLASS} h-10 px-1 py-1.5 text-center align-middle text-[10px] text-slate-600`}>—</th>
                 <th className={`${STICKY_FILTER_CELL_CLASS} h-10 px-1 py-1.5 text-center align-middle text-[10px] text-slate-600`}>—</th>
                 <th className={`${STICKY_FILTER_CELL_CLASS} h-10 px-1 py-1.5 text-center align-middle`}>
@@ -2168,7 +2203,7 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                 // usuário não perca o acesso ao botão de limpar justamente
                 // quando os filtros não retornam resultados.
                 <tr>
-                  <td colSpan={12} className="px-4 py-10 text-center align-middle text-sm text-slate-500">
+                  <td colSpan={14} className="px-4 py-10 text-center align-middle text-sm text-slate-500">
                     <div className="flex flex-col items-center justify-center gap-3">
                       <span>Nenhum personagem encontrado para os filtros atuais.</span>
                       {hasActiveTableFilters && (
@@ -2407,6 +2442,32 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                       );
                     })()}
                   </td>
+                  {/* SW/SG — MESMOS helpers e MESMO componente da guia Quests
+                      (formatQuestStatus + QuestBossCounter importados do
+                      BazarPanel), alimentados pelas quests que ESTA consulta
+                      já derivou do próprio payload (mesma função do Electron
+                      — zero consultas extras). Consulta antiga sem o dado
+                      mostra "—". Cores idênticas às da guia Quests: Concl. =
+                      rose (indisponível p/ comprador), Disp. = emerald. */}
+                  {(["soulwarCompleted", "sanguineCompleted"] as const).map(questField => {
+                    const questDetail = questDetailFromItemsResult(result);
+                    const isSuspiciousQuest = isQuestSuspicious(questDetail, questField);
+                    const questValue = questDetail?.[questField];
+                    return (
+                      <td
+                        key={questField}
+                        className={`px-1 py-1.5 text-center align-middle text-[10px] ${isSuspiciousQuest ? "bg-rose-500/10 ring-1 ring-inset ring-rose-400/35" : ""} ${questValue === true ? "text-rose-300" : questValue === false ? "text-emerald-300" : "text-slate-500"}`}
+                        title={isSuspiciousQuest
+                          ? `${questField === "soulwarCompleted" ? "Soul War" : "Sanguine"} suspeita: contador de bosses muito próximo do total indica alta chance de quest indisponível.`
+                          : questDetail
+                            ? "Verificação feita nesta própria consulta de itens — mesma lógica da guia Quests, sem consulta extra."
+                            : "Consulta anterior à verificação de quests na guia Itens — refaça a consulta para obter este dado."}
+                      >
+                        <div className="font-bold">{formatQuestStatus(questDetail, questField, false)}</div>
+                        <QuestBossCounter detail={questDetail} field={questField} />
+                      </td>
+                    );
+                  })}
                   <td className="px-2 py-1.5 text-center">
                     {/* "Ver" com HISTÓRICO — mesmo mecanismo do botão Link
                         (open|opened|last, estado compartilhado do BazarPanel,

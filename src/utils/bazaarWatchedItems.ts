@@ -97,6 +97,15 @@ export interface BazaarItemsCharacterResult {
    */
   soulwarCompleted?: boolean | null;
   sanguineCompleted?: boolean | null;
+  /**
+   * CONTADORES de bosses das quests ("X/Y" da guia Quests) — calculados pela
+   * MESMA função (deriveQuestsFromApiPayload) a partir do MESMO payload da
+   * consulta de itens. Ausentes em consultas antigas (persistidas antes do
+   * campo existir) ou quando a resposta foi inconclusiva — nesse caso a
+   * exibição mostra o padrão sem contador, nunca um número inventado.
+   */
+  soulWarBossCount?: number;
+  sanguineBossCount?: number;
   /** Valor (bid) do personagem NO MOMENTO da consulta — só exibição. */
   bid?: number;
   /** Encerramento do leilão (s ou ms, normalizado na exibição) — só exibição. */
@@ -580,6 +589,37 @@ export function loadItemsLastQuery(): BazaarItemsLastQuery | null {
 
 export function saveItemsLastQuery(query: BazaarItemsLastQuery): void {
   saveUIState(BAZAAR_ITEMS_LAST_QUERY_KEY, query);
+  // AVISO LOCAL (mesma janela) de que a última consulta de itens mudou —
+  // a guia Quests usa este evento para manter a coluna "Valor Itens (kk)"
+  // em dia sem reler o localStorage a cada render (o evento "storage" do
+  // navegador NÃO dispara na própria janela que gravou). Nenhuma rede,
+  // nenhum Firestore — é um CustomEvent no próprio window.
+  try {
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent(BAZAAR_ITEMS_LAST_QUERY_UPDATED_EVENT));
+    }
+  } catch { /* ambiente sem window (testes) — gravação já feita acima */ }
+}
+
+/** Nome do evento local disparado sempre que a última consulta de itens é salva. */
+export const BAZAAR_ITEMS_LAST_QUERY_UPDATED_EVENT = "bazaar-items-last-query-updated";
+
+/**
+ * Valor EFETIVO do "Valor Itens (KK)" de um personagem: a correção MANUAL
+ * (quando presente e válida) tem prioridade sobre o total calculado pela
+ * consulta. FONTE ÚNICA — exibição, filtros, ordenação, cálculo de RC e a
+ * coluna "Valor Itens (kk)" da guia Quests passam todos por aqui (o painel
+ * de itens importa daqui; nenhuma lógica paralela).
+ */
+export function effectiveTotalKk(result: BazaarItemsCharacterResult): number {
+  const manual = Number(result.manualTotalKk);
+  return Number.isFinite(manual) && manual > 0 ? manual : result.totalKk;
+}
+
+/** true quando o personagem tem correção manual ativa no KK. */
+export function hasManualTotalKk(result: BazaarItemsCharacterResult): boolean {
+  const manual = Number(result.manualTotalKk);
+  return Number.isFinite(manual) && manual > 0;
 }
 
 // ============================================================================

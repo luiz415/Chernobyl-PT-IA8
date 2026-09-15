@@ -28,6 +28,29 @@ import { loadUIState, saveUIState, loadNotifications } from "../storage";
 import { SERVER_OPTIONS, normalizeServerName, serverKey } from "../constants/servers";
 import { computeUserPriority } from "../utils/bazaarUserPriority";
 import { collectBusyIdsForQuest } from "../utils/questEligibility";
+// ── Coluna "Valor Itens (kk)" (integração Quests↔Itens) ─────────────────────
+// A guia Quests REAPROVEITA a última consulta da guia Itens (persistida
+// LOCALMENTE em `rubinot_bazaar_items_last_query` — nunca Firestore): mesma
+// fonte, mesmos valores efetivos (effectiveTotalKk: correção manual >
+// calculado), mesma formatação kk (trimZeros). Cruzamento por auction.id
+// (mesmo id nas duas consultas) — nenhuma consulta nova ao site.
+import {
+  BAZAAR_ITEMS_LAST_QUERY_UPDATED_EVENT,
+  effectiveTotalKk,
+  hasManualTotalKk,
+  loadItemsLastQuery,
+  type BazaarItemsCharacterResult,
+  type BazaarItemsLastQuery,
+} from "../utils/bazaarWatchedItems";
+import { formatKkValue as formatKkValueBase } from "../utils/itemSale";
+
+/**
+ * Formatação de kk da coluna "Valor Itens (kk)" — MESMA regra da guia Itens:
+ * até 1 casa decimal, sem zeros à direita ("1,5kk", nunca "1,50kk").
+ */
+function formatItemsKk(value: number): string {
+  return formatKkValueBase(value, "kk", true);
+}
 
 interface BazaarAuction {
   id: string;
@@ -49,14 +72,25 @@ interface BazaarAuction {
   sanguineBossTotal?: number;
 }
 
-interface BazaarDetails {
-  id: string;
+/**
+ * SUBCONJUNTO estrutural de `BazaarDetails` com os campos que os helpers de
+ * exibição das quests (status "Concl./Disp./Indisp." + contador "X/Y")
+ * realmente usam. EXPORTADO para o BazaarItemsPanel: as colunas SW/SG da
+ * guia Itens montam este shape a partir do resultado da consulta de itens
+ * (que já deriva as quests pela MESMA função do Electron) e reutilizam os
+ * MESMOS helpers/componente daqui — nenhuma segunda implementação.
+ */
+export interface BazaarQuestStatusDetail {
   soulwarCompleted: boolean | null;
   sanguineCompleted: boolean | null;
   soulWarBossCount?: number;
   sanguineBossCount?: number;
   soulWarBossTotal?: number;
   sanguineBossTotal?: number;
+}
+
+interface BazaarDetails extends BazaarQuestStatusDetail {
+  id: string;
   fetchedAt: number;
   error?: string;
 }
@@ -864,8 +898,8 @@ function matchesQuestFilter(detail: BazaarDetails | undefined, filter: QuestFilt
  * e não "Indisp." (que sugeriria uma tentativa fracassada) nem "Disp." (que
  * seria inventar um resultado).
  */
-function formatQuestStatus(
-  detail: BazaarDetails | undefined,
+export function formatQuestStatus(
+  detail: BazaarQuestStatusDetail | undefined,
   field: "soulwarCompleted" | "sanguineCompleted",
   needsQuestDetails: boolean,
   questRequired = true,
@@ -877,18 +911,18 @@ function formatQuestStatus(
   return "Indisp.";
 }
 
-function getQuestBossCount(detail: BazaarDetails | undefined, field: "soulwarCompleted" | "sanguineCompleted") {
+function getQuestBossCount(detail: BazaarQuestStatusDetail | undefined, field: "soulwarCompleted" | "sanguineCompleted") {
   const current = field === "soulwarCompleted" ? detail?.soulWarBossCount : detail?.sanguineBossCount;
   const total = field === "soulwarCompleted" ? (detail?.soulWarBossTotal ?? 6) : (detail?.sanguineBossTotal ?? 5);
   return { current: Math.max(0, current ?? 0), total };
 }
 
-function formatQuestBossCount(detail: BazaarDetails | undefined, field: "soulwarCompleted" | "sanguineCompleted") {
+function formatQuestBossCount(detail: BazaarQuestStatusDetail | undefined, field: "soulwarCompleted" | "sanguineCompleted") {
   const { current, total } = getQuestBossCount(detail, field);
   return `${current}/${total}`;
 }
 
-function isQuestSuspicious(detail: BazaarDetails | undefined, field: "soulwarCompleted" | "sanguineCompleted"): boolean {
+export function isQuestSuspicious(detail: BazaarQuestStatusDetail | undefined, field: "soulwarCompleted" | "sanguineCompleted"): boolean {
   if (!detail) return false;
   // Quest não verificada (filtro em "Todas") não pode ser suspeita: não houve
   // apuração. `null` aqui significa ausência de dado, não um resultado ruim.
@@ -909,13 +943,13 @@ function isQuestSuspicious(detail: BazaarDetails | undefined, field: "soulwarCom
   return current >= minSuspicious && current <= total - 1;
 }
 
-function getQuestBossCountClass(detail: BazaarDetails | undefined, field: "soulwarCompleted" | "sanguineCompleted") {
+function getQuestBossCountClass(detail: BazaarQuestStatusDetail | undefined, field: "soulwarCompleted" | "sanguineCompleted") {
   if (isQuestSuspicious(detail, field)) return "font-mono text-[9px] font-black text-rose-200";
   const { current } = getQuestBossCount(detail, field);
   return current > 0 ? "font-mono text-[9px] font-black text-amber-300" : "font-mono text-[9px] text-slate-500";
 }
 
-function QuestBossCounter({ detail, field }: { detail: BazaarDetails | undefined; field: "soulwarCompleted" | "sanguineCompleted" }) {
+export function QuestBossCounter({ detail, field }: { detail: BazaarQuestStatusDetail | undefined; field: "soulwarCompleted" | "sanguineCompleted" }) {
   if (!detail) return <div className="font-mono text-[9px] text-slate-500">—</div>;
   const { current } = getQuestBossCount(detail, field);
   const hasBosses = current > 0;
@@ -1220,6 +1254,41 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
     if (showItemsMode) setItemsPanelMounted(true);
     if (!isBossUser || demoMode) { setItemsPanelMounted(false); setIsItemsQueryRunning(false); }
   }, [showItemsMode, isBossUser, demoMode]);
+  // ── Coluna "Valor Itens (kk)" — dados da ÚLTIMA consulta da guia Itens ────
+  // Fonte: `rubinot_bazaar_items_last_query` (local, gravada pela própria guia
+  // Itens — NUNCA Firestore, NUNCA nova consulta ao site). O estado é lido uma
+  // vez na montagem e atualizado por DOIS eventos, ambos locais:
+  //   • BAZAAR_ITEMS_LAST_QUERY_UPDATED_EVENT — a guia Itens salvou (mesma
+  //     janela: nova consulta, correção manual, reprecificação, Atualizar);
+  //   • "storage" — outra janela/aba gravou a chave.
+  // Zero leituras redundantes: nada de reler localStorage a cada render.
+  const [itemsLastQueryForQuests, setItemsLastQueryForQuests] = useState<BazaarItemsLastQuery | null>(() => loadItemsLastQuery());
+  useEffect(() => {
+    const refresh = () => setItemsLastQueryForQuests(loadItemsLastQuery());
+    const onStorage = (event: StorageEvent) => {
+      if (event.key && event.key !== "rubinot_bazaar_items_last_query") return;
+      refresh();
+    };
+    window.addEventListener(BAZAAR_ITEMS_LAST_QUERY_UPDATED_EVENT, refresh);
+    window.addEventListener("storage", onStorage);
+    return () => {
+      window.removeEventListener(BAZAAR_ITEMS_LAST_QUERY_UPDATED_EVENT, refresh);
+      window.removeEventListener("storage", onStorage);
+    };
+  }, []);
+  // Índice por ID DO LEILÃO (auction.id — o MESMO id nas duas consultas, que
+  // ambas usam como chave primária). Fallback para URL/nome apenas quando um
+  // dos lados não tem id — nunca matching por texto quando há id melhor.
+  const itemsResultByAuctionKey = useMemo(() => {
+    const map = new Map<string, BazaarItemsCharacterResult>();
+    for (const result of itemsLastQueryForQuests?.results || []) {
+      const key = String(result.id || result.url || result.name || "");
+      if (key) map.set(key, result);
+    }
+    return map;
+  }, [itemsLastQueryForQuests]);
+  // Modal SOMENTE INFORMATIVO do "Ver" da coluna "Valor Itens (kk)".
+  const [questsItemsDetailResult, setQuestsItemsDetailResult] = useState<BazaarItemsCharacterResult | null>(null);
   const needsQuestDetails = soulwarFilter !== "all" || sanguineFilter !== "all";
   // Quais quests os filtros atuais realmente exigem. Uma quest em "Todas" não
   // é consultada e a coluna correspondente mostra "Não verificado".
@@ -3734,7 +3803,7 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
           ) : (
             <table className="w-full min-w-[920px] table-fixed border-separate border-spacing-0 text-xs">
               {/* Distribuição responsiva (abordagem original restaurada):
-                  table-fixed + colgroup percentual — as 11 colunas de dados
+                  table-fixed + colgroup percentual — as 12 colunas de dados
                   redistribuem o espaço de forma dinâmica conforme a largura
                   da janela (proporções fixas, largura total aproveitada).
                   Única exceção: a coluna "#" tem largura FIXA mínima (w-9),
@@ -3751,10 +3820,12 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
                 <col className="w-[9%]" />
                 <col className="w-[9%]" />
                 <col className="w-[10%]" />
+                {/* Valor Itens (kk) — integração com a guia Itens. */}
+                <col className="w-[8%]" />
                 <col className="w-[5%]" />
                 <col className="w-[5%]" />
-                <col className="w-[16%]" />
-                <col className="w-[13%]" />
+                <col className="w-[11%]" />
+                <col className="w-[10%]" />
               </colgroup>
               <thead className="text-[10px] uppercase tracking-wider text-slate-400">
                 <tr>
@@ -3770,6 +3841,12 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
                   <SortHeader label="Servidor" column="server" />
                   <SortHeader label="Valor" column="bid" align="right" />
                   <SortHeader label="Encerra" column="auctionEndTs" />
+                  {/* VALOR ITENS (KK) — total dos itens monitorados deste
+                      personagem, vindo da ÚLTIMA consulta da guia Itens
+                      (mesmos valores/regras — effectiveTotalKk com correção
+                      manual prioritária; cruzamento pelo id do leilão).
+                      Sem consulta da guia Itens para este leilão => "—". */}
+                  <th className={`${STICKY_HEAD_CELL_CLASS} h-10 px-1 py-2 text-center align-middle leading-none`} title="Valor total dos itens monitorados encontrados para este personagem na última consulta da guia Itens (mesmos valores e regras de cálculo/Tier da guia Itens — nenhuma consulta extra). '—' = personagem sem itens na última consulta da guia Itens.">Valor Itens (kk)</th>
                   <th className={`${STICKY_HEAD_CELL_CLASS} h-10 px-1 py-2 text-center align-middle leading-none`}>SW</th>
                   <th className={`${STICKY_HEAD_CELL_CLASS} h-10 px-1 py-2 text-center align-middle leading-none`}>SG</th>
                   <th className={`${STICKY_HEAD_CELL_CLASS} h-10 px-1 py-2 text-center align-middle leading-none`}>Interessados</th>
@@ -3801,6 +3878,8 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
                   <th className={`${STICKY_FILTER_CELL_CLASS} h-10 px-1 py-1.5 align-middle`}><div className="flex w-full items-center justify-center [&>button]:w-full [&>button]:max-w-[96px]"><FilterMulti label="Servidor" options={tableServerOptions} selected={tableFilters.servers} onApply={values => updateTableFilters({ servers: values })} placeholder="Servidor" searchable /></div></th>
                   <th className={`${STICKY_FILTER_CELL_CLASS} h-10 px-1 py-1.5 align-middle`}><div className="flex w-full items-center justify-center [&>button]:w-full [&>button]:max-w-[80px]"><FilterNumber label="Valor" value={tableFilters.bidValue} operator={tableFilters.bidOperator} onChange={(value, operator) => updateTableFilters({ bidValue: value, bidOperator: operator })} placeholder="Valor" /></div></th>
                   <th className={`${STICKY_FILTER_CELL_CLASS} h-10 px-1 py-1.5 align-middle`}><div className="flex w-full items-center justify-center [&>div]:w-full [&>div]:max-w-[122px]"><FilterDateMax label="Encerra até" value={tableFilters.endUntil} onChange={value => updateTableFilters({ endUntil: value })} placeholder="Encerra" /></div></th>
+                  {/* Valor Itens (kk), SW e SG: sem filtro próprio. */}
+                  <th className={`${STICKY_FILTER_CELL_CLASS} h-10 px-1 py-1.5 text-center align-middle text-[10px] text-slate-600`}>—</th>
                   <th className={`${STICKY_FILTER_CELL_CLASS} h-10 px-1 py-1.5 text-center align-middle text-[10px] text-slate-600`}>—</th>
                   <th className={`${STICKY_FILTER_CELL_CLASS} h-10 px-1 py-1.5 text-center align-middle text-[10px] text-slate-600`}>—</th>
                   <th className={`${STICKY_FILTER_CELL_CLASS} h-10 px-1 py-1.5 text-center align-middle`}>
@@ -3835,7 +3914,7 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
                   // perderia o acesso ao botão de limpar justamente quando os filtros
                   // não retornam resultados.
                   <tr>
-                    <td colSpan={12} className="px-4 py-10 text-center align-middle text-sm text-slate-500">
+                    <td colSpan={13} className="px-4 py-10 text-center align-middle text-sm text-slate-500">
                       <div className="flex flex-col items-center justify-center gap-3">
                         <span>Nenhum personagem encontrado para os filtros atuais.</span>
                         {hasActiveTableFilters && (
@@ -3997,6 +4076,52 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
                           {formatAuctionEnd(auction.auctionEndTs, timezoneOffsetMinutes)}
                         </span>
                       </td>
+                      <td className="h-12 px-1 py-2 text-center align-middle">
+                        {/* VALOR ITENS (KK) — reaproveita a ÚLTIMA consulta da
+                            guia Itens (local): cruzamento pelo id do leilão
+                            (getAuctionKey === chave dos resultados de itens),
+                            valor EFETIVO pela MESMA função da guia Itens
+                            (effectiveTotalKk — correção manual prioritária) e
+                            MESMA formatação (trimZeros). "Ver" abre o modal
+                            SOMENTE INFORMATIVO (Item Encontrado + Total (KK)).
+                            Sem itens para este leilão => "—". */}
+                        {(() => {
+                          const itemsResult = itemsResultByAuctionKey.get(auctionKey);
+                          if (!itemsResult) {
+                            return (
+                              <span
+                                className="font-mono text-[10px] font-bold text-slate-600"
+                                title="Personagem sem itens monitorados na última consulta da guia Itens (ou ainda não consultado por ela)."
+                              >
+                                —
+                              </span>
+                            );
+                          }
+                          const itemsEffectiveKk = effectiveTotalKk(itemsResult);
+                          const itemsManualKk = hasManualTotalKk(itemsResult);
+                          return (
+                            <div className="flex flex-col items-center gap-0.5">
+                              <span
+                                className="font-mono text-[11px] font-black text-amber-200"
+                                title={itemsManualKk
+                                  ? `Valor corrigido manualmente na guia Itens (calculado pela consulta: ${formatItemsKk(itemsResult.totalKk)})`
+                                  : "Valor total dos itens monitorados — mesma regra de cálculo/Tier da guia Itens (última consulta)"}
+                              >
+                                {formatItemsKk(itemsEffectiveKk)}
+                                {itemsManualKk && <span className="ml-0.5 align-middle rounded border border-fuchsia-500/40 bg-fuchsia-500/15 px-1 py-px text-[7px] font-black uppercase tracking-wide text-fuchsia-300">manual</span>}
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => setQuestsItemsDetailResult(itemsResult)}
+                                title="Ver os itens encontrados para este personagem (somente leitura — Item Encontrado e Total (KK))"
+                                className="inline-flex items-center gap-1 rounded border border-fuchsia-500/30 bg-fuchsia-500/10 px-1.5 py-0.5 text-[9px] font-black text-fuchsia-300 hover:bg-fuchsia-500/20 transition-colors cursor-pointer"
+                              >
+                                Ver
+                              </button>
+                            </div>
+                          );
+                        })()}
+                      </td>
                       <td className={`h-12 px-1 py-2 text-center align-middle text-[10px] ${isSuspiciousSoulWar ? "bg-rose-500/10 ring-1 ring-inset ring-rose-400/35" : ""} ${detail?.soulwarCompleted === true ? "text-rose-300" : detail?.soulwarCompleted === false ? "text-emerald-300" : "text-slate-500"}`} title={isSuspiciousSoulWar ? "Soul War suspeita: 3/6 bosses encontrados indica alta chance de quest indisponível." : undefined}><div className="font-bold">{formatQuestStatus(detail, "soulwarCompleted", needsQuestDetails, soulwarRequired)}</div>{soulwarRequired && <QuestBossCounter detail={detail} field="soulwarCompleted" />}</td>
                       <td className={`h-12 px-1 py-2 text-center align-middle text-[10px] ${isSuspiciousSanguine ? "bg-rose-500/10 ring-1 ring-inset ring-rose-400/35" : ""} ${detail?.sanguineCompleted === true ? "text-rose-300" : detail?.sanguineCompleted === false ? "text-emerald-300" : "text-slate-500"}`} title={isSuspiciousSanguine ? "Sanguine suspeita: 2/5 bosses encontrados indica alta chance de quest indisponível." : undefined}><div className="font-bold">{formatQuestStatus(detail, "sanguineCompleted", needsQuestDetails, sanguineRequired)}</div>{sanguineRequired && <QuestBossCounter detail={detail} field="sanguineCompleted" />}</td>
                       <td className="h-10 px-1 py-1.5 text-center align-middle">
@@ -4093,7 +4218,7 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
                     </tr>
                     {isInlinePurchaseOpen && !isAlreadyAddedToPersonalList && inlinePurchaseDraft && (
                       <tr className="border-b border-emerald-500/20 bg-emerald-500/[0.035]">
-                        <td colSpan={12} className="px-2 py-2 sm:px-3">
+                        <td colSpan={13} className="px-2 py-2 sm:px-3">
                           <form
                             onSubmit={event => {
                               event.preventDefault();
@@ -4328,6 +4453,82 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
         onClose={() => setIsUsedFiltersOpen(false)}
         filters={officialMetadata?.filters || null}
       />
+
+      {/* ── Modal "Ver" da coluna "Valor Itens (kk)" — SOMENTE INFORMATIVO ──
+          Reutiliza o DESENHO do modal Detalhes da guia Itens em modo leitura:
+          NENHUMA ação de modificação (sem editar valor, sem valor base, sem
+          atualizar item, sem atualizar global) e SOMENTE as colunas "Item
+          Encontrado" e "Total (KK)". Os dados são os da última consulta da
+          guia Itens (locais) — nenhuma consulta nova, nenhum Firestore. */}
+      {questsItemsDetailResult && (
+        <div
+          className="app-modal-overlay fixed inset-0 z-[1200] flex items-center justify-center bg-black/70 backdrop-blur-sm"
+          onMouseDown={event => { if (event.target === event.currentTarget) setQuestsItemsDetailResult(null); }}
+        >
+          <div className="app-modal-frame w-full max-w-md max-h-[88vh] flex flex-col rounded-xl border border-fuchsia-500/30 bg-[var(--th-bg-raised)] shadow-2xl shadow-black/60 overflow-hidden">
+            <div className="flex-shrink-0 flex items-center justify-between gap-2 px-4 py-3 border-b border-[var(--th-line)]/40">
+              <div className="flex items-center gap-2 min-w-0">
+                <Package size={16} className="text-fuchsia-400 flex-shrink-0" />
+                <span className="text-sm font-bold text-fuchsia-300 truncate">{questsItemsDetailResult.name || "Personagem"}</span>
+                {questsItemsDetailResult.server && (
+                  <span className="inline-flex items-center gap-1 rounded border border-fuchsia-500/30 bg-fuchsia-500/10 px-1.5 py-0.5 text-[9px] font-black uppercase tracking-wide text-fuchsia-300 flex-shrink-0" title="Os valores vêm da Lista de Itens deste servidor (última consulta da guia Itens)">
+                    {questsItemsDetailResult.server}
+                  </span>
+                )}
+                <span className="inline-flex items-center rounded border border-white/15 bg-white/5 px-1.5 py-0.5 text-[9px] font-bold text-slate-400 flex-shrink-0" title="Exibição somente leitura — para editar valores, use o Detalhes da guia Itens">
+                  Somente leitura
+                </span>
+              </div>
+              <button type="button" onClick={() => setQuestsItemsDetailResult(null)} className="p-1 rounded text-slate-400 hover:text-white hover:bg-white/10 transition-colors cursor-pointer flex-shrink-0" title="Fechar">
+                <X size={15} />
+              </button>
+            </div>
+
+            <div className="flex-1 min-h-0 overflow-auto custom-scrollbar px-4 py-3 space-y-2">
+              <table className="w-full text-[10px]">
+                <thead>
+                  <tr className="text-[8px] uppercase tracking-wider text-slate-400 border-b border-[var(--th-line)]/40">
+                    {/* ÚNICAS colunas do requisito: Item Encontrado + Total (KK).
+                        Nada de edição/atualização/última atualização. */}
+                    <th className="px-1.5 py-1.5 text-left">Item Encontrado</th>
+                    <th className="px-1.5 py-1.5 text-right">Total (KK)</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {questsItemsDetailResult.matches.map((match, index) => (
+                    <tr key={`${match.foundName}-${index}`} className="border-b border-[var(--th-line)]/25">
+                      <td className="px-1.5 py-1.5 text-left font-bold text-slate-100">
+                        {match.foundName}
+                        {match.amount > 1 && <span className="ml-1 font-mono text-[9px] font-bold text-slate-400">×{match.amount}</span>}
+                      </td>
+                      <td className="px-1.5 py-1.5 text-right font-mono font-bold text-amber-200">{formatItemsKk(match.totalKk)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+
+              <div className="rounded-lg border border-fuchsia-500/25 bg-fuchsia-500/5 px-3 py-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px]">
+                <span className="text-slate-300">
+                  Total do personagem: <span className="font-mono font-bold text-amber-200">{formatItemsKk(effectiveTotalKk(questsItemsDetailResult))}</span>
+                  {hasManualTotalKk(questsItemsDetailResult) && (
+                    <span className="ml-1 rounded border border-fuchsia-500/40 bg-fuchsia-500/15 px-1 py-px text-[7px] font-black uppercase tracking-wide text-fuchsia-300" title={`Correção manual feita na guia Itens (calculado: ${formatItemsKk(questsItemsDetailResult.totalKk)})`}>
+                      manual
+                    </span>
+                  )}
+                </span>
+                {(questsItemsDetailResult.goldKk || 0) > 0 && (
+                  <span className="text-slate-300" title="Ouro lido na página do leilão, convertido para kk (1.000.000 gold = 1kk) e já somado ao total — uma única vez.">
+                    Inclui Ouro: <span className="font-mono font-bold text-yellow-300">{formatItemsKk(questsItemsDetailResult.goldKk || 0)}</span>
+                  </span>
+                )}
+                <span className="text-[9px] text-slate-500 basis-full">
+                  Dados da última consulta da guia Itens — nenhuma nova consulta. Para editar valores, use o Detalhes da guia Itens.
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Confirmação do "Concluir agora". Cancelar não faz NADA: a consulta
           segue rodando exatamente como estava, sem nenhum efeito colateral —
