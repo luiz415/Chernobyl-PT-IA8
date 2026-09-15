@@ -104,7 +104,7 @@ export default function CharacterBazaarItemsModal({ character, coinRate, onClose
                   <td className="px-1.5 py-1.5 text-right font-mono text-slate-200">{formatKkValue(match.baseValueKk, "kk")}</td>
                   <td className="px-1.5 py-1.5 text-center font-mono">
                     {match.tier > 0
-                      ? <span className="text-fuchsia-300 font-bold" title={`+${match.tier * 20}% sobre o valor base`}>{match.tier}</span>
+                      ? <span className="text-fuchsia-300 font-bold" title={`+${match.tier * 30}% sobre o valor base`}>{match.tier}</span>
                       : <span className="text-slate-600">—</span>}
                   </td>
                   <td className="px-1.5 py-1.5 text-right font-mono text-slate-200">{formatKkValue(match.unitValueKk, "kk")}</td>
@@ -137,7 +137,7 @@ export default function CharacterBazaarItemsModal({ character, coinRate, onClose
               <span className="text-slate-500">Informe o valor do coin na guia Bazaar → Itens para ver a conversão em RC.</span>
             )}
             <span className="text-[9px] text-slate-500 basis-full">
-              Tier: valor base × (1 + 0,2 × Tier). Conversão RC: floor((total ÷ coin) × 1000). Dados importados da consulta de origem — nenhuma nova consulta.
+              Tier: valor base × (1 + 0,3 × Tier). Conversão RC: floor((total ÷ coin) × 1000). Dados importados da consulta de origem — nenhuma nova consulta.
             </span>
           </div>
         </div>

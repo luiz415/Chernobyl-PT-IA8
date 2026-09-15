@@ -14,7 +14,7 @@
 //
 // O renderer envia a lista de nomes monitorados JÁ NORMALIZADOS (watchKeys) e
 // recebe de volta apenas os MATCHES brutos — nome encontrado, chave base,
-// Tier e quantidade. Todo o cálculo de valor (Tier +20%/nível, kk→RC) é feito
+// Tier e quantidade. Todo o cálculo de valor (Tier +30%/nível, kk→RC) é feito
 // no renderer, com as funções já existentes. Nada é persistido aqui.
 // ============================================================================
 

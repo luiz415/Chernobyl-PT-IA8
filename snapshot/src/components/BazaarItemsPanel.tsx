@@ -11,7 +11,7 @@
 //      fora do prazo nunca chegam ao navegador;
 //   3. `rubinot-bazaar-items-v2`: 1 fetch JSON por personagem elegível
 //      (exclusivamente API — sem método antigo página-a-página);
-//   4. casamento com a Lista de Itens + Tier (+20%/nível) + kk→RC locais.
+//   4. casamento com a Lista de Itens + Tier (+30%/nível) + kk→RC locais.
 // ============================================================================
 
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
@@ -45,6 +45,7 @@ import {
   formatDateTimeWithOffset,
   formatDuration,
   formatTimeZoneOffset,
+  getBazarEndUntilAtConfiguredTime,
   getDefaultBazarEndUntil,
   normalizeAuctionEndTimestamp,
   parseDateTimeLocalWithOffset,
@@ -1035,13 +1036,20 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
     retryBrowsers: string[];
     speedMode: BazaarSpeedMode;
     retryCounts: BazaarRetryCounts;
+    /**
+     * Filtro "Encerra até" calculado NO INSTANTE do disparo — usado pelo
+     * encadeamento do Auto-Bazaar (Quests → Itens), que roda sem interação
+     * e não pode depender do valor possivelmente antigo do input.
+     */
+    endUntilOverride?: string;
   }) {
     // Reconferência do gate: o painel nunca deveria estar montado sem Boss,
     // mas a restrição é REAL, não apenas visual. A guarda contra consulta de
     // QUESTS em andamento também é real — nunca duas consultas no navegador.
     if (!isBossUser || !isElectron || isRunning || isQuestsQueryRunning) return;
 
-    const endLimit = parseDateTimeLocalWithOffset(endUntil, timezoneOffsetMinutes);
+    const effectiveEndUntil = options.endUntilOverride || endUntil;
+    const endLimit = parseDateTimeLocalWithOffset(effectiveEndUntil, timezoneOffsetMinutes);
     if (!endLimit) { setError("Filtro de data inválido."); return; }
 
     const startedAt = Date.now();
@@ -1094,7 +1102,7 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
           analyzedCount: 0,
           failedCount: 0,
           stoppedManually: false,
-          endUntilLabel: endUntil,
+          endUntilLabel: effectiveEndUntil,
           results: [],
         };
         saveItemsLastQuery(summary);
@@ -1174,7 +1182,7 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
         analyzedCount: Number(detailsResponse.analyzedCount || 0),
         failedCount: Number(detailsResponse.failedCount || 0),
         stoppedManually: detailsResponse.stoppedManually === true,
-        endUntilLabel: endUntil,
+        endUntilLabel: effectiveEndUntil,
         results,
       };
       saveItemsLastQuery(summary);
@@ -1192,6 +1200,40 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
       setStatusText("");
     }
   }
+
+  // ── SEQUÊNCIA AUTO-BAZAAR: consulta de ITENS encadeada após as QUESTS ─────
+  // Disparada EXCLUSIVAMENTE pelo BazarPanel quando a consulta de Quests
+  // iniciada automaticamente pela notificação diária finaliza com sucesso
+  // (evento "auto-bazaar-items-run-request"). Consultas manuais de Quests ou
+  // de Itens nunca passam por aqui — o comportamento delas está intacto.
+  //
+  // O disparo reproduz o fluxo automático das quests: navegador e demais
+  // preferências salvas (mesmas chaves do modal), SEM abrir o seletor; o
+  // "Encerra até" é calculado NO INSTANTE do disparo com a MESMA regra do
+  // auto das quests (amanhã às 11:00 no fuso configurado). As guardas reais
+  // do executeItemsQuery (Boss/Electron/isRunning/isQuestsQueryRunning)
+  // continuam valendo — nada de consulta duplicada.
+  const autoItemsRunRef = useRef<() => void>(() => {});
+  autoItemsRunRef.current = () => {
+    if (!isBossUser || !isElectron || isRunning || isQuestsQueryRunning || isValueRefreshing) return;
+    if (totalWatchedCount === 0) return; // sem itens cadastrados: nada a consultar (silencioso — fluxo automático)
+    const autoEndUntil = getBazarEndUntilAtConfiguredTime(timezoneOffsetMinutes, 1, 11, 0);
+    setError(null);
+    void executeItemsQuery({
+      browserKey: loadUIState(BAZAAR_BROWSER_KEY, "webkit"),
+      browserOrder: loadUIState<string[]>(BAZAAR_BROWSER_ORDER_KEY, DEFAULT_BROWSER_ORDER),
+      cleanProfile: false,
+      retryBrowsers: loadUIState<string[]>(BAZAAR_RETRY_BROWSERS_KEY, []),
+      speedMode: loadUIState<BazaarSpeedMode>(BAZAAR_SPEED_MODE_KEY, "moderado"),
+      retryCounts: normalizeRetryCounts(loadUIState<BazaarRetryCounts | null>(BAZAAR_RETRY_COUNTS_KEY, null)),
+      endUntilOverride: autoEndUntil,
+    });
+  };
+  useEffect(() => {
+    const handleAutoItemsRun = () => autoItemsRunRef.current();
+    window.addEventListener("auto-bazaar-items-run-request", handleAutoItemsRun);
+    return () => window.removeEventListener("auto-bazaar-items-run-request", handleAutoItemsRun);
+  }, []);
 
   /**
    * ATUALIZAR VALORES — MESMA função/comportamento/lógica das QUESTS
@@ -1294,7 +1336,7 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
    * EDIÇÃO PELO MODAL "DETALHES": salva o novo valor BASE do item na Lista
    * de Itens do SERVIDOR do personagem visualizado (MESMA fonte de preço do
    * modal Lista de Itens — nenhuma tabela paralela) e reprecifica na hora os
-   * personagens DESSE servidor na última consulta (Tier +20%/nível e RC
+   * personagens DESSE servidor na última consulta (Tier +30%/nível e RC
    * derivam normalmente do novo valor). Outros servidores não mudam.
    */
   function saveDetailEdit() {
@@ -2527,7 +2569,7 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                 </div>
                 {draftError && <p role="alert" className="text-[10px] font-medium text-rose-300">{draftError}</p>}
                 <p className="text-[9px] text-slate-500 leading-relaxed">
-                  O valor cadastrado é a BASE do cálculo, em kk (aceita <strong className="text-slate-400">1 casa decimal</strong> — ex.: 1,5kk). Itens com <span className="font-mono text-slate-400">[Tier x]</span> no Bazaar valem +20% por nível de Tier sobre esta base.
+                  O valor cadastrado é a BASE do cálculo, em kk (aceita <strong className="text-slate-400">1 casa decimal</strong> — ex.: 1,5kk). Itens com <span className="font-mono text-slate-400">[Tier x]</span> no Bazaar valem +30% por nível de Tier sobre esta base.
                 </p>
               </form>
 
@@ -2915,7 +2957,7 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                       </td>
                       <td className="px-1.5 py-1.5 text-center font-mono">
                         {match.tier > 0
-                          ? <span className="text-fuchsia-300 font-bold" title={`+${match.tier * 20}% sobre o valor base`}>{match.tier}</span>
+                          ? <span className="text-fuchsia-300 font-bold" title={`+${match.tier * 30}% sobre o valor base`}>{match.tier}</span>
                           : <span className="text-slate-600">—</span>}
                       </td>
                       <td className="px-1.5 py-1.5 text-center font-mono text-slate-200">{match.amount}</td>
@@ -2923,7 +2965,7 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                         {/* TOTAL — apenas CALCULADO (base × Tier × quantidade).
                             Não há edição aqui: o total NUNCA alimenta a Lista
                             de Itens nem o botão "Atualizar". */}
-                        <span title={`base ${formatKkValue(match.baseValueKk, "kk")} × (1 + 0,2 × ${match.tier}) × ${match.amount} — somente leitura`}>{formatKkValue(match.totalKk, "kk")}</span>
+                        <span title={`base ${formatKkValue(match.baseValueKk, "kk")} × (1 + 0,3 × ${match.tier}) × ${match.amount} — somente leitura`}>{formatKkValue(match.totalKk, "kk")}</span>
                       </td>
                       <td className="px-1.5 py-1.5 text-center">
                         {/* ÚLTIMA ATUALIZAÇÃO — quando o VALOR deste item foi
@@ -3024,7 +3066,7 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                   <span className="text-slate-500">Informe o valor do coin no quadro para ver a conversão em RC.</span>
                 )}
                 <span className="text-[9px] text-slate-500 basis-full">
-                  Tier: valor base × (1 + 0,2 × Tier). Conversão RC: floor((total ÷ coin) × 1000).
+                  Tier: valor base × (1 + 0,3 × Tier). Conversão RC: floor((total ÷ coin) × 1000).
                 </span>
               </div>
             </div>

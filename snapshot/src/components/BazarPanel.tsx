@@ -1170,6 +1170,12 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
   const [checkingDetailsCount, setCheckingDetailsCount] = useState(0);
   const [currentUnixTs, setCurrentUnixTs] = useState(() => Math.floor(Date.now() / 1000));
   const autoBazaarNotificationInFlightRef = useRef<string | null>(null);
+  // SEQUÊNCIA AUTOMÁTICA DO AUTO-BAZAAR (Quests → Itens): marcado SOMENTE
+  // quando a consulta foi iniciada automaticamente pela NOTIFICAÇÃO DIÁRIA
+  // (source "daily-notification"). Consultas manuais, clique na notificação
+  // ou qualquer outra origem NUNCA ligam esta flag — e portanto nunca
+  // encadeiam a consulta de Itens.
+  const autoBazaarChainItemsRef = useRef<boolean>(false);
   const { currentUser, userProfile } = useAuth();
   // Esta é somente uma projeção visual da fonte de contas já existente no App.
   // Não há coleção/localStorage extra para o fluxo do Bazaar.
@@ -2504,7 +2510,27 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
       if (consultationSucceeded && autoBazaarNotificationInFlightRef.current) {
         window.dispatchEvent(new CustomEvent("auto-bazaar-success", { detail: { notificationId: autoBazaarNotificationInFlightRef.current } }));
       }
+      // ── SEQUÊNCIA AUTO-BAZAAR: Quests concluídas → Itens ────────────────
+      // Encadeia SOMENTE quando (a) a consulta nasceu automaticamente da
+      // notificação diária (flag ligada exclusivamente nesse caminho) e
+      // (b) as Quests finalizaram COM SUCESSO (cancelada/interrompida/
+      // falha ⇒ consultationSucceeded=false ⇒ nada é encadeado). O evento
+      // é disparado APÓS este finally zerar isLoading/isCheckingDetails —
+      // o mesmo atraso de 500ms do agendador diário garante que o guard
+      // anti-simultaneidade da guia Itens veja os estados já liberados.
+      const shouldChainItems = autoBazaarChainItemsRef.current && consultationSucceeded;
+      autoBazaarChainItemsRef.current = false;
       autoBazaarNotificationInFlightRef.current = null;
+      if (shouldChainItems) {
+        // Garante o LISTENER: o BazaarItemsPanel é montado sob demanda (1ª
+        // visita à guia). Montar aqui (oculto via CSS, sem trocar de guia)
+        // é o mesmo mecanismo do toggle — a consulta roda em segundo plano
+        // e o progresso aparece ao abrir a guia Itens.
+        setItemsPanelMounted(true);
+        window.setTimeout(() => {
+          window.dispatchEvent(new CustomEvent("auto-bazaar-items-run-request", { detail: { source: "auto-bazaar-chain" } }));
+        }, 500);
+      }
     }
   }
 
@@ -2514,6 +2540,11 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
       const notificationId = (event as CustomEvent).detail?.notificationId;
       if (!notificationId) return;
       autoBazaarNotificationInFlightRef.current = String(notificationId);
+      // Encadeamento Quests → Itens: EXCLUSIVO do início automático pela
+      // notificação diária ("daily-notification"). O clique manual na
+      // notificação ("notification-click") e qualquer outra origem mantêm
+      // o comportamento atual — sem segunda consulta.
+      autoBazaarChainItemsRef.current = (event as CustomEvent).detail?.source === "daily-notification";
       handleFetchBazaar({
         filtersOverride: {
           endUntil: getAutoBazarEndUntil(timezoneOffsetMinutes),

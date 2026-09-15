@@ -57,7 +57,7 @@ export interface CharacterItemMatch {
   watchedName: string;
   baseValueKk: number;
   tier: number;
-  /** Valor unitário após o Tier: base × (1 + 0.2 × tier). */
+  /** Valor unitário após o Tier: base × (1 + 0.3 × tier). */
   unitValueKk: number;
   amount: number;
   totalKk: number;
@@ -165,13 +165,13 @@ export function parseTieredItemName(raw: string): { baseName: string; tier: numb
   };
 }
 
-/** Regra de negócio do Tier: cada nível vale +20% sobre o valor base. */
+/** Regra de negócio do Tier: cada nível vale +30% sobre o valor base. */
 export function computeTieredValueKk(baseValueKk: number, tier: number): number {
   const base = Number(baseValueKk);
   const safeTier = Number.isFinite(tier) && tier > 0 ? Math.floor(tier) : 0;
   if (!Number.isFinite(base) || base <= 0) return 0;
-  // Duas casas bastam para kk e evitam ruído de ponto flutuante (ex.: 4.5 × 1.2).
-  return Math.round(base * (1 + 0.2 * safeTier) * 100) / 100;
+  // Duas casas bastam para kk e evitam ruído de ponto flutuante (ex.: 4.5 × 1.3).
+  return Math.round(base * (1 + 0.3 * safeTier) * 100) / 100;
 }
 
 /** Índice nome-normalizado -> item monitorado, para casamento O(1). */
@@ -357,7 +357,7 @@ export function collectAllWatchKeys(map: WatchedItemsByServer): string[] {
  * Reprecifica um item nos resultados persistidos da última consulta,
  * SOMENTE para os personagens do servidor indicado (edição pelo modal
  * "Detalhes"): matches do item ganham novo `baseValueKk`, o `unitValueKk`
- * é recalculado pela MESMA regra de Tier (+20%/nível) e os totais do
+ * é recalculado pela MESMA regra de Tier (+30%/nível) e os totais do
  * personagem são refeitos. Personagens de OUTROS servidores e correções
  * manuais (`manualTotalKk`) não são tocados.
  */
@@ -450,7 +450,7 @@ export function addWatchedItemToAllServers(
  * repriceQueryResultsForServerItem, com as MESMAS regras:
  *   • cada match usa o valor do item na lista do SERVIDOR do personagem
  *     (nunca preço de outro servidor);
- *   • Tier: base × (1 + 0,2 × tier), via computeTieredValueKk;
+ *   • Tier: base × (1 + 0,3 × tier), via computeTieredValueKk;
  *   • Ouro do personagem preservado e somado UMA única vez ao total;
  *   • `manualTotalKk` (correção manual) NUNCA é tocado — o cálculo
  *     automático é refeito por baixo, e a prioridade do manual permanece

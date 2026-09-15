@@ -189,7 +189,8 @@ function getAutoBazaarNotificationId(dateKey: string, targetMs: number): string 
 
 function getNextAutoBazaarTriggerMs(nowMs = Date.now(), offsetMinutes = readBazarTimezoneOffsetMinutesForAuto()): number {
   const shifted = new Date(nowMs + offsetMinutes * 60 * 1000);
-  const target = Date.UTC(shifted.getUTCFullYear(), shifted.getUTCMonth(), shifted.getUTCDate(), 10, 5, 0, 0) - offsetMinutes * 60 * 1000;
+  // Notificação diária do Bazaar: 10h10 no fuso configurado (era 10h05).
+  const target = Date.UTC(shifted.getUTCFullYear(), shifted.getUTCMonth(), shifted.getUTCDate(), 10, 10, 0, 0) - offsetMinutes * 60 * 1000;
   if (target <= nowMs) return target + 24 * 60 * 60 * 1000;
   return target;
 }
