@@ -56,6 +56,14 @@ import {
   parseDateTimeLocalWithOffset,
 } from "../utils/bazaarTime";
 import { openExternalUrl } from "../utils/openExternal";
+// PERSISTÊNCIA do "Valor Itens (KK)" na lista oficial (`bazaar/current`):
+// ao FINAL de cada consulta de itens, os totais/itens de cada personagem são
+// embutidos no próprio personagem da lista oficial — é assim que os demais
+// usuários (guia Quests) recebem o valor junto dos dados que já carregam,
+// sem leitura adicional por personagem. Os RESULTADOS COMPLETOS da consulta
+// continuam locais (`rubinot_bazaar_items_last_query`) — o publicado é a
+// forma mínima de exibição (foundName/tier/amount/totalKk).
+import { publishBazaarItemsValues, type OfficialBazaarItemMatch } from "../services/bazaarOfficialService";
 import {
   addWatchedItemToAllServers,
   buildCharacterMatches,
@@ -1049,6 +1057,47 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
     } catch {}
   }
 
+  /**
+   * PUBLICA os valores de itens da consulta recém-terminada DENTRO da lista
+   * oficial (`bazaar/current`), cruzando por auction.id. Fire-and-forget
+   * deliberado: a publicação é um ESPELHO para os demais usuários — uma
+   * falha (ex.: sem rede com o Firestore) NÃO invalida a consulta local,
+   * que já foi salva; o erro vira apenas um aviso no status. Sem itens
+   * encontrados a gravação TAMBÉM roda: ela LIMPA os valores da consulta
+   * anterior (personagem fora da consulta vigente nunca mantém valor velho).
+   */
+  async function publishItemsValuesToOfficialList(summary: BazaarItemsLastQuery): Promise<void> {
+    // Consulta interrompida manualmente: cobertura parcial — NÃO publica,
+    // para não apagar valores de personagens que nem chegaram a ser
+    // analisados. A próxima consulta completa republica tudo.
+    if (summary.stoppedManually) return;
+    try {
+      const valuesByAuctionId: Record<string, { totalKk: number; goldKk?: number; matches: OfficialBazaarItemMatch[]; checkedAtMs: number }> = {};
+      for (const result of summary.results) {
+        const id = String(result.id || "").trim();
+        if (!id) continue; // sem id confiável não há cruzamento seguro
+        valuesByAuctionId[id] = {
+          // SEMPRE o calculado da consulta — a correção manual é local ao
+          // dispositivo do Boss e não é publicada.
+          totalKk: Number(result.totalKk || 0),
+          ...(Number(result.goldKk || 0) > 0 ? { goldKk: Number(result.goldKk || 0) } : {}),
+          matches: (result.matches || []).map(match => ({
+            foundName: String(match.foundName || ""),
+            tier: Number(match.tier || 0),
+            amount: Number(match.amount || 0),
+            totalKk: Number(match.totalKk || 0),
+          })),
+          checkedAtMs: summary.completedAtMs,
+        };
+      }
+      await publishBazaarItemsValues(valuesByAuctionId);
+    } catch (err) {
+      // Aviso não bloqueante: a consulta local está íntegra; apenas o espelho
+      // para os demais usuários não foi atualizado desta vez.
+      setError(`Consulta concluída, mas não foi possível publicar os valores de itens para os demais usuários: ${String((err as Error)?.message || err)}`);
+    }
+  }
+
   async function executeItemsQuery(options: {
     browserKey: string;
     browserOrder: string[];
@@ -1127,6 +1176,9 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
         };
         saveItemsLastQuery(summary);
         setLastQuery(summary);
+        // Nenhum personagem elegível TAMBÉM publica: limpa da lista oficial
+        // os valores da consulta anterior (ninguém tem itens nesta).
+        await publishItemsValuesToOfficialList(summary);
         setStatusText("");
         return;
       }
@@ -1212,6 +1264,11 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
       };
       saveItemsLastQuery(summary);
       setLastQuery(summary);
+      // ESPELHO GLOBAL: embute os valores calculados na lista oficial
+      // (`bazaar/current`) para os demais usuários verem o "Valor Itens
+      // (KK)" na guia Quests — 1 transação, zero leituras por personagem.
+      // Falha aqui NÃO invalida a consulta local (aviso não bloqueante).
+      await publishItemsValuesToOfficialList(summary);
       setStatusText("");
     } catch (err) {
       setError(String((err as Error)?.message || err));

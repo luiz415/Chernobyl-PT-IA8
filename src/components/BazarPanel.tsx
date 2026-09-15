@@ -52,6 +52,67 @@ function formatItemsKk(value: number): string {
   return formatKkValueBase(value, "kk", true);
 }
 
+/**
+ * Dados exibidos pela coluna "Valor Itens (kk)" e pelo modal "Ver" — shape
+ * NEUTRO que unifica as DUAS fontes possíveis:
+ *   • LOCAL (dispositivo do Boss): última consulta da guia Itens
+ *     (`rubinot_bazaar_items_last_query`), que inclui a correção manual;
+ *   • EMBUTIDA (todos os usuários): campos `items*` gravados dentro de cada
+ *     personagem da lista oficial pela publicação da consulta de Itens.
+ * A LOCAL tem prioridade quando existe (é a mais fresca no dispositivo que
+ * rodou a consulta); nos demais dispositivos só a embutida existe.
+ */
+interface QuestsItemsDetailView {
+  name: string;
+  server: string;
+  matches: { foundName: string; tier: number; amount: number; totalKk: number }[];
+  /** Valor EFETIVO exibido (correção manual > calculado, quando fonte local). */
+  effectiveKk: number;
+  /** Valor CALCULADO pela consulta (para o tooltip quando há manual). */
+  calculatedKk: number;
+  isManual: boolean;
+  goldKk: number;
+}
+
+/** Constrói a view a partir do resultado LOCAL da guia Itens (Boss). */
+function itemsViewFromLocalResult(result: BazaarItemsCharacterResult): QuestsItemsDetailView {
+  return {
+    name: String(result.name || ""),
+    server: String(result.server || ""),
+    matches: (result.matches || []).map(match => ({
+      foundName: String(match.foundName || ""),
+      tier: Number(match.tier || 0),
+      amount: Number(match.amount || 0),
+      totalKk: Number(match.totalKk || 0),
+    })),
+    effectiveKk: effectiveTotalKk(result),
+    calculatedKk: Number(result.totalKk || 0),
+    isManual: hasManualTotalKk(result),
+    goldKk: Number(result.goldKk || 0),
+  };
+}
+
+/** Constrói a view a partir dos campos EMBUTIDOS na lista oficial. */
+function itemsViewFromAuction(auction: BazaarAuction): QuestsItemsDetailView | null {
+  if (typeof auction.itemsTotalKk !== "number" || !Array.isArray(auction.itemsMatches) || auction.itemsMatches.length === 0) return null;
+  return {
+    name: String(auction.name || ""),
+    server: String(auction.server || ""),
+    matches: auction.itemsMatches.map(match => ({
+      foundName: String(match.foundName || ""),
+      tier: Number(match.tier || 0),
+      amount: Number(match.amount || 0),
+      totalKk: Number(match.totalKk || 0),
+    })),
+    effectiveKk: Number(auction.itemsTotalKk || 0),
+    calculatedKk: Number(auction.itemsTotalKk || 0),
+    // A correção manual do Boss é local ao dispositivo dele — o publicado é
+    // sempre o valor calculado pela consulta.
+    isManual: false,
+    goldKk: Number(auction.itemsGoldKk || 0),
+  };
+}
+
 interface BazaarAuction {
   id: string;
   name: string;
@@ -70,6 +131,16 @@ interface BazaarAuction {
   sanguineBossCount?: number;
   soulWarBossTotal?: number;
   sanguineBossTotal?: number;
+  // ── VALOR ITENS (KK) EMBUTIDO NA LISTA OFICIAL ───────────────────────────
+  // Gravados pela publicação da consulta da guia Itens do Boss
+  // (publishBazaarItemsValues) DENTRO de cada personagem de `bazaar/current`
+  // — mesmo padrão das quests acima. Chegam a TODOS os usuários junto da
+  // lista que a tabela já carrega: zero leituras adicionais por personagem.
+  // Ausentes = personagem sem itens monitorados na última consulta de itens.
+  itemsTotalKk?: number;
+  itemsGoldKk?: number;
+  itemsMatches?: { foundName: string; tier: number; amount: number; totalKk: number }[];
+  itemsCheckedAtMs?: number;
 }
 
 /**
@@ -1288,7 +1359,11 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
     return map;
   }, [itemsLastQueryForQuests]);
   // Modal SOMENTE INFORMATIVO do "Ver" da coluna "Valor Itens (kk)".
-  const [questsItemsDetailResult, setQuestsItemsDetailResult] = useState<BazaarItemsCharacterResult | null>(null);
+  // Shape NEUTRO: alimentado tanto pela fonte LOCAL (última consulta da guia
+  // Itens — dispositivo do Boss, inclui correção manual) quanto pelos campos
+  // EMBUTIDOS na lista oficial (demais usuários) — os dois têm exatamente o
+  // que o modal exibe (Item encontrado | Tier | QTD | Total).
+  const [questsItemsDetailResult, setQuestsItemsDetailResult] = useState<QuestsItemsDetailView | null>(null);
   const needsQuestDetails = soulwarFilter !== "all" || sanguineFilter !== "all";
   // Quais quests os filtros atuais realmente exigem. Uma quest em "Todas" não
   // é consultada e a coluna correspondente mostra "Não verificado".
@@ -4077,43 +4152,44 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
                         </span>
                       </td>
                       <td className="h-12 px-1 py-2 text-center align-middle">
-                        {/* VALOR ITENS (KK) — reaproveita a ÚLTIMA consulta da
-                            guia Itens (local): cruzamento pelo id do leilão
-                            (getAuctionKey === chave dos resultados de itens),
-                            valor EFETIVO pela MESMA função da guia Itens
-                            (effectiveTotalKk — correção manual prioritária) e
-                            MESMA formatação (trimZeros). "Ver" abre o modal
-                            SOMENTE INFORMATIVO (Item Encontrado + Total (KK)).
-                            Sem itens para este leilão => "—". */}
+                        {/* VALOR ITENS (KK) — DUAS fontes, mesma exibição:
+                            1) LOCAL (dispositivo do Boss): última consulta da
+                               guia Itens (inclui correção manual, prioritária
+                               pela MESMA função effectiveTotalKk);
+                            2) EMBUTIDA (todos os usuários): campos `items*`
+                               gravados dentro do personagem da lista oficial
+                               pela publicação da consulta de Itens.
+                            Cruzamento pelo id do leilão nas duas. "Ver" abre
+                            o modal SOMENTE INFORMATIVO (Item encontrado |
+                            Tier | QTD | Total). Sem itens => "—". */}
                         {(() => {
-                          const itemsResult = itemsResultByAuctionKey.get(auctionKey);
-                          if (!itemsResult) {
+                          const localResult = itemsResultByAuctionKey.get(auctionKey);
+                          const itemsView = localResult ? itemsViewFromLocalResult(localResult) : itemsViewFromAuction(auction);
+                          if (!itemsView) {
                             return (
                               <span
                                 className="font-mono text-[10px] font-bold text-slate-600"
-                                title="Personagem sem itens monitorados na última consulta da guia Itens (ou ainda não consultado por ela)."
+                                title="Personagem sem itens monitorados na última consulta da guia Itens (ou consulta de itens ainda não realizada)."
                               >
                                 —
                               </span>
                             );
                           }
-                          const itemsEffectiveKk = effectiveTotalKk(itemsResult);
-                          const itemsManualKk = hasManualTotalKk(itemsResult);
                           return (
                             <div className="flex flex-col items-center gap-0.5">
                               <span
                                 className="font-mono text-[11px] font-black text-amber-200"
-                                title={itemsManualKk
-                                  ? `Valor corrigido manualmente na guia Itens (calculado pela consulta: ${formatItemsKk(itemsResult.totalKk)})`
+                                title={itemsView.isManual
+                                  ? `Valor corrigido manualmente na guia Itens (calculado pela consulta: ${formatItemsKk(itemsView.calculatedKk)})`
                                   : "Valor total dos itens monitorados — mesma regra de cálculo/Tier da guia Itens (última consulta)"}
                               >
-                                {formatItemsKk(itemsEffectiveKk)}
-                                {itemsManualKk && <span className="ml-0.5 align-middle rounded border border-fuchsia-500/40 bg-fuchsia-500/15 px-1 py-px text-[7px] font-black uppercase tracking-wide text-fuchsia-300">manual</span>}
+                                {formatItemsKk(itemsView.effectiveKk)}
+                                {itemsView.isManual && <span className="ml-0.5 align-middle rounded border border-fuchsia-500/40 bg-fuchsia-500/15 px-1 py-px text-[7px] font-black uppercase tracking-wide text-fuchsia-300">manual</span>}
                               </span>
                               <button
                                 type="button"
-                                onClick={() => setQuestsItemsDetailResult(itemsResult)}
-                                title="Ver os itens encontrados para este personagem (somente leitura — Item Encontrado e Total (KK))"
+                                onClick={() => setQuestsItemsDetailResult(itemsView)}
+                                title="Ver os itens encontrados para este personagem (somente leitura — Item encontrado | Tier | QTD | Total)"
                                 className="inline-flex items-center gap-1 rounded border border-fuchsia-500/30 bg-fuchsia-500/10 px-1.5 py-0.5 text-[9px] font-black text-fuchsia-300 hover:bg-fuchsia-500/20 transition-colors cursor-pointer"
                               >
                                 Ver
@@ -4457,15 +4533,16 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
       {/* ── Modal "Ver" da coluna "Valor Itens (kk)" — SOMENTE INFORMATIVO ──
           Reutiliza o DESENHO do modal Detalhes da guia Itens em modo leitura:
           NENHUMA ação de modificação (sem editar valor, sem valor base, sem
-          atualizar item, sem atualizar global) e SOMENTE as colunas "Item
-          Encontrado" e "Total (KK)". Os dados são os da última consulta da
-          guia Itens (locais) — nenhuma consulta nova, nenhum Firestore. */}
+          atualizar item, sem atualizar global) e SOMENTE as colunas
+          "Item encontrado | Tier | QTD | Total". Os dados vêm da última
+          consulta da guia Itens (local no Boss; embutidos na lista oficial
+          para os demais usuários) — nenhuma consulta nova por personagem. */}
       {questsItemsDetailResult && (
         <div
           className="app-modal-overlay fixed inset-0 z-[1200] flex items-center justify-center bg-black/70 backdrop-blur-sm"
           onMouseDown={event => { if (event.target === event.currentTarget) setQuestsItemsDetailResult(null); }}
         >
-          <div className="app-modal-frame w-full max-w-md max-h-[88vh] flex flex-col rounded-xl border border-fuchsia-500/30 bg-[var(--th-bg-raised)] shadow-2xl shadow-black/60 overflow-hidden">
+          <div className="app-modal-frame w-full max-w-lg max-h-[88vh] flex flex-col rounded-xl border border-fuchsia-500/30 bg-[var(--th-bg-raised)] shadow-2xl shadow-black/60 overflow-hidden">
             <div className="flex-shrink-0 flex items-center justify-between gap-2 px-4 py-3 border-b border-[var(--th-line)]/40">
               <div className="flex items-center gap-2 min-w-0">
                 <Package size={16} className="text-fuchsia-400 flex-shrink-0" />
@@ -4475,7 +4552,7 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
                     {questsItemsDetailResult.server}
                   </span>
                 )}
-                <span className="inline-flex items-center rounded border border-white/15 bg-white/5 px-1.5 py-0.5 text-[9px] font-bold text-slate-400 flex-shrink-0" title="Exibição somente leitura — para editar valores, use o Detalhes da guia Itens">
+                <span className="inline-flex items-center rounded border border-white/15 bg-white/5 px-1.5 py-0.5 text-[9px] font-bold text-slate-400 flex-shrink-0" title="Exibição somente leitura — para editar valores, use o Detalhes da guia Itens (somente Boss)">
                   Somente leitura
                 </span>
               </div>
@@ -4488,20 +4565,26 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
               <table className="w-full text-[10px]">
                 <thead>
                   <tr className="text-[8px] uppercase tracking-wider text-slate-400 border-b border-[var(--th-line)]/40">
-                    {/* ÚNICAS colunas do requisito: Item Encontrado + Total (KK).
-                        Nada de edição/atualização/última atualização. */}
-                    <th className="px-1.5 py-1.5 text-left">Item Encontrado</th>
-                    <th className="px-1.5 py-1.5 text-right">Total (KK)</th>
+                    {/* ÚNICAS colunas do requisito: Item encontrado | Tier |
+                        QTD | Total. Nada de edição/atualização/última
+                        atualização. */}
+                    <th className="px-1.5 py-1.5 text-left">Item encontrado</th>
+                    <th className="px-1.5 py-1.5 text-center">Tier</th>
+                    <th className="px-1.5 py-1.5 text-center">QTD</th>
+                    <th className="px-1.5 py-1.5 text-right">Total</th>
                   </tr>
                 </thead>
                 <tbody>
                   {questsItemsDetailResult.matches.map((match, index) => (
                     <tr key={`${match.foundName}-${index}`} className="border-b border-[var(--th-line)]/25">
-                      <td className="px-1.5 py-1.5 text-left font-bold text-slate-100">
-                        {match.foundName}
-                        {match.amount > 1 && <span className="ml-1 font-mono text-[9px] font-bold text-slate-400">×{match.amount}</span>}
+                      <td className="px-1.5 py-1.5 text-left font-bold text-slate-100">{match.foundName}</td>
+                      <td className="px-1.5 py-1.5 text-center font-mono">
+                        {match.tier > 0
+                          ? <span className="text-fuchsia-300 font-bold" title={`+${match.tier * 30}% sobre o valor base`}>{match.tier}</span>
+                          : <span className="text-slate-600">—</span>}
                       </td>
-                      <td className="px-1.5 py-1.5 text-right font-mono font-bold text-amber-200">{formatItemsKk(match.totalKk)}</td>
+                      <td className="px-1.5 py-1.5 text-center font-mono text-slate-200">{match.amount}</td>
+                      <td className="px-1.5 py-1.5 text-right font-mono font-bold text-amber-200" title="Total do item já com Tier e quantidade aplicados — mesma regra de cálculo da guia Itens">{formatItemsKk(match.totalKk)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -4509,20 +4592,20 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
 
               <div className="rounded-lg border border-fuchsia-500/25 bg-fuchsia-500/5 px-3 py-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px]">
                 <span className="text-slate-300">
-                  Total do personagem: <span className="font-mono font-bold text-amber-200">{formatItemsKk(effectiveTotalKk(questsItemsDetailResult))}</span>
-                  {hasManualTotalKk(questsItemsDetailResult) && (
-                    <span className="ml-1 rounded border border-fuchsia-500/40 bg-fuchsia-500/15 px-1 py-px text-[7px] font-black uppercase tracking-wide text-fuchsia-300" title={`Correção manual feita na guia Itens (calculado: ${formatItemsKk(questsItemsDetailResult.totalKk)})`}>
+                  Total do personagem: <span className="font-mono font-bold text-amber-200">{formatItemsKk(questsItemsDetailResult.effectiveKk)}</span>
+                  {questsItemsDetailResult.isManual && (
+                    <span className="ml-1 rounded border border-fuchsia-500/40 bg-fuchsia-500/15 px-1 py-px text-[7px] font-black uppercase tracking-wide text-fuchsia-300" title={`Correção manual feita na guia Itens (calculado: ${formatItemsKk(questsItemsDetailResult.calculatedKk)})`}>
                       manual
                     </span>
                   )}
                 </span>
-                {(questsItemsDetailResult.goldKk || 0) > 0 && (
+                {questsItemsDetailResult.goldKk > 0 && (
                   <span className="text-slate-300" title="Ouro lido na página do leilão, convertido para kk (1.000.000 gold = 1kk) e já somado ao total — uma única vez.">
-                    Inclui Ouro: <span className="font-mono font-bold text-yellow-300">{formatItemsKk(questsItemsDetailResult.goldKk || 0)}</span>
+                    Inclui Ouro: <span className="font-mono font-bold text-yellow-300">{formatItemsKk(questsItemsDetailResult.goldKk)}</span>
                   </span>
                 )}
                 <span className="text-[9px] text-slate-500 basis-full">
-                  Dados da última consulta da guia Itens — nenhuma nova consulta. Para editar valores, use o Detalhes da guia Itens.
+                  Dados da última consulta da guia Itens — nenhuma nova consulta. Tier: valor base × (1 + 0,3 × Tier) × quantidade.
                 </span>
               </div>
             </div>

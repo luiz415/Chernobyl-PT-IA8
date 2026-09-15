@@ -10,6 +10,20 @@ import {
 import { db } from "../firebase/config";
 import { normalizeServerName } from "../constants/servers";
 
+/**
+ * Item encontrado para um personagem, na forma MÍNIMA embutida na lista
+ * oficial (`bazaar/current`) — apenas o que a coluna "Valor Itens (KK)" e o
+ * modal "Ver" (Item encontrado | Tier | QTD | Total) precisam exibir. Os
+ * campos completos do match (valor base, item da lista etc.) permanecem
+ * SOMENTE no dispositivo do Boss (`rubinot_bazaar_items_last_query`).
+ */
+export interface OfficialBazaarItemMatch {
+  foundName: string;
+  tier: number;
+  amount: number;
+  totalKk: number;
+}
+
 export interface OfficialBazaarCharacter {
   id: string;
   name: string;
@@ -28,6 +42,21 @@ export interface OfficialBazaarCharacter {
   sanguineBossCount?: number;
   soulWarBossTotal?: number;
   sanguineBossTotal?: number;
+  // ── VALOR ITENS (KK) EMBUTIDO — mesmo padrão das quests acima ────────────
+  // Gravado por publishBazaarItemsValues quando a consulta da guia Itens do
+  // Boss termina: o valor viaja DENTRO do personagem da lista oficial, então
+  // qualquer usuário que já carregou a lista tem o dado — sem leitura extra
+  // por personagem, sem listener novo. Ausente = personagem sem itens
+  // monitorados na última consulta de itens (ou consulta ainda não feita).
+  // É SEMPRE o valor CALCULADO pela consulta (a correção manual do Boss é
+  // local ao dispositivo dele e não é publicada).
+  itemsTotalKk?: number;
+  /** Parcela de ouro (kk) já somada em itemsTotalKk — só exibição. */
+  itemsGoldKk?: number;
+  /** Itens encontrados (forma mínima para o modal "Ver"). */
+  itemsMatches?: OfficialBazaarItemMatch[];
+  /** Quando a consulta de itens que gerou estes valores terminou. */
+  itemsCheckedAtMs?: number;
 }
 
 export interface OfficialBazaarMetadata {
@@ -64,6 +93,16 @@ export interface OfficialBazaarMetadata {
    * Limitado a 50 entradas para nao inflar o documento.
    */
   failedCharacterList?: { id: string; name: string; url: string }[];
+  /**
+   * Carimbo da ÚLTIMA gravação dos valores de itens embutidos na lista
+   * oficial (publishBazaarItemsValues). O sync compara este campo para saber
+   * que precisa reler `bazaar/current` MESMO quando a `version` não mudou —
+   * é o que faz o "Valor Itens (KK)" chegar aos demais usuários pelo polling
+   * que já existe, sem listener novo e sem invalidar os interesses (a
+   * `version` permanece a mesma). Ausente/0 = nenhum valor de itens gravado
+   * nesta versão da lista.
+   */
+  itemsValuesUpdatedAtMs?: number;
 }
 
 export interface OfficialBazaarCache {
@@ -460,6 +499,92 @@ export async function publishOfficialBazaarList(params: {
   return { metadata, interestsCleared: true, interests: {} };
 }
 
+/**
+ * PERSISTE os valores de itens da última consulta da guia ITENS DENTRO da
+ * lista oficial (`bazaar/current`), personagem a personagem, cruzando pelo
+ * id do leilão — a MESMA chave usada pelas duas consultas.
+ *
+ * Por que embutir (e não coleção/documento separado): a lista oficial é a
+ * estrutura que TODOS os usuários já carregam (1 leitura de `bazaar/current`
+ * pelo polling existente). Com o valor DENTRO do personagem, o "Valor Itens
+ * (KK)" chega junto dos dados que a tabela já exibe — zero leituras
+ * adicionais por personagem, zero listeners novos. É o mesmo padrão já usado
+ * para as quests (soulwarCompleted/sanguineCompleted embutidos).
+ *
+ * SEMÂNTICA: os valores gravados espelham EXATAMENTE a última consulta de
+ * itens — personagem presente nos resultados recebe os campos; personagem
+ * AUSENTE tem os campos removidos (não tem itens monitorados na consulta
+ * vigente; nunca fica valor obsoleto de uma consulta anterior).
+ *
+ * A `version` da lista NÃO muda (não é uma lista nova — os interesses e o
+ * overlay de valores continuam válidos). O que muda é o carimbo
+ * `itemsValuesUpdatedAtMs` nos metadados: é ele que faz o
+ * syncOfficialBazaarList dos demais dispositivos reler `bazaar/current`
+ * dentro do polling que já existe.
+ *
+ * Transação (2 escritas): lista + metadados — atômico; se falhar, nada muda.
+ * Somente Boss (regras do Firestore já restringem a escrita em `bazaar/*`).
+ */
+export async function publishBazaarItemsValues(valuesByAuctionId: Record<string, {
+  totalKk: number;
+  goldKk?: number;
+  matches: OfficialBazaarItemMatch[];
+  checkedAtMs: number;
+}>): Promise<{ updatedCharacters: number; itemsValuesUpdatedAtMs: number } | null> {
+  if (!db) return null;
+  const stampMs = now();
+  let updatedCharacters = 0;
+  let mergedCharacters: OfficialBazaarCharacter[] = [];
+  let mergedVersion = "";
+
+  const currentRef = doc(db, "bazaar", "current");
+  const metadataRef = doc(db, "bazaar", "metadata");
+  await runTransaction(db, async tx => {
+    const currentSnap = await tx.get(currentRef);
+    if (!currentSnap.exists()) throw new Error("Lista oficial do Bazaar não encontrada — publique a consulta de Quests antes.");
+    const current = currentSnap.data() as any;
+    mergedVersion = String(current.version || "");
+    updatedCharacters = 0;
+    const characters = Array.isArray(current.characters) ? current.characters : [];
+    mergedCharacters = characters.map((raw: OfficialBazaarCharacter) => {
+      // Remove SEMPRE os campos de itens antigos: personagem fora da consulta
+      // vigente volta a "sem itens" (nunca um valor obsoleto).
+      const { itemsTotalKk: _t, itemsGoldKk: _g, itemsMatches: _i, itemsCheckedAtMs: _c, ...character } = raw as any;
+      const values = valuesByAuctionId[String(character.id || "")];
+      if (!values) return character as OfficialBazaarCharacter;
+      updatedCharacters += 1;
+      return {
+        ...character,
+        itemsTotalKk: values.totalKk,
+        // Firestore não aceita `undefined`: campos opcionais só entram quando
+        // existem de fato.
+        ...(typeof values.goldKk === "number" && values.goldKk > 0 ? { itemsGoldKk: values.goldKk } : {}),
+        itemsMatches: values.matches.map(match => ({
+          foundName: String(match.foundName || ""),
+          tier: Number(match.tier || 0),
+          amount: Number(match.amount || 0),
+          totalKk: Number(match.totalKk || 0),
+        })),
+        itemsCheckedAtMs: values.checkedAtMs,
+      } as OfficialBazaarCharacter;
+    });
+    tx.set(currentRef, { ...current, characters: mergedCharacters, updatedAt: serverTimestamp() });
+    tx.set(metadataRef, { itemsValuesUpdatedAtMs: stampMs, updatedAt: serverTimestamp() }, { merge: true });
+  });
+
+  // Cache local do publicador reflete a gravação na hora (sem releitura).
+  const local = readOfficialBazaarCache();
+  if (local && local.version === mergedVersion) {
+    saveOfficialBazaarCache({
+      ...local,
+      metadata: { ...local.metadata, itemsValuesUpdatedAtMs: stampMs },
+      characters: mergedCharacters.map(character => ({ ...character, server: normalizeServerName(character.server) })),
+      loadedAtMs: now(),
+    });
+  }
+  return { updatedCharacters, itemsValuesUpdatedAtMs: stampMs };
+}
+
 export async function syncOfficialBazaarList(options: { force?: boolean } = {}): Promise<{ cache: OfficialBazaarCache | null; changed: boolean; skipped: boolean; error?: string }> {
   const local = readOfficialBazaarCache();
   if (!db) return { cache: local, changed: false, skipped: true, error: "Firestore indisponível." };
@@ -470,7 +595,16 @@ export async function syncOfficialBazaarList(options: { force?: boolean } = {}):
     writeNumber(METADATA_CHECK_KEY, now());
     if (!metadataSnap.exists()) return { cache: local, changed: false, skipped: false };
     const metadata = metadataSnap.data() as OfficialBazaarMetadata;
-    if (local && local.version === metadata.version) return { cache: { ...local, metadata }, changed: false, skipped: false };
+    // MESMA versão da lista: normalmente não há o que reler. EXCEÇÃO: os
+    // valores de itens embutidos mudaram (itemsValuesUpdatedAtMs diferente do
+    // cache local) — a lista é a mesma, mas `bazaar/current` foi atualizado
+    // pela publicação da consulta de ITENS; relê para o "Valor Itens (KK)"
+    // chegar a este dispositivo. Sem essa exceção, o dado só chegaria na
+    // próxima rotação diária.
+    if (local && local.version === metadata.version
+      && Number(local.metadata?.itemsValuesUpdatedAtMs || 0) === Number(metadata.itemsValuesUpdatedAtMs || 0)) {
+      return { cache: { ...local, metadata }, changed: false, skipped: false };
+    }
 
     const currentSnap = await getDoc(doc(db, "bazaar", "current"));
     if (!currentSnap.exists()) return { cache: local, changed: false, skipped: false, error: "Lista oficial não encontrada." };
