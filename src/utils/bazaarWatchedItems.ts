@@ -389,6 +389,110 @@ export function repriceQueryResultsForServerItem(
 }
 
 /**
+ * "ADICIONAR ITEM" DO MODAL LISTA DE ITENS — cria o item na lista de TODOS
+ * os servidores de uma só vez (o usuário não precisa cadastrar o mesmo item
+ * servidor por servidor). Regras:
+ *   • universo de servidores = lista oficial (`serverUniverse`) ∪ servidores
+ *     que JÁ possuem lista no mapa (dados antigos nunca ficam de fora);
+ *   • servidor onde o item JÁ existe permanece INTACTO — valor e data de
+ *     atualização preservados (cada servidor mantém o próprio preço);
+ *   • servidor sem o item recebe uma cópia com o valor informado e ids
+ *     próprios (nunca compartilhados entre servidores);
+ *   • sem duplicação: o casamento é por nome normalizado
+ *     (normalizeWatchedItemName), a MESMA chave usada pela consulta;
+ *   • se o item já existir em todos os servidores, devolve o MESMO mapa
+ *     (referência) e `addedServers` vazio — nada é gravado.
+ */
+export function addWatchedItemToAllServers(
+  map: WatchedItemsByServer,
+  serverUniverse: readonly string[],
+  name: string,
+  valueKk: number,
+  nowMs: number,
+): { map: WatchedItemsByServer; addedServers: string[] } {
+  const trimmedName = String(name || "").trim();
+  const nameKey = normalizeWatchedItemName(trimmedName);
+  if (!nameKey) return { map, addedServers: [] };
+  // Universo: servidores oficiais + qualquer servidor já presente no mapa.
+  const servers: string[] = [];
+  const seen = new Set<string>();
+  for (const server of serverUniverse || []) {
+    const key = canonicalServerKey(server);
+    if (key && !seen.has(key)) { seen.add(key); servers.push(key); }
+  }
+  for (const server of Object.keys(map || {})) {
+    const key = canonicalServerKey(server);
+    if (key && !seen.has(key)) { seen.add(key); servers.push(key); }
+  }
+  const next: WatchedItemsByServer = { ...map };
+  const addedServers: string[] = [];
+  for (const server of servers) {
+    const items = next[server] || [];
+    if (items.some(item => normalizeWatchedItemName(item.name) === nameKey)) continue;
+    next[server] = [
+      ...items,
+      {
+        id: `wi_${nowMs.toString(36)}_${Math.random().toString(36).slice(2, 7)}`,
+        name: trimmedName,
+        valueKk,
+        updatedAtMs: nowMs,
+      },
+    ];
+    addedServers.push(server);
+  }
+  return addedServers.length > 0 ? { map: next, addedServers } : { map, addedServers };
+}
+
+/**
+ * BOTÃO "ATUALIZAR" DA GUIA ITENS — reprecifica TODOS os personagens da
+ * última consulta com os preços ATUAIS das Listas de Itens (por servidor),
+ * 100% localmente. É a versão "consulta inteira" do
+ * repriceQueryResultsForServerItem, com as MESMAS regras:
+ *   • cada match usa o valor do item na lista do SERVIDOR do personagem
+ *     (nunca preço de outro servidor);
+ *   • Tier: base × (1 + 0,2 × tier), via computeTieredValueKk;
+ *   • Ouro do personagem preservado e somado UMA única vez ao total;
+ *   • `manualTotalKk` (correção manual) NUNCA é tocado — o cálculo
+ *     automático é refeito por baixo, e a prioridade do manual permanece
+ *     com a regra de exibição existente (effectiveTotalKk);
+ *   • item que saiu da lista do servidor: o match mantém o snapshot da
+ *     consulta (não zera nem inventa preço);
+ *   • dados brutos da consulta (nome, tier, quantidade, bid, encerramento)
+ *     intactos — só os campos de valor derivados mudam;
+ *   • nada mudou ⇒ devolve o MESMO array (referência), sinalizando ao
+ *     chamador que nenhuma persistência é necessária.
+ */
+export function repriceAllQueryResults(
+  results: BazaarItemsCharacterResult[],
+  map: WatchedItemsByServer,
+): { results: BazaarItemsCharacterResult[]; changedCount: number } {
+  let changedCount = 0;
+  const out = (Array.isArray(results) ? results : []).map(result => {
+    const serverItems = getServerWatchedItems(map, canonicalServerKey(String(result.server || "")));
+    if (serverItems.length === 0) return result;
+    const index = buildWatchlistIndex(serverItems);
+    let touched = false;
+    const matches = (result.matches || []).map(match => {
+      const watched = index.get(normalizeWatchedItemName(match.watchedName));
+      if (!watched || watched.valueKk === match.baseValueKk) return match;
+      touched = true;
+      const unitValueKk = computeTieredValueKk(watched.valueKk, match.tier);
+      const totalKk = Math.round(unitValueKk * match.amount * 100) / 100;
+      return { ...match, baseValueKk: watched.valueKk, unitValueKk, totalKk };
+    });
+    if (!touched) return result;
+    changedCount += 1;
+    // Total = matches reprecificados + parcela de OURO (independente de
+    // preço de item — preservada, nunca duplicada). Mesma fórmula do
+    // repriceQueryResultsForServerItem.
+    const goldKk = Number.isFinite(result.goldKk) && (result.goldKk || 0) > 0 ? (result.goldKk as number) : 0;
+    const totalKk = Math.round((matches.reduce((sum, item) => sum + item.totalKk, 0) + goldKk) * 100) / 100;
+    return { ...result, matches, totalKk };
+  });
+  return changedCount > 0 ? { results: out, changedCount } : { results, changedCount: 0 };
+}
+
+/**
  * "ATUALIZAR" DO MODAL DETALHES — propaga o valor de UM item para TODAS as
  * listas de servidores. Regras de eficiência (as listas são 100% locais —
  * localStorage —, mas o princípio de "só gravar o necessário" vale igual):

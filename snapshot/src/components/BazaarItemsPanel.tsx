@@ -16,7 +16,7 @@
 
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { AlertTriangle, ArrowDown, ArrowDownUp, ArrowUp, Check, Coins, Copy, Download, ExternalLink, Eye, FlagTriangleRight, Globe, ListChecks, Package, Pencil, Plus, RefreshCw, RotateCcw, Search, Sparkles, Square, Star, Trash2, Upload, X } from "lucide-react";
+import { AlertTriangle, ArrowDown, ArrowDownUp, ArrowUp, Calculator, Check, Coins, Copy, Download, ExternalLink, Eye, FlagTriangleRight, Globe, ListChecks, Package, Pencil, Plus, RefreshCw, RotateCcw, Search, Sparkles, Square, Star, Trash2, Upload, X } from "lucide-react";
 import BazaarBrowserModal, { BAZAAR_BROWSER_KEY, BAZAAR_BROWSER_ORDER_KEY, BAZAAR_RETRY_BROWSERS_KEY, BAZAAR_RETRY_COUNTS_KEY, BAZAAR_SPEED_MODE_KEY, DEFAULT_BROWSER_ORDER, normalizeRetryCounts } from "./BazaarBrowserModal";
 // Mesmos componentes de filtro da tabela de QUESTS (FilterTypes é a fonte
 // única — nenhuma implementação paralela) e as MESMAS classes de célula
@@ -51,6 +51,7 @@ import {
 } from "../utils/bazaarTime";
 import { openExternalUrl } from "../utils/openExternal";
 import {
+  addWatchedItemToAllServers,
   buildCharacterMatches,
   buildWatchlistIndex,
   canonicalServerKey,
@@ -66,6 +67,7 @@ import {
   normalizeWatchedItemName,
   parseWatchlistImportAny,
   propagateWatchedItemValueToAllServers,
+  repriceAllQueryResults,
   repriceQueryResultsForServerItem,
   saveItemsCoinRate,
   saveItemsInterests,
@@ -510,6 +512,13 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
   const [isValueRefreshing, setIsValueRefreshing] = useState(false);
   const [valueRefreshStatus, setValueRefreshStatus] = useState("");
 
+  // ── Botão "Atualizar" — reprecificação 100% LOCAL da última consulta ──────
+  // Feedback (3s) de quantos personagens tiveram valores recalculados com os
+  // preços atuais das Listas de Itens. SEM atualização automática contínua:
+  // o recálculo roda SOMENTE no clique (requisito explícito).
+  const [repriceFeedback, setRepriceFeedback] = useState<string | null>(null);
+  const repriceFeedbackTimerRef = useRef<number | null>(null);
+
   // ── Edição MANUAL do "Valor Itens (KK)" — modal por personagem ────────────
   const [kkEdit, setKkEdit] = useState<{ auctionKey: string; value: string } | null>(null);
 
@@ -532,6 +541,7 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
   useEffect(() => () => {
     if (detailApplyTimerRef.current !== null) window.clearTimeout(detailApplyTimerRef.current);
     if (listApplyTimerRef.current !== null) window.clearTimeout(listApplyTimerRef.current);
+    if (repriceFeedbackTimerRef.current !== null) window.clearTimeout(repriceFeedbackTimerRef.current);
   }, []);
 
   function updateTableFilters(patch: Partial<ItemsTableFilters>) {
@@ -826,7 +836,16 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
     setWatchedByServer(map);
   }
 
-  /** Formulário superior — EXCLUSIVO para ADICIONAR novos itens. */
+  /**
+   * Formulário superior — EXCLUSIVO para ADICIONAR novos itens.
+   *
+   * O item é criado de uma vez na lista de TODOS os servidores (oficiais +
+   * quaisquer servidores extras já presentes no mapa) com o valor informado
+   * como valor inicial — o usuário não cadastra servidor por servidor.
+   * Servidores onde o item JÁ existe permanecem intactos (cada servidor
+   * mantém o próprio preço; nada é sobrescrito) e o casamento por nome
+   * normalizado evita duplicação.
+   */
   function submitDraft() {
     const name = draft.name.trim();
     // Valores em kk aceitam UMA casa decimal (ex.: 1,5). O input já limita o
@@ -838,7 +857,10 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
     const duplicated = watchedItems.some(item => normalizeWatchedItemName(item.name) === key);
     if (duplicated) { setDraftError("Este item já está na lista."); return; }
     const now = Date.now();
-    persistItems([...watchedItems, { id: `wi_${now.toString(36)}_${Math.random().toString(36).slice(2, 7)}`, name, valueKk, updatedAtMs: now }]);
+    const { map, addedServers } = addWatchedItemToAllServers(watchedByServer, SERVER_OPTIONS, name, valueKk, now);
+    if (addedServers.length === 0) { setDraftError("Este item já está na lista de todos os servidores."); return; }
+    // Uma única gravação do mapa completo (mesma chave/formato de sempre).
+    persistAllServerItems(map);
     setDraft(EMPTY_DRAFT);
     setDraftError(null);
   }
@@ -1341,11 +1363,23 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
    * ter sido removido da lista depois da consulta.
    */
   function resolveDetailBaseValueKk(match: CharacterItemMatch): number {
-    if (!detailResult) return match.baseValueKk;
+    const listed = resolveDetailListedItem(match);
+    return listed ? listed.valueKk : match.baseValueKk;
+  }
+
+  /**
+   * Item da LISTA DE ITENS do servidor do personagem correspondente a um
+   * match do modal Detalhes (casamento por nome normalizado). Fonte da
+   * coluna "Última Atualização": `updatedAtMs` é o timestamp REAL da última
+   * alteração de VALOR na lista daquele servidor (a mesma regra "data só
+   * muda se o valor mudou" da edição) — nunca a data da consulta nem a de
+   * inclusão do personagem. `null` = item não está mais na lista.
+   */
+  function resolveDetailListedItem(match: CharacterItemMatch): WatchedItem | null {
+    if (!detailResult) return null;
     const serverItems = getServerWatchedItems(watchedByServer, canonicalServerKey(String(detailResult.server || "")));
     const nameKey = normalizeWatchedItemName(match.watchedName);
-    const listed = serverItems.find(item => normalizeWatchedItemName(item.name) === nameKey);
-    return listed ? listed.valueKk : match.baseValueKk;
+    return serverItems.find(item => normalizeWatchedItemName(item.name) === nameKey) || null;
   }
 
   function applyDetailGlobalValue(matchIndex: number) {
@@ -1397,6 +1431,48 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
       }
     }
     return { changedServers };
+  }
+
+  /**
+   * BOTÃO "ATUALIZAR" (quadro Última Consulta) — recalcula TODOS os
+   * personagens da última consulta com os preços ATUAIS das Listas de Itens.
+   * 100% local e SOMENTE no clique (nenhuma atualização automática contínua):
+   *   • NÃO executa o script de consulta do Bazaar — só reprocessa os dados
+   *     já obtidos (matches/tier/quantidade/ouro intactos);
+   *   • preço aplicado = o do servidor de CADA personagem (nunca fallback);
+   *   • KK/RC/Potencial e demais campos derivados atualizam sozinhos: todos
+   *     partem de totalKk/effectiveTotalKk, recalculados aqui;
+   *   • correções manuais (`manualTotalKk`) preservadas — prioridade de
+   *     exibição continua com a regra existente;
+   *   • nada mudou ⇒ nenhuma persistência (o helper devolve a MESMA
+   *     referência); zero Firestore em qualquer caso.
+   */
+  function handleRepriceFromLists() {
+    if (!lastQuery || lastQuery.results.length === 0) {
+      setError("Não há consulta de itens carregada para atualizar.");
+      return;
+    }
+    setError(null);
+    const { results: repriced, changedCount } = repriceAllQueryResults(lastQuery.results, watchedByServer);
+    if (changedCount > 0) {
+      const updated: BazaarItemsLastQuery = { ...lastQuery, results: repriced };
+      saveItemsLastQuery(updated);
+      setLastQuery(updated);
+      // Modal Detalhes aberto: reflete os números novos sem fechar/reabrir.
+      if (detailResult) {
+        const detailKey = detailResult.id || detailResult.url || detailResult.name;
+        const refreshed = repriced.find(result => (result.id || result.url || result.name) === detailKey);
+        if (refreshed) setDetailResult(refreshed);
+      }
+    }
+    setRepriceFeedback(changedCount > 0
+      ? `${changedCount} personagem(ns) recalculado(s) com os preços atuais.`
+      : "Todos os personagens já estavam com os preços atuais.");
+    if (repriceFeedbackTimerRef.current !== null) window.clearTimeout(repriceFeedbackTimerRef.current);
+    repriceFeedbackTimerRef.current = window.setTimeout(() => {
+      setRepriceFeedback(null);
+      repriceFeedbackTimerRef.current = null;
+    }, 3000);
   }
 
   /**
@@ -1834,6 +1910,29 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
           {valueRefreshStatus && (
             <span className="max-w-[260px] text-[8px] font-bold leading-tight text-sky-300/80" role="status">
               {valueRefreshStatus}
+            </span>
+          )}
+
+          {/* ATUALIZAR — recálculo 100% LOCAL com os preços atuais das
+              Listas de Itens (por servidor). NÃO refaz a consulta ao Bazaar
+              (diferente do "Atualizar Valores", que relê a listagem para
+              atualizar bids): apenas reprocessa os personagens já carregados
+              — KK, RC, Potencial e demais campos derivados. Roda SOMENTE no
+              clique (sem recálculo automático contínuo). */}
+          {lastQuery && lastQuery.results.length > 0 && (
+            <button
+              type="button"
+              onClick={handleRepriceFromLists}
+              disabled={isRunning}
+              className="inline-flex h-7 items-center justify-center gap-1 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-2.5 text-[10px] font-black text-emerald-300 hover:bg-emerald-500/20 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+              title="Recalcula os personagens da última consulta com os preços ATUAIS da Lista de Itens de cada servidor — localmente, sem nova consulta ao Bazaar"
+            >
+              <Calculator size={11} /> Atualizar
+            </button>
+          )}
+          {repriceFeedback && (
+            <span className="max-w-[300px] text-[8px] font-bold leading-tight text-emerald-300/90" role="status">
+              {repriceFeedback}
             </span>
           )}
 
@@ -2723,6 +2822,7 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                     <th className="px-1.5 py-1.5 text-center">Tier</th>
                     <th className="px-1.5 py-1.5 text-center">Qtd</th>
                     <th className="px-1.5 py-1.5 text-right">Total (kk)</th>
+                    <th className="px-1.5 py-1.5 text-center">Última Atualização</th>
                     <th className="px-1.5 py-1.5 text-center">Atualizar</th>
                   </tr>
                 </thead>
@@ -2737,7 +2837,11 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                     // Valor BASE oficial da linha — o da Lista de Itens do
                     // servidor (o snapshot da consulta é só fallback). É o
                     // ÚNICO valor que o "Atualizar" propaga.
-                    const rowBaseValueKk = resolveDetailBaseValueKk(match);
+                    // Item na Lista de Itens do servidor: dá o valor BASE
+                    // oficial da linha e o timestamp da última alteração de
+                    // VALOR (coluna "Última Atualização").
+                    const rowListedItem = resolveDetailListedItem(match);
+                    const rowBaseValueKk = rowListedItem ? rowListedItem.valueKk : match.baseValueKk;
                     return (
                     <Fragment key={`${match.foundName}-${index}`}>
                     <tr className={`border-b border-[var(--th-line)]/25 ${isEditingMatch ? "bg-fuchsia-500/5" : ""} ${isConfirmingApply ? "!border-b-0 bg-amber-500/5" : ""}`}>
@@ -2822,6 +2926,22 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                         <span title={`base ${formatKkValue(match.baseValueKk, "kk")} × (1 + 0,2 × ${match.tier}) × ${match.amount} — somente leitura`}>{formatKkValue(match.totalKk, "kk")}</span>
                       </td>
                       <td className="px-1.5 py-1.5 text-center">
+                        {/* ÚLTIMA ATUALIZAÇÃO — quando o VALOR deste item foi
+                            modificado pela última vez na Lista de Itens
+                            DESTE servidor (timestamp real gravado na edição:
+                            a data só muda quando o valor muda). NÃO é a data
+                            da consulta nem a de inclusão do personagem. Item
+                            legado sem registro (ou removido da lista) mostra
+                            "—" — nunca uma data inventada. */}
+                        {rowListedItem?.updatedAtMs ? (
+                          <span className="font-mono text-[9px] leading-tight text-amber-300 whitespace-nowrap" title={`Última alteração do valor de "${match.watchedName}" na Lista de Itens de ${detailResult.server}`}>
+                            {formatItemUpdatedAt(rowListedItem.updatedAtMs, timezoneOffsetMinutes)}
+                          </span>
+                        ) : (
+                          <span className="text-slate-600" title={rowListedItem ? "Sem registro de atualização do valor" : "Item não está mais na Lista de Itens deste servidor"}>—</span>
+                        )}
+                      </td>
+                      <td className="px-1.5 py-1.5 text-center">
                         {/* "ATUALIZAR" — propaga o valor BASE atual deste item
                             para TODAS as listas de servidores. O 1º clique
                             NUNCA aplica: abre a confirmação inline abaixo da
@@ -2851,7 +2971,7 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                         GLOBAL da ação. Confirmar aplica; Cancelar descarta. */}
                     {isConfirmingApply && (
                       <tr className="border-b border-[var(--th-line)]/25 bg-amber-500/5">
-                        <td colSpan={6} className="px-1.5 pb-1.5 pt-0">
+                        <td colSpan={7} className="px-1.5 pb-1.5 pt-0">
                           <div className="flex flex-wrap items-center justify-end gap-x-2 gap-y-1 rounded-md border border-amber-400/30 bg-amber-500/10 px-2 py-1">
                             <AlertTriangle size={10} className="flex-shrink-0 text-amber-300" />
                             <span className="text-[9px] font-bold text-amber-200">
