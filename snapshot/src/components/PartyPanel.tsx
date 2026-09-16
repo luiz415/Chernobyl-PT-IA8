@@ -4018,7 +4018,34 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
                         ) : (
                           <>{lbl}{isCustom ? " ✦" : ""}</>
                         )}
-                        {isServiceMember && <span className="ml-1 px-1 py-0.5 rounded bg-cyan-900/30 text-cyan-400 text-[10px] font-mono border border-cyan-800/50" title="Personagem adicionado da Lista de Espera (Service)">Service</span>}
+                        {/* BADGE DA COLUNA CONTA — regra VISUAL apenas (a
+                            classificação interna `isService`/`isServiceMember`
+                            e a contabilização de +1 Service NÃO mudam):
+                              • Externo (isCustom): SEM badge — o rótulo
+                                "Ext<N> ✦" acima já identifica; internamente
+                                continua Service para todas as regras.
+                              • Service com Serviceiro definido: "Service (Nome)".
+                              • Service sem Serviceiro ("Qualquer um"/vazio ou
+                                registro vivo já removido): "Service (n/a)".
+                            O Serviceiro vem do DADO JÁ EXISTENTE
+                            `liveService.addedBy` (mesma fonte de
+                            canViewServiceClientWhats), via isServiceOpenToAnyone
+                            — nenhum campo novo no banco. */}
+                        {isServiceMember && !isCustom && (() => {
+                          const serviceiroName = (liveService && !isServiceOpenToAnyone(liveService))
+                            ? (liveService.addedBy || "").trim()
+                            : "";
+                          return (
+                            <span
+                              className="ml-1 px-1 py-0.5 rounded bg-cyan-900/30 text-cyan-400 text-[10px] font-mono border border-cyan-800/50"
+                              title={serviceiroName
+                                ? `Personagem adicionado da Lista de Espera (Service) — Serviceiro designado: ${serviceiroName}`
+                                : "Personagem adicionado da Lista de Espera (Service) — sem Serviceiro específico designado"}
+                            >
+                              Service ({serviceiroName || "n/a"})
+                            </span>
+                          );
+                        })()}
                         {isDupAcc && <span className="text-amber-400" title="Mesma conta">⚠</span>}
                       </span>
                     </td>
