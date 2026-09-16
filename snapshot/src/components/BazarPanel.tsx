@@ -2568,8 +2568,11 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
 
       // ═══ ETAPA DE ITENS — integração Quests+Itens ═══════════════════════
       // TODA consulta de Quests (manual e Auto-Bazaar, método antigo e novo)
-      // consulta também os ITENS dos personagens APROVADOS pelos filtros
-      // (`finalAuctions` — nunca os descartados). Mecanismo 100% reutilizado:
+      // consulta também os ITENS dos personagens aprovados pelos filtros da
+      // API (data/servidor/vocação/level/valor — `apiFilteredAuctions`).
+      // A disponibilidade de QUEST não descarta ninguém desta etapa: SW/SG
+      // são INFORMAÇÃO das colunas da guia Itens, não critério de inclusão
+      // (ver `itemsStepAuctions` abaixo). Mecanismo 100% reutilizado:
       //   • canal `rubinot-bazaar-items-v2` (o MESMO da guia Itens) — mesma
       //     sessão/navegador já aberto pela listagem (fila global do
       //     Electron), 1 fetch JSON por personagem, zero navegador extra;
@@ -2594,18 +2597,29 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
       // MESMA semântica do publishBazaarItemsValues da guia Itens.
       let itemsStepCheckedAtMs = 0;
       const itemsEmbeddedByAuctionId = new Map<string, Pick<BazaarAuction, "itemsTotalKk" | "itemsGoldKk" | "itemsMatches" | "itemsCheckedAtMs">>();
+      // ── CONJUNTO ANALISADO PELA ETAPA DE ITENS ──────────────────────────
+      // `apiFilteredAuctions` (PRÉ-filtro de quest), NÃO `finalAuctions`
+      // (pós-filtro). A disponibilidade de SW/SG é INFORMAÇÃO exibida nas
+      // colunas da guia Itens — nunca critério de descarte: um personagem
+      // com item monitorado aparece na guia Itens mesmo sem nenhuma Quest
+      // disponível. Os demais filtros da consulta (data/servidor/vocação/
+      // level/valor) continuam valendo, e a LISTA OFICIAL das Quests segue
+      // sendo `finalAuctions` (o filtro de quest dela está intacto) — os
+      // personagens analisados aqui além dela existem SOMENTE no resultado
+      // local da guia Itens.
+      const itemsStepAuctions = apiFilteredAuctions;
       // Encerramento manual DURANTE as quests: interrupção existente — a
       // etapa de itens nem inicia (o pedido de parada seguiria valendo e a
       // análise encerraria no 1º personagem; pular evita o custo à toa).
-      if (finalAuctions.length > 0 && !stoppedManuallyRun) {
+      if (itemsStepAuctions.length > 0 && !stoppedManuallyRun) {
         const watchedByServerNow = loadWatchedItemsByServer();
         const watchKeys = collectAllWatchKeys(watchedByServerNow);
         if (watchKeys.length > 0) {
           setQueryStatus("Analisando itens dos personagens aprovados...");
           setIsCheckingDetails(true);
-          setCheckingDetailsCount(finalAuctions.length);
+          setCheckingDetailsCount(itemsStepAuctions.length);
           const itemsStartedAt = Date.now();
-          const itemsResponse = await ipcRenderer.invoke("rubinot-bazaar-items-v2", finalAuctions, {
+          const itemsResponse = await ipcRenderer.invoke("rubinot-bazaar-items-v2", itemsStepAuctions, {
             watchKeys,
             // Progresso pertence à GUIA QUESTS (etapa desta consulta) — a
             // guia Itens não exibe nada desta execução.
@@ -2630,7 +2644,12 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
               return index;
             };
             const itemsResults: BazaarItemsCharacterResult[] = [];
-            for (const auction of finalAuctions) {
+            // Itera o conjunto PRÉ-filtro de quest: personagem com item
+            // monitorado entra nos resultados da guia Itens mesmo com SW/SG
+            // indisponíveis (as quests viram INFORMAÇÃO das colunas SW/SG,
+            // preenchidas logo abaixo a partir do MESMO payload — nunca
+            // critério de exclusão).
+            for (const auction of itemsStepAuctions) {
               const key = auction.id || auction.name || auction.url;
               const detail = key ? itemsResponse.details?.[key] : null;
               if (!detail || detail.error || !Array.isArray(detail.matches) || detail.matches.length === 0) continue;
@@ -2668,7 +2687,7 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
               completedAtMs: itemsCompletedAtMs,
               durationMs: Number(itemsResponse.totalDurationMs || (itemsCompletedAtMs - itemsStartedAt)),
               listedCount: Array.isArray(response.auctions) ? response.auctions.length : 0,
-              eligibleCount: finalAuctions.length,
+              eligibleCount: itemsStepAuctions.length,
               analyzedCount: Number(itemsResponse.analyzedCount || 0),
               failedCount: Number(itemsResponse.failedCount || 0),
               stoppedManually: itemsResponse.stoppedManually === true,
@@ -2701,7 +2720,7 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
               // estavam completas — a lista NÃO vira parcial por isso; só os
               // personagens analisados carregam valores de itens.
               itemsStepNotice = "A etapa de itens foi encerrada manualmente: "
-                + `${itemsSummary.analyzedCount} de ${finalAuctions.length} personagem(ns) tiveram os itens analisados. `
+                + `${itemsSummary.analyzedCount} de ${itemsStepAuctions.length} personagem(ns) tiveram os itens analisados. `
                 + "Os demais ficam sem valor de itens nesta consulta.";
             }
           }
