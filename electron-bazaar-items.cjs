@@ -398,6 +398,16 @@ function registerBazaarItemsMethod(deps) {
         .map(key => normalizeItemName(key))
         .filter(Boolean),
     );
+    // ── GUIA DONA do progresso desta execução ───────────────────────────────
+    // 'itens' (padrão, comportamento original): consulta disparada pela GUIA
+    // ITENS — o progresso aparece só lá. 'quests': a MESMA análise rodando
+    // como ETAPA da consulta de QUESTS (integração Quests+Itens) — o
+    // progresso aparece na guia Quests ("analisando itens") e a guia Itens o
+    // ignora. Parâmetro apenas de EXIBIÇÃO: a análise em si é idêntica.
+    const progressScope = options?.progressScope === 'quests' ? 'quests' : 'itens';
+    const progressMessage = progressScope === 'quests'
+      ? 'Analisando itens dos personagens aprovados...'
+      : 'Itens: consultando personagens via API...';
 
     return runQueued('bazaar-items-v2', async () => {
       const startedAt = Date.now();
@@ -437,11 +447,13 @@ function registerBazaarItemsMethod(deps) {
       const failureReasons = {};
 
       try {
-        sendProgress(event.sender, buildProgress('details', 'Itens: consultando personagens via API...', 0, list.length, {
+        sendProgress(event.sender, buildProgress('details', progressMessage, 0, list.length, {
           methodLabel: 'Itens (API JSON)',
-          // Progresso pertence à GUIA ITENS: o renderer usa este carimbo para
-          // exibir cada consulta somente na própria guia.
-          scope: 'itens',
+          // Guia dona do progresso: 'itens' (consulta da guia Itens) ou
+          // 'quests' (etapa de itens DENTRO da consulta de Quests) — o
+          // renderer usa este carimbo para exibir cada consulta somente na
+          // guia correta.
+          scope: progressScope,
         }));
 
         for (let index = 0; index < list.length; index++) {
@@ -491,10 +503,10 @@ function registerBazaarItemsMethod(deps) {
             details[key] = { id: key, error: outcome.reason, failureReason: outcome.reason, fetchedAt: Date.now() };
           }
 
-          sendProgress(event.sender, buildProgress('details', 'Itens: consultando personagens via API...', index + 1, list.length, {
+          sendProgress(event.sender, buildProgress('details', progressMessage, index + 1, list.length, {
             methodLabel: 'Itens (API JSON)',
             apiResolved: analyzedCount,
-            scope: 'itens',
+            scope: progressScope,
           }));
 
           if (index < list.length - 1) await page.waitForTimeout(currentGapMs());
@@ -506,7 +518,14 @@ function registerBazaarItemsMethod(deps) {
         // Sem isto, o listener de progresso do renderer ficaria "preso" em
         // estágio ativo após a consulta de itens (o handler antigo limpa os
         // estados no próprio fluxo das quests; aqui o fluxo é outro).
-        try { if (finishProgress) finishProgress('itens-finalizado'); } catch (_) {}
+        // EXCEÇÃO: quando esta análise roda como ETAPA da consulta de QUESTS
+        // (progressScope 'quests'), quem encerra o progresso é o fluxo das
+        // quests (fechamento do navegador no finally do renderer) — finalizar
+        // aqui dispararia um evento active=false NO MEIO da consulta de
+        // quests, zerando o painel de progresso antes da publicação.
+        if (progressScope === 'itens') {
+          try { if (finishProgress) finishProgress('itens-finalizado'); } catch (_) {}
+        }
       }
 
       const failedCount = Math.max(0, list.length - analyzedCount);

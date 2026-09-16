@@ -50,7 +50,6 @@ import {
   formatDateTimeWithOffset,
   formatDuration,
   formatTimeZoneOffset,
-  getBazarEndUntilAtConfiguredTime,
   getDefaultBazarEndUntil,
   normalizeAuctionEndTimestamp,
   parseDateTimeLocalWithOffset,
@@ -65,6 +64,7 @@ import { openExternalUrl } from "../utils/openExternal";
 // forma mínima de exibição (foundName/tier/amount/totalKk).
 import { publishBazaarItemsValues, type OfficialBazaarItemMatch } from "../services/bazaarOfficialService";
 import {
+  BAZAAR_ITEMS_LAST_QUERY_UPDATED_EVENT,
   addWatchedItemToAllServers,
   buildCharacterMatches,
   buildWatchlistIndex,
@@ -1283,38 +1283,24 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
     }
   }
 
-  // ── SEQUÊNCIA AUTO-BAZAAR: consulta de ITENS encadeada após as QUESTS ─────
-  // Disparada EXCLUSIVAMENTE pelo BazarPanel quando a consulta de Quests
-  // iniciada automaticamente pela notificação diária finaliza com sucesso
-  // (evento "auto-bazaar-items-run-request"). Consultas manuais de Quests ou
-  // de Itens nunca passam por aqui — o comportamento delas está intacto.
+  // ── INTEGRAÇÃO QUESTS+ITENS: "Última Consulta" sempre em dia ──────────────
+  // A análise de itens agora TAMBÉM roda como etapa da consulta de QUESTS
+  // (manual e Auto-Bazaar), que persiste na MESMA chave local
+  // (`rubinot_bazaar_items_last_query`, via saveItemsLastQuery — que dispara
+  // este evento). Se este painel estiver montado quando isso acontecer, o
+  // quadro "Última Consulta" recarrega daqui, sem releitura contínua.
   //
-  // O disparo reproduz o fluxo automático das quests: navegador e demais
-  // preferências salvas (mesmas chaves do modal), SEM abrir o seletor; o
-  // "Encerra até" é calculado NO INSTANTE do disparo com a MESMA regra do
-  // auto das quests (amanhã às 11:00 no fuso configurado). As guardas reais
-  // do executeItemsQuery (Boss/Electron/isRunning/isQuestsQueryRunning)
-  // continuam valendo — nada de consulta duplicada.
-  const autoItemsRunRef = useRef<() => void>(() => {});
-  autoItemsRunRef.current = () => {
-    if (!isBossUser || !isElectron || isRunning || isQuestsQueryRunning || isValueRefreshing) return;
-    if (totalWatchedCount === 0) return; // sem itens cadastrados: nada a consultar (silencioso — fluxo automático)
-    const autoEndUntil = getBazarEndUntilAtConfiguredTime(timezoneOffsetMinutes, 1, 11, 0);
-    setError(null);
-    void executeItemsQuery({
-      browserKey: loadUIState(BAZAAR_BROWSER_KEY, "webkit"),
-      browserOrder: loadUIState<string[]>(BAZAAR_BROWSER_ORDER_KEY, DEFAULT_BROWSER_ORDER),
-      cleanProfile: false,
-      retryBrowsers: loadUIState<string[]>(BAZAAR_RETRY_BROWSERS_KEY, []),
-      speedMode: loadUIState<BazaarSpeedMode>(BAZAAR_SPEED_MODE_KEY, "moderado"),
-      retryCounts: normalizeRetryCounts(loadUIState<BazaarRetryCounts | null>(BAZAAR_RETRY_COUNTS_KEY, null)),
-      endUntilOverride: autoEndUntil,
-    });
-  };
+  // (O antigo encadeamento do Auto-Bazaar — evento
+  // "auto-bazaar-items-run-request" disparando uma SEGUNDA consulta dos
+  // mesmos personagens — foi ELIMINADO junto com o disparo no BazarPanel:
+  // a etapa integrada já cobre o caso sem duplicar navegador/fetches.)
   useEffect(() => {
-    const handleAutoItemsRun = () => autoItemsRunRef.current();
-    window.addEventListener("auto-bazaar-items-run-request", handleAutoItemsRun);
-    return () => window.removeEventListener("auto-bazaar-items-run-request", handleAutoItemsRun);
+    // Recarrega SEMPRE do storage: quando a gravação partiu deste próprio
+    // painel, o conteúdo lido é idêntico ao já em estado (inócuo); quando
+    // partiu da etapa integrada das Quests, é a atualização que interessa.
+    const refreshFromStorage = () => setLastQuery(loadItemsLastQuery());
+    window.addEventListener(BAZAAR_ITEMS_LAST_QUERY_UPDATED_EVENT, refreshFromStorage);
+    return () => window.removeEventListener(BAZAAR_ITEMS_LAST_QUERY_UPDATED_EVENT, refreshFromStorage);
   }, []);
 
   /**

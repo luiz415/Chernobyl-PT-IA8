@@ -36,11 +36,21 @@ import { collectBusyIdsForQuest } from "../utils/questEligibility";
 // (mesmo id nas duas consultas) — nenhuma consulta nova ao site.
 import {
   BAZAAR_ITEMS_LAST_QUERY_UPDATED_EVENT,
+  buildCharacterMatches,
+  buildWatchlistIndex,
+  canonicalServerKey,
+  collectAllWatchKeys,
   effectiveTotalKk,
+  getServerWatchedItems,
   hasManualTotalKk,
   loadItemsLastQuery,
+  loadWatchedItemsByServer,
+  saveItemsLastQuery,
   type BazaarItemsCharacterResult,
   type BazaarItemsLastQuery,
+  type ItemsCharacterSkills,
+  type RawItemMatch,
+  type WatchedItem,
 } from "../utils/bazaarWatchedItems";
 import { formatKkValue as formatKkValueBase } from "../utils/itemSale";
 
@@ -243,6 +253,39 @@ interface BazaarDetailsResponse {
   consecutiveFailures?: number;
   // Métricas da consulta, para comparar execuções entre si.
   successRate?: number;
+  totalDurationMs?: number;
+}
+
+/**
+ * Resposta do canal `rubinot-bazaar-items-v2` quando executado como ETAPA da
+ * consulta de QUESTS (integração Quests+Itens). É o MESMO handler e o MESMO
+ * contrato usados pela guia Itens (ItemsDetailsResult do BazaarItemsPanel) —
+ * declarado aqui apenas para tipar a chamada desta guia sem acoplar os dois
+ * componentes. Os matches chegam BRUTOS (RawItemMatch); a precificação é
+ * feita no renderer com a Lista de Itens do SERVIDOR de cada personagem,
+ * pelas MESMAS funções da guia Itens (buildWatchlistIndex/buildCharacterMatches).
+ */
+interface QuestsItemsStepResponse {
+  ok: boolean;
+  error?: string;
+  details?: Record<string, {
+    id: string;
+    matches?: RawItemMatch[];
+    /** Ouro da página do leilão, em gold (inteiro). */
+    gold?: number;
+    /** Skills inteiras da página (chaves canônicas do Electron). */
+    skills?: ItemsCharacterSkills;
+    /** Quests REAIS do payload (deriveQuestsFromApiPayload): true = feita. */
+    soulwarCompleted?: boolean | null;
+    sanguineCompleted?: boolean | null;
+    /** Contadores de bosses ("X/Y") — mesma função, mesmo payload. */
+    soulWarBossCount?: number;
+    sanguineBossCount?: number;
+    error?: string;
+  }>;
+  analyzedCount?: number;
+  failedCount?: number;
+  stoppedManually?: boolean;
   totalDurationMs?: number;
 }
 
@@ -1275,12 +1318,6 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
   const [checkingDetailsCount, setCheckingDetailsCount] = useState(0);
   const [currentUnixTs, setCurrentUnixTs] = useState(() => Math.floor(Date.now() / 1000));
   const autoBazaarNotificationInFlightRef = useRef<string | null>(null);
-  // SEQUÊNCIA AUTOMÁTICA DO AUTO-BAZAAR (Quests → Itens): marcado SOMENTE
-  // quando a consulta foi iniciada automaticamente pela NOTIFICAÇÃO DIÁRIA
-  // (source "daily-notification"). Consultas manuais, clique na notificação
-  // ou qualquer outra origem NUNCA ligam esta flag — e portanto nunca
-  // encadeiam a consulta de Itens.
-  const autoBazaarChainItemsRef = useRef<boolean>(false);
   const { currentUser, userProfile } = useAuth();
   // Esta é somente uma projeção visual da fonte de contas já existente no App.
   // Não há coleção/localStorage extra para o fluxo do Bazaar.
@@ -2529,7 +2566,156 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
         setDetailsCache(nextDetailsCache);
       }
 
-      const finalAuctionsWithQuestDetails = finalAuctions.map(auction => mergeAuctionWithQuestDetails(auction, nextDetailsCache[getAuctionKey(auction)]));
+      // ═══ ETAPA DE ITENS — integração Quests+Itens ═══════════════════════
+      // TODA consulta de Quests (manual e Auto-Bazaar, método antigo e novo)
+      // consulta também os ITENS dos personagens APROVADOS pelos filtros
+      // (`finalAuctions` — nunca os descartados). Mecanismo 100% reutilizado:
+      //   • canal `rubinot-bazaar-items-v2` (o MESMO da guia Itens) — mesma
+      //     sessão/navegador já aberto pela listagem (fila global do
+      //     Electron), 1 fetch JSON por personagem, zero navegador extra;
+      //   • watchKeys = união dos itens de TODOS os servidores; o PREÇO
+      //     aplicado é sempre o da Lista de Itens do SERVIDOR do personagem
+      //     (buildWatchlistIndex/buildCharacterMatches — as MESMAS funções da
+      //     guia Itens; nenhuma segunda regra de precificação);
+      //   • progresso com scope 'quests': a etapa "Analisando itens..."
+      //     aparece AQUI (guia Quests); a guia Itens ignora esses eventos;
+      //   • resultado salvo em `rubinot_bazaar_items_last_query` (mesma
+      //     persistência local da guia Itens — a "Última Consulta" de lá
+      //     passa a refletir esta etapa) e EMBUTIDO nos personagens antes da
+      //     publicação (campos items* já existentes na lista oficial): o
+      //     "Valor Itens (KK)" e o modal "Ver" chegam a todos os usuários no
+      //     MESMO commit da lista — zero leituras/gravações extras.
+      // FALHA/parada manual NESTA etapa não invalida a consulta de Quests
+      // (aviso não bloqueante, mesmo padrão da publicação de valores da guia
+      // Itens); sem itens cadastrados a etapa é dispensada em silêncio.
+      let itemsStepNotice = "";
+      // Carimbo da etapa de itens (0 = etapa não rodou/sem itens cadastrados)
+      // — vai para os metadados da publicação (itemsValuesUpdatedAtMs), com a
+      // MESMA semântica do publishBazaarItemsValues da guia Itens.
+      let itemsStepCheckedAtMs = 0;
+      const itemsEmbeddedByAuctionId = new Map<string, Pick<BazaarAuction, "itemsTotalKk" | "itemsGoldKk" | "itemsMatches" | "itemsCheckedAtMs">>();
+      // Encerramento manual DURANTE as quests: interrupção existente — a
+      // etapa de itens nem inicia (o pedido de parada seguiria valendo e a
+      // análise encerraria no 1º personagem; pular evita o custo à toa).
+      if (finalAuctions.length > 0 && !stoppedManuallyRun) {
+        const watchedByServerNow = loadWatchedItemsByServer();
+        const watchKeys = collectAllWatchKeys(watchedByServerNow);
+        if (watchKeys.length > 0) {
+          setQueryStatus("Analisando itens dos personagens aprovados...");
+          setIsCheckingDetails(true);
+          setCheckingDetailsCount(finalAuctions.length);
+          const itemsStartedAt = Date.now();
+          const itemsResponse = await ipcRenderer.invoke("rubinot-bazaar-items-v2", finalAuctions, {
+            watchKeys,
+            // Progresso pertence à GUIA QUESTS (etapa desta consulta) — a
+            // guia Itens não exibe nada desta execução.
+            progressScope: "quests",
+          }) as QuestsItemsStepResponse;
+          if (!itemsResponse?.ok) {
+            itemsStepNotice = "Consulta de Quests concluída, mas a etapa de itens falhou: "
+              + `${itemsResponse?.error || "erro desconhecido"}. Os valores de itens não foram atualizados nesta consulta.`;
+          } else {
+            // Precificação IDÊNTICA à da guia Itens (etapa 4 do
+            // executeItemsQuery): índice por servidor, sem fallback de preço
+            // de outro servidor; Tier +30%/nível via computeTieredValueKk
+            // (dentro de buildCharacterMatches); ouro somado UMA única vez.
+            const indexByServer = new Map<string, Map<string, WatchedItem>>();
+            const getServerIndex = (server: string) => {
+              const serverKeyName = canonicalServerKey(server);
+              let index = indexByServer.get(serverKeyName);
+              if (!index) {
+                index = buildWatchlistIndex(getServerWatchedItems(watchedByServerNow, serverKeyName));
+                indexByServer.set(serverKeyName, index);
+              }
+              return index;
+            };
+            const itemsResults: BazaarItemsCharacterResult[] = [];
+            for (const auction of finalAuctions) {
+              const key = auction.id || auction.name || auction.url;
+              const detail = key ? itemsResponse.details?.[key] : null;
+              if (!detail || detail.error || !Array.isArray(detail.matches) || detail.matches.length === 0) continue;
+              const { matches, totalKk } = buildCharacterMatches(detail.matches, getServerIndex(String(auction.server || "")));
+              if (matches.length === 0) continue;
+              const goldRaw = Number(detail.gold || 0);
+              const goldKk = Number.isFinite(goldRaw) && goldRaw > 0 ? Math.round((goldRaw / 1_000_000) * 100) / 100 : 0;
+              itemsResults.push({
+                id: String(auction.id || ""),
+                name: String(auction.name || ""),
+                url: String(auction.url || ""),
+                level: Number(auction.level || 0),
+                vocation: String(auction.vocation || ""),
+                server: String(auction.server || ""),
+                matches,
+                totalKk: Math.round((totalKk + goldKk) * 100) / 100,
+                ...(goldKk > 0 ? { goldKk } : {}),
+                ...(detail.skills && Object.keys(detail.skills).length > 0 ? { skills: detail.skills } : {}),
+                ...(detail.soulwarCompleted !== undefined ? { soulwarCompleted: detail.soulwarCompleted } : {}),
+                ...(detail.sanguineCompleted !== undefined ? { sanguineCompleted: detail.sanguineCompleted } : {}),
+                ...(typeof detail.soulWarBossCount === "number" ? { soulWarBossCount: detail.soulWarBossCount } : {}),
+                ...(typeof detail.sanguineBossCount === "number" ? { sanguineBossCount: detail.sanguineBossCount } : {}),
+                bid: Number(auction.bid || 0),
+                auctionEndTs: auction.auctionEndTs ?? null,
+              });
+            }
+            itemsResults.sort((a, b) => b.totalKk - a.totalKk);
+
+            // Persistência LOCAL — a MESMA da guia Itens (saveItemsLastQuery
+            // dispara o evento que atualiza a coluna "Valor Itens (kk)" desta
+            // guia e a "Última Consulta" da guia Itens, sem releitura).
+            const itemsCompletedAtMs = Date.now();
+            itemsStepCheckedAtMs = itemsCompletedAtMs;
+            const itemsSummary: BazaarItemsLastQuery = {
+              completedAtMs: itemsCompletedAtMs,
+              durationMs: Number(itemsResponse.totalDurationMs || (itemsCompletedAtMs - itemsStartedAt)),
+              listedCount: Array.isArray(response.auctions) ? response.auctions.length : 0,
+              eligibleCount: finalAuctions.length,
+              analyzedCount: Number(itemsResponse.analyzedCount || 0),
+              failedCount: Number(itemsResponse.failedCount || 0),
+              stoppedManually: itemsResponse.stoppedManually === true,
+              endUntilLabel: activeFilters.endUntil,
+              results: itemsResults,
+            };
+            saveItemsLastQuery(itemsSummary);
+
+            // Forma mínima EMBUTIDA nos personagens publicados — mesmos
+            // campos items* gravados por publishBazaarItemsValues (guia
+            // Itens): sempre o valor CALCULADO (correção manual é local).
+            for (const itemsResult of itemsResults) {
+              const auctionId = String(itemsResult.id || "").trim();
+              if (!auctionId) continue;
+              itemsEmbeddedByAuctionId.set(auctionId, {
+                itemsTotalKk: Number(itemsResult.totalKk || 0),
+                ...(Number(itemsResult.goldKk || 0) > 0 ? { itemsGoldKk: Number(itemsResult.goldKk || 0) } : {}),
+                itemsMatches: (itemsResult.matches || []).map(match => ({
+                  foundName: String(match.foundName || ""),
+                  tier: Number(match.tier || 0),
+                  amount: Number(match.amount || 0),
+                  totalKk: Number(match.totalKk || 0),
+                })),
+                itemsCheckedAtMs: itemsCompletedAtMs,
+              });
+            }
+
+            if (itemsResponse.stoppedManually) {
+              // Encerramento manual DURANTE a etapa de itens: as Quests já
+              // estavam completas — a lista NÃO vira parcial por isso; só os
+              // personagens analisados carregam valores de itens.
+              itemsStepNotice = "A etapa de itens foi encerrada manualmente: "
+                + `${itemsSummary.analyzedCount} de ${finalAuctions.length} personagem(ns) tiveram os itens analisados. `
+                + "Os demais ficam sem valor de itens nesta consulta.";
+            }
+          }
+        }
+      }
+
+      const finalAuctionsWithQuestDetails = finalAuctions.map(auction => {
+        const merged = mergeAuctionWithQuestDetails(auction, nextDetailsCache[getAuctionKey(auction)]);
+        // Valores de itens EMBUTIDOS no personagem: seguem para a tabela
+        // local, o cache local e a publicação da lista oficial (o spread de
+        // normalizeOfficialCharacter preserva os campos items*).
+        const embeddedItems = itemsEmbeddedByAuctionId.get(String(auction.id || "").trim());
+        return embeddedItems ? { ...merged, ...embeddedItems } : merged;
+      });
       const finalResult: BazaarFetchResult = {
         ...response,
         total: finalAuctionsWithQuestDetails.length,
@@ -2609,6 +2795,11 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
             // Vai junto da lista oficial, no MESMO commit — sem consulta extra.
             failedCharacters: detailsStats?.failedCount ?? 0,
             failedCharacterList: detailsStats?.failedCharacterList ?? [],
+            // Etapa de itens desta MESMA consulta: os characters acima já
+            // carregam os campos items* — o carimbo segue nos metadados no
+            // MESMO commit (semântica do publishBazaarItemsValues, sem
+            // transação extra). 0 = etapa não rodou (campo omitido).
+            itemsValuesUpdatedAtMs: itemsStepCheckedAtMs,
           });
           if (published) {
             setOfficialMetadata(published.metadata);
@@ -2635,6 +2826,11 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
           }
         }
       }
+      // Aviso NÃO BLOQUEANTE da etapa de itens (falha ou encerramento manual
+      // durante a análise de itens): a consulta de Quests está íntegra e a
+      // publicação seguiu o fluxo normal — o aviso apenas explica por que os
+      // valores de itens podem estar ausentes/incompletos nesta consulta.
+      if (itemsStepNotice) setError(itemsStepNotice);
     } catch (err: any) {
       setError(err?.message || "Erro ao consultar o Bazaar.");
     } finally {
@@ -2654,27 +2850,14 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
       if (consultationSucceeded && autoBazaarNotificationInFlightRef.current) {
         window.dispatchEvent(new CustomEvent("auto-bazaar-success", { detail: { notificationId: autoBazaarNotificationInFlightRef.current } }));
       }
-      // ── SEQUÊNCIA AUTO-BAZAAR: Quests concluídas → Itens ────────────────
-      // Encadeia SOMENTE quando (a) a consulta nasceu automaticamente da
-      // notificação diária (flag ligada exclusivamente nesse caminho) e
-      // (b) as Quests finalizaram COM SUCESSO (cancelada/interrompida/
-      // falha ⇒ consultationSucceeded=false ⇒ nada é encadeado). O evento
-      // é disparado APÓS este finally zerar isLoading/isCheckingDetails —
-      // o mesmo atraso de 500ms do agendador diário garante que o guard
-      // anti-simultaneidade da guia Itens veja os estados já liberados.
-      const shouldChainItems = autoBazaarChainItemsRef.current && consultationSucceeded;
-      autoBazaarChainItemsRef.current = false;
+      // ── AUTO-BAZAAR: encadeamento Quests → Itens ELIMINADO ──────────────
+      // A consulta de ITENS agora é uma ETAPA da própria consulta de Quests
+      // (manual E automática): os itens dos personagens aprovados já foram
+      // analisados, precificados, salvos localmente e publicados JUNTO da
+      // lista oficial. Disparar aqui a segunda consulta da guia Itens
+      // repetiria os MESMOS personagens (navegador + fetches + publicação
+      // duplicados) — exatamente a redundância que a integração elimina.
       autoBazaarNotificationInFlightRef.current = null;
-      if (shouldChainItems) {
-        // Garante o LISTENER: o BazaarItemsPanel é montado sob demanda (1ª
-        // visita à guia). Montar aqui (oculto via CSS, sem trocar de guia)
-        // é o mesmo mecanismo do toggle — a consulta roda em segundo plano
-        // e o progresso aparece ao abrir a guia Itens.
-        setItemsPanelMounted(true);
-        window.setTimeout(() => {
-          window.dispatchEvent(new CustomEvent("auto-bazaar-items-run-request", { detail: { source: "auto-bazaar-chain" } }));
-        }, 500);
-      }
     }
   }
 
@@ -2684,11 +2867,9 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
       const notificationId = (event as CustomEvent).detail?.notificationId;
       if (!notificationId) return;
       autoBazaarNotificationInFlightRef.current = String(notificationId);
-      // Encadeamento Quests → Itens: EXCLUSIVO do início automático pela
-      // notificação diária ("daily-notification"). O clique manual na
-      // notificação ("notification-click") e qualquer outra origem mantêm
-      // o comportamento atual — sem segunda consulta.
-      autoBazaarChainItemsRef.current = (event as CustomEvent).detail?.source === "daily-notification";
+      // Itens: já fazem parte da PRÓPRIA consulta de Quests (etapa interna
+      // do handleFetchBazaar) — o antigo encadeamento Quests → Itens do
+      // Auto-Bazaar foi eliminado por redundante.
       handleFetchBazaar({
         filtersOverride: {
           endUntil: getAutoBazarEndUntil(timezoneOffsetMinutes),

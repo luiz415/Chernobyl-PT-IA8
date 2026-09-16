@@ -423,6 +423,15 @@ export async function publishOfficialBazaarList(params: {
   failedPageNumbers?: number[];
   failedCharacters?: number;
   failedCharacterList?: { id: string; name: string; url: string }[];
+  /**
+   * Carimbo dos valores de itens EMBUTIDOS nos personagens desta publicação
+   * (integração Quests+Itens: a etapa de itens roda DENTRO da consulta de
+   * Quests e os campos items* já vêm nos characters). Gravado nos metadados
+   * pela MESMA semântica do publishBazaarItemsValues — os leitores continuam
+   * com uma única referência de "quando os itens foram checados". Ausente =
+   * publicação sem etapa de itens (ex.: sem itens cadastrados).
+   */
+  itemsValuesUpdatedAtMs?: number;
 }): Promise<PublishOfficialBazaarResult | null> {
   if (!db) return null;
   const version = new Date().toISOString();
@@ -456,6 +465,12 @@ export async function publishOfficialBazaarList(params: {
         url: String(entry?.url || ""),
       }))
       .filter((entry) => entry.url),
+    // Integração Quests+Itens: quando os characters já trazem os campos
+    // items* (etapa de itens da própria consulta), o carimbo entra no MESMO
+    // commit da publicação — semântica idêntica ao publishBazaarItemsValues.
+    // Só é gravado quando informado (> 0): publicação sem etapa de itens não
+    // inventa carimbo.
+    ...(Number(params.itemsValuesUpdatedAtMs || 0) > 0 ? { itemsValuesUpdatedAtMs: Number(params.itemsValuesUpdatedAtMs) } : {}),
   };
 
   const batch = writeBatch(db);
