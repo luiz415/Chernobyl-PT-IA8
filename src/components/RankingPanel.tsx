@@ -16,6 +16,8 @@ import {
 } from "lucide-react";
 import {
   collection,
+  doc,
+  getDoc,
   query,
   orderBy,
   limit as fireLimit,
@@ -120,6 +122,9 @@ export default function RankingPanel({
   const [rankingMode, setRankingMode] = useState<RankingMode>("geral");
   const [entries, setEntries] = useState<RankingEntry[]>([]);
   const [loading, setLoading] = useState(true);
+  // Falha na carga inicial — estado TERMINAL controlado (nunca loading
+  // infinito silencioso): mensagem + botão "Tentar novamente".
+  const [loadError, setLoadError] = useState<string>("");
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(false);
   const [expandedTotalUid, setExpandedTotalUid] = useState<string | null>(null);
@@ -134,8 +139,13 @@ export default function RankingPanel({
   const [historyDoc, setHistoryDoc] = useState<RankingHistoryDoc | null>(null);
   // Aviso exibido só ao Boss quando o reset fica pendente.
   const [resetNotice, setResetNotice] = useState<string>("");
-  // Guarda de sessão: impede leituras/resets repetidos ao reabrir o painel.
+  // Guarda de sessão da TENTATIVA DE RESET do Boss (efeito colateral único).
+  // IMPORTANTE: protege SÓ o reset — nunca a carga de dados (era a causa do
+  // loading infinito: a guarda bloqueava a re-execução e a execução original
+  // havia sido cancelada antes de carregar o quadro).
   const resetCheckedRef = useRef(false);
+  // Guarda de sessão da leitura do histórico "Último Mês" (1-3 getDoc).
+  const historyCheckedRef = useRef(false);
   // Modo do quadro "Mês Atual": true = docs consolidados rankingMonthly
   // (backend migrado); false = caminho legado (userStats + agregação cliente).
   // null enquanto os metadados não foram lidos na sessão.
@@ -204,13 +214,14 @@ export default function RankingPanel({
     } catch {}
   }
 
-  // ─── Parse do doc consolidado mensal (rankingMonthly/{mês}/users/{uid}) ──
-  function parseMonthlyDoc(docSnap: QueryDocumentSnapshot<DocumentData, DocumentData>): RankingEntry | null {
-    const data = docSnap.data();
+  // ─── Parse de uma ENTRADA consolidada mensal ─────────────────────────────
+  // Formato comum ao doc único (rankingMonthly/{mês}.entries[i], com uid no
+  // próprio objeto) e à subcoleção legada (users/{uid}, uid = id do doc).
+  function parseMonthlyData(uid: string, data: DocumentData): RankingEntry | null {
     if (typeof data.score !== "number") return null;
     return {
-      uid: docSnap.id,
-      nome: userNames[docSnap.id] || `Jogador ${docSnap.id.slice(0, 6)}`,
+      uid,
+      nome: userNames[uid] || `Jogador ${uid.slice(0, 6)}`,
       score: data.score || 0,
       concluidas: typeof data.concluidas === "number" ? data.concluidas : 0,
       totalParticipacoes: typeof data.totalParticipacoes === "number" ? data.totalParticipacoes : 0,
@@ -234,24 +245,32 @@ export default function RankingPanel({
   }
 
   /**
-   * Carrega a primeira página do quadro "Mês Atual".
+   * Carrega o quadro "Mês Atual".
    *
-   * MODO MENSAL (padrão após a migração do backend): lê os docs consolidados
-   * `rankingMonthly/{mês corrente}/users` ordenados por score — documentos
-   * PEQUENOS (só o mês), ordenação mensal CORRETA no servidor (o quadro deixa
-   * de ser "top-N vitalício agregado no cliente", que escondia usuários
-   * ativos fora desse recorte) e zero agregação repetida por cliente.
+   * MODO MENSAL (padrão após a migração do backend):
+   *   1º) DOC ÚNICO `rankingMonthly/{mês corrente}` com o quadro COMPLETO
+   *       embutido no campo `entries` (projeção mantida pelo backend) —
+   *       o painel inteiro em 1 LEITURA, sem paginação;
+   *   2º) fallback: subcoleção `users` ordenada por score (comportamento
+   *       anterior), enquanto a projeção ainda não foi gravada pelas CFs.
    *
    * MODO LEGADO (fallback): top-N de userStats por rankingScore vitalício +
    * agregação de dailyStats no cliente — caminho original, mantido enquanto a
    * Cloud Function agendada não rodou pela primeira vez (metadado
    * `rankingMonthlyActive`) e em modo simulação.
+   *
+   * REENTRÂNCIA: esta função é idempotente e pode ser chamada por qualquer
+   * re-execução do efeito de sessão — o dedup por promise em voo abaixo evita
+   * leituras duplicadas quando duas chamadas se sobrepõem (StrictMode/deps).
    */
+  const fetchInitialInFlightRef = useRef<Promise<void> | null>(null);
   const fetchInitial = async (force = false, monthlyOverride?: boolean) => {
     if (isSimulationMode || !db) {
       setLoading(false);
       return;
     }
+    // Dedup: chamada sobreposta reutiliza a promise em voo (mesmas leituras).
+    if (fetchInitialInFlightRef.current) return fetchInitialInFlightRef.current;
     const monthly = monthlyOverride ?? monthlyModeRef.current === true;
 
     if (!force) {
@@ -260,40 +279,75 @@ export default function RankingPanel({
         setEntries(cached.entries);
         setHasMore(cached.hasMore);
         lastDocRef.current = null;
+        setLoadError("");
         setLoading(false);
         return;
       }
     }
 
     setLoading(true);
-    try {
-      const q = monthly
-        ? query(
-            collection(db, "rankingMonthly", currentMonthKey, "users"),
-            orderBy("score", "desc"),
-            fireLimit(PAGE_SIZE)
-          )
-        : query(
+    const run = (async () => {
+      try {
+        let list: RankingEntry[] = [];
+        let nextHasMore = false;
+
+        if (monthly) {
+          // ── DOC ÚNICO: quadro completo em 1 leitura ──────────────────────
+          const monthSnap = await getDoc(doc(db, "rankingMonthly", currentMonthKey));
+          const monthData = monthSnap.exists() ? monthSnap.data() : null;
+          if (monthData && Array.isArray(monthData.entries)) {
+            (monthData.entries as DocumentData[]).forEach(item => {
+              const uid = String(item?.uid || "").trim();
+              if (!uid) return;
+              const parsed = parseMonthlyData(uid, item);
+              if (parsed) list.push(parsed);
+            });
+            list.sort((a, b) => b.score - a.score);
+            // Quadro completo no doc: sem paginação (hasMore sempre false).
+            lastDocRef.current = null;
+          } else {
+            // ── Fallback: subcoleção paginada (projeção ainda não gravada) ─
+            const snap = await getDocs(query(
+              collection(db, "rankingMonthly", currentMonthKey, "users"),
+              orderBy("score", "desc"),
+              fireLimit(PAGE_SIZE)
+            ));
+            snap.forEach((d) => {
+              const parsed = parseMonthlyData(d.id, d.data());
+              if (parsed) list.push(parsed);
+            });
+            nextHasMore = snap.docs.length === PAGE_SIZE;
+            lastDocRef.current = snap.docs.length > 0 ? snap.docs[snap.docs.length - 1] : null;
+          }
+        } else {
+          const snap = await getDocs(query(
             collection(db, "userStats"),
             orderBy("rankingScore", "desc"),
             fireLimit(PAGE_SIZE)
-          );
-      const snap = await getDocs(q);
-      const list: RankingEntry[] = [];
-      snap.forEach((d) => {
-        const parsed = monthly ? parseMonthlyDoc(d) : parseDoc(d);
-        if (parsed) list.push(parsed);
-      });
-      const nextHasMore = snap.docs.length === PAGE_SIZE;
-      setEntries(list);
-      lastDocRef.current = snap.docs.length > 0 ? snap.docs[snap.docs.length - 1] : null;
-      setHasMore(nextHasMore);
-      saveRankingCache(list, nextHasMore, monthly);
-    } catch (err) {
-      console.error("Erro ao carregar ranking universal:", err);
-    } finally {
-      setLoading(false);
-    }
+          ));
+          snap.forEach((d) => {
+            const parsed = parseDoc(d);
+            if (parsed) list.push(parsed);
+          });
+          nextHasMore = snap.docs.length === PAGE_SIZE;
+          lastDocRef.current = snap.docs.length > 0 ? snap.docs[snap.docs.length - 1] : null;
+        }
+
+        setEntries(list);
+        setHasMore(nextHasMore);
+        setLoadError("");
+        saveRankingCache(list, nextHasMore, monthly);
+      } catch (err) {
+        console.error("Erro ao carregar ranking universal:", err);
+        // ERRO CONTROLADO: nunca deixar o quadro em loading silencioso.
+        setLoadError("Não foi possível carregar o Ranking. Verifique sua conexão e tente novamente.");
+      } finally {
+        setLoading(false);
+        fetchInitialInFlightRef.current = null;
+      }
+    })();
+    fetchInitialInFlightRef.current = run;
+    return run;
   };
 
   // MODO DEMO: alimenta o quadro com as entradas fictícias e encerra o
@@ -321,24 +375,36 @@ export default function RankingPanel({
    * Sessão do painel: metadados de reset → modo do quadro → carga inicial →
    * histórico "Último Mês".
    *
-   * Roda UMA vez por sessão (`resetCheckedRef`), evitando releituras a cada
-   * reabertura do painel. O reset mensal é PRIMARIAMENTE a Cloud Function
-   * agendada `scheduledRankingReset` (diária 00:20 UTC, idempotente); o
-   * caminho do Boss abaixo permanece como fallback self-healing — os dois
-   * usam os mesmos metadados e gates, então nunca duplicam o reset.
+   * REENTRÂNCIA (correção do loading infinito): este efeito re-executa quando
+   * as dependências mudam (perfil chegando após a montagem muda `isBossUser`;
+   * StrictMode em dev monta 2×). A versão anterior tinha uma guarda "roda 1×"
+   * SÍNCRONA (`resetCheckedRef`) combinada com um cancelamento que abortava a
+   * execução em voo ANTES de `fetchInitial` — a re-execução era bloqueada pela
+   * guarda e NINGUÉM mais desligava o loading: o quadro ficava girando para
+   * sempre e só o próprio usuário aparecia (card alimentado por outra via).
+   *
+   * Agora: TODA execução completa o pipeline de CARGA (leituras baratas e
+   * idempotentes — metadados 1 getDoc, quadro com cache TTL + dedup por
+   * promise em voo, histórico 1-3 getDoc por sessão). `cancelled` passa a
+   * impedir apenas ESCRITAS DE ESTADO obsoletas, nunca a carga da execução
+   * mais nova. Os EFEITOS COLATERAIS únicos (tentativa de reset do Boss) e a
+   * leitura do histórico continuam 1× por sessão, cada um com a sua guarda —
+   * marcada no INÍCIO da tentativa (as transações do reset já são
+   * idempotentes entre si; a guarda só evita leituras repetidas).
    */
   useEffect(() => {
     if (demoMode) return; // demo: sem metadados/reset/carga real
     if (isSimulationMode || !db) return;
-    if (resetCheckedRef.current) return;
-    resetCheckedRef.current = true;
 
     let cancelled = false;
     (async () => {
       // Boss (fallback): verifica e, se for o caso, executa o reset do mês.
+      // Guarda própria (1× por sessão) — SÓ para o efeito colateral do reset;
+      // a carga de dados abaixo roda em TODAS as execuções do efeito.
       let meta: RankingResetMeta | null = null;
       let forceReload = false;
-      if (isBossUser) {
+      if (isBossUser && !resetCheckedRef.current) {
+        resetCheckedRef.current = true;
         const result = await ensureMonthlyRankingReset({
           isBoss: true,
           currentUserUid,
@@ -353,17 +419,24 @@ export default function RankingPanel({
       } else {
         meta = await readRankingResetMeta();
       }
-      if (cancelled) return;
-      setResetMeta(meta);
+      if (!cancelled) setResetMeta(meta);
 
       // Modo do quadro: consolidado mensal após a primeira execução da CF
-      // agendada; antes disso, caminho legado.
+      // agendada; antes disso, caminho legado. O ref é definido SEMPRE
+      // (mesmo com meta null — falha de leitura cai no legado), destravando
+      // o efeito-resgate de userNames.
       monthlyModeRef.current = meta?.rankingMonthlyActive === true;
-      if (cancelled) return;
-      fetchInitial(forceReload, monthlyModeRef.current === true);
+
+      // CARGA DO QUADRO — sempre executa; nunca fica atrás de guarda.
+      // (fetchInitial tem cache TTL + dedup em voo: re-execuções não geram
+      // leituras extras; o finally interno SEMPRE desliga o loading.)
+      await fetchInitial(forceReload, monthlyModeRef.current === true);
 
       // "Último Mês": snapshot do mês anterior ao último reset registrado.
       // Sem metadado de histórico, tenta o mês anterior ao corrente.
+      // Guarda própria (1× por sessão): as releituras não mudam o resultado.
+      if (historyCheckedRef.current) return;
+      historyCheckedRef.current = true;
       const candidates = Array.from(new Set([
         meta?.lastHistoryMonth || "",
         meta?.lastRankingResetMonth ? getPreviousMonthKey(meta.lastRankingResetMonth) : "",
@@ -372,13 +445,21 @@ export default function RankingPanel({
 
       for (const month of candidates) {
         const history = await readRankingHistory(month);
-        if (cancelled) return;
         if (history && history.entries.length > 0) {
-          setHistoryDoc(history);
+          if (!cancelled) setHistoryDoc(history);
           return;
         }
       }
-    })().catch(() => {});
+    })().catch((err) => {
+      // Erro inesperado no pipeline (fora do fetchInitial, que já trata os
+      // seus): encerra o loading em estado de ERRO CONTROLADO — nunca
+      // spinner infinito silencioso.
+      console.error("Erro na sessão do painel Ranking:", err);
+      if (!cancelled) {
+        setLoadError("Não foi possível carregar o Ranking. Verifique sua conexão e tente novamente.");
+        setLoading(false);
+      }
+    });
 
     return () => { cancelled = true; };
   }, [isBossUser, currentUserUid]);
@@ -410,7 +491,7 @@ export default function RankingPanel({
         const firstSnap = await getDocs(baseQuery);
         const firstList: RankingEntry[] = [];
         firstSnap.forEach((d) => {
-          const parsed = monthly ? parseMonthlyDoc(d) : parseDoc(d);
+          const parsed = monthly ? parseMonthlyData(d.id, d.data()) : parseDoc(d);
           if (parsed) firstList.push(parsed);
         });
         const firstHasMore = firstSnap.docs.length === PAGE_SIZE;
@@ -438,7 +519,7 @@ export default function RankingPanel({
       const snap = await getDocs(qNext);
       const nextList: RankingEntry[] = [];
       snap.forEach((d) => {
-        const parsed = monthly ? parseMonthlyDoc(d) : parseDoc(d);
+        const parsed = monthly ? parseMonthlyData(d.id, d.data()) : parseDoc(d);
         if (parsed) nextList.push(parsed);
       });
       const nextHasMore = snap.docs.length === PAGE_SIZE;
@@ -1202,6 +1283,22 @@ export default function RankingPanel({
                 <div className="flex flex-col items-center justify-center py-12 text-slate-500 gap-2 border border-dashed border-[var(--th-line)]/40 rounded-2xl bg-[var(--th-bg-base)]/30">
                   <div className="w-9 h-9 rounded-full border-2 border-amber-500/30 border-t-amber-500 animate-spin" />
                   <span className="text-xs font-bold text-slate-400">Carregando Ranking Universal...</span>
+                </div>
+              ) : loadError && panel.key === "total" && panel.list.length === 0 ? (
+                /* ERRO CONTROLADO (só o quadro "Mês Atual" depende da carga
+                   com falha; "Último Mês" tem fonte própria): mensagem +
+                   nova tentativa — nunca spinner infinito silencioso. */
+                <div className="flex flex-col items-center justify-center py-12 text-slate-500 gap-2 border border-dashed border-rose-800/40 rounded-2xl bg-[var(--th-bg-base)]/30">
+                  <Trophy size={30} className="text-rose-800/70 mb-1" />
+                  <span className="text-xs font-bold text-rose-300/80">Falha ao carregar o Ranking</span>
+                  <span className="text-[10px] text-slate-500 text-center max-w-sm">{loadError}</span>
+                  <button
+                    type="button"
+                    onClick={() => { setLoadError(""); fetchInitial(true); }}
+                    className="mt-1 inline-flex items-center gap-1.5 px-4 py-1.5 rounded-lg border border-amber-600/40 hover:border-amber-500 bg-[var(--th-bg-overlay)] text-amber-300 hover:text-white text-[10px] font-black uppercase tracking-wider transition-all cursor-pointer"
+                  >
+                    Tentar novamente
+                  </button>
                 </div>
               ) : panel.list.length === 0 ? (
                 <div className="flex flex-col items-center justify-center py-12 text-slate-500 gap-2 border border-dashed border-[var(--th-line)]/40 rounded-2xl bg-[var(--th-bg-base)]/30">
