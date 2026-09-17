@@ -502,15 +502,20 @@ export function repriceAllQueryResults(
 }
 
 /**
- * "ATUALIZAR" DO MODAL DETALHES — propaga o valor de UM item para TODAS as
- * listas de servidores. Regras de eficiência (as listas são 100% locais —
- * localStorage —, mas o princípio de "só gravar o necessário" vale igual):
- *   • altera SOMENTE o item de nome casado (normalizeWatchedItemName) —
- *     nenhum outro item de nenhuma lista é tocado;
- *   • servidor cuja lista NÃO contém o item permanece intacto (a propagação
- *     não cria o item onde ele nunca foi cadastrado);
+ * "ATUALIZAR VALOR PARA TODOS OS SERVIDORES" (modal Detalhes e Lista de
+ * Itens) — propaga o valor de UM item para TODAS as listas de servidores,
+ * CRIANDO o item onde ele ainda não existir (valor propagado como valor
+ * inicial). Regras de eficiência (as listas são 100% locais — localStorage
+ * —, mas o princípio de "só gravar o necessário" vale igual):
+ *   • altera SOMENTE o item de nome casado (normalizeWatchedItemName — a
+ *     MESMA chave de identificação da Lista/consulta; variações de caixa ou
+ *     formatação nunca duplicam) — nenhum outro item de nenhuma lista é
+ *     tocado;
+ *   • servidor sem o item recebe uma cópia nova com id próprio
+ *     (`addedServers`); universo = lista oficial ∪ servidores já no mapa;
  *   • servidor que JÁ está no valor novo não é regravado (updatedAtMs
  *     preservado — mesma regra "data só muda se o valor mudou" da edição);
+ *     repetir a operação é idempotente: nada é criado nem regravado;
  *   • se nada mudou, devolve o MESMO mapa (referência), sinalizando ao
  *     chamador que nenhuma persistência/reprecificação é necessária.
  */
@@ -519,22 +524,61 @@ export function propagateWatchedItemValueToAllServers(
   watchedName: string,
   valueKk: number,
   nowMs: number,
-): { map: WatchedItemsByServer; changedServers: string[] } {
-  const nameKey = normalizeWatchedItemName(watchedName);
-  const next: WatchedItemsByServer = {};
-  const changedServers: string[] = [];
-  for (const [server, items] of Object.entries(map || {})) {
-    let touched = false;
-    const list = (items || []).map(item => {
-      if (normalizeWatchedItemName(item.name) !== nameKey) return item;
-      if (item.valueKk === valueKk) return item;
-      touched = true;
-      return { ...item, valueKk, updatedAtMs: nowMs };
-    });
-    if (touched) changedServers.push(server);
-    next[server] = touched ? list : items;
+  /**
+   * Universo de servidores onde o item deve EXISTIR após a propagação
+   * (lista oficial). Servidores presentes só no mapa também entram. Vazio =
+   * comportamento antigo (atualiza apenas onde o item já existe).
+   */
+  serverUniverse: readonly string[] = [],
+): { map: WatchedItemsByServer; changedServers: string[]; addedServers: string[] } {
+  const trimmedName = String(watchedName || "").trim();
+  const nameKey = normalizeWatchedItemName(trimmedName);
+  if (!nameKey) return { map, changedServers: [], addedServers: [] };
+  // Universo: servidores oficiais + qualquer servidor já presente no mapa
+  // (mesma regra do addWatchedItemToAllServers — dados antigos nunca ficam
+  // de fora, e a ordem oficial prevalece).
+  const servers: string[] = [];
+  const seen = new Set<string>();
+  for (const server of serverUniverse || []) {
+    const key = canonicalServerKey(server);
+    if (key && !seen.has(key)) { seen.add(key); servers.push(key); }
   }
-  return changedServers.length > 0 ? { map: next, changedServers } : { map, changedServers };
+  for (const server of Object.keys(map || {})) {
+    const key = canonicalServerKey(server);
+    if (key && !seen.has(key)) { seen.add(key); servers.push(key); }
+  }
+  const next: WatchedItemsByServer = { ...map };
+  const changedServers: string[] = [];
+  const addedServers: string[] = [];
+  for (const server of servers) {
+    const items = next[server] || [];
+    const index = items.findIndex(item => normalizeWatchedItemName(item.name) === nameKey);
+    if (index >= 0) {
+      // Item EXISTE neste servidor: atualiza somente se o valor mudou
+      // (idempotência — repetir a operação não regrava nem toca a data).
+      if (items[index].valueKk === valueKk) continue;
+      next[server] = items.map((item, i) => (i === index ? { ...item, valueKk, updatedAtMs: nowMs } : item));
+      changedServers.push(server);
+    } else {
+      // Item NÃO existe neste servidor: cria com o valor propagado como
+      // valor inicial e id próprio (nunca compartilhado entre servidores).
+      // Nome preservado como informado (o casamento é sempre pelo nome
+      // normalizado, então variações de caixa não geram duplicata).
+      next[server] = [
+        ...items,
+        {
+          id: `wi_${nowMs.toString(36)}_${Math.random().toString(36).slice(2, 7)}`,
+          name: trimmedName,
+          valueKk,
+          updatedAtMs: nowMs,
+        },
+      ];
+      addedServers.push(server);
+    }
+  }
+  return changedServers.length > 0 || addedServers.length > 0
+    ? { map: next, changedServers, addedServers }
+    : { map, changedServers, addedServers };
 }
 
 /**

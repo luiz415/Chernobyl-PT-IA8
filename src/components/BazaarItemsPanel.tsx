@@ -1498,12 +1498,13 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
     if (!match) { setDetailApply(null); return; }
     // EXCLUSIVAMENTE o valor BASE da Lista de Itens do servidor — jamais o
     // Valor Total do personagem (Tier × quantidade) ou a correção manual.
-    const { changedServers } = propagateItemValueGlobally(match.watchedName, resolveDetailBaseValueKk(match));
+    const { changedServers, addedServers } = propagateItemValueGlobally(match.watchedName, resolveDetailBaseValueKk(match));
 
     // Feedback inline (2,5s): quantos servidores foram efetivamente
-    // atualizados — 0 significa que todos já estavam no valor.
+    // tocados (atualizados + criados) — 0 significa que todos já estavam
+    // no valor (item presente em todos, idempotência).
     setDetailApply(null);
-    setDetailApplyDone({ matchIndex, count: changedServers.length });
+    setDetailApplyDone({ matchIndex, count: changedServers.length + addedServers.length });
     if (detailApplyTimerRef.current !== null) window.clearTimeout(detailApplyTimerRef.current);
     detailApplyTimerRef.current = window.setTimeout(() => {
       setDetailApplyDone(null);
@@ -1514,19 +1515,25 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
   /**
    * NÚCLEO da propagação global — COMPARTILHADO pelo modal "Detalhes" e pelo
    * modal "Lista de Itens" (uma única implementação): aplica `valueKk` ao
-   * item em TODAS as listas de servidores (helper puro só grava onde mudou)
-   * e reprecifica a última consulta SÓ nos servidores alterados, preservando
-   * correções manuais de KK e a parcela de Ouro.
+   * item em TODAS as listas de servidores — atualizando onde existe e
+   * CRIANDO onde não existe (valor propagado como valor inicial; universo =
+   * SERVER_OPTIONS ∪ servidores já no mapa, mesma regra do "Adicionar
+   * Item"). O helper puro só grava onde mudou, e reprecifica a última
+   * consulta SÓ nos servidores tocados, preservando correções manuais de KK
+   * e a parcela de Ouro.
    */
-  function propagateItemValueGlobally(watchedName: string, valueKk: number): { changedServers: string[] } {
+  function propagateItemValueGlobally(watchedName: string, valueKk: number): { changedServers: string[]; addedServers: string[] } {
     const now = Date.now();
-    const { map, changedServers } = propagateWatchedItemValueToAllServers(watchedByServer, watchedName, valueKk, now);
-    if (changedServers.length > 0) {
+    const { map, changedServers, addedServers } = propagateWatchedItemValueToAllServers(watchedByServer, watchedName, valueKk, now, SERVER_OPTIONS);
+    if (changedServers.length > 0 || addedServers.length > 0) {
       // Uma única gravação do mapa completo (mesma chave/formato de sempre).
       persistAllServerItems(map);
       if (lastQuery) {
         let repriced = lastQuery.results;
-        for (const server of changedServers) {
+        // Servidores recém-criados também entram: se a última consulta tiver
+        // personagens deles com o item, os totais passam a usar o valor novo
+        // (sem match na consulta, o reprice é um no-op seguro).
+        for (const server of [...changedServers, ...addedServers]) {
           repriced = repriceQueryResultsForServerItem(repriced, server, watchedName, valueKk);
         }
         const updated: BazaarItemsLastQuery = { ...lastQuery, results: repriced };
@@ -1540,7 +1547,7 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
         }
       }
     }
-    return { changedServers };
+    return { changedServers, addedServers };
   }
 
   /**
@@ -1626,9 +1633,9 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
    * na própria linha do item. Usa o valor ATUAL configurado no item.
    */
   function applyListGlobalValue(item: WatchedItem) {
-    const { changedServers } = propagateItemValueGlobally(item.name, item.valueKk);
+    const { changedServers, addedServers } = propagateItemValueGlobally(item.name, item.valueKk);
     setListApply(null);
-    setListApplyDone({ itemId: item.id, count: changedServers.length });
+    setListApplyDone({ itemId: item.id, count: changedServers.length + addedServers.length });
     if (listApplyTimerRef.current !== null) window.clearTimeout(listApplyTimerRef.current);
     listApplyTimerRef.current = window.setTimeout(() => {
       setListApplyDone(null);
@@ -2849,7 +2856,7 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                               type="button"
                               onClick={() => setListApply(prev => (prev === item.id ? null : item.id))}
                               className={`p-1 rounded transition-colors cursor-pointer flex-shrink-0 ${listApply === item.id ? "text-amber-200 bg-amber-500/20" : "text-amber-300 hover:bg-amber-500/15"}`}
-                              title={`Atualizar valor para todos os servidores — aplica ${formatKkValue(item.valueKk, "kk")} de "${item.name}" à Lista de Itens de TODOS os servidores (pede confirmação)`}
+                              title={`Atualizar valor para todos os servidores — aplica ${formatKkValue(item.valueKk, "kk")} de "${item.name}" à Lista de Itens de TODOS os servidores; onde o item ainda não existir, ele é criado com este valor (pede confirmação)`}
                             >
                               <Globe size={12} />
                             </button>
@@ -2880,7 +2887,7 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                             type="button"
                             onClick={() => applyListGlobalValue(item)}
                             className="inline-flex items-center gap-1 rounded-md border border-emerald-500/40 bg-emerald-500/15 px-1.5 py-0.5 text-[9px] font-black text-emerald-300 hover:bg-emerald-500/25 transition-colors cursor-pointer"
-                            title="Confirmar: atualiza este item nas Listas de Itens de todos os servidores"
+                            title="Confirmar: atualiza este item nas Listas de Itens de todos os servidores (cria o item onde ainda não existir)"
                           >
                             <Check size={10} strokeWidth={3} /> Confirmar
                           </button>
@@ -3105,7 +3112,7 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                                 ? "border-amber-400/60 bg-amber-500/20 text-amber-200"
                                 : "border-amber-600/30 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20"
                             }`}
-                            title={`Aplicar o valor BASE atual (${formatKkValue(rowBaseValueKk, "kk")} — o da Lista de Itens, nunca o Valor Total) de "${match.watchedName}" à Lista de Itens de TODOS os servidores (pede confirmação)`}
+                            title={`Aplicar o valor BASE atual (${formatKkValue(rowBaseValueKk, "kk")} — o da Lista de Itens, nunca o Valor Total) de "${match.watchedName}" à Lista de Itens de TODOS os servidores; onde o item ainda não existir, ele é criado com este valor (pede confirmação)`}
                           >
                             <RefreshCw size={9} className="flex-shrink-0" /> Atualizar
                           </button>
@@ -3128,7 +3135,7 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                                 type="button"
                                 onClick={() => applyDetailGlobalValue(index)}
                                 className="inline-flex items-center gap-1 rounded-md border border-emerald-500/40 bg-emerald-500/15 px-1.5 py-0.5 text-[9px] font-black text-emerald-300 hover:bg-emerald-500/25 transition-colors cursor-pointer"
-                                title="Confirmar: atualiza este item nas Listas de Itens de todos os servidores"
+                                title="Confirmar: atualiza este item nas Listas de Itens de todos os servidores (cria o item onde ainda não existir)"
                               >
                                 <Check size={10} strokeWidth={3} /> Confirmar
                               </button>
