@@ -374,14 +374,14 @@ export default function AcquiredCharactersPanel({
             {sold.length === 0 ? (
               <EmptyPerspective text="Nenhum personagem seu foi negociado com outro usuário." />
             ) : (
-              <table className="w-full min-w-[650px] table-fixed border-separate border-spacing-0 text-xs">
+              <table className="w-full min-w-[560px] table-fixed border-separate border-spacing-0 text-xs">
                 <colgroup>
-                  <col className="w-[22%]" /><col className="w-[18%]" /><col className="w-[19%]" />
-                  <col className="w-[15%]" /><col className="w-[12%]" /><col className="w-[14%]" />
+                  <col className="w-[24%]" /><col className="w-[20%]" /><col className="w-[21%]" />
+                  <col className="w-[17%]" /><col className="w-[18%]" />
                 </colgroup>
                 <thead className="sticky top-0 z-10 bg-[var(--th-bg-base)] text-[8px] uppercase tracking-wider text-slate-500 shadow-[0_1px_0_rgba(255,255,255,0.06)]">
                   <tr>
-                    {['Personagem', 'Perspectiva', 'Valor Recebido', 'Venda', 'Total', 'PG'].map(label => <th key={label} className="border-b border-[var(--th-line)]/60 px-2 py-2 text-center font-black whitespace-nowrap first:text-left">{label}</th>)}
+                    {['Personagem', 'Perspectiva', 'Valor Recebido', 'Venda', 'PG'].map(label => <th key={label} className="border-b border-[var(--th-line)]/60 px-2 py-2 text-center font-black whitespace-nowrap first:text-left">{label}</th>)}
                   </tr>
                 </thead>
                 <tbody>
@@ -390,7 +390,10 @@ export default function AcquiredCharactersPanel({
                     const initialPaymentConfirmed = isPaymentConfirmed(record);
                     const saleValue = resolveOfficialSaleValue(record, currentUserUid, originalCharactersById);
                     const payoutReady = record.status === "sold" && saleValue !== undefined && saleValue > 0;
-                    const total = received - record.originalCharacterCost;
+                    // Sem coluna "Total" nesta tabela: venda entre usuários não
+                    // gera lucro ao vendedor (os 50 RC da taxa do Bazaar são
+                    // taxa obrigatória do jogo, nunca lucro) — nenhum cálculo
+                    // de lucro é exibido ou sugerido aqui.
                     const canEditSale = record.salePayoutStatus !== "confirmed" && !!onEditOriginalCharacter;
                     // Pagamento posterior: o valor NÃO foi transferido no aceite;
                     // fica pendente até a compensação única após a venda.
@@ -420,7 +423,6 @@ export default function AcquiredCharactersPanel({
                             {canEditSale && <button type="button" onClick={() => onEditOriginalCharacter?.(record.characterId)} className="inline-flex h-4 w-4 items-center justify-center rounded border border-amber-500/30 bg-amber-500/10 text-amber-200 transition-colors hover:bg-amber-500/20" title="Editar o valor de venda no personagem original" aria-label="Editar valor da venda"><Pencil size={9} /></button>}
                           </div>
                         </td>
-                        <td className={`border-b border-white/5 px-2 py-1.5 text-center font-mono text-[11px] font-black ${total >= 0 ? "text-sky-200" : "text-rose-300"}`}>{initialPaymentConfirmed ? formatRC(total) : "—"}</td>
                         <td className="border-b border-white/5 px-2 py-1.5 text-center">
                           {!payoutReady ? (
                             <PaymentStamp value={record.status === "sold" ? "Aguardando valor da venda" : "Aguardando venda"} confirmed={false} />
