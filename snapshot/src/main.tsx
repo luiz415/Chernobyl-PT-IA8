@@ -8,6 +8,7 @@ import { UserStatsProvider } from "./context/UserStatsContext";
 import { ThemeProvider } from "./theme/ThemeContext";
 import TutorialRoot from "./tutorial/TutorialRoot";
 import PublicServiceForm from "./components/PublicServiceForm";
+import PublicRecruitmentPage from "./components/PublicRecruitmentPage";
 import { installGlobalPulseSync } from "./utils/pulseSync";
 
 // Sincroniza TODOS os efeitos de pulsação participantes (seletores de estágio
@@ -30,15 +31,25 @@ const normalizedHash = (() => {
   try { return decodeURIComponent(window.location.hash).toLowerCase(); }
   catch { return window.location.hash.toLowerCase(); }
 })();
+// Página pública de RECRUTAMENTO (https://SEU-DOMINIO.web.app/#/serviceiro):
+// mesma mecânica dos links públicos — decidida ANTES do render, fora do Auth
+// Gate, sem login. Checada PRIMEIRO porque é a rota mais específica
+// ("#/servico"/"#/serviço" não colidem com "#/serviceiro", mas a ordem
+// explícita elimina qualquer ambiguidade futura).
+const isPublicRecruitmentPage = normalizedHash.startsWith("#/serviceiro");
 const isPublicServicePage =
-  normalizedHash.startsWith("#/servico") ||
-  normalizedHash.startsWith("#/serviço") ||
-  new URLSearchParams(window.location.search).has("servico");
+  !isPublicRecruitmentPage && (
+    normalizedHash.startsWith("#/servico") ||
+    normalizedHash.startsWith("#/serviço") ||
+    new URLSearchParams(window.location.search).has("servico")
+  );
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <ThemeProvider>
-      {isPublicServicePage ? (
+      {isPublicRecruitmentPage ? (
+        <PublicRecruitmentPage />
+      ) : isPublicServicePage ? (
         <PublicServiceForm />
       ) : (
         <AuthProvider>
