@@ -48,10 +48,11 @@ import { VOC_COLORS } from "../types";
 // página carrega sem login, sem Firestore e sem nenhuma dependência de dados.
 // Conteúdo 100% estático e institucional.
 //
-// Identidade visual: reaproveita integralmente o tema premium já existente da
-// página pública (classe `public-service-form` + psf-quadro/psf-card em
-// src/index.css): tokens dark, tipografia fluida (clamp), neon/hover com
-// suporte a touch e prefers-reduced-motion. Nenhum CSS novo foi necessário.
+// Identidade visual: reaproveita o tema premium da página pública (classe
+// `public-service-form` + psf-quadro/psf-card em src/index.css). A classe
+// adicional `recruit-page` aplica a ESCALA TIPOGRÁFICA própria desta landing
+// (fontes maiores e mais legíveis que as do formulário) — ver o bloco
+// "PÁGINA DE RECRUTAMENTO" em src/index.css.
 //
 // Contato: reutiliza o ÚNICO mecanismo público de contato que já existe no
 // projeto (WhatsApp do Suporte, o mesmo do rodapé do formulário público).
@@ -75,16 +76,16 @@ const EARNING_SCENARIOS = [
 // ── Pré-requisitos (conteúdo fornecido — não alterar sem necessidade) ───────
 const REQUIREMENTS: { icon: typeof Zap; text: ReactNode }[] = [
   { icon: Rocket, text: <>Ser um jogador <strong className="text-white">proativo</strong>.</> },
-  { icon: Swords, text: <>Dominar completamente <strong className="text-white">pelo menos 2 vocações</strong>, incluindo <strong className="text-white">refil e proteções de cada Quest</strong>.</> },
-  { icon: Radar, text: <>Saber seguir <strong className="text-white">Call</strong>: quando alguém passar a call, saber executar com facilidade e precisão.</> },
+  { icon: Swords, text: <>Dominar completamente <strong className="text-cyan-200">pelo menos 2 vocações</strong>, incluindo <strong className="text-white">refil e proteções de cada Quest</strong>.</> },
+  { icon: Radar, text: <>Saber seguir <strong className="text-cyan-200">Call</strong>: quando alguém passar a call, saber executar com facilidade e precisão.</> },
   { icon: Users, text: <>Conhecer as <strong className="text-white">funções básicas de todas as vocações</strong>.</> },
-  { icon: Crosshair, text: <>Dominar completamente as <strong className="text-white">mecânicas de todos os Bosses</strong> das Quests <strong className="text-white">Soul War</strong> e <strong className="text-white">Sanguine</strong>.</> },
+  { icon: Crosshair, text: <>Dominar completamente as <strong className="text-cyan-200">mecânicas de todos os Bosses</strong> das Quests <strong className="text-white">Soul War</strong> e <strong className="text-white">Sanguine</strong>.</> },
   { icon: Gauge, text: <>Dominar completamente a <strong className="text-white">rodinha de habilidades</strong> das vocações que joga.</> },
-  { icon: Wand2, text: <>Dominar e ter facilidade para <strong className="text-white">"Swapar" Amuletos e Anéis</strong>, principalmente <strong className="text-white">SSA</strong>, <strong className="text-white">Might Ring</strong> e <strong className="text-white">Sacred Tree Amulet</strong>.</> },
+  { icon: Wand2, text: <>Dominar e ter facilidade para <strong className="text-cyan-200">"Swapar" Amuletos e Anéis</strong>, principalmente <strong className="text-white">SSA</strong>, <strong className="text-white">Might Ring</strong> e <strong className="text-white">Sacred Tree Amulet</strong>.</> },
   { icon: ShieldCheck, text: <>Ter <strong className="text-white">calma e controle</strong> em situações extremas.</> },
   { icon: Award, text: <>Ter facilidade para realizar as Quests utilizando <strong className="text-white">personagens de nível baixo</strong>.</> },
-  { icon: CalendarClock, text: <>Ter <strong className="text-white">compromisso com horários</strong> e cumprir os horários combinados.</> },
-  { icon: HandCoins, text: <>Entender que <strong className="text-white">é investindo que se obtém lucro</strong>.</> },
+  { icon: CalendarClock, text: <>Ter <strong className="text-cyan-200">compromisso com horários</strong> e cumprir os horários combinados.</> },
+  { icon: HandCoins, text: <>Entender que <strong className="text-amber-200">é investindo que se obtém lucro</strong>.</> },
 ];
 
 // ── Níveis mínimos recomendados (conteúdo fornecido — não alterar) ──────────
@@ -141,12 +142,12 @@ const BENEFITS: { icon: typeof Zap; tone: string; title: string; body: ReactNode
     body: (
       <>
         Possibilidade de escolher entre comprar <strong className="text-white">personagens baratos, já disponíveis e preparados para as Quests</strong>.
-        <ul className="mt-2 space-y-1 text-slate-400">
-          <li className="flex items-start gap-1.5"><span className="text-emerald-400 mt-0.5">•</span><span>Cada personagem possui seu próprio valor.</span></li>
-          <li className="flex items-start gap-1.5"><span className="text-emerald-400 mt-0.5">•</span><span>O valor é exatamente o valor pago no <strong className="text-white">Bazaar do RubinOT</strong>.</span></li>
-          <li className="flex items-start gap-1.5"><span className="text-emerald-400 mt-0.5">•</span><span>Os personagens disponíveis ficam entre <strong className="text-white">51 RC e 500 RC</strong>.</span></li>
+        <ul className="mt-3 space-y-1.5 text-slate-400">
+          <li className="flex items-start gap-2"><span className="text-emerald-400 mt-0.5 font-black">•</span><span>Cada personagem possui <strong className="text-slate-200">seu próprio valor</strong>.</span></li>
+          <li className="flex items-start gap-2"><span className="text-emerald-400 mt-0.5 font-black">•</span><span>O valor é exatamente o valor pago no <strong className="text-slate-200">Bazaar do RubinOT</strong>.</span></li>
+          <li className="flex items-start gap-2"><span className="text-emerald-400 mt-0.5 font-black">•</span><span>Os personagens disponíveis ficam entre <strong className="text-emerald-300">51 RC e 500 RC</strong>.</span></li>
         </ul>
-        <p className="mt-2 text-slate-400">Alternativamente, é possível <strong className="text-white">combinar um valor para realizar o Service de um personagem</strong>, quando essa modalidade for utilizada.</p>
+        <p className="mt-3 text-slate-400">Alternativamente, é possível <strong className="text-slate-200">combinar um valor para realizar o Service de um personagem</strong>, quando essa modalidade for utilizada.</p>
       </>
     ),
   },
@@ -154,7 +155,7 @@ const BENEFITS: { icon: typeof Zap; tone: string; title: string; body: ReactNode
     icon: Landmark,
     tone: "#f59e0b",
     title: "Acompanhar o Bazaar oficial do RubinOT",
-    body: <>Acompanhe a lista oficial do Bazaar com personagens <strong className="text-white">já filtrados de acordo com as Quests disponíveis</strong> e realize <strong className="text-white">BID</strong> nos próprios personagens.</>,
+    body: <>Acompanhe a lista oficial do Bazaar com personagens <strong className="text-white">já filtrados de acordo com as Quests disponíveis</strong> e realize <strong className="text-amber-200">BID</strong> nos próprios personagens.</>,
   },
   {
     icon: Gem,
@@ -194,6 +195,18 @@ const IDEAL_PROFILE: { icon: typeof Zap; label: string; tone: string }[] = [
 ];
 
 // ── Blocos auxiliares de layout ─────────────────────────────────────────────
+
+/** Divisor sutil entre grandes seções — respiro visual sem poluir. */
+function SectionDivider() {
+  return (
+    <div className="flex items-center justify-center gap-3 py-1" aria-hidden="true">
+      <span className="h-px w-16 sm:w-24 bg-gradient-to-r from-transparent to-white/15" />
+      <span className="h-1.5 w-1.5 rotate-45 rounded-[2px] bg-white/20" />
+      <span className="h-px w-16 sm:w-24 bg-gradient-to-l from-transparent to-white/15" />
+    </div>
+  );
+}
+
 function SectionShell({ accent, icon: Icon, title, subtitle, children }: {
   accent: string;
   icon: typeof Zap;
@@ -207,18 +220,18 @@ function SectionShell({ accent, icon: Icon, title, subtitle, children }: {
       style={{ "--psf-quadro-accent": accent, borderColor: `${accent}55` } as CSSProperties}
     >
       <div
-        className="psf-quadro-header border-b px-7 py-5 flex items-center gap-3"
+        className="psf-quadro-header border-b px-5 sm:px-7 py-5 flex items-center gap-3.5"
         style={{
           borderColor: `${accent}33`,
           background: `linear-gradient(90deg, ${accent}14, ${accent}22, ${accent}14)`,
         }}
       >
-        <div className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0" style={{ background: `linear-gradient(135deg, ${accent}, color-mix(in oklab, ${accent} 55%, black))` }}>
-          <Icon size={20} className="text-black" />
+        <div className="w-11 h-11 sm:w-12 sm:h-12 rounded-xl flex items-center justify-center flex-shrink-0 shadow-lg" style={{ background: `linear-gradient(135deg, ${accent}, color-mix(in oklab, ${accent} 55%, black))`, boxShadow: `0 8px 24px -8px ${accent}66` }}>
+          <Icon size={22} className="text-black" />
         </div>
         <div className="min-w-0">
-          <h2 className="text-base font-black tracking-wide uppercase" style={{ color: `color-mix(in oklab, ${accent} 70%, white)` }}>{title}</h2>
-          <p className="text-[11px] text-slate-500">{subtitle}</p>
+          <h2 className="font-black tracking-wide uppercase" style={{ color: `color-mix(in oklab, ${accent} 70%, white)` }}>{title}</h2>
+          <p className="recruit-subtitle text-slate-500">{subtitle}</p>
         </div>
       </div>
       <div className="psf-quadro-inner px-4 py-6 sm:p-7">{children}</div>
@@ -231,7 +244,7 @@ function SectionShell({ accent, icon: Icon, title, subtitle, children }: {
 // ============================================================================
 export default function PublicRecruitmentPage() {
   return (
-    <div className="public-service-form min-h-screen w-full text-slate-200 font-sans relative overflow-x-hidden">
+    <div className="public-service-form recruit-page min-h-screen w-full text-slate-200 font-sans relative overflow-x-hidden">
       {/* Imagem de fundo fixa — a mesma identidade da página pública de Service */}
       <div
         className="fixed inset-0 pointer-events-none bg-[var(--th-n-raised)]"
@@ -263,39 +276,39 @@ export default function PublicRecruitmentPage() {
         </div>
       </header>
 
-      <div className="relative z-10 w-full max-w-3xl mx-auto px-3 sm:px-6 pt-28 pb-12 space-y-8">
+      <div className="relative z-10 w-full max-w-3xl mx-auto px-3 sm:px-6 pt-28 pb-14 space-y-10 sm:space-y-12">
 
         {/* ================================================================
             1. HERO / APRESENTAÇÃO
             ================================================================ */}
-        <section className="text-center space-y-5 py-6 sm:py-10">
-          <div className="inline-flex items-center gap-2 rounded-full border border-cyan-500/30 bg-cyan-500/10 px-4 py-1.5 text-[10px] font-black uppercase tracking-[0.2em] text-cyan-300">
-            <Radar size={12} className="flex-shrink-0" /> Recrutamento aberto
+        <section className="text-center space-y-6 py-8 sm:py-12">
+          <div className="inline-flex items-center gap-2 rounded-full border border-cyan-500/35 bg-cyan-500/10 px-5 py-2 text-[11px] sm:text-xs font-black uppercase tracking-[0.22em] text-cyan-300 shadow-[0_0_24px_-8px_rgba(34,211,238,0.5)]">
+            <Radar size={14} className="flex-shrink-0" /> Recrutamento aberto
           </div>
-          <div className="space-y-3">
-            <h2 className="text-2xl sm:text-4xl font-black tracking-tight text-white leading-tight" style={{ filter: "drop-shadow(0 6px 24px rgb(0 0 0 / 0.6))" }}>
+          <div className="space-y-4">
+            <h2 className="recruit-hero-title font-black tracking-tight text-white leading-tight" style={{ filter: "drop-shadow(0 6px 24px rgb(0 0 0 / 0.6))" }}>
               Chernobyl Team
             </h2>
-            <p className="mx-auto max-w-xl text-base sm:text-xl font-black leading-snug bg-gradient-to-r from-cyan-300 via-sky-300 to-violet-300 bg-clip-text text-transparent">
+            <p className="recruit-hero-tagline mx-auto max-w-2xl font-black leading-snug bg-gradient-to-r from-cyan-300 via-sky-300 to-violet-300 bg-clip-text text-transparent">
               Transforme sua experiência no Tibia em uma profissão.
             </p>
           </div>
-          <p className="mx-auto max-w-2xl text-sm text-slate-400 leading-relaxed">
+          <p className="mx-auto max-w-2xl text-slate-300 leading-relaxed">
             O <strong className="text-white">Chernobyl Team</strong> busca pessoas que compartilham os mesmos
             interesses dos nossos Serviceiros e que desejam transformar essa atividade em uma
-            <strong className="text-white"> profissão e fonte de renda</strong>. Procuramos jogadores
+            <strong className="text-cyan-200"> profissão e fonte de renda</strong>. Procuramos jogadores
             comprometidos, habilidosos e interessados em trabalhar profissionalmente com
             <strong className="text-white"> Services e Quests</strong> — com organização, método e uma
             estrutura completa por trás.
           </p>
-          <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
+          <div className="flex flex-wrap items-center justify-center gap-2.5 pt-1">
             {[
               { icon: Trophy, label: "Operação profissional" },
               { icon: BrainCircuit, label: "Estrutura + tecnologia" },
               { icon: Scale, label: "Transparência total" },
             ].map(({ icon: Icon, label }) => (
-              <span key={label} className="inline-flex items-center gap-1.5 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-1.5 text-[11px] font-bold text-slate-300">
-                <Icon size={13} className="text-cyan-400 flex-shrink-0" /> {label}
+              <span key={label} className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.05] px-4 py-2 text-xs sm:text-sm font-bold text-slate-200 backdrop-blur-sm">
+                <Icon size={15} className="text-cyan-400 flex-shrink-0" /> {label}
               </span>
             ))}
           </div>
@@ -305,29 +318,29 @@ export default function PublicRecruitmentPage() {
             2. O QUE PROCURAMOS
             ================================================================ */}
         <SectionShell accent="#22d3ee" icon={UserCheck} title="O que procuramos" subtitle="O perfil que buscamos para o Team">
-          <div className="space-y-6">
-            <div className="rounded-2xl border border-cyan-500/20 bg-cyan-500/[0.06] px-5 py-4">
-              <p className="text-sm text-slate-300 leading-relaxed">
-                Procuramos jogadores que tenham interesse em <strong className="text-white">trabalhar
+          <div className="space-y-8">
+            <div className="rounded-2xl border-l-4 border border-cyan-500/25 bg-cyan-500/[0.07] px-5 py-4 sm:px-6 sm:py-5" style={{ borderLeftColor: "#22d3ee" }}>
+              <p className="text-slate-200 leading-relaxed">
+                Procuramos jogadores que tenham interesse em <strong className="text-cyan-200">trabalhar
                 profissionalmente com Services</strong>, que sejam <strong className="text-white">comprometidos</strong>,
                 tenham <strong className="text-white">domínio técnico do jogo</strong> e estejam dispostos a
-                <strong className="text-white"> investir tempo, conhecimento e estrutura</strong> para obter resultados.
+                <strong className="text-cyan-200"> investir tempo, conhecimento e estrutura</strong> para obter resultados.
               </p>
             </div>
 
             {/* Pré-requisitos */}
             <div>
-              <h3 className="flex items-center gap-2 text-sm font-black text-white uppercase tracking-wider mb-4">
-                <span className="w-7 h-7 rounded-lg bg-cyan-500/15 border border-cyan-500/30 flex items-center justify-center"><ListChecks size={14} className="text-cyan-300" /></span>
+              <h3 className="flex items-center gap-2.5 font-black text-white uppercase tracking-wider mb-5">
+                <span className="w-9 h-9 rounded-xl bg-cyan-500/15 border border-cyan-500/30 flex items-center justify-center flex-shrink-0"><ListChecks size={17} className="text-cyan-300" /></span>
                 Pré-requisitos
               </h3>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 {REQUIREMENTS.map(({ icon: Icon, text }, i) => (
-                  <div key={i} className="psf-card flex items-start gap-3 rounded-2xl border border-white/5 bg-[var(--th-n-panel)] px-4 py-3" style={{ "--psf-accent": "#22d3ee" } as CSSProperties}>
-                    <span className="mt-0.5 flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-lg border border-cyan-500/25 bg-cyan-500/10">
-                      <Icon size={13} className="text-cyan-300" />
+                  <div key={i} className="psf-card flex items-start gap-3.5 rounded-2xl border border-white/[0.07] bg-[var(--th-n-panel)] px-4 py-3.5 sm:px-5 sm:py-4" style={{ "--psf-accent": "#22d3ee" } as CSSProperties}>
+                    <span className="mt-0.5 flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl border border-cyan-500/25 bg-cyan-500/10">
+                      <Icon size={16} className="text-cyan-300" />
                     </span>
-                    <span className="text-xs text-slate-300 leading-relaxed">{text}</span>
+                    <span className="recruit-body text-slate-300 leading-relaxed">{text}</span>
                   </div>
                 ))}
               </div>
@@ -335,24 +348,24 @@ export default function PublicRecruitmentPage() {
 
             {/* Níveis mínimos recomendados */}
             <div>
-              <h3 className="flex items-center gap-2 text-sm font-black text-white uppercase tracking-wider mb-1.5">
-                <span className="w-7 h-7 rounded-lg bg-rose-500/15 border border-rose-500/30 flex items-center justify-center"><Gauge size={14} className="text-rose-300" /></span>
+              <h3 className="flex items-center gap-2.5 font-black text-white uppercase tracking-wider mb-2">
+                <span className="w-9 h-9 rounded-xl bg-rose-500/15 border border-rose-500/30 flex items-center justify-center flex-shrink-0"><Gauge size={17} className="text-rose-300" /></span>
                 Níveis mínimos recomendados
               </h3>
-              <p className="text-[11px] text-slate-500 mb-4">Um dos pontos importantes da seleção — referência por Quest e vocação.</p>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <p className="recruit-subtitle text-slate-500 mb-5">Um dos pontos importantes da seleção — referência por Quest e vocação.</p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 {MIN_LEVELS.map(({ quest, accent, rows }) => (
-                  <div key={quest} className="psf-card rounded-2xl border bg-[var(--th-n-panel)] p-4" style={{ "--psf-accent": accent, borderColor: `${accent}33` } as CSSProperties}>
-                    <div className="mb-3 flex items-center gap-2">
-                      <span className="h-2 w-2 rounded-full" style={{ backgroundColor: accent, boxShadow: `0 0 10px ${accent}` }} />
-                      <span className="text-sm font-black uppercase tracking-wider" style={{ color: `color-mix(in oklab, ${accent} 70%, white)` }}>{quest}</span>
+                  <div key={quest} className="psf-card rounded-2xl border bg-[var(--th-n-panel)] p-4 sm:p-5" style={{ "--psf-accent": accent, borderColor: `${accent}33` } as CSSProperties}>
+                    <div className="mb-4 flex items-center gap-2.5">
+                      <span className="h-2.5 w-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: accent, boxShadow: `0 0 12px ${accent}` }} />
+                      <span className="text-base sm:text-lg font-black uppercase tracking-wider" style={{ color: `color-mix(in oklab, ${accent} 70%, white)` }}>{quest}</span>
                     </div>
-                    <div className="grid grid-cols-2 gap-2">
+                    <div className="grid grid-cols-2 gap-2.5">
                       {rows.map(({ voc, sub, level, color }) => (
-                        <div key={`${quest}-${voc}`} className="psf-voc rounded-xl border bg-black/20 p-2.5 text-center" style={{ "--voc-color": color } as CSSProperties}>
-                          <div className="psf-voc-letter text-sm font-black tracking-wider" style={{ color: `color-mix(in oklab, ${color} 62%, white)` }}>{voc}</div>
-                          <div className="text-[8px] uppercase tracking-wider text-slate-500 mb-1">{sub}</div>
-                          <div className="psf-voc-badge inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-black tabular-nums" style={{ color: `color-mix(in oklab, ${color} 62%, white)`, borderColor: `${color}44`, backgroundColor: `${color}11` }}>{level}+</div>
+                        <div key={`${quest}-${voc}`} className="psf-voc rounded-xl border bg-black/25 p-3 text-center" style={{ "--voc-color": color } as CSSProperties}>
+                          <div className="psf-voc-letter font-black tracking-wider" style={{ color: `color-mix(in oklab, ${color} 62%, white)` }}>{voc}</div>
+                          <div className="text-[10px] uppercase tracking-wider text-slate-500 mb-1.5">{sub}</div>
+                          <div className="psf-voc-badge inline-flex items-center rounded-full border px-2.5 py-1 font-black tabular-nums" style={{ color: `color-mix(in oklab, ${color} 62%, white)`, borderColor: `${color}44`, backgroundColor: `${color}11` }}>{level}+</div>
                         </div>
                       ))}
                     </div>
@@ -363,19 +376,19 @@ export default function PublicRecruitmentPage() {
 
             {/* Diferenciais recomendáveis */}
             <div>
-              <h3 className="flex items-center gap-2 text-sm font-black text-white uppercase tracking-wider mb-1.5">
-                <span className="w-7 h-7 rounded-lg bg-amber-500/15 border border-amber-500/30 flex items-center justify-center"><Sparkles size={14} className="text-amber-300" /></span>
+              <h3 className="flex items-center gap-2.5 font-black text-white uppercase tracking-wider mb-2">
+                <span className="w-9 h-9 rounded-xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center flex-shrink-0"><Sparkles size={17} className="text-amber-300" /></span>
                 Diferenciais recomendáveis
               </h3>
-              <p className="text-[11px] text-slate-500 mb-4">Não são obrigatórios — mas contam pontos importantes na seleção.</p>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+              <p className="recruit-subtitle text-slate-500 mb-5">Não são obrigatórios — mas contam pontos importantes na seleção.</p>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 {DIFFERENTIALS.map(({ icon: Icon, title, text }) => (
-                  <div key={title} className="psf-card rounded-2xl border border-amber-500/15 bg-[var(--th-n-panel)] p-4 text-center" style={{ "--psf-accent": "#f59e0b" } as CSSProperties}>
-                    <span className="mx-auto mb-2 flex h-9 w-9 items-center justify-center rounded-xl border border-amber-500/25 bg-amber-500/10">
-                      <Icon size={16} className="text-amber-300" />
+                  <div key={title} className="psf-card rounded-2xl border border-amber-500/15 bg-[var(--th-n-panel)] p-5 text-center" style={{ "--psf-accent": "#f59e0b" } as CSSProperties}>
+                    <span className="mx-auto mb-3 flex h-11 w-11 items-center justify-center rounded-xl border border-amber-500/25 bg-amber-500/10">
+                      <Icon size={19} className="text-amber-300" />
                     </span>
-                    <div className="text-xs font-black text-amber-200 uppercase tracking-wide mb-1">{title}</div>
-                    <p className="text-[11px] text-slate-400 leading-relaxed">{text}</p>
+                    <div className="text-sm sm:text-base font-black text-amber-200 uppercase tracking-wide mb-1.5">{title}</div>
+                    <p className="recruit-support text-slate-400 leading-relaxed">{text}</p>
                   </div>
                 ))}
               </div>
@@ -383,81 +396,85 @@ export default function PublicRecruitmentPage() {
           </div>
         </SectionShell>
 
+        <SectionDivider />
+
         {/* ================================================================
             3. BENEFÍCIOS
             ================================================================ */}
         <SectionShell accent="#34d399" icon={Gem} title="Benefícios do Chernobyl Team" subtitle="A estrutura completa que você recebe ao fazer parte">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
             {BENEFITS.map(({ icon: Icon, tone, title, body }, i) => (
               <div
                 key={title}
-                className={`psf-card rounded-2xl border bg-[var(--th-n-panel)] p-4 ${i === 2 ? "sm:col-span-2" : ""}`}
+                className={`psf-card rounded-2xl border bg-[var(--th-n-panel)] p-5 ${i === 2 ? "sm:col-span-2" : ""}`}
                 style={{ "--psf-accent": tone, borderColor: `${tone}26` } as CSSProperties}
               >
-                <div className="mb-2 flex items-center gap-2.5">
-                  <span className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg border" style={{ borderColor: `${tone}40`, backgroundColor: `${tone}14` }}>
-                    <Icon size={15} style={{ color: `color-mix(in oklab, ${tone} 75%, white)` }} />
+                <div className="mb-3 flex items-center gap-3">
+                  <span className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl border" style={{ borderColor: `${tone}40`, backgroundColor: `${tone}14` }}>
+                    <Icon size={18} style={{ color: `color-mix(in oklab, ${tone} 75%, white)` }} />
                   </span>
-                  <span className="text-xs font-black uppercase tracking-wide" style={{ color: `color-mix(in oklab, ${tone} 70%, white)` }}>{title}</span>
+                  <span className="text-sm sm:text-base font-black uppercase tracking-wide leading-tight" style={{ color: `color-mix(in oklab, ${tone} 70%, white)` }}>{title}</span>
                 </div>
-                <div className="text-xs text-slate-300 leading-relaxed">{body}</div>
+                <div className="recruit-body text-slate-300 leading-relaxed">{body}</div>
               </div>
             ))}
           </div>
         </SectionShell>
 
+        <SectionDivider />
+
         {/* ================================================================
             4. POTENCIAL DE GANHOS
             ================================================================ */}
         <SectionShell accent="#f59e0b" icon={LineChart} title="Potencial de ganhos" subtitle="Simulações de referência — não são promessa de ganho garantido">
-          <div className="space-y-5">
+          <div className="space-y-6">
             {/* Premissas do cálculo — matemática explícita e verificável */}
-            <div className="rounded-2xl border border-white/10 bg-black/20 px-5 py-4">
-              <div className="mb-3 flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.15em] text-slate-400">
-                <ClipboardList size={13} className="text-amber-400" /> Premissas do cenário utilizado pelo Team
+            <div className="rounded-2xl border border-white/10 bg-black/25 px-5 py-5 sm:px-6">
+              <div className="mb-4 flex items-center gap-2 text-xs sm:text-sm font-black uppercase tracking-[0.15em] text-slate-300">
+                <ClipboardList size={15} className="text-amber-400 flex-shrink-0" /> Premissas do cenário utilizado pelo Team
               </div>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-center">
-                <div className="rounded-xl border border-white/5 bg-white/[0.03] px-3 py-2.5">
-                  <div className="text-sm font-black text-white tabular-nums">800 RC</div>
-                  <div className="text-[9px] uppercase tracking-wider text-slate-500">valor médio por Quest/Service</div>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-center">
+                <div className="rounded-xl border border-white/[0.07] bg-white/[0.04] px-3 py-3.5">
+                  <div className="text-lg sm:text-xl font-black text-amber-200 tabular-nums">800 RC</div>
+                  <div className="recruit-support uppercase tracking-wider text-slate-500 mt-0.5">valor médio por Quest/Service</div>
                 </div>
-                <div className="rounded-xl border border-white/5 bg-white/[0.03] px-3 py-2.5">
-                  <div className="text-sm font-black text-white tabular-nums">1.000 RC = R$ 90,00</div>
-                  <div className="text-[9px] uppercase tracking-wider text-slate-500">conversão utilizada</div>
+                <div className="rounded-xl border border-white/[0.07] bg-white/[0.04] px-3 py-3.5">
+                  <div className="text-lg sm:text-xl font-black text-amber-200 tabular-nums">1.000 RC = R$ 90,00</div>
+                  <div className="recruit-support uppercase tracking-wider text-slate-500 mt-0.5">conversão utilizada</div>
                 </div>
-                <div className="rounded-xl border border-white/5 bg-white/[0.03] px-3 py-2.5">
-                  <div className="text-sm font-black text-white">Segunda a sábado</div>
-                  <div className="text-[9px] uppercase tracking-wider text-slate-500">26 dias no mês de referência</div>
+                <div className="rounded-xl border border-white/[0.07] bg-white/[0.04] px-3 py-3.5">
+                  <div className="text-lg sm:text-xl font-black text-white">Segunda a sábado</div>
+                  <div className="recruit-support uppercase tracking-wider text-slate-500 mt-0.5">26 dias no mês de referência</div>
                 </div>
               </div>
-              <p className="mt-3 text-[11px] text-slate-500 leading-relaxed text-center">
-                Pela conversão, <strong className="text-slate-300">800 RC ≈ R$ 72,00</strong> por Quest/Service.
-                Trabalhando de segunda a sábado, o mês de referência soma <strong className="text-slate-300">26 dias</strong> — é daí que saem os valores abaixo.
+              <p className="mt-4 recruit-body text-slate-400 leading-relaxed text-center">
+                Pela conversão, <strong className="text-amber-200">800 RC ≈ R$ 72,00</strong> por Quest/Service.
+                Trabalhando de segunda a sábado, o mês de referência soma <strong className="text-white">26 dias</strong> — é daí que saem os valores abaixo.
               </p>
             </div>
 
             {/* Cenários */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 sm:gap-3.5 pt-1.5">
               {EARNING_SCENARIOS.map(({ perDay, label, value, math, tone, icon: Icon, ...rest }) => (
-                <div key={perDay} className="psf-card relative rounded-2xl border bg-[var(--th-n-panel)] p-5 text-center" style={{ "--psf-accent": tone, borderColor: `${tone}33` } as CSSProperties}>
+                <div key={perDay} className="psf-card relative rounded-2xl border bg-[var(--th-n-panel)] p-5 sm:p-6 text-center" style={{ "--psf-accent": tone, borderColor: `${tone}33` } as CSSProperties}>
                   {"badge" in rest && rest.badge ? (
-                    <span className="absolute -top-2.5 left-1/2 -translate-x-1/2 rounded-full border border-amber-500/40 bg-[var(--th-n-elev)] px-2.5 py-0.5 text-[8px] font-black uppercase tracking-widest text-amber-300">{rest.badge}</span>
+                    <span className="absolute -top-3 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-full border border-amber-500/40 bg-[var(--th-n-elev)] px-3 py-1 text-[10px] font-black uppercase tracking-widest text-amber-300">{rest.badge}</span>
                   ) : null}
-                  <span className="mx-auto mb-2.5 flex h-10 w-10 items-center justify-center rounded-xl border" style={{ borderColor: `${tone}40`, backgroundColor: `${tone}14` }}>
-                    <Icon size={18} style={{ color: `color-mix(in oklab, ${tone} 75%, white)` }} />
+                  <span className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-xl border" style={{ borderColor: `${tone}40`, backgroundColor: `${tone}14` }}>
+                    <Icon size={21} style={{ color: `color-mix(in oklab, ${tone} 75%, white)` }} />
                   </span>
-                  <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1.5">{label}</div>
-                  <div className="psf-pay-value text-xl font-black tabular-nums" style={{ color: `color-mix(in oklab, ${tone} 70%, white)` }}>{value}</div>
-                  <div className="mt-1 text-[9px] font-mono text-slate-500">{math}</div>
-                  <div className="mt-2 text-[9px] uppercase tracking-widest text-slate-600">alvo de referência mensal</div>
+                  <div className="text-xs sm:text-sm font-bold uppercase tracking-wider text-slate-300 mb-2">{label}</div>
+                  <div className="recruit-earning-value font-black tabular-nums leading-none" style={{ color: `color-mix(in oklab, ${tone} 70%, white)` }}>{value}</div>
+                  <div className="mt-2 text-[11px] sm:text-xs font-mono text-slate-500">{math}</div>
+                  <div className="mt-2.5 recruit-support uppercase tracking-widest text-slate-600">alvo de referência mensal</div>
                 </div>
               ))}
             </div>
 
             {/* Disclaimer — potencial, não promessa */}
-            <div className="flex items-start gap-2.5 rounded-xl border border-amber-500/25 bg-amber-500/[0.07] px-4 py-3">
-              <ShieldAlert size={15} className="mt-0.5 flex-shrink-0 text-amber-400" />
-              <p className="text-[11px] text-amber-200/90 leading-relaxed">
+            <div className="flex items-start gap-3 rounded-xl border border-amber-500/25 bg-amber-500/[0.07] px-4 py-4 sm:px-5">
+              <ShieldAlert size={18} className="mt-0.5 flex-shrink-0 text-amber-400" />
+              <p className="recruit-body text-amber-200/90 leading-relaxed">
                 Os valores acima são <strong className="text-amber-100">simulações e alvos de referência</strong> baseados nas
                 premissas apresentadas — eles mostram <strong className="text-amber-100">potencial de faturamento</strong>, e
                 <strong className="text-amber-100"> não constituem promessa de ganho garantido</strong>. Os resultados reais
@@ -467,33 +484,35 @@ export default function PublicRecruitmentPage() {
           </div>
         </SectionShell>
 
+        <SectionDivider />
+
         {/* ================================================================
             5. A REALIDADE DO TRABALHO
             ================================================================ */}
         <SectionShell accent="#94a3b8" icon={Scale} title="A realidade do trabalho" subtitle="Transparência antes de qualquer expectativa">
-          <div className="space-y-4">
-            <div className="rounded-2xl border-l-4 border border-slate-500/30 bg-white/[0.03] px-5 py-4" style={{ borderLeftColor: "#94a3b8" }}>
-              <p className="text-sm text-slate-200 font-bold leading-relaxed">
+          <div className="space-y-5">
+            <div className="rounded-2xl border-l-4 border border-slate-500/30 bg-white/[0.04] px-5 py-4 sm:px-6 sm:py-5" style={{ borderLeftColor: "#94a3b8" }}>
+              <p className="text-slate-100 font-bold leading-relaxed">
                 Não se iluda com os números. O trabalho muitas vezes é cansativo e exige paciência para alcançar resultados.
               </p>
             </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div className="psf-card rounded-2xl border border-white/5 bg-[var(--th-n-panel)] p-4" style={{ "--psf-accent": "#38bdf8" } as CSSProperties}>
-                <div className="mb-2 flex items-center gap-2 text-sky-300 text-xs font-black uppercase tracking-wide">
-                  <Clock3 size={14} className="flex-shrink-0" /> Cada minuto é valioso
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+              <div className="psf-card rounded-2xl border border-white/[0.07] bg-[var(--th-n-panel)] p-5" style={{ "--psf-accent": "#38bdf8" } as CSSProperties}>
+                <div className="mb-2.5 flex items-center gap-2.5 text-sky-300 text-sm sm:text-base font-black uppercase tracking-wide">
+                  <Clock3 size={16} className="flex-shrink-0" /> Cada minuto é valioso
                 </div>
-                <p className="text-xs text-slate-300 leading-relaxed">
+                <p className="recruit-body text-slate-300 leading-relaxed">
                   Quanto menos tempo levar para concluir uma Quest, mais tempo teremos para realizar
                   outra Quest — ou simplesmente descansar.
                 </p>
               </div>
-              <div className="psf-card rounded-2xl border border-white/5 bg-[var(--th-n-panel)] p-4" style={{ "--psf-accent": "#a78bfa" } as CSSProperties}>
-                <div className="mb-2 flex items-center gap-2 text-violet-300 text-xs font-black uppercase tracking-wide">
-                  <Gauge size={14} className="flex-shrink-0" /> Resultado se constrói
+              <div className="psf-card rounded-2xl border border-white/[0.07] bg-[var(--th-n-panel)] p-5" style={{ "--psf-accent": "#a78bfa" } as CSSProperties}>
+                <div className="mb-2.5 flex items-center gap-2.5 text-violet-300 text-sm sm:text-base font-black uppercase tracking-wide">
+                  <Gauge size={16} className="flex-shrink-0" /> Resultado se constrói
                 </div>
-                <p className="text-xs text-slate-300 leading-relaxed">
-                  Produtividade, organização, experiência, preparo e disciplina influenciam
-                  <strong className="text-white"> diretamente</strong> os resultados de cada Serviceiro.
+                <p className="recruit-body text-slate-300 leading-relaxed">
+                  <strong className="text-white">Produtividade, organização, experiência, preparo e disciplina</strong> influenciam
+                  diretamente os resultados de cada Serviceiro.
                 </p>
               </div>
             </div>
@@ -504,46 +523,48 @@ export default function PublicRecruitmentPage() {
             6. LIMITE DE GANHOS
             ================================================================ */}
         <SectionShell accent="#fb7185" icon={ShieldAlert} title="Limite de ganhos" subtitle="Comunicação transparente — sem pessimismo e sem promessa exagerada">
-          <div className="space-y-4">
-            <div className="rounded-2xl border-l-4 border border-rose-500/25 bg-rose-500/[0.05] px-5 py-4" style={{ borderLeftColor: "#fb7185" }}>
-              <p className="text-sm text-slate-200 font-bold leading-relaxed">
+          <div className="space-y-5">
+            <div className="rounded-2xl border-l-4 border border-rose-500/25 bg-rose-500/[0.06] px-5 py-4 sm:px-6 sm:py-5" style={{ borderLeftColor: "#fb7185" }}>
+              <p className="text-slate-100 font-bold leading-relaxed">
                 Todos devem entender que existe um teto máximo de ganhos.
               </p>
             </div>
-            <p className="text-xs text-slate-300 leading-relaxed">
+            <p className="recruit-body text-slate-300 leading-relaxed">
               A quantidade de Services que cabe em um dia é limitada — e, portanto, o faturamento também é.
-              Essa atividade <strong className="text-white">não deve ser tratada como única fonte de renda garantida</strong>.
+              Essa atividade <strong className="text-rose-200">não deve ser tratada como única fonte de renda garantida</strong>.
             </p>
-            <div className="flex items-start gap-2.5 rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3">
-              <HeartHandshake size={15} className="mt-0.5 flex-shrink-0 text-rose-300" />
-              <p className="text-[11px] text-slate-400 leading-relaxed">
-                Por isso, recomendamos que todos tenham <strong className="text-slate-200">outras fontes de renda</strong> e
+            <div className="flex items-start gap-3 rounded-xl border border-white/10 bg-white/[0.04] px-4 py-4 sm:px-5">
+              <HeartHandshake size={18} className="mt-0.5 flex-shrink-0 text-rose-300" />
+              <p className="recruit-body text-slate-300 leading-relaxed">
+                Por isso, recomendamos que todos tenham <strong className="text-white">outras fontes de renda</strong> e
                 não dependam exclusivamente dos Services realizados pelo Team.
               </p>
             </div>
           </div>
         </SectionShell>
 
+        <SectionDivider />
+
         {/* ================================================================
             7. PERFIL IDEAL
             ================================================================ */}
         <SectionShell accent="#a78bfa" icon={Trophy} title="Perfil ideal" subtitle="O resumo de um bom integrante do Team">
-          <div className="space-y-5">
-            <div className="flex flex-wrap items-center justify-center gap-2">
+          <div className="space-y-6">
+            <div className="flex flex-wrap items-center justify-center gap-2.5">
               {IDEAL_PROFILE.map(({ icon: Icon, label, tone }, i) => (
-                <span key={label} className="inline-flex items-center gap-2">
+                <span key={label} className="inline-flex items-center gap-2.5">
                   <span
-                    className="psf-choice inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-[11px] font-black uppercase tracking-wide"
+                    className="psf-choice inline-flex items-center gap-2 rounded-xl border px-4 py-2.5 text-xs sm:text-sm font-black uppercase tracking-wide"
                     style={{ "--psf-accent": tone, borderColor: `${tone}40`, backgroundColor: `${tone}10`, color: `color-mix(in oklab, ${tone} 70%, white)` } as CSSProperties}
                   >
-                    <Icon size={13} className="flex-shrink-0" /> {label}
+                    <Icon size={15} className="flex-shrink-0" /> {label}
                   </span>
-                  {i < IDEAL_PROFILE.length - 1 && <span className="text-slate-600 font-black">+</span>}
+                  {i < IDEAL_PROFILE.length - 1 && <span className="text-slate-600 font-black text-base">+</span>}
                 </span>
               ))}
             </div>
-            <p className="text-center text-[11px] text-slate-500 leading-relaxed">
-              Sete pilares, um resultado: uma operação <strong className="text-slate-300">rápida, segura e consistente</strong> — Quest após Quest.
+            <p className="text-center recruit-body text-slate-400 leading-relaxed">
+              Sete pilares, um resultado: uma operação <strong className="text-violet-200">rápida, segura e consistente</strong> — Quest após Quest.
             </p>
           </div>
         </SectionShell>
@@ -552,49 +573,46 @@ export default function PublicRecruitmentPage() {
             8. ENCERRAMENTO / INTERESSE
             ================================================================ */}
         <section
-          className="psf-quadro relative overflow-hidden rounded-3xl border border-cyan-500/30 bg-[var(--th-n-elev)] px-6 py-10 sm:px-10 sm:py-12 text-center shadow-2xl"
+          className="psf-quadro relative overflow-hidden rounded-3xl border border-cyan-500/30 bg-[var(--th-n-elev)] px-6 py-12 sm:px-12 sm:py-14 text-center shadow-2xl"
           style={{ "--psf-quadro-accent": "#22d3ee" } as CSSProperties}
         >
           {/* brilho decorativo interno */}
           <div className="pointer-events-none absolute inset-0">
             <div className="absolute -top-1/2 left-1/2 h-full w-[120%] -translate-x-1/2 rounded-full bg-cyan-500/10 blur-[90px]" />
           </div>
-          <div className="relative space-y-5">
-            <span className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl border border-cyan-500/40 bg-cyan-500/10">
-              <Swords size={26} className="text-cyan-300" />
+          <div className="relative space-y-6">
+            <span className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl border border-cyan-500/40 bg-cyan-500/10 shadow-[0_0_40px_-10px_rgba(34,211,238,0.6)]">
+              <Swords size={30} className="text-cyan-300" />
             </span>
-            <h2 className="text-xl sm:text-3xl font-black tracking-tight leading-tight">
+            <h2 className="recruit-cta-title font-black tracking-tight leading-tight">
               <span className="text-white">Você já possui a experiência.</span>
               <br />
               <span className="bg-gradient-to-r from-cyan-300 via-sky-300 to-violet-300 bg-clip-text text-transparent">Nós fornecemos a estrutura.</span>
             </h2>
-            <p className="mx-auto max-w-xl text-sm text-slate-400 leading-relaxed">
+            <p className="mx-auto max-w-xl text-slate-300 leading-relaxed">
               Se você se identifica com essa proposta, joga com seriedade e quer transformar seu domínio do jogo
-              em uma operação profissional, o <strong className="text-white">Chernobyl Team</strong> quer conhecer você.
+              em uma operação profissional, o <strong className="text-cyan-200">Chernobyl Team</strong> quer conhecer você.
             </p>
-            <div className="pt-1">
+            <div className="pt-2">
               <a
                 href={SUPPORT_WHATSAPP_URL}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="psf-submit inline-flex items-center justify-center gap-2.5 rounded-2xl bg-gradient-to-r from-cyan-400 to-sky-500 px-8 py-4 text-base font-black tracking-wide text-black shadow-xl shadow-cyan-500/25 transition-all duration-300 hover:from-cyan-300 hover:to-sky-400 hover:shadow-cyan-500/40 hover:scale-[1.02] active:scale-[0.98]"
+                className="psf-submit inline-flex items-center justify-center gap-3 rounded-2xl bg-gradient-to-r from-cyan-400 to-sky-500 px-9 py-4 text-base sm:text-lg font-black tracking-wide text-black shadow-xl shadow-cyan-500/25 transition-all duration-300 hover:from-cyan-300 hover:to-sky-400 hover:shadow-cyan-500/40 hover:scale-[1.02] active:scale-[0.98]"
               >
-                <MessageCircle size={19} /> Falar com o Team no WhatsApp
+                <MessageCircle size={21} /> Falar com o Team no WhatsApp
               </a>
-              <p className="mt-3 text-[10px] text-slate-600">
-                Mesmo canal oficial de suporte do Chernobyl PT — sem formulários, sem burocracia.
-              </p>
             </div>
           </div>
         </section>
 
         {/* ===== RODAPÉ — idêntico ao padrão das páginas públicas ===== */}
         <div className="text-center pt-2 space-y-2">
-          <div className="flex items-center justify-center gap-2 text-[11px] text-slate-600">
-            <MessageCircle size={12} className="text-emerald-500/60" />
+          <div className="flex items-center justify-center gap-2 text-xs sm:text-sm text-slate-500">
+            <MessageCircle size={14} className="text-emerald-500/60" />
             <span>Dúvidas? Fale conosco: <a href={SUPPORT_WHATSAPP_URL} target="_blank" rel="noopener noreferrer" className="text-emerald-400/80 hover:text-emerald-300 font-semibold">WhatsApp do Suporte</a></span>
           </div>
-          <p className="text-[10px] text-slate-700">Chernobyl PT · By Exori Coins</p>
+          <p className="text-[11px] text-slate-600">Chernobyl PT · By Exori Coins</p>
         </div>
       </div>
     </div>

@@ -1578,3 +1578,91 @@ body {
 .exclusive-form-link-pulse {
   animation: exclusive-form-link-border-pulse 1.8s ease-in-out infinite;
 }
+
+/* ============================================================================
+   PÁGINA DE RECRUTAMENTO (#/serviceiro) — escala tipográfica própria
+   ----------------------------------------------------------------------------
+   A landing institucional reaproveita todo o tema `public-service-form`
+   (tokens escuros, quadros psf-*, neon/hover), mas precisa de LEITURA DE
+   LANDING PAGE: fontes visivelmente maiores que as do formulário, mantendo a
+   hierarquia título > subtítulo > corpo > apoio. A classe `.recruit-page`
+   (aplicada junto de `.public-service-form` no container raiz) tem
+   especificidade maior que as regras base — os clamps abaixo vencem os do
+   formulário sem tocá-lo. Tudo fluido (clamp) para desktop e mobile.
+   ============================================================================ */
+
+/* Título do hero — "Chernobyl Team" */
+.public-service-form.recruit-page .recruit-hero-title {
+  font-size: clamp(2rem, 1.2rem + 3.4vw, 3.4rem) !important;
+  line-height: 1.08 !important;
+  letter-spacing: -0.02em;
+}
+/* Tagline do hero — "Transforme sua experiência..." */
+.public-service-form.recruit-page .recruit-hero-tagline {
+  font-size: clamp(1.25rem, 0.9rem + 1.6vw, 1.9rem) !important;
+  line-height: 1.28 !important;
+}
+/* Título do encerramento — "Você já possui a experiência..." */
+.public-service-form.recruit-page .recruit-cta-title {
+  font-size: clamp(1.5rem, 1rem + 2.2vw, 2.4rem) !important;
+  line-height: 1.2 !important;
+}
+/* Títulos dos quadros (headers das seções) */
+.public-service-form.recruit-page h2 {
+  font-size: clamp(1.15rem, 0.9rem + 1.1vw, 1.6rem) !important;
+  line-height: 1.25 !important;
+}
+/* Subtítulos internos (Pré-requisitos, Níveis mínimos, ...) */
+.public-service-form.recruit-page h3 {
+  font-size: clamp(1rem, 0.85rem + 0.7vw, 1.3rem) !important;
+  line-height: 1.3 !important;
+}
+/* Corpo de texto padrão (parágrafos) */
+.public-service-form.recruit-page p {
+  font-size: clamp(0.95rem, 0.85rem + 0.45vw, 1.15rem) !important;
+  line-height: 1.65 !important;
+}
+/* Listas */
+.public-service-form.recruit-page ul,
+.public-service-form.recruit-page ol {
+  font-size: clamp(0.9rem, 0.8rem + 0.4vw, 1.08rem) !important;
+  line-height: 1.6 !important;
+}
+/* Corpo dos CARDS (requisitos, benefícios, avisos) — um degrau abaixo do
+   parágrafo solto, mas ainda confortável. A classe explícita vence o clamp
+   de <p>/<ul> quando aplicada no mesmo elemento ou em um container. */
+.public-service-form.recruit-page .recruit-body,
+.public-service-form.recruit-page .recruit-body p,
+.public-service-form.recruit-page .recruit-body ul {
+  font-size: clamp(0.9rem, 0.8rem + 0.4vw, 1.05rem) !important;
+  line-height: 1.6 !important;
+}
+/* Legendas/subtítulos de apoio (linha sob os títulos dos quadros) */
+.public-service-form.recruit-page .recruit-subtitle {
+  font-size: clamp(0.78rem, 0.7rem + 0.3vw, 0.92rem) !important;
+  line-height: 1.45 !important;
+}
+/* Texto de apoio pequeno (rótulos das premissas, notas dos cenários) */
+.public-service-form.recruit-page .recruit-support {
+  font-size: clamp(0.7rem, 0.64rem + 0.25vw, 0.82rem) !important;
+  line-height: 1.4 !important;
+  display: block;
+}
+/* Valores dos cenários de ganhos — números-destaque da página */
+.public-service-form.recruit-page .recruit-earning-value {
+  font-size: clamp(1.5rem, 1.1rem + 1.6vw, 2.1rem) !important;
+}
+/* Badges de vocação e níveis mínimos — maiores que no formulário */
+.public-service-form.recruit-page .psf-voc-letter {
+  font-size: clamp(1rem, 0.85rem + 0.6vw, 1.3rem) !important;
+}
+.public-service-form.recruit-page .psf-voc-badge {
+  font-size: clamp(0.85rem, 0.72rem + 0.5vw, 1.05rem) !important;
+}
+/* Container um pouco mais largo em telas grandes: fontes maiores precisam de
+   mais linha para manter ~65-75 caracteres por linha. */
+@media (min-width: 1024px) {
+  .public-service-form.recruit-page > .relative {
+    max-width: 960px !important;
+  }
+}
