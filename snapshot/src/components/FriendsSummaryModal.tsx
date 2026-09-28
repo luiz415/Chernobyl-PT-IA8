@@ -1,7 +1,7 @@
 import type { CSSProperties } from "react";
 import { BarChart3, Filter, Server, X } from "lucide-react";
 import type { Character, PartyTab, Vocation, WaitingService } from "../types";
-import { analyzeServerPotential } from "../utils/suggestionAlgorithm";
+import { analyzeServerPotential, resolveServiceResponsible } from "../utils/suggestionAlgorithm";
 import { serverKey, serverLabel } from "../constants/servers";
 import { getCharacterAccountKey } from "../utils/accountIdentity";
 import { RECOMMENDABLE_VOCATIONS, VOCATION_ORDER, computeServerPriorityVocations } from "../utils/vocationPriority";
@@ -147,13 +147,37 @@ export function buildVocationCountsByServer(
   }
 
   if (filters.useWaitingList) {
+    // Guarda contra duplicação entre origens: um id já contado como personagem
+    // (Disponíveis/Hub) nunca entra de novo como Service. Na prática os ids
+    // vêm de coleções diferentes e não colidem, mas a regra fica explícita.
+    const alreadyCounted = new Set(candidates.map(candidate => candidate.id));
     waitingList.forEach(service => {
+      if (alreadyCounted.has(service.id)) return;
       if (busyIds.has(service.id)) return;
       // Quest Alvo para services (fonte única): service é de uma quest só.
       if (!serviceQuestEligible(service, filters.questFilter)) return;
       if ((service.level || 0) < (filters.minLevels[service.voc] || 0)) return;
-      const dono = service.ownerName || service.addedBy || service.createdByName || "";
-      if (filters.userMode === "filter" && filters.selectedUsers.length > 0 && !filters.selectedUsers.includes(dono)) return;
+
+      // ── VÍNCULO DO SERVICE COM O USUÁRIO RESPONSÁVEL ────────────────────
+      // O responsável é o SERVICEIRO (`addedBy`) — em "Meus Services" é o
+      // dono da guia. `ownerName` é o CLIENTE (dono do personagem, alguém de
+      // fora do app): compará-lo com "Filtrar Usuários" descartava TODOS os
+      // Services quando o filtro estava ativo, e a origem "Service (Espera)"
+      // deixava de alimentar o Resumo de Amigos e a coluna VOC do Bazaar.
+      // Mesma regra já usada pela sugestão de PT (`resolveServiceResponsible`).
+      const responsavel = resolveServiceResponsible(service.addedBy);
+      const dono = responsavel || service.ownerName || service.addedBy || service.createdByName || "";
+      if (filters.userMode === "filter" && filters.selectedUsers.length > 0) {
+        // Service SEM Serviceiro designado ("Qualquer um") é livre: qualquer
+        // usuário selecionado pode usá-lo — não é descartado por não casar
+        // com nenhum nome (idêntico ao comportamento da sugestão de PT).
+        if (responsavel) {
+          const match = filters.selectedUsers.some(
+            user => user.toLowerCase() === responsavel.toLowerCase(),
+          );
+          if (!match) return;
+        }
+      }
       candidates.push({
         id: service.id,
         servidor: serverLabel(service.servidor),

@@ -16,7 +16,7 @@
 
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { AlertTriangle, ArrowDown, ArrowDownUp, ArrowUp, Calculator, Check, Coins, Copy, Download, ExternalLink, Eye, FlagTriangleRight, Globe, ListChecks, Package, Pencil, Plus, RefreshCw, RotateCcw, Search, Sparkles, Square, Star, Trash2, Upload, X } from "lucide-react";
+import { AlertTriangle, ArrowDown, ArrowDownUp, ArrowUp, Calculator, Check, Coins, Copy, Crown, Download, ExternalLink, Eye, FlagTriangleRight, Globe, ListChecks, Package, Pencil, Plus, RefreshCw, RotateCcw, Search, Sparkles, Square, Star, Trash2, Upload, X } from "lucide-react";
 import BazaarBrowserModal, { BAZAAR_BROWSER_KEY, BAZAAR_BROWSER_ORDER_KEY, BAZAAR_RETRY_BROWSERS_KEY, BAZAAR_RETRY_COUNTS_KEY, BAZAAR_SPEED_MODE_KEY, DEFAULT_BROWSER_ORDER, normalizeRetryCounts } from "./BazaarBrowserModal";
 // Mesmos componentes de filtro da tabela de QUESTS (FilterTypes é a fonte
 // única — nenhuma implementação paralela) e as MESMAS classes de célula
@@ -1838,21 +1838,28 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
   // somem.
   const titleActions = (
     <>
-      {/* ORDEM: Lista de Itens → Consultar Bazaar (posições trocadas a
-          pedido; tamanho, função e estilo dos botões inalterados). */}
+      {/* ORDEM: Lista de Itens → Consultar Bazaar — o MESMO arranjo do
+          cabeçalho das QUESTS ("Filtros Consulta" → "Consultar Bazaar"):
+          botão secundário em contorno primeiro e a ação principal em
+          gradiente por último. As CORES seguem o padrão dos botões
+          equivalentes das Quests (contorno âmbar / gradiente âmbar com
+          texto preto); tamanho, função e handlers inalterados. */}
       <button
         type="button"
         onClick={() => { setIsItemsModalOpen(true); setImportFeedback(null); setScopePicker(null); cancelInlineEdit(); }}
-        className="inline-flex h-7 items-center gap-1 px-2.5 rounded-lg border border-fuchsia-500/25 bg-fuchsia-500/10 text-fuchsia-300 text-[10px] font-black transition-all cursor-pointer hover:bg-fuchsia-500/20"
+        className="inline-flex h-7 items-center gap-1 px-2.5 rounded-lg border border-amber-500/25 bg-amber-500/10 text-amber-300 text-[10px] font-black transition-all cursor-pointer hover:bg-amber-500/20"
         title="Itens monitorados na consulta: nome e valor base em kk, por servidor"
       >
         <ListChecks size={12} /> Lista de Itens ({totalWatchedCount})
       </button>
       {isElectron && (isRunning ? (
+        // "Parar" segue o padrão de cor do equivalente das QUESTS
+        // ("Concluir agora"): tom ÂMBAR — a ação encerra mais cedo mantendo
+        // os resultados já analisados; nada é apagado.
         <button
           type="button"
           onClick={() => void requestStop()}
-          className="inline-flex h-7 items-center gap-1 px-2.5 rounded-lg border border-rose-500/40 bg-rose-500/15 text-rose-300 text-[10px] font-black transition-all cursor-pointer hover:bg-rose-500/25"
+          className="inline-flex h-7 items-center gap-1 px-2.5 rounded-lg border border-amber-500/40 bg-amber-500/10 text-amber-200 text-[10px] font-black transition-all cursor-pointer hover:bg-amber-500/20 hover:border-amber-400/60"
           title="Encerra a consulta após o personagem atual. Os resultados já analisados são mantidos."
         >
           <Square size={11} /> Parar
@@ -1865,7 +1872,7 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
           // o navegador é um só; nenhuma consulta simultânea.
           disabled={!!isQuestsQueryRunning}
           title={isQuestsQueryRunning ? "Consulta de Quests em andamento — aguarde a finalização." : undefined}
-          className="inline-flex h-7 items-center gap-1 px-2.5 rounded-lg bg-gradient-to-r from-fuchsia-700/80 to-fuchsia-600/80 hover:from-fuchsia-600 hover:to-fuchsia-500 border border-fuchsia-500/40 text-white text-[10px] font-black transition-all cursor-pointer shadow-md shadow-fuchsia-900/15 disabled:opacity-50 disabled:cursor-not-allowed"
+          className="inline-flex h-7 items-center gap-1 px-2.5 rounded-lg bg-gradient-to-r from-amber-700/80 to-amber-600/80 hover:from-amber-600 hover:to-amber-500 border border-amber-500/40 text-black text-[10px] font-black transition-all cursor-pointer shadow-md shadow-amber-900/15 disabled:opacity-50 disabled:cursor-not-allowed"
         >
           <RefreshCw size={12} /> Consultar Bazaar
         </button>
@@ -1930,181 +1937,207 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
         </div>
       )}
 
-      {/* ── Quadro "Última Consulta" do modo itens ─────────────────────────── */}
-      <div className="rounded-lg border border-fuchsia-500/25 bg-[var(--th-n-base)]/85 px-2.5 py-1.5 text-[11px] text-slate-400 space-y-1">
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-          <div className="inline-flex items-center gap-1.5 font-black text-fuchsia-300 uppercase tracking-wide">
-            <Sparkles size={12} /> Última consulta
-          </div>
-
-          {/* Parâmetros da consulta, direto no quadro (sem "Filtros Consulta") */}
-          <label className="inline-flex items-center gap-1 text-[10px]">
-            <span className="font-bold text-slate-300">Encerra até</span>
-            <input
-              type="datetime-local"
-              value={endUntil}
-              onChange={event => setEndUntil(event.target.value)}
-              disabled={isRunning}
-              title={`Somente personagens cujo leilão encerra até este momento serão analisados (${formatTimeZoneOffset(timezoneOffsetMinutes)}). O filtro é aplicado ANTES da análise individual.`}
-              className="h-7 rounded-md border border-[var(--th-line)]/70 bg-black/35 px-1.5 text-[10px] text-white outline-none focus:border-fuchsia-600/60 disabled:opacity-50"
-            />
-          </label>
-
-          <label className="inline-flex items-center gap-1 text-[10px]" title="Cotação do Rubini Coin no Market: quantos k equivalem a 1000 RC. Mesma regra de conversão usada no restante do aplicativo.">
-            <Coins size={11} className="text-amber-300" />
-            <span className="font-bold text-slate-300">Coin (k)</span>
-            <input
-              type="text"
-              inputMode="decimal"
-              value={coinRateText}
-              onChange={event => {
-                setCoinRateText(event.target.value);
-                saveItemsCoinRate(parseCoinRate(event.target.value));
-              }}
-              placeholder="90"
-              className="h-7 w-16 rounded-md border border-[var(--th-line)]/70 bg-black/35 px-1.5 text-[10px] text-white outline-none focus:border-fuchsia-600/60"
-            />
-          </label>
-
-          {/* ── Pesquisar Item — filtro LOCAL da lista de personagens ─────
-              Filtra dinamicamente sobre os resultados JÁ obtidos (pesquisa
-              parcial, sem distinção de caixa/acentos). Nunca dispara nova
-              consulta nem altera os dados persistidos; campo vazio = todos
-              os personagens de volta. */}
-          <label className="relative inline-flex items-center gap-1 text-[10px]" title="Filtra os personagens da última consulta: somente quem possui o item pesquisado entre os itens encontrados. Pesquisa local — não refaz a consulta.">
-            <Search size={11} className="absolute left-1.5 text-slate-500 pointer-events-none" />
-            <input
-              type="text"
-              value={resultsSearch}
-              onChange={event => setResultsSearch(event.target.value)}
-              placeholder="Pesquisar item..."
-              className="h-7 w-40 rounded-md border border-[var(--th-line)]/70 bg-black/35 pl-6 pr-6 text-[10px] text-white outline-none focus:border-fuchsia-600/60 placeholder:text-slate-600"
-            />
-            {resultsSearch && (
-              <button
-                type="button"
-                onClick={() => setResultsSearch("")}
-                className="absolute right-1 p-0.5 rounded text-slate-500 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
-                title="Limpar pesquisa"
-              >
-                <X size={11} />
-              </button>
-            )}
-          </label>
-          {resultsSearchTerm && (
-            <span className="text-[9px] font-bold text-fuchsia-300">
-              {visibleResults.length} de {results.length} {results.length === 1 ? "personagem" : "personagens"}
-            </span>
-          )}
-
-          {/* OCULTAR ENCERRADOS / EXIBIR TODOS — mesmo botão das quests
-              (mesmo visual/alternância/carência de 5 min), aplicado à lista
-              local de itens. Preferência persistida por dispositivo. */}
-          <button
-            type="button"
-            onClick={() => setHideEndedResults(prev => !prev)}
-            className={`inline-flex h-7 items-center gap-1 rounded-md border px-2.5 text-[10px] font-black transition-colors cursor-pointer ${hideEndedResults ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20" : "border-amber-500/25 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20"}`}
-            title={hideEndedResults ? "Mostrar também leilões encerrados" : "Ocultar leilões encerrados"}
-          >
-            {hideEndedResults ? "Ocultar encerrados" : "Exibir todos"}
-          </button>
-
-          {/* ATUALIZAR VALORES — mesma função das quests: relê SÓ a listagem
-              do Bazaar e atualiza os valores dos leilões APENAS localmente
-              (nenhuma nova análise de itens; nada no Firestore). */}
-          {isElectron && isBossUser && (
-            <button
-              type="button"
-              onClick={() => { void handleRefreshItemValues(); }}
-              disabled={isValueRefreshing || isRunning}
-              className="inline-flex h-7 items-center justify-center gap-1 rounded-md border border-sky-500/30 bg-sky-500/10 px-2.5 text-[10px] font-black text-sky-300 hover:bg-sky-500/20 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-              title="Relê a listagem do Bazaar e atualiza os valores dos leilões da última consulta apenas neste dispositivo"
-            >
-              {isValueRefreshing && <RefreshCw size={11} className="animate-spin" />}
-              {isValueRefreshing ? "Atualizando..." : "Atualizar Valores"}
-            </button>
-          )}
-          {valueRefreshStatus && (
-            <span className="max-w-[260px] text-[8px] font-bold leading-tight text-sky-300/80" role="status">
-              {valueRefreshStatus}
-            </span>
-          )}
-
-          {/* ATUALIZAR — recálculo 100% LOCAL com os preços atuais das
-              Listas de Itens (por servidor). NÃO refaz a consulta ao Bazaar
-              (diferente do "Atualizar Valores", que relê a listagem para
-              atualizar bids): apenas reprocessa os personagens já carregados
-              — KK, RC, Potencial e demais campos derivados. Roda SOMENTE no
-              clique (sem recálculo automático contínuo). */}
-          {lastQuery && lastQuery.results.length > 0 && (
-            <button
-              type="button"
-              onClick={handleRepriceFromLists}
-              disabled={isRunning}
-              className="inline-flex h-7 items-center justify-center gap-1 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-2.5 text-[10px] font-black text-emerald-300 hover:bg-emerald-500/20 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-              title="Recalcula os personagens da última consulta com os preços ATUAIS da Lista de Itens de cada servidor — localmente, sem nova consulta ao Bazaar"
-            >
-              <Calculator size={11} /> Atualizar
-            </button>
-          )}
-          {repriceFeedback && (
-            <span className="max-w-[300px] text-[8px] font-bold leading-tight text-emerald-300/90" role="status">
-              {repriceFeedback}
-            </span>
-          )}
-
-          {/* Fallback: sem o contêiner do título (montagem isolada), os
-              botões permanecem aqui — o comportamento nunca se perde. */}
-          {!titleActionsHost && (
-            <div className="ml-auto flex items-center gap-1.5">
-              {titleActions}
+      {/* ── Quadro "Última Consulta" do modo itens ───────────────────────────
+          MESMA estrutura do quadro equivalente da guia QUESTS: coluna
+          ESQUERDA com o título, os parâmetros e o resumo da execução;
+          COLUNA DE AÇÕES à direita com os botões em linhas horizontais —
+          1ª linha com as ações gerais e, abaixo, a SEÇÃO BOSS destacada com
+          as ações exclusivas do cargo. Botões, handlers e condições são
+          exatamente os mesmos de antes — apenas posição e cores foram
+          alinhadas aos equivalentes das Quests. */}
+      <div className="rounded-lg border border-fuchsia-500/25 bg-[var(--th-n-base)]/85 px-2.5 py-1 text-[11px] text-slate-400">
+        <div className="flex flex-col gap-0.5 lg:flex-row lg:items-start lg:justify-between lg:gap-3">
+          <div className="min-w-0 flex-1 space-y-0.5">
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="inline-flex items-center gap-1.5 font-black text-fuchsia-300 uppercase tracking-wide">
+                <Sparkles size={12} /> Última consulta
+              </div>
             </div>
-          )}
-        </div>
 
-        {/* Resumo da última execução (persistido localmente) */}
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[10px] leading-tight">
-          {lastQuery ? (
-            <>
-              <span>Concluída: <span className="font-mono text-slate-200">{formatDateTimeWithOffset(lastQuery.completedAtMs, timezoneOffsetMinutes)}</span></span>
-              <span>Duração: <span className="font-mono text-slate-200">{formatDuration(lastQuery.durationMs)}</span></span>
-              <span>Listados: <span className="font-mono text-slate-200">{lastQuery.listedCount}</span></span>
-              <span>Elegíveis (data): <span className="font-mono text-slate-200">{lastQuery.eligibleCount}</span></span>
-              <span>Analisados: <span className="font-mono text-slate-200">{lastQuery.analyzedCount}</span></span>
-              <span>Com itens: <span className="font-mono text-fuchsia-200">{lastQuery.results.length}</span></span>
-              {lastQuery.failedCount > 0 && (
-                <span className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 border border-rose-500/40 bg-rose-500/10 font-bold text-rose-300">
-                  <AlertTriangle size={10} /> Falhas: <span className="font-mono">{lastQuery.failedCount}</span>
+            {/* Parâmetros da consulta, direto no quadro (sem "Filtros Consulta") */}
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+              <label className="inline-flex items-center gap-1 text-[10px]">
+                <span className="font-bold text-slate-300">Encerra até</span>
+                <input
+                  type="datetime-local"
+                  value={endUntil}
+                  onChange={event => setEndUntil(event.target.value)}
+                  disabled={isRunning}
+                  title={`Somente personagens cujo leilão encerra até este momento serão analisados (${formatTimeZoneOffset(timezoneOffsetMinutes)}). O filtro é aplicado ANTES da análise individual.`}
+                  className="h-7 rounded-md border border-[var(--th-line)]/70 bg-black/35 px-1.5 text-[10px] text-white outline-none focus:border-fuchsia-600/60 disabled:opacity-50"
+                />
+              </label>
+
+              <label className="inline-flex items-center gap-1 text-[10px]" title="Cotação do Rubini Coin no Market: quantos k equivalem a 1000 RC. Mesma regra de conversão usada no restante do aplicativo.">
+                <Coins size={11} className="text-amber-300" />
+                <span className="font-bold text-slate-300">Coin (k)</span>
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  value={coinRateText}
+                  onChange={event => {
+                    setCoinRateText(event.target.value);
+                    saveItemsCoinRate(parseCoinRate(event.target.value));
+                  }}
+                  placeholder="90"
+                  className="h-7 w-16 rounded-md border border-[var(--th-line)]/70 bg-black/35 px-1.5 text-[10px] text-white outline-none focus:border-fuchsia-600/60"
+                />
+              </label>
+
+              {/* ── Pesquisar Item — filtro LOCAL da lista de personagens ─────
+                  Filtra dinamicamente sobre os resultados JÁ obtidos (pesquisa
+                  parcial, sem distinção de caixa/acentos). Nunca dispara nova
+                  consulta nem altera os dados persistidos; campo vazio = todos
+                  os personagens de volta. */}
+              <label className="relative inline-flex items-center gap-1 text-[10px]" title="Filtra os personagens da última consulta: somente quem possui o item pesquisado entre os itens encontrados. Pesquisa local — não refaz a consulta.">
+                <Search size={11} className="absolute left-1.5 text-slate-500 pointer-events-none" />
+                <input
+                  type="text"
+                  value={resultsSearch}
+                  onChange={event => setResultsSearch(event.target.value)}
+                  placeholder="Pesquisar item..."
+                  className="h-7 w-40 rounded-md border border-[var(--th-line)]/70 bg-black/35 pl-6 pr-6 text-[10px] text-white outline-none focus:border-fuchsia-600/60 placeholder:text-slate-600"
+                />
+                {resultsSearch && (
+                  <button
+                    type="button"
+                    onClick={() => setResultsSearch("")}
+                    className="absolute right-1 p-0.5 rounded text-slate-500 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
+                    title="Limpar pesquisa"
+                  >
+                    <X size={11} />
+                  </button>
+                )}
+              </label>
+              {resultsSearchTerm && (
+                <span className="text-[9px] font-bold text-fuchsia-300">
+                  {visibleResults.length} de {results.length} {results.length === 1 ? "personagem" : "personagens"}
                 </span>
               )}
-              {lastQuery.stoppedManually && (
-                <span className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 border border-amber-500/40 bg-amber-500/10 font-bold text-amber-300">
-                  <FlagTriangleRight size={10} /> Encerrada manualmente
-                </span>
-              )}
-            </>
-          ) : (
-            <span className="text-slate-500">Nenhuma consulta de itens realizada neste dispositivo.</span>
-          )}
-        </div>
+            </div>
 
-        {/* Progresso ao vivo — apenas enquanto ESTA consulta roda */}
-        {isRunning && (
-          <div className="space-y-0.5">
-            <div className="flex items-center gap-2 text-[10px] text-fuchsia-200">
-              <RefreshCw size={11} className="animate-spin" />
-              <span className="truncate">{progress?.message || statusText || "Consultando..."}</span>
-              {(progress?.total || 0) > 0 && (
-                <span className="font-mono flex-shrink-0">{progress?.processed}/{progress?.total}</span>
+            {/* Resumo da última execução (persistido localmente) */}
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[10px] leading-tight">
+              {lastQuery ? (
+                <>
+                  <span>Concluída: <span className="font-mono text-slate-200">{formatDateTimeWithOffset(lastQuery.completedAtMs, timezoneOffsetMinutes)}</span></span>
+                  <span>Duração: <span className="font-mono text-slate-200">{formatDuration(lastQuery.durationMs)}</span></span>
+                  <span>Listados: <span className="font-mono text-slate-200">{lastQuery.listedCount}</span></span>
+                  <span>Elegíveis (data): <span className="font-mono text-slate-200">{lastQuery.eligibleCount}</span></span>
+                  <span>Analisados: <span className="font-mono text-slate-200">{lastQuery.analyzedCount}</span></span>
+                  <span>Com itens: <span className="font-mono text-fuchsia-200">{lastQuery.results.length}</span></span>
+                  {lastQuery.failedCount > 0 && (
+                    <span className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 border border-rose-500/40 bg-rose-500/10 font-bold text-rose-300">
+                      <AlertTriangle size={10} /> Falhas: <span className="font-mono">{lastQuery.failedCount}</span>
+                    </span>
+                  )}
+                  {lastQuery.stoppedManually && (
+                    <span className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 border border-amber-500/40 bg-amber-500/10 font-bold text-amber-300">
+                      <FlagTriangleRight size={10} /> Encerrada manualmente
+                    </span>
+                  )}
+                </>
+              ) : (
+                <span className="text-slate-500">Nenhuma consulta de itens realizada neste dispositivo.</span>
               )}
             </div>
-            {(progress?.total || 0) > 0 && (
-              <div className="h-1 rounded bg-black/40 overflow-hidden">
-                <div className="h-full bg-gradient-to-r from-fuchsia-600 to-fuchsia-400 transition-all" style={{ width: `${progress?.percent || 0}%` }} />
+
+            {/* Progresso ao vivo — apenas enquanto ESTA consulta roda */}
+            {isRunning && (
+              <div className="space-y-0.5">
+                <div className="flex items-center gap-2 text-[10px] text-fuchsia-200">
+                  <RefreshCw size={11} className="animate-spin" />
+                  <span className="truncate">{progress?.message || statusText || "Consultando..."}</span>
+                  {(progress?.total || 0) > 0 && (
+                    <span className="font-mono flex-shrink-0">{progress?.processed}/{progress?.total}</span>
+                  )}
+                </div>
+                {(progress?.total || 0) > 0 && (
+                  <div className="h-1 rounded bg-black/40 overflow-hidden">
+                    <div className="h-full bg-gradient-to-r from-fuchsia-600 to-fuchsia-400 transition-all" style={{ width: `${progress?.percent || 0}%` }} />
+                  </div>
+                )}
               </div>
             )}
           </div>
-        )}
+
+          {/* COLUNA DE AÇÕES — mesma organização da guia Quests: 1ª linha com
+              os controles/ações de TODOS os usuários; 2ª linha é a SEÇÃO
+              BOSS, grupo destacado só com as ações exclusivas do cargo. */}
+          <div className="flex min-w-0 flex-col items-end gap-1.5">
+            <div className="flex flex-wrap items-center justify-end gap-1.5">
+              {/* OCULTAR ENCERRADOS / EXIBIR TODOS — mesmo botão das quests
+                  (mesmo visual/alternância/carência de 5 min), aplicado à lista
+                  local de itens. Preferência persistida por dispositivo. */}
+              <button
+                type="button"
+                onClick={() => setHideEndedResults(prev => !prev)}
+                className={`inline-flex h-7 items-center gap-1 rounded-md border px-2.5 text-[10px] font-black transition-colors cursor-pointer ${hideEndedResults ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20" : "border-amber-500/25 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20"}`}
+                title={hideEndedResults ? "Mostrar também leilões encerrados" : "Ocultar leilões encerrados"}
+              >
+                {hideEndedResults ? "Ocultar encerrados" : "Exibir todos"}
+              </button>
+
+              {/* ATUALIZAR — recálculo 100% LOCAL com os preços atuais das
+                  Listas de Itens (por servidor). NÃO refaz a consulta ao Bazaar
+                  (diferente do "Atualizar Valores", que relê a listagem para
+                  atualizar bids): apenas reprocessa os personagens já carregados
+                  — KK, RC, Potencial e demais campos derivados. Roda SOMENTE no
+                  clique (sem recálculo automático contínuo). Cor CIANO — o mesmo
+                  padrão do botão "Atualizar" da guia Quests. */}
+              {lastQuery && lastQuery.results.length > 0 && (
+                <button
+                  type="button"
+                  onClick={handleRepriceFromLists}
+                  disabled={isRunning}
+                  className="inline-flex h-7 items-center justify-center gap-1 rounded-md border border-cyan-500/25 bg-cyan-500/10 px-2.5 text-[10px] font-black text-cyan-300 hover:bg-cyan-500/20 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                  title="Recalcula os personagens da última consulta com os preços ATUAIS da Lista de Itens de cada servidor — localmente, sem nova consulta ao Bazaar"
+                >
+                  <Calculator size={11} /> Atualizar
+                </button>
+              )}
+              {repriceFeedback && (
+                <span className="max-w-[300px] text-right text-[8px] font-bold leading-tight text-cyan-300/90" role="status">
+                  {repriceFeedback}
+                </span>
+              )}
+
+              {/* Fallback: sem o contêiner do título (montagem isolada), os
+                  botões permanecem aqui — o comportamento nunca se perde. */}
+              {!titleActionsHost && titleActions}
+            </div>
+
+            {/* ── SEÇÃO BOSS ──────────────────────────────────────────────
+                Mesmo grupo destacado da guia Quests, só com as ações
+                exclusivas do cargo Boss. Botões/estados idênticos aos de
+                antes — só a posição mudou. */}
+            {isElectron && isBossUser && (
+              <div className="flex flex-wrap items-center justify-end gap-1.5 rounded-md border border-amber-500/20 bg-amber-500/[0.04] px-1.5 py-1">
+                <span className="inline-flex items-center gap-1 pl-0.5 text-[8px] font-black uppercase tracking-widest text-amber-400/80" title="Ações exclusivas do cargo Boss">
+                  <Crown size={10} /> Boss
+                </span>
+                {/* ATUALIZAR VALORES — mesma função das quests: relê SÓ a listagem
+                    do Bazaar e atualiza os valores dos leilões APENAS localmente
+                    (nenhuma nova análise de itens; nada no Firestore). */}
+                <button
+                  type="button"
+                  onClick={() => { void handleRefreshItemValues(); }}
+                  disabled={isValueRefreshing || isRunning}
+                  className="inline-flex h-7 items-center justify-center gap-1 rounded-md border border-sky-500/30 bg-sky-500/10 px-2.5 text-[10px] font-black text-sky-300 hover:bg-sky-500/20 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                  title="Relê a listagem do Bazaar e atualiza os valores dos leilões da última consulta apenas neste dispositivo"
+                >
+                  {isValueRefreshing && <RefreshCw size={11} className="animate-spin" />}
+                  {isValueRefreshing ? "Atualizando..." : "Atualizar Valores"}
+                </button>
+                {valueRefreshStatus && (
+                  <div className="max-w-[260px] text-right text-[8px] font-bold leading-tight text-sky-300/80" role="status">
+                    {valueRefreshStatus}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
       </div>
 
       {/* ── Resultados compactos ────────────────────────────────────────────── */}
