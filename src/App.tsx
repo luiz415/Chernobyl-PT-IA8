@@ -6,7 +6,7 @@ import {
   SlidersHorizontal, ChevronDown, FileSpreadsheet, Briefcase, FileCode2
 } from "lucide-react";
 import ExoriLogo from "./components/ExoriLogo";
-import type { AppData, BazaarItemsPurchasePrefill, Character, CharacterAcquisition, CharacterAcquisitionBuyerDetails, PartyFinalizationReason, PartyTab, PersonalPartyHistory, PtType, WaitingService, SharedService, DialogOptions, ProbableMarkersMap, Vocation } from "./types";
+import type { AppData, BazaarItemsPurchasePrefill, Character, CharacterAcquisition, CharacterAcquisitionBuyerDetails, CharacterBazaarItemsSnapshot, PartyFinalizationReason, PartyTab, PersonalPartyHistory, PtType, WaitingService, SharedService, DialogOptions, ProbableMarkersMap, Vocation } from "./types";
 import { setGlobalDialogHandler, customAlert, customConfirm, formatRC } from "./types";
 import { loadData, saveData, exportCSV, exportJSON, importJSON, buildPersonalBackup, normalizeImportedBackup, saveAutoSaveHandle, loadAutoSaveHandle, loadUIState, saveUIState, saveCloseTray, saveStartWithWindows, saveLowCpuUsage, loadSharedCharsCache, saveSharedCharsCache, isSharedCharsCacheFresh, invalidateSharedCharsCache } from "./storage";
 import { canViewServiceEntry, canViewServiceForViewer, projectServiceForViewer } from "./utils/serviceVisibility";
@@ -134,6 +134,14 @@ interface BazaarCharacterPurchase {
   vocation: string;
   account: string;
   valorPago: number;
+  /**
+   * ITENS ENCONTRADOS NA CONSULTA do Bazaar para este personagem — snapshot
+   * montado pelo BazarPanel a partir dos dados JÁ OBTIDOS (fonte local da
+   * guia Itens ou campos `items*` embutidos na lista oficial). Ausente =
+   * personagem sem itens monitorados na consulta. Persistido no Character
+   * (`bazaarItems`) para o "Ver" da coluna Itens exibir sem nova consulta.
+   */
+  items?: CharacterBazaarItemsSnapshot;
 }
 
 interface BazaarCharacterPurchaseResult {
@@ -3919,6 +3927,13 @@ export default function App() {
       dataVenda: "",
       ownerUid: currentUser.uid,
       ownerName: displayUserName,
+      // ITENS DA CONSULTA associados ao personagem (mesmo padrão do fluxo
+      // "Bazaar → Itens → Comprado"): snapshot dos dados já obtidos — nenhuma
+      // nova consulta. Persistido junto ao personagem em `userCharacters`
+      // (disponível após fechar/reabrir e em outros dispositivos) e revisto
+      // em Meus Personagens → Disponíveis → Itens → Ver. A publicação em
+      // sharedCharacters continua REMOVENDO o campo (privacidade preservada).
+      ...(purchase.items ? { bazaarItems: purchase.items } : {}),
       createdAt: now,
       updatedAt: now,
     };

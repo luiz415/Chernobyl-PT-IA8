@@ -15,7 +15,7 @@ import OverviewFiltersModal from "./OverviewFiltersModal";
 import UserFilterModal from "./UserFilterModal";
 import { DEFAULT_OVERVIEW_FILTERS, useOverviewFilters } from "../hooks/useOverviewFilters";
 import { FilterDateMax, FilterInline, FilterMulti, FilterNumber } from "./FilterTypes";
-import type { BazaarItemsPurchasePrefill, Character, PartyTab, WaitingService, Vocation } from "../types";
+import type { BazaarItemsPurchasePrefill, Character, CharacterBazaarItemsSnapshot, PartyTab, WaitingService, Vocation } from "../types";
 import { useAuth } from "../context/AuthContext";
 import { getManualSyncCooldownRemainingMs, markManualSyncAttempt, publishOfficialBazaarList, readOfficialBazaarCache, removeBazaarInterest, removeBazaarInterestsForAuctions, setBazaarInterest, syncBazaarInterests, syncOfficialBazaarList, type BazaarInterestMap, type OfficialBazaarMetadata } from "../services/bazaarOfficialService";
 import { applyValueOverlay, buildValueOverlay, clearBazaarValueOverlay, computeAutoRemoveAuctions, parseAutoRemoveLimit, readBazaarValueOverlay, sanitizeAutoRemoveLimit, saveBazaarValueOverlay } from "../utils/bazaarValueRefresh";
@@ -121,6 +121,63 @@ function itemsViewFromAuction(auction: BazaarAuction): QuestsItemsDetailView | n
     isManual: false,
     goldKk: Number(auction.itemsGoldKk || 0),
   };
+}
+
+/**
+ * SNAPSHOT DE ITENS PARA A COMPRA (botão "Comprado" da guia Quests).
+ *
+ * Monta o `CharacterBazaarItemsSnapshot` persistido no personagem a partir
+ * dos dados JÁ OBTIDOS pelo painel — nenhuma nova consulta ao Bazaar. Mesmas
+ * DUAS fontes (e mesma prioridade) da coluna "Valor Itens (kk)":
+ *
+ *   1. LOCAL (dispositivo do Boss): última consulta da guia Itens, com os
+ *      matches COMPLETOS (item da lista, base, pós-Tier) e a correção manual
+ *      — cópia idêntica à do fluxo "Bazaar → Itens → Comprado";
+ *   2. EMBUTIDA (campos `items*` da lista oficial): matches resumidos
+ *      (foundName/tier/amount/totalKk). Os campos que o resumo não carrega
+ *      são reconstruídos pela MESMA fórmula oficial do Tier
+ *      (unit = base × (1 + 0,3 × tier) ⇒ base = unit ÷ (1 + 0,3 × tier)),
+ *      sem inventar regra nova; o "item da lista" recebe o próprio nome
+ *      encontrado (o resumo publicado não guarda o nome da lista).
+ *
+ * Sem itens em nenhuma das fontes ⇒ `undefined` (o personagem é salvo sem
+ * `bazaarItems`, e a coluna Itens exibe "—", como hoje).
+ */
+function buildPurchaseItemsSnapshot(
+  localResult: BazaarItemsCharacterResult | undefined,
+  auction: BazaarAuction,
+): CharacterBazaarItemsSnapshot | undefined {
+  if (localResult && Array.isArray(localResult.matches) && localResult.matches.length > 0) {
+    return {
+      server: localResult.server,
+      totalKk: Number(localResult.totalKk || 0),
+      ...(typeof localResult.goldKk === "number" && localResult.goldKk > 0 ? { goldKk: localResult.goldKk } : {}),
+      manualTotalKk: typeof localResult.manualTotalKk === "number" && localResult.manualTotalKk > 0 ? localResult.manualTotalKk : null,
+      matches: localResult.matches.map(match => ({ ...match })),
+      capturedAtMs: Date.now(),
+    };
+  }
+  if (typeof auction.itemsTotalKk === "number" && Array.isArray(auction.itemsMatches) && auction.itemsMatches.length > 0) {
+    return {
+      server: String(auction.server || ""),
+      totalKk: Number(auction.itemsTotalKk || 0),
+      ...(Number(auction.itemsGoldKk || 0) > 0 ? { goldKk: Number(auction.itemsGoldKk || 0) } : {}),
+      // A correção manual do Boss é local ao dispositivo dele — o publicado
+      // é sempre o valor calculado pela consulta.
+      manualTotalKk: null,
+      matches: auction.itemsMatches.map(match => {
+        const amount = Number(match.amount || 0);
+        const totalKk = Number(match.totalKk || 0);
+        const tier = Math.max(0, Number(match.tier || 0));
+        const unitValueKk = Math.round((amount > 0 ? totalKk / amount : totalKk) * 100) / 100;
+        const baseValueKk = Math.round((unitValueKk / (1 + 0.3 * tier)) * 100) / 100;
+        const foundName = String(match.foundName || "");
+        return { foundName, watchedName: foundName, baseValueKk, tier, unitValueKk, amount, totalKk };
+      }),
+      capturedAtMs: Date.now(),
+    };
+  }
+  return undefined;
 }
 
 interface BazaarAuction {
@@ -1104,6 +1161,11 @@ interface BazaarCharacterPurchase {
   vocation: string;
   account: string;
   valorPago: number;
+  /**
+   * Snapshot dos ITENS ENCONTRADOS na consulta para este personagem
+   * (ver buildPurchaseItemsSnapshot). Ausente = sem itens na consulta.
+   */
+  items?: CharacterBazaarItemsSnapshot;
 }
 
 interface BazaarInlinePurchaseDraft {
@@ -4503,6 +4565,12 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
                                 setInlinePurchase(current => current?.auctionKey === auctionKey ? { ...current, error: validationError } : current);
                                 return;
                               }
+                              // ITENS DA CONSULTA: snapshot dos dados já
+                              // obtidos (fonte local da guia Itens > campos
+                              // embutidos na lista oficial) — persistido no
+                              // personagem para o "Ver" da coluna Itens de
+                              // Meus Personagens, sem nova consulta.
+                              const purchaseItems = buildPurchaseItemsSnapshot(itemsResultByAuctionKey.get(auctionKey), auction);
                               const response = onAddCharacterFromBazaar?.({
                                 name: auction.name || "",
                                 level: auction.level || 0,
@@ -4510,6 +4578,7 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
                                 vocation: auction.vocation || "",
                                 account: inlinePurchaseDraft.account.trim(),
                                 valorPago: Number(inlinePurchaseDraft.valorPago),
+                                ...(purchaseItems ? { items: purchaseItems } : {}),
                               });
                               if (!response?.ok) {
                                 setInlinePurchase(current => current?.auctionKey === auctionKey
