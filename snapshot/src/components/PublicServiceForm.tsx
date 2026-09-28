@@ -5,13 +5,13 @@ import { Clock, Save, CheckCircle2, AlertTriangle, MessageCircle, Swords, Shield
 import type { WaitingService, Vocation } from "../types";
 import { VOCATIONS, VOC_COLORS, VOC_LABEL, todayISO } from "../types";
 import { db, auth, isSimulationMode } from "../firebase/config";
-import { doc, collection, query, where, getDocs } from "firebase/firestore";
-import { setDoc } from "../firebase/config";
+import { collection, query, where, getDocs } from "firebase/firestore";
 import ExoriLogo from "./ExoriLogo";
 import { FilterSelect } from "./FilterTypes";
 import { getEffectiveUserRole } from "../utils/vipAccess";
 import { SERVER_OPTIONS } from "../constants/servers";
 import { createServiceRequest } from "../services/sharedServicesService";
+import { DUPLICATE_SERVICE_MESSAGE, createWithQueueGuard } from "../services/serviceQueueIndexService";
 import { getServiceFormIdFromLocation, resolveServiceFormTarget } from "../utils/serviceFormSlug";
 
 // ============================================================================
@@ -113,6 +113,9 @@ export default function PublicServiceForm() {
   const [blockedUntil, setBlockedUntil] = useState<number>(0);
   const [countdown, setCountdown] = useState<string>("");
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  // Aviso específico de PERSONAGEM JÁ NA FILA — separado do erro genérico
+  // para ter visual próprio (âmbar, informativo) em vez de tom de falha.
+  const [duplicateMsg, setDuplicateMsg] = useState<string | null>(null);
 
   // Campos do formulário
   const [personagem, setPersonagem] = useState("");
@@ -272,6 +275,7 @@ export default function PublicServiceForm() {
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setErrorMsg(null);
+    setDuplicateMsg(null);
 
     // Re-checar bloqueio
     const until = getBlockedUntil();
@@ -366,6 +370,12 @@ export default function PublicServiceForm() {
       } else if (targetUid) {
         // Serviceiro específico: nasce como SOLICITAÇÃO PENDENTE, aguardando
         // aprovação do destinatário. Nada entra em sharedServices ainda.
+        //
+        // ANTI-DUPLICADO: `createServiceRequest` grava a solicitação num
+        // WriteBatch atômico junto com a chave do personagem em
+        // `serviceQueueIndex`. Se o personagem já está na fila (de QUALQUER
+        // usuário), NADA é criado — sem segundo registro, sem notificação e
+        // sem alterar o pedido existente — e o cliente recebe o aviso.
         const created = await createServiceRequest(targetUid, {
           personagem: service.personagem,
           ownerName: service.ownerName,
@@ -379,9 +389,39 @@ export default function PublicServiceForm() {
           quest: service.quest,
           paymentMethod: payment,
         });
-        if (!created.ok) throw new Error(created.error || "Falha ao enviar a solicitação ao Serviceiro.");
+        if (!created.ok) {
+          if (created.duplicate) {
+            setDuplicateMsg(DUPLICATE_SERVICE_MESSAGE);
+            setFormState("filling");
+            return;
+          }
+          throw new Error(created.error || "Falha ao enviar a solicitação ao Serviceiro.");
+        }
       } else {
-        await setDoc(doc(db, "waitingList", id), JSON.parse(JSON.stringify(service)));
+        // "Qualquer um": MESMA proteção anti-duplicado — chave + documento
+        // da Lista de Espera num único batch atômico. Bloqueado = nenhuma
+        // gravação acontece e a Cloud Function de notificação do Boss
+        // (onDocumentCreated em waitingList) nem chega a disparar.
+        const createdWaiting = await createWithQueueGuard({
+          entry: {
+            personagem: service.personagem,
+            servidor: service.servidor,
+            quest: service.quest,
+            refId: id,
+            refKind: "waiting",
+          },
+          targetCollection: "waitingList",
+          targetId: id,
+          targetData: JSON.parse(JSON.stringify(service)),
+        });
+        if (!createdWaiting.ok) {
+          if (createdWaiting.duplicate) {
+            setDuplicateMsg(DUPLICATE_SERVICE_MESSAGE);
+            setFormState("filling");
+            return;
+          }
+          throw new Error(createdWaiting.error || "Falha ao enviar sua solicitação.");
+        }
       }
 
       // 5. Registrar envio no rate limiter
@@ -414,6 +454,7 @@ export default function PublicServiceForm() {
     setPayment("");
     setNotes("");
     setFieldErrors({});
+    setDuplicateMsg(null);
     // Link exclusivo: o vínculo do formulário permanece após "Adicionar
     // outro personagem" — o cliente continua cadastrando para o MESMO
     // Serviceiro do link. Só o modo normal volta para "Qualquer um".
@@ -735,6 +776,20 @@ export default function PublicServiceForm() {
                 </div>
               )}
 
+              {/* Personagem já na fila — aviso informativo (não é um erro do
+                  cliente): nenhum novo registro foi criado. */}
+              {duplicateMsg && (
+                <div className="flex items-start gap-3 bg-amber-500/10 border border-amber-500/30 rounded-xl px-4 py-3 text-sm text-amber-300">
+                  <Clock size={18} className="flex-shrink-0 mt-0.5" />
+                  <div>
+                    <div className="font-bold">{duplicateMsg}</div>
+                    <div className="text-[11px] text-amber-200/70 mt-1">
+                      Nossa equipe já recebeu a solicitação deste personagem e entrará em contato pelo WhatsApp.
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {/* Nome do personagem + Seu nome */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
                 <div>
@@ -743,7 +798,7 @@ export default function PublicServiceForm() {
                     ref={firstFieldRef}
                     type="text"
                     value={personagem}
-                    onChange={e => { setPersonagem(e.target.value.replace(/[^A-Za-zÀ-ÿ\s]/g, "")); if (fieldErrors.personagem) setFieldErrors(f => ({ ...f, personagem: "" })); }}
+                    onChange={e => { setPersonagem(e.target.value.replace(/[^A-Za-zÀ-ÿ\s]/g, "")); if (fieldErrors.personagem) setFieldErrors(f => ({ ...f, personagem: "" })); if (duplicateMsg) setDuplicateMsg(null); }}
                     placeholder="Ex: Sir Knight"
                     maxLength={50}
                     className={`${inputCls} ${fieldErrors.personagem ? "border-rose-500/60" : ""}`}
@@ -770,7 +825,7 @@ export default function PublicServiceForm() {
                   <label className={labelCls}>Servidor *</label>
                   <FilterSelect
                     selected={servidor}
-                    onSelect={(v: string) => { setServidor(v); if (fieldErrors.servidor) setFieldErrors(f => ({ ...f, servidor: "" })); }}
+                    onSelect={(v: string) => { setServidor(v); if (fieldErrors.servidor) setFieldErrors(f => ({ ...f, servidor: "" })); if (duplicateMsg) setDuplicateMsg(null); }}
                     options={SERVER_OPTIONS}
                     placeholder="Selecione o servidor"
                     searchable

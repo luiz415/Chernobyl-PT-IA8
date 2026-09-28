@@ -35,9 +35,9 @@ import {
   applyServiceStatus,
   approveServiceRequest,
   subscribeServiceRequests,
+  subscribeSharedServices,
   rejectServiceRequest,
   createServiceId,
-  fetchSharedServices,
   persistSharedServices,
   isServiceProbablyDone,
   readServiceRequestsCache,
@@ -47,6 +47,12 @@ import {
   saveServiceRequestsCache,
   toIsoDate,
 } from "../services/sharedServicesService";
+import {
+  backfillServiceQueueEntries,
+  buildServiceQueueKey,
+  freeServiceQueueEntry,
+  registerServiceQueueEntry,
+} from "../services/serviceQueueIndexService";
 
 // ============================================================================
 // MEUS SERVICES — etapa 1 da reestruturação
@@ -360,58 +366,80 @@ export default function MyServicesPanel({
     });
   }
 
-  // Guarda de sessão: UMA leitura do Firestore por usuário, como em
-  // "Meus Personagens". Trocar de aba ou de visão não relê nada.
-  const loadedForUidRef = useRef<string>("");
-
   /**
-   * Carrega Services e solicitações pendentes.
+   * LISTENER EM TEMPO REAL dos SERVICES (`sharedServices/{uid}` — 1 doc).
    *
-   * CORREÇÃO DO "Carregando" ETERNO: antes o `finally` só chamava
-   * `setIsLoading(false)` quando `isCancelled()` era falso. Quando uma
-   * dependência do efeito mudava no meio da requisição (o `userProfile.nome`
-   * chega do Firestore depois do primeiro render), o cleanup marcava
-   * `cancelled = true`, a re-execução era barrada pela guarda de sessão e
-   * NINGUÉM desligava o loading — o botão ficava preso.
+   * CORREÇÃO ESTRUTURAL: antes a lista era carregada por leitura PONTUAL,
+   * uma única vez por sessão — e nem isso quando o cache local já tinha
+   * conteúdo. Consequências: um Service criado por aprovação automática ou
+   * em OUTRO dispositivo/navegador só aparecia ao trocar de guia (na melhor
+   * hipótese) e um segundo dispositivo ficava permanentemente preso ao
+   * próprio cache. Agora a fonte de verdade é o snapshot do documento:
    *
-   * Agora `setIsLoading(false)` roda SEMPRE; o `isCancelled` protege apenas
-   * a escrita dos dados, evitando resultado obsoleto.
+   *   • personagem aprovado (aqui ou em outro dispositivo) entra na lista
+   *     NA HORA, com a guia aberta — filtros/ordenações preservados, pois
+   *     são derivados por useMemo do estado;
+   *   • alterou/removeu/concluiu em outro dispositivo → reflete sem refresh;
+   *   • custo mínimo: UM listener em UM documento (1 leitura por mudança).
+   *
+   * GUARDA ANTI-CLOBBER: enquanto houver escrita otimista pendente
+   * (debounce/em voo), o snapshot NÃO sobrescreve o estado — a versão local
+   * é mais nova e será persistida pelo flush; o snapshot de confirmação
+   * subsequente realinha tudo. Sem isso, uma emissão atrasada desfaria uma
+   * edição recém-digitada.
+   *
+   * O cleanup cancela a inscrição ao desmontar — sem listeners duplicados
+   * nem vazamento ao trocar de guia. As dependências são apenas uid/acesso,
+   * então filtrar, ordenar ou abrir modais não recria o listener.
+   *
+   * O cache local continua hidratando a primeira pintura (useState inicial)
+   * e é reescrito a cada emissão dentro do próprio subscribe.
    */
-  async function loadServices(isCancelled: () => boolean = () => false) {
-    const uid = currentUser?.uid || "";
-    if (!uid) return;
-    setIsLoading(true);
-    setError("");
-    try {
-      const result = await fetchSharedServices(uid, userProfile?.nome || "");
-      if (!isCancelled()) {
-        setServices(result.services);
-        if (result.error) setError(`Não foi possível carregar tudo: ${result.error}`);
-      }
-    } catch (err: any) {
-      if (!isCancelled()) setError(err?.message || "Falha ao carregar seus Services.");
-    } finally {
-      // SEMPRE desliga — mesmo cancelado — para o botão nunca travar.
-      setIsLoading(false);
-    }
-  }
-
-  // Carga dos SERVICES (leitura pontual + cache; sem listener).
+  const servicesBackfillRanRef = useRef(false);
   useEffect(() => {
     if (demoMode) return; // demo: sem carga do Firestore
     const uid = currentUser?.uid || "";
     if (!uid || !hasAccess) return;
-    if (loadedForUidRef.current === uid) return;
-    loadedForUidRef.current = uid;
 
-    // Cache já hidratou a tela: não gasta leitura na primeira abertura.
-    if (readSharedServicesCache(uid).length > 0) return;
+    // Sem cache: liga o "Carregando" até a primeira emissão do snapshot.
+    if (readSharedServicesCache(uid).length === 0) setIsLoading(true);
 
-    let cancelled = false;
-    loadServices(() => cancelled);
-    return () => { cancelled = true; };
+    const unsubscribe = subscribeSharedServices(
+      uid,
+      userProfile?.nome || "",
+      incoming => {
+        setIsLoading(false);
+
+        // BACKFILL do índice anti-duplicado (uma vez por dispositivo/uid):
+        // garante chave em `serviceQueueIndex` para os Services DISPONÍVEIS
+        // legados, sem apagar nem alterar nenhum registro existente.
+        if (!servicesBackfillRanRef.current) {
+          servicesBackfillRanRef.current = true;
+          void backfillServiceQueueEntries(
+            `myservices.${uid}`,
+            incoming
+              .filter(s => s.status === "disponivel")
+              .map(s => ({ personagem: s.personagem, servidor: s.servidor, quest: s.quest, refId: s.id, refKind: "service" as const })),
+          );
+        }
+
+        // Edição otimista pendente é mais nova que este snapshot: não
+        // sobrescreve. O flush persiste a versão local e o snapshot de
+        // confirmação (que chega depois) realinha o estado.
+        if (pendingWriteRef.current || servicesWriteInFlightRef.current) return;
+        setServices(incoming);
+        // Mantém a projeção compartilhada (PTs/ServiceList) coerente sem
+        // leitura adicional — mesma via usada após cada flush.
+        onServicesChangedRef.current?.(incoming);
+      },
+      message => {
+        setIsLoading(false);
+        setError(message);
+      },
+    );
+    return () => unsubscribe();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentUser?.uid, hasAccess]);
+  }, [currentUser?.uid, hasAccess, demoMode]);
 
   /**
    * LISTENER EM TEMPO REAL das solicitações pendentes.
@@ -570,6 +598,21 @@ export default function MyServicesPanel({
 
       const updated = applyServiceStatus(merged, form.realizado, merged.valorCombinado);
       commit(services.map(item => (item.id === updated.id ? updated : item)), { flushImmediately: true });
+
+      // Manutenção do índice anti-duplicado (best-effort, nunca bloqueia):
+      //   • personagem/servidor mudou → libera a chave antiga;
+      //   • continua na fila (disponível) → garante a chave nova;
+      //   • saiu da fila (realizado) → libera a chave.
+      const oldKey = buildServiceQueueKey(editing.personagem, editing.servidor);
+      const newKey = buildServiceQueueKey(updated.personagem, updated.servidor);
+      if (oldKey && oldKey !== newKey) void freeServiceQueueEntry(editing.personagem, editing.servidor);
+      if (updated.status === "disponivel") {
+        if (oldKey !== newKey || editing.status === "realizado") {
+          void registerServiceQueueEntry({ personagem: updated.personagem, servidor: updated.servidor, quest: updated.quest, refId: updated.id, refKind: "service" });
+        }
+      } else {
+        void freeServiceQueueEntry(updated.personagem, updated.servidor);
+      }
     } else {
       const resolved = resolveServiceValue(form.paymentMethod, form.valorCombinado);
       const draft: SharedService = {
@@ -605,6 +648,12 @@ export default function MyServicesPanel({
 
       const created = applyServiceStatus(draft, form.realizado, draft.valorCombinado);
       commit([created, ...services], { flushImmediately: true });
+
+      // Cadastro manual entra na fila: registra a chave anti-duplicado
+      // (best-effort) para o Formulário Público bloquear o mesmo personagem.
+      if (created.status === "disponivel") {
+        void registerServiceQueueEntry({ personagem: created.personagem, servidor: created.servidor, quest: created.quest, refId: created.id, refKind: "service" });
+      }
     }
 
     setIsModalOpen(false);
@@ -630,6 +679,8 @@ export default function MyServicesPanel({
     if (!target) return;
     setPendingDelete(null);
     commit(services.filter(item => item.id !== target.id), { flushImmediately: true });
+    // Excluído = personagem sai da fila: libera a chave anti-duplicado.
+    void freeServiceQueueEntry(target.personagem, target.servidor);
   }
 
   /**
@@ -643,6 +694,13 @@ export default function MyServicesPanel({
     }
     const next = applyServiceStatus(service, service.status !== "realizado", service.valorCombinado);
     commit(services.map(item => (item.id === next.id ? next : item)), { flushImmediately: true });
+    // Concluído sai da fila (libera a chave); reaberto volta à fila
+    // (recria a chave) — sempre best-effort, sem bloquear o fluxo.
+    if (next.status === "realizado") {
+      void freeServiceQueueEntry(next.personagem, next.servidor);
+    } else {
+      void registerServiceQueueEntry({ personagem: next.personagem, servidor: next.servidor, quest: next.quest, refId: next.id, refKind: "service" });
+    }
   }
 
   /** Confirmação do modal de valor: grava o valor e conclui. */
@@ -656,6 +714,8 @@ export default function MyServicesPanel({
       ? services.map(item => (item.id === concluded.id ? concluded : item))
       : [concluded, ...services], { flushImmediately: true });
     setPendingValueService(null);
+    // Concluído = personagem sai da fila: libera a chave anti-duplicado.
+    void freeServiceQueueEntry(concluded.personagem, concluded.servidor);
   }
 
   /**
@@ -777,7 +837,12 @@ export default function MyServicesPanel({
     (async () => {
       // `current` acompanha o array a cada aprovação, garantindo que a
       // verificação de duplicidade use sempre o estado mais recente.
-      let current = services;
+      // A REF (e não a variável do closure) evita usar uma lista defasada
+      // quando os services mudaram sem que as deps deste efeito mudassem
+      // — ex.: snapshot do listener chegando entre duas emissões de
+      // solicitações. Persistir a partir de lista velha poderia descartar
+      // um Service recém-criado.
+      let current = servicesRef.current;
       for (const request of queue) {
         if (cancelled) break;
         autoHandledRef.current.add(request.id);

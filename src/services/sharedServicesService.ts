@@ -3,6 +3,7 @@ import { db } from "../firebase/config";
 import type { ServicePaymentMethod, ServiceRequest, ServiceRequestStatus, SharedService, SharedServiceStatus, Vocation, WaitingService } from "../types";
 import { normalizeServerName } from "../constants/servers";
 import { resolveServiceValue } from "../types";
+import { createWithQueueGuard, freeServiceQueueEntry } from "./serviceQueueIndexService";
 
 // ============================================================================
 // MEUS SERVICES — persistência em `sharedServices/{uid}`
@@ -119,6 +120,62 @@ export async function fetchSharedServices(uid: string, serviceiroNome: string): 
   } catch (error: any) {
     // Falha de rede/permissão: mantém o que já estava em cache.
     return { services: readSharedServicesCache(uid), error: error?.message || String(error) };
+  }
+}
+
+/**
+ * LISTENER EM TEMPO REAL dos Services do próprio usuário.
+ *
+ * Escuta UM único documento (`sharedServices/{uid}`) — o mais barato possível
+ * no Firestore: 1 leitura na inscrição e 1 leitura por alteração real do
+ * documento, venha ela deste dispositivo ou de qualquer outro.
+ *
+ * É ele que corrige os dois problemas estruturais da guia "Meus Services":
+ *   • um Service criado por aprovação (manual ou automática, inclusive em
+ *     OUTRO dispositivo) aparece na lista imediatamente, com a guia aberta;
+ *   • o cache local (localStorage) deixa de ser a única fonte da sessão —
+ *     antes, com cache não-vazio, o painel NUNCA relia o Firestore, e um
+ *     segundo dispositivo/navegador ficava permanentemente desatualizado.
+ *
+ * O cache continua existindo, mas apenas como HIDRATAÇÃO instantânea da
+ * primeira pintura; a fonte de verdade é o snapshot. Cada emissão reescreve
+ * o cache, então os últimos dados válidos sobrevivem a uma falha posterior.
+ *
+ * Devolve a função de cancelamento — o chamador DEVE invocá-la ao desmontar
+ * (o MyServicesPanel faz isso no cleanup do efeito, evitando vazamento).
+ */
+export function subscribeSharedServices(
+  uid: string,
+  serviceiroNome: string,
+  onChange: (services: SharedService[]) => void,
+  onError?: (message: string) => void,
+): () => void {
+  if (!db || !uid) return () => {};
+  try {
+    return onSnapshot(
+      doc(db, SHARED_SERVICES_COLLECTION, uid),
+      snap => {
+        if (!snap.exists()) {
+          saveSharedServicesCache(uid, []);
+          onChange([]);
+          return;
+        }
+        const data = snap.data() as any;
+        const list = Array.isArray(data?.services) ? data.services : [];
+        const services = list
+          .map((item: any) => normalizeService(item, uid, serviceiroNome))
+          .filter((item: SharedService | null): item is SharedService => item !== null);
+        saveSharedServicesCache(uid, services);
+        onChange(services);
+      },
+      error => {
+        // Erro NÃO limpa a tela: o cache já carregado permanece.
+        onError?.(error?.message || String(error));
+      },
+    );
+  } catch (error: any) {
+    onError?.(error?.message || String(error));
+    return () => {};
   }
 }
 
@@ -427,18 +484,36 @@ function normalizeRequest(raw: any, id: string): ServiceRequest | null {
   };
 }
 
-/** Cria a solicitação pendente para o Serviceiro escolhido. */
+/**
+ * Cria a solicitação pendente para o Serviceiro escolhido.
+ *
+ * PROTEÇÃO ANTI-DUPLICADO: a gravação passa pelo `createWithQueueGuard`
+ * (serviceQueueIndexService) — a solicitação nasce num WriteBatch atômico
+ * junto com a chave determinística do personagem em `serviceQueueIndex`.
+ * Se o personagem JÁ está na fila (de QUALQUER usuário), nada é criado e o
+ * retorno traz `duplicate: true`; nesse caso a notificação também NÃO é
+ * disparada (ela só é gravada após o sucesso do batch).
+ */
 export async function createServiceRequest(
   serviceiroUid: string,
   request: PublicServiceRequest,
-): Promise<{ ok: boolean; id?: string; error?: string }> {
+): Promise<{ ok: boolean; id?: string; duplicate?: boolean; error?: string }> {
   if (!db) return { ok: false, error: "Firestore indisponível." };
   const uid = String(serviceiroUid || "").trim();
   if (!uid) return { ok: false, error: "Serviceiro inválido." };
 
   const id = createServiceId();
-  try {
-    await setDoc(doc(db, SERVICE_REQUESTS_COLLECTION, id), {
+  const created = await createWithQueueGuard({
+    entry: {
+      personagem: request.personagem,
+      servidor: request.servidor,
+      quest: request.quest,
+      refId: id,
+      refKind: "request",
+    },
+    targetCollection: SERVICE_REQUESTS_COLLECTION,
+    targetId: id,
+    targetData: {
       id,
       personagem: request.personagem,
       ownerName: request.ownerName,
@@ -455,29 +530,34 @@ export async function createServiceRequest(
       status: "pendente",
       createdAt: Date.now(),
       source: "public_form",
-    });
-    // Notifica o Serviceiro destinatário. Reaproveita a coleção
-    // `notifications` (chaveada por `userId`), a mesma que o hook
-    // useNotifications (App) já escuta — sem estrutura paralela.
-    //
-    // Falha aqui NÃO invalida a solicitação: o pedido já está gravado e
-    // aparecerá em "Meus Services" de qualquer forma.
-    try {
-      await setDoc(doc(db, "notifications", `svcreq_${id}`), {
-        id: `svcreq_${id}`,
-        type: "service_request",
-        title: "Nova solicitação de Service",
-        body: `${request.personagem} — solicitação pendente de aprovação em Meus Services.`,
-        status: "pending",
-        userId: uid,
-        createdAt: Date.now(),
-      });
-    } catch { /* notificação é acessória */ }
+    },
+  });
 
-    return { ok: true, id };
-  } catch (error: any) {
-    return { ok: false, error: error?.message || String(error) };
+  if (!created.ok) {
+    if (created.duplicate) return { ok: false, duplicate: true };
+    return { ok: false, error: created.error || "Falha ao enviar a solicitação." };
   }
+
+  // Notifica o Serviceiro destinatário. Reaproveita a coleção
+  // `notifications` (chaveada por `userId`), a mesma que o hook
+  // useNotifications (App) já escuta — sem estrutura paralela.
+  //
+  // Falha aqui NÃO invalida a solicitação: o pedido já está gravado e
+  // aparecerá em "Meus Services" de qualquer forma. E um envio BLOQUEADO
+  // por duplicidade nunca chega aqui — não notifica nem altera o existente.
+  try {
+    await setDoc(doc(db, "notifications", `svcreq_${id}`), {
+      id: `svcreq_${id}`,
+      type: "service_request",
+      title: "Nova solicitação de Service",
+      body: `${request.personagem} — solicitação pendente de aprovação em Meus Services.`,
+      status: "pending",
+      userId: uid,
+      createdAt: Date.now(),
+    });
+  } catch { /* notificação é acessória */ }
+
+  return { ok: true, id };
 }
 
 /** Solicitações dirigidas a um Serviceiro. Uma consulta indexada por UID. */
@@ -591,6 +671,9 @@ export async function rejectServiceRequest(params: {
   }
   try {
     await deleteDoc(doc(db, SERVICE_REQUESTS_COLLECTION, request.id));
+    // Recusado = personagem SAI da fila: libera a chave anti-duplicado para
+    // que o cliente possa, se quiser, solicitar novamente no futuro.
+    void freeServiceQueueEntry(request.personagem, request.servidor);
     return { ok: true };
   } catch (error: any) {
     return { ok: false, error: error?.message || String(error) };

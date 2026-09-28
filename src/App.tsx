@@ -31,6 +31,7 @@ import StatsPanel from "./components/StatsPanel";
 import RankingPanel from "./components/RankingPanel";
 import MyServicesPanel from "./components/MyServicesPanel";
 import { fetchAllSharedServicesAsWaiting, isServiceProbablyDone, readAllSharedServicesCache, readServiceRequestsCache, readSharedServicesCache, replaceOwnerSharedServicesInWaitingCache } from "./services/sharedServicesService";
+import { backfillServiceQueueEntries, buildServiceQueueKey, freeServiceQueueEntry, registerServiceQueueEntry } from "./services/serviceQueueIndexService";
 import NotesPanel from "./components/NotesPanel";
 import WaitingListPanel from "./components/WaitingListPanel";
 import { useNotifications } from "./hooks/useNotifications";
@@ -1704,6 +1705,11 @@ export default function App() {
           realizadoAt,
         }))
       );
+      // Entregues saem da fila: libera as chaves anti-duplicado (best-effort).
+      toMark.forEach(id => {
+        const entry = waitingById.get(id);
+        if (entry) void freeServiceQueueEntry(entry.personagem, entry.servidor);
+      });
     } catch {
       // Falha na marcação não pode interromper o fluxo de conclusão da PT;
       // libera o marcador para nova tentativa em um próximo ciclo.
@@ -4486,6 +4492,12 @@ export default function App() {
         createdAt: item.createdAt || Date.now(),
         updatedAt: serverTimestamp()
       });
+      // Personagem entrou na fila por cadastro interno: registra a chave
+      // anti-duplicado (best-effort) para o Formulário Público bloquear
+      // um novo envio do mesmo personagem.
+      if (item.status !== "realizado") {
+        void registerServiceQueueEntry({ personagem: item.personagem, servidor: item.servidor, quest: item.quest, refId: item.id, refKind: "waiting" });
+      }
     } catch {
     } finally {
       setIsSyncing(false);
@@ -4524,6 +4536,18 @@ export default function App() {
         ...merged,
         updatedAt: serverTimestamp()
       });
+      // Índice anti-duplicado: se o personagem/servidor mudou na edição,
+      // libera a chave antiga e registra a nova (best-effort).
+      if (original) {
+        const oldKey = buildServiceQueueKey(original.personagem, original.servidor);
+        const newKey = buildServiceQueueKey(merged.personagem, merged.servidor);
+        if (oldKey && oldKey !== newKey) {
+          void freeServiceQueueEntry(original.personagem, original.servidor);
+          if (merged.status !== "realizado") {
+            void registerServiceQueueEntry({ personagem: merged.personagem, servidor: merged.servidor, quest: merged.quest, refId: merged.id, refKind: "waiting" });
+          }
+        }
+      }
     } catch (err) {
       console.error("Erro ao atualizar service na Lista de Espera:", err);
       if (original) applyLocal(original); // rollback
@@ -4549,6 +4573,8 @@ export default function App() {
     try {
       setIsSyncing(true);
       await deleteDoc(doc(db, "waitingList", id));
+      // Removido da fila: libera a chave anti-duplicado do personagem.
+      if (removed) void freeServiceQueueEntry(removed.personagem, removed.servidor);
     } catch {
       // Restaura o item se a exclusão falhar.
       if (removed) {
@@ -4821,6 +4847,18 @@ export default function App() {
     try {
       localStorage.setItem("cloud_cache_waitingList", JSON.stringify(waiting));
     } catch {}
+    // BACKFILL do índice anti-duplicado para itens LEGADOS da Lista de
+    // Espera (criados antes do índice existir). Uma vez por dispositivo,
+    // apenas pelo Boss (dono da fila "Qualquer um"), sem apagar nem alterar
+    // nenhum registro — só cria chaves ausentes, best-effort.
+    if (userProfile?.role === "Boss") {
+      void backfillServiceQueueEntries(
+        `waitinglist.${currentUser?.uid || ""}`,
+        waiting
+          .filter(w => w.status !== "realizado")
+          .map(w => ({ personagem: w.personagem, servidor: w.servidor, quest: w.quest, refId: w.id, refKind: "waiting" as const })),
+      );
+    }
   }
 
   /**

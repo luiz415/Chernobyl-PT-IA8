@@ -575,6 +575,40 @@ service cloud.firestore {
         resource.data.serviceiroUid == request.auth.uid || isBoss()
       );
     }
+    // ── Índice anti-duplicado da fila de Services ──────────────────────────
+    // Um documento por personagem NA FILA, com ID determinístico
+    // (servidor__nome normalizados). É a barreira de unicidade do Formulário
+    // Público: o envio grava índice + pedido num WriteBatch atômico e, como
+    // update é PROIBIDO, um segundo envio do mesmo personagem (mesmo
+    // simultâneo) encontra o documento existente e o batch inteiro falha —
+    // nada é criado e nenhuma notificação dispara.
+    //   • get: qualquer autenticado (o formulário usa login anônimo) — o
+    //     documento não carrega dados sensíveis (sem WhatsApp/cliente);
+    //   • create: validado campo a campo, chave = ID do documento;
+    //   • update: NUNCA (é isso que fecha a condição de corrida);
+    //   • delete: usuários aprovados (Serviceiro/Boss liberam a chave quando
+    //     o Service é concluído, excluído ou a solicitação é recusada).
+    match /serviceQueueIndex/{entryKey} {
+      allow get: if isAuth();
+      allow list: if isAuth() && isApproved();
+      allow create: if isAuth()
+        && request.resource.data.keys().hasOnly([
+          'key', 'personagem', 'servidor', 'quest', 'refId', 'refKind', 'createdAt'
+        ])
+        && request.resource.data.key == entryKey
+        && request.resource.data.personagem is string
+        && request.resource.data.personagem.size() > 0
+        && request.resource.data.personagem.size() <= 50
+        && request.resource.data.servidor is string
+        && request.resource.data.servidor.size() <= 40
+        && request.resource.data.quest in ['soulwar', 'sanguine']
+        && request.resource.data.refId is string
+        && request.resource.data.refId.size() <= 80
+        && request.resource.data.refKind in ['request', 'waiting', 'service']
+        && request.resource.data.createdAt is number;
+      allow update: if false;
+      allow delete: if isAuth() && isApproved();
+    }
     match /rankingHistory/{monthKey} {
       allow read: if isAuth() && isApproved();
       allow create: if isBoss()
