@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { BriefcaseBusiness, Check, Clock3, Copy, Handshake, Pencil, Send, UserRound } from "lucide-react";
+import { BriefcaseBusiness, Check, Clock3, Copy, Handshake, Pencil, RotateCcw, Send, UserRound } from "lucide-react";
 import type { Character, CharacterAcquisition, CharacterAcquisitionBuyerDetails, NegotiationTimestamp, PtType } from "../types";
 import { formatRC } from "../types";
 import { ItemSelect, SANGUINE_ITEMS, SOULWAR_ITEMS } from "./CharTable";
+import { FilterInline, FilterNumber, FilterSelect } from "./FilterTypes";
 import { computeDeferredSettlement, getCharacterAcquisitionSellerReceived, isDeferredPaymentPending, isPaymentConfirmed } from "../services/characterAcquisitionService";
 import { formatFirestoreLocalDateTime, toFirestoreMillis } from "../utils/firestoreTimestamp";
 import CharacterAcquisitionPaymentModal, { type CharacterAcquisitionPaymentModalContext } from "./CharacterAcquisitionPaymentModal";
@@ -225,6 +226,73 @@ function EmptyPerspective({ text }: { text: string }) {
   return <div className="flex min-h-[140px] flex-1 items-center justify-center px-5 text-center text-xs italic text-slate-500">{text}</div>;
 }
 
+// ── FILTROS POR COLUNA — mesmo conceito da guia "Disponíveis" (CharTable) ──
+// Linha de filtros logo abaixo do cabeçalho, um filtro por coluna, com os
+// MESMOS componentes (FilterInline/FilterSelect/FilterNumber) e o botão de
+// limpar (RotateCcw, com pulso âmbar quando há filtro ativo). Filtragem 100%
+// local (derivado puro sobre dados já carregados — zero Firestore).
+type NumericOp = "gte" | "lte";
+interface NumericFilterState { value: number | null; op: NumericOp }
+const EMPTY_NUM: NumericFilterState = { value: null, op: "gte" };
+
+function matchNumeric(value: number | null | undefined, st: NumericFilterState): boolean {
+  if (st.value === null) return true;
+  if (value === null || value === undefined || !Number.isFinite(value)) return false;
+  return st.op === "gte" ? value >= st.value : value <= st.value;
+}
+
+function matchText(haystack: string, needle: string): boolean {
+  const n = needle.trim().toLowerCase();
+  if (!n) return true;
+  return haystack.toLowerCase().includes(n);
+}
+
+/** Estado de pagamento da coluna PG, reduzido às duas situações reais. */
+function pgStatus(record: CharacterAcquisition): "Pago" | "Aguardando" {
+  return record.salePayoutStatus === "confirmed" ? "Pago" : "Aguardando";
+}
+
+/** Botão "limpar filtros" — mesmo visual do da guia Disponíveis. */
+function ClearFiltersButton({ active, onClear }: { active: boolean; onClear: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClear}
+      className={`h-6 w-6 flex-shrink-0 rounded flex items-center justify-center transition-all cursor-pointer ${
+        active
+          ? "bg-amber-500 text-black font-bold shadow-sm shadow-amber-500/20 animate-pulse"
+          : "bg-white/5 hover:bg-white/10 text-slate-400 hover:text-white"
+      }`}
+      title="Limpar todos os filtros"
+    >
+      <RotateCcw size={11} />
+    </button>
+  );
+}
+
+interface PurchasedFilters {
+  name: string;
+  owner: string;
+  drop: string;
+  profit: NumericFilterState;
+  paid: NumericFilterState;
+  sale: NumericFilterState;
+  total: NumericFilterState;
+  pg: string;
+}
+const EMPTY_PURCHASED_FILTERS: PurchasedFilters = { name: "", owner: "", drop: "", profit: EMPTY_NUM, paid: EMPTY_NUM, sale: EMPTY_NUM, total: EMPTY_NUM, pg: "" };
+
+interface SoldFilters {
+  name: string;
+  buyer: string;
+  received: NumericFilterState;
+  sale: NumericFilterState;
+  pg: string;
+}
+const EMPTY_SOLD_FILTERS: SoldFilters = { name: "", buyer: "", received: EMPTY_NUM, sale: EMPTY_NUM, pg: "" };
+
+const PG_FILTER_OPTIONS = ["Pago", "Aguardando"];
+
 export default function AcquiredCharactersPanel({
   acquisitions,
   buyerDetails = [],
@@ -247,6 +315,70 @@ export default function AcquiredCharactersPanel({
     .filter(record => record.originalOwnerUid === currentUserUid && isPaymentConfirmed(record))
     .sort((a, b) => toFirestoreMillis(b.updatedAt) - toFirestoreMillis(a.updatedAt)), [acquisitions, currentUserUid]);
   const salePayoutPrompt = useMemo(() => sold.find(record => record.id === salePayoutPromptId) || null, [salePayoutPromptId, sold]);
+
+  // ── Filtros por coluna (padrão da guia "Disponíveis") ────────────────────
+  const [purchasedFilters, setPurchasedFilters] = useState<PurchasedFilters>(EMPTY_PURCHASED_FILTERS);
+  const [soldFilters, setSoldFilters] = useState<SoldFilters>(EMPTY_SOLD_FILTERS);
+
+  const hasPurchasedFilters = useMemo(() =>
+    purchasedFilters.name.trim() !== "" || purchasedFilters.owner !== "" || purchasedFilters.drop !== "" || purchasedFilters.pg !== ""
+    || purchasedFilters.profit.value !== null || purchasedFilters.paid.value !== null || purchasedFilters.sale.value !== null || purchasedFilters.total.value !== null,
+  [purchasedFilters]);
+
+  const hasSoldFilters = useMemo(() =>
+    soldFilters.name.trim() !== "" || soldFilters.buyer !== "" || soldFilters.pg !== ""
+    || soldFilters.received.value !== null || soldFilters.sale.value !== null,
+  [soldFilters]);
+
+  // Opções dos selects — derivadas dos próprios dados carregados (sem
+  // consulta extra), como as opções de Conta/Servidor da guia Disponíveis.
+  const purchasedOwnerOptions = useMemo(() => {
+    const set = new Set<string>();
+    purchased.forEach(record => { if (record.originalOwnerName) set.add(record.originalOwnerName); });
+    return Array.from(set).sort((a, b) => a.localeCompare(b, "pt-BR"));
+  }, [purchased]);
+
+  const purchasedDropOptions = useMemo(() => {
+    const set = new Set<string>();
+    purchased.forEach(record => {
+      const drop = buyerDetailsByAcquisition.get(record.id)?.questDrops?.[0];
+      if (drop) set.add(drop);
+    });
+    return Array.from(set).sort((a, b) => a.localeCompare(b, "pt-BR"));
+  }, [purchased, buyerDetailsByAcquisition]);
+
+  const soldBuyerOptions = useMemo(() => {
+    const set = new Set<string>();
+    sold.forEach(record => { if (record.acquirerName) set.add(record.acquirerName); });
+    return Array.from(set).sort((a, b) => a.localeCompare(b, "pt-BR"));
+  }, [sold]);
+
+  // Filtragem LOCAL, combinando todos os filtros ativos (AND) e preservando
+  // a ordenação existente (o filter mantém a ordem do array de origem).
+  const filteredPurchased = useMemo(() => purchased.filter(record => {
+    if (!matchText(record.characterName || "", purchasedFilters.name)) return false;
+    if (purchasedFilters.owner && record.originalOwnerName !== purchasedFilters.owner) return false;
+    const detail = buyerDetailsByAcquisition.get(record.id);
+    if (purchasedFilters.drop && (detail?.questDrops?.[0] || "") !== purchasedFilters.drop) return false;
+    if (!matchNumeric(detail?.questProfit ?? 0, purchasedFilters.profit)) return false;
+    if (!matchNumeric(record.finalPaid, purchasedFilters.paid)) return false;
+    const saleValue = resolveOfficialSaleValue(record, currentUserUid, originalCharactersById);
+    if (!matchNumeric(saleValue, purchasedFilters.sale)) return false;
+    const total = (detail?.questProfit || 0) + (saleValue || 0) - record.finalPaid;
+    if (!matchNumeric(total, purchasedFilters.total)) return false;
+    if (purchasedFilters.pg && pgStatus(record) !== purchasedFilters.pg) return false;
+    return true;
+  }), [purchased, purchasedFilters, buyerDetailsByAcquisition, currentUserUid, originalCharactersById]);
+
+  const filteredSold = useMemo(() => sold.filter(record => {
+    if (!matchText(record.characterName || "", soldFilters.name)) return false;
+    if (soldFilters.buyer && record.acquirerName !== soldFilters.buyer) return false;
+    if (!matchNumeric(getCharacterAcquisitionSellerReceived(record), soldFilters.received)) return false;
+    const saleValue = resolveOfficialSaleValue(record, currentUserUid, originalCharactersById);
+    if (!matchNumeric(saleValue, soldFilters.sale)) return false;
+    if (soldFilters.pg && pgStatus(record) !== soldFilters.pg) return false;
+    return true;
+  }), [sold, soldFilters, currentUserUid, originalCharactersById]);
   const salePayoutValue = salePayoutPrompt ? resolveOfficialSaleValue(salePayoutPrompt, currentUserUid, originalCharactersById) : undefined;
 
   // PAGAMENTO POSTERIOR: o encerramento é a COMPENSAÇÃO ÚNICA da diferença
@@ -315,9 +447,42 @@ export default function AcquiredCharactersPanel({
                   <tr>
                     {['Personagens', 'Perspectiva', 'Drop Quest', 'Lucro Quest', 'Valor Pago', 'Venda', 'Total', 'PG'].map(label => <th key={label} className="border-b border-[var(--th-line)]/60 px-2 py-2 text-center font-black whitespace-nowrap first:text-left">{label}</th>)}
                   </tr>
+                  {/* Linha de filtros — mesmo padrão da guia Disponíveis. */}
+                  <tr>
+                    <th className="border-b border-[var(--th-line)]/60 px-1 py-1 bg-[var(--th-bg-base)]">
+                      <div className="flex items-center gap-1">
+                        <ClearFiltersButton active={hasPurchasedFilters} onClear={() => setPurchasedFilters(EMPTY_PURCHASED_FILTERS)} />
+                        <FilterInline value={purchasedFilters.name} onChange={v => setPurchasedFilters(f => ({ ...f, name: v }))} maxWidth="90px" />
+                      </div>
+                    </th>
+                    <th className="border-b border-[var(--th-line)]/60 px-1 py-1 bg-[var(--th-bg-base)]">
+                      <div className="flex justify-center"><FilterSelect label="Perspectiva" options={purchasedOwnerOptions} selected={purchasedFilters.owner} onSelect={v => setPurchasedFilters(f => ({ ...f, owner: v }))} searchable /></div>
+                    </th>
+                    <th className="border-b border-[var(--th-line)]/60 px-1 py-1 bg-[var(--th-bg-base)]">
+                      <div className="flex justify-center"><FilterSelect label="Drop Quest" options={purchasedDropOptions} selected={purchasedFilters.drop} onSelect={v => setPurchasedFilters(f => ({ ...f, drop: v }))} searchable /></div>
+                    </th>
+                    <th className="border-b border-[var(--th-line)]/60 px-1 py-1 bg-[var(--th-bg-base)]">
+                      <div className="flex justify-center"><FilterNumber label="Lucro Quest" value={purchasedFilters.profit.value} operator={purchasedFilters.profit.op} onChange={(value, op) => setPurchasedFilters(f => ({ ...f, profit: { value, op } }))} /></div>
+                    </th>
+                    <th className="border-b border-[var(--th-line)]/60 px-1 py-1 bg-[var(--th-bg-base)]">
+                      <div className="flex justify-center"><FilterNumber label="Valor Pago" value={purchasedFilters.paid.value} operator={purchasedFilters.paid.op} onChange={(value, op) => setPurchasedFilters(f => ({ ...f, paid: { value, op } }))} /></div>
+                    </th>
+                    <th className="border-b border-[var(--th-line)]/60 px-1 py-1 bg-[var(--th-bg-base)]">
+                      <div className="flex justify-center"><FilterNumber label="Venda" value={purchasedFilters.sale.value} operator={purchasedFilters.sale.op} onChange={(value, op) => setPurchasedFilters(f => ({ ...f, sale: { value, op } }))} /></div>
+                    </th>
+                    <th className="border-b border-[var(--th-line)]/60 px-1 py-1 bg-[var(--th-bg-base)]">
+                      <div className="flex justify-center"><FilterNumber label="Total" value={purchasedFilters.total.value} operator={purchasedFilters.total.op} onChange={(value, op) => setPurchasedFilters(f => ({ ...f, total: { value, op } }))} allowNegative /></div>
+                    </th>
+                    <th className="border-b border-[var(--th-line)]/60 px-1 py-1 bg-[var(--th-bg-base)]">
+                      <div className="flex justify-center"><FilterSelect label="PG" options={PG_FILTER_OPTIONS} selected={purchasedFilters.pg} onSelect={v => setPurchasedFilters(f => ({ ...f, pg: v }))} /></div>
+                    </th>
+                  </tr>
                 </thead>
                 <tbody>
-                  {purchased.map(record => {
+                  {filteredPurchased.length === 0 && (
+                    <tr><td colSpan={8} className="px-4 py-6 text-center text-xs italic text-slate-500">Nenhuma negociação corresponde aos filtros atuais.</td></tr>
+                  )}
+                  {filteredPurchased.map(record => {
                     const detail = buyerDetailsByAcquisition.get(record.id);
                     const initialPaymentConfirmed = isPaymentConfirmed(record);
                     const questProfit = detail?.questProfit || 0;
@@ -383,9 +548,33 @@ export default function AcquiredCharactersPanel({
                   <tr>
                     {['Personagem', 'Perspectiva', 'Valor Recebido', 'Venda', 'PG'].map(label => <th key={label} className="border-b border-[var(--th-line)]/60 px-2 py-2 text-center font-black whitespace-nowrap first:text-left">{label}</th>)}
                   </tr>
+                  {/* Linha de filtros — mesmo padrão da guia Disponíveis. */}
+                  <tr>
+                    <th className="border-b border-[var(--th-line)]/60 px-1 py-1 bg-[var(--th-bg-base)]">
+                      <div className="flex items-center gap-1">
+                        <ClearFiltersButton active={hasSoldFilters} onClear={() => setSoldFilters(EMPTY_SOLD_FILTERS)} />
+                        <FilterInline value={soldFilters.name} onChange={v => setSoldFilters(f => ({ ...f, name: v }))} maxWidth="90px" />
+                      </div>
+                    </th>
+                    <th className="border-b border-[var(--th-line)]/60 px-1 py-1 bg-[var(--th-bg-base)]">
+                      <div className="flex justify-center"><FilterSelect label="Perspectiva" options={soldBuyerOptions} selected={soldFilters.buyer} onSelect={v => setSoldFilters(f => ({ ...f, buyer: v }))} searchable /></div>
+                    </th>
+                    <th className="border-b border-[var(--th-line)]/60 px-1 py-1 bg-[var(--th-bg-base)]">
+                      <div className="flex justify-center"><FilterNumber label="Valor Recebido" value={soldFilters.received.value} operator={soldFilters.received.op} onChange={(value, op) => setSoldFilters(f => ({ ...f, received: { value, op } }))} /></div>
+                    </th>
+                    <th className="border-b border-[var(--th-line)]/60 px-1 py-1 bg-[var(--th-bg-base)]">
+                      <div className="flex justify-center"><FilterNumber label="Venda" value={soldFilters.sale.value} operator={soldFilters.sale.op} onChange={(value, op) => setSoldFilters(f => ({ ...f, sale: { value, op } }))} /></div>
+                    </th>
+                    <th className="border-b border-[var(--th-line)]/60 px-1 py-1 bg-[var(--th-bg-base)]">
+                      <div className="flex justify-center"><FilterSelect label="PG" options={PG_FILTER_OPTIONS} selected={soldFilters.pg} onSelect={v => setSoldFilters(f => ({ ...f, pg: v }))} /></div>
+                    </th>
+                  </tr>
                 </thead>
                 <tbody>
-                  {sold.map(record => {
+                  {filteredSold.length === 0 && (
+                    <tr><td colSpan={5} className="px-4 py-6 text-center text-xs italic text-slate-500">Nenhuma negociação corresponde aos filtros atuais.</td></tr>
+                  )}
+                  {filteredSold.map(record => {
                     const received = getCharacterAcquisitionSellerReceived(record);
                     const initialPaymentConfirmed = isPaymentConfirmed(record);
                     const saleValue = resolveOfficialSaleValue(record, currentUserUid, originalCharactersById);
