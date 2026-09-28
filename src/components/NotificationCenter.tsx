@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { Bell, BellOff, Check, X, ShieldAlert, Clock, Info, DollarSign, ExternalLink, Crown, Heart, CheckCircle2, ShoppingBag, Briefcase, BellRing } from "lucide-react";
+import { Bell, BellOff, Check, X, ShieldAlert, Clock, Info, DollarSign, ExternalLink, Crown, Heart, CheckCircle2, ShoppingBag, Briefcase, BellRing, Handshake } from "lucide-react";
 import type { Notification } from "../types/notifications";
 import { checkPermission } from "../utils/desktopNotify";
 import { dispatchNotificationNavigate } from "../utils/notificationNavigation";
+import { requestAcquisitionAccept } from "../utils/acquisitionAcceptNavigation";
 import { formatHourMinuteWithOffset, readBazarTimezoneOffsetMinutes } from "../utils/bazaarTime";
 import ThemeSelector from "./ThemeSelector";
 import NotificationSettingsModal from "./NotificationSettingsModal";
@@ -235,6 +236,9 @@ function getNotificationBadges(n: Notification): string[] {
   if (n.type === "service_waiting") {
     badges.push("Pendente");
   }
+  if (n.type === "acquisition_pre_approved") {
+    badges.push("Pré-venda");
+  }
   if ((n.type === "pt_added" || n.type === "quest_completed_donation" || n.type === "pt_updated" || n.type === "schedule_changed" || n.type === "party_finalized" || n.type === "service_waiting") && questLabel) {
     badges.push(questLabel);
   }
@@ -244,6 +248,21 @@ function getNotificationBadges(n: Notification): string[] {
 
 function getNotificationTheme(type: Notification["type"]) {
   switch (type) {
+    // Negociação de personagem entre usuários — VIOLETA, a mesma identidade
+    // visual dos controles de negociação do PartyPanel (selo/botões Handshake).
+    case "acquisition_pre_approved":
+      return {
+        pendingCard: "relative px-2.5 py-2 rounded-lg border border-violet-500/35 bg-gradient-to-r from-violet-950/25 via-violet-900/10 to-transparent flex flex-col gap-1.5 shadow-[0_0_18px_rgba(139,92,246,0.10)] overflow-hidden",
+        historyCard: "px-2.5 py-1.5 rounded-lg border border-violet-500/15 bg-violet-500/[0.04] opacity-60 hover:opacity-100 transition-opacity flex flex-col gap-0.5",
+        stripe: "from-violet-300 via-violet-400 to-purple-600",
+        iconWrap: "bg-violet-500/15 border border-violet-400/30 text-violet-200",
+        pendingTitle: "text-[11px] font-black tracking-tight text-violet-100 truncate",
+        historyTitle: "text-[10px] font-bold text-violet-200/85 truncate",
+        pendingBody: "text-[11px] text-violet-100/80 leading-snug line-clamp-2",
+        historyBody: "text-[10px] text-violet-100/45 line-clamp-1",
+        badge: "border-violet-400/40 text-violet-200 bg-violet-500/15",
+        historyBadge: "border-violet-400/30 text-violet-300/80 bg-violet-500/10",
+      };
     case "service_request":
       return {
         pendingCard: "relative px-2.5 py-2 rounded-lg border border-sky-500/35 bg-gradient-to-r from-sky-900/25 via-sky-800/10 to-transparent flex flex-col gap-1.5 shadow-[0_0_18px_rgba(56,189,248,0.10)] overflow-hidden",
@@ -584,6 +603,28 @@ export function NotificationCenter({
     onClose();
   }
 
+  /**
+   * "Comprar Personagem" — notificação `acquisition_pre_approved`.
+   *
+   * Registra o pedido de aceite ANTES de navegar (padrão do módulo
+   * acquisitionAcceptNavigation): se o PartyPanel da PT já estiver montado,
+   * o CustomEvent abre o modal na hora; senão, o painel consome o pedido
+   * pendente ao montar/receber as negociações. Em seguida, o MESMO evento
+   * canônico de navegação das demais notificações leva à PT exata por ID.
+   * Todas as validações da compra (status pre_approved, comprador correto,
+   * PT não finalizada) são reaplicadas pelo PartyPanel e pelo serviço.
+   */
+  function handleBuyCharacterFromNotification(notif: Notification) {
+    if (notif.partyId && notif.acquisitionId) {
+      requestAcquisitionAccept({
+        partyId: notif.partyId,
+        acquisitionId: notif.acquisitionId,
+        characterId: notif.characterId,
+      });
+    }
+    handleNavigateFromNotification(notif);
+  }
+
   const handleToggleCloseTray = (v: boolean) => {
     onToggleCloseTray(v);
     if (isElectron) {
@@ -619,6 +660,7 @@ export function NotificationCenter({
       case "service_request": return <Briefcase size={size} className="text-sky-300" />;
       case "service_waiting": return <Clock size={size} className="text-cyan-300" />;
       case "party_finalized": return <CheckCircle2 size={size} className="text-emerald-300" />;
+      case "acquisition_pre_approved": return <Handshake size={size} className="text-violet-300" />;
     }
   }
 
@@ -833,6 +875,15 @@ export function NotificationCenter({
                             <ExternalLink size={11} /> Ver PT
                           </button>
                         )}
+                        {n.type === "acquisition_pre_approved" && n.partyId && n.acquisitionId && (
+                          <button
+                            onClick={() => handleBuyCharacterFromNotification(n)}
+                            className="h-6 px-2 rounded bg-violet-500/10 border border-violet-500/25 text-violet-300 text-[10px] font-bold hover:bg-violet-500/20 flex items-center gap-1 cursor-pointer"
+                            title="Abrir a PT e confirmar a compra deste personagem"
+                          >
+                            <Handshake size={11} /> Comprar Personagem
+                          </button>
+                        )}
                         {n.type === "bazaar_interest_ending" && n.url && (
                           <button
                             onClick={() => openExternalUrl(n.url)}
@@ -962,6 +1013,15 @@ export function NotificationCenter({
                               className="h-6 px-2 rounded bg-red-900/40 border border-red-500/20 text-red-200 text-[10px] font-bold hover:bg-red-900/60 flex items-center gap-1"
                             >
                               <ExternalLink size={11} /> Ver PT
+                            </button>
+                          )}
+                          {n.type === "acquisition_pre_approved" && n.partyId && n.acquisitionId && (
+                            <button
+                              onClick={() => handleBuyCharacterFromNotification(n)}
+                              className="h-6 px-2 rounded bg-violet-500/10 border border-violet-500/25 text-violet-300 text-[10px] font-bold hover:bg-violet-500/20 flex items-center gap-1 cursor-pointer"
+                              title="Abrir a PT e confirmar a compra deste personagem"
+                            >
+                              <Handshake size={11} /> Comprar Personagem
                             </button>
                           )}
                           {n.type === "bazaar_interest_ending" && n.url && (

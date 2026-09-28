@@ -1,10 +1,69 @@
-import { useState, useEffect, useMemo } from "react";
-import { X, Save, User, Users } from "lucide-react";
+import { useState, useEffect, useMemo, useRef } from "react";
+import { X, Save, User, Users, Copy, Check } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 
 interface Props {
   open: boolean;
   onClose: () => void;
+}
+
+/** Copia o texto usando o mesmo caminho do "Copiar (WA)" do PartyPanel, do
+ *  histórico de PT's e da guia Negociados (textarea + execCommand, com
+ *  fallback para a API assíncrona de clipboard). */
+function copyTextToClipboard(text: string): void {
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.position = "fixed";
+    ta.style.top = "0";
+    ta.style.left = "0";
+    ta.style.opacity = "0";
+    ta.style.pointerEvents = "none";
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    document.execCommand("copy");
+    document.body.removeChild(ta);
+  } catch {
+    navigator.clipboard.writeText(text).catch(() => {});
+  }
+}
+
+/** Nome do personagem principal do amigo como BOTÃO DE COPIAR — o MESMO
+ *  padrão já usado na guia Negociados (AcquiredCharactersPanel): o nome
+ *  continua visualmente identificado como personagem (âmbar/mono), com
+ *  ícone de copiar no hover e ✓ verde por 2s após copiar o nome EXATO. */
+function FriendMainCharacterName({ name, friendName }: { name: string; friendName: string }) {
+  const [copied, setCopied] = useState(false);
+  const copiedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => {
+    if (copiedTimer.current) clearTimeout(copiedTimer.current);
+  }, []);
+  function handleCopy() {
+    const clean = String(name || "").trim();
+    if (!clean) return;
+    copyTextToClipboard(clean);
+    setCopied(true);
+    if (copiedTimer.current) clearTimeout(copiedTimer.current);
+    copiedTimer.current = setTimeout(() => setCopied(false), 2000);
+  }
+  return (
+    <button
+      type="button"
+      onClick={handleCopy}
+      title={copied ? "Nome copiado" : `Copiar "${name}" — personagem principal de ${friendName}`}
+      className={`group inline-flex min-w-0 cursor-copy items-center gap-1 rounded px-0.5 py-0.5 font-mono text-[11px] font-bold transition-colors ${
+        copied
+          ? "bg-emerald-500/15 text-emerald-300"
+          : "text-amber-300 hover:bg-white/[0.07] hover:text-amber-200"
+      }`}
+    >
+      <span className="truncate">{name}</span>
+      {copied
+        ? <Check size={10} strokeWidth={3} className="flex-shrink-0 text-emerald-400" />
+        : <Copy size={10} className="flex-shrink-0 text-slate-500 opacity-0 transition-opacity group-hover:opacity-80" />}
+    </button>
+  );
 }
 
 export default function ReceiveRCModal({ open, onClose }: Props) {
@@ -158,9 +217,7 @@ export default function ReceiveRCModal({ open, onClose }: Props) {
                           <span className="truncate text-[11px] font-semibold text-slate-300" title={friend.nome}>{friend.nome}</span>
                         </span>
                         {friend.mainCharacterName ? (
-                          <span className="truncate text-[11px] font-mono font-bold text-amber-300 text-right" title={`Personagem principal de ${friend.nome}: ${friend.mainCharacterName}`}>
-                            {friend.mainCharacterName}
-                          </span>
+                          <FriendMainCharacterName name={friend.mainCharacterName} friendName={friend.nome} />
                         ) : (
                           <span className="text-[10px] italic text-slate-600 text-right flex-shrink-0" title={`${friend.nome} ainda não configurou o personagem principal`}>
                             Não configurado

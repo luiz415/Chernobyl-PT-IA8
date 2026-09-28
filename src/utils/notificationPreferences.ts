@@ -39,6 +39,7 @@ export type NotificationTypeId =
   | "bazaar_daily_available"
   | "service_request"
   | "service_waiting"
+  | "acquisition_pre_approved"
   | "vip_approved"
   | "payment_received"
   | "update_available"
@@ -172,6 +173,13 @@ export const NOTIFICATION_PREFERENCES: NotificationPreferenceItem[] = [
     label: "PT finalizada no histórico",
     description: "O backend concluiu a finalização de uma PT que você participou.",
     storageKey: `${TYPE_KEY_PREFIX}party_finalized`,
+  },
+  {
+    id: "acquisition_pre_approved",
+    category: "pt",
+    label: "Personagem pré-aprovado para venda",
+    description: "O dono pré-aprovou a venda de um personagem da PT para você — inclui os botões Ver PT e Comprar Personagem.",
+    storageKey: `${TYPE_KEY_PREFIX}acquisition_pre_approved`,
   },
 
   // ── Bazaar ───────────────────────────────────────────────────────────────

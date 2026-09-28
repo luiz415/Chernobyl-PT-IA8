@@ -7,7 +7,7 @@ import {
 } from "lucide-react";
 import ExoriLogo from "./components/ExoriLogo";
 import type { AppData, BazaarItemsPurchasePrefill, Character, CharacterAcquisition, CharacterAcquisitionBuyerDetails, PartyFinalizationReason, PartyTab, PersonalPartyHistory, PtType, WaitingService, SharedService, DialogOptions, ProbableMarkersMap, Vocation } from "./types";
-import { setGlobalDialogHandler, customAlert, customConfirm } from "./types";
+import { setGlobalDialogHandler, customAlert, customConfirm, formatRC } from "./types";
 import { loadData, saveData, exportCSV, exportJSON, importJSON, buildPersonalBackup, normalizeImportedBackup, saveAutoSaveHandle, loadAutoSaveHandle, loadUIState, saveUIState, saveCloseTray, saveStartWithWindows, saveLowCpuUsage, loadSharedCharsCache, saveSharedCharsCache, isSharedCharsCacheFresh, invalidateSharedCharsCache } from "./storage";
 import { canViewServiceEntry, canViewServiceForViewer, projectServiceForViewer } from "./utils/serviceVisibility";
 import { applyPartyProfitToCharacters, buildCharacterProfitPatch, computePartyProfitMap } from "./utils/partyProfit";
@@ -3990,6 +3990,40 @@ export default function App() {
     if (!result.ok || !result.record) return result;
 
     setPendingCharacterAcquisitions(previous => previous.some(item => item.id === result.record!.id) ? previous : [result.record!, ...previous]);
+
+    // ── NOTIFICAÇÃO AO COMPRADOR — mesma infraestrutura das demais ─────────
+    // Documento em `notifications` (padrão do pt_added): o listener do
+    // useNotifications entrega no centro/som/desktop do destinatário
+    // (userId = comprador) e a Cloud Function genérica notificationPushTrigger
+    // cobre o push sem nenhuma alteração no backend. Criada SOMENTE aqui,
+    // após o sucesso da transação de criação — o `create` da pré-aprovação
+    // exige documento inexistente, então isto roda UMA única vez por
+    // pré-aprovação válida; re-render, listeners e updates posteriores do
+    // documento nunca repetem a notificação. O id carrega o instante da
+    // criação: uma NOVA pré-aprovação (após cancelamento) gera notificação
+    // nova mesmo que a anterior já esteja no histórico do comprador.
+    // `acquisitionId`/`partyId`/`characterId` são os IDs estáveis que os
+    // botões "Ver PT" e "Comprar Personagem" usam — nunca nomes.
+    if (db && !isSimulation) {
+      const notifId = `acquisition_pre_approved_${result.record.id}_${Date.now()}`;
+      setDoc(doc(db, "notifications", notifId), {
+        id: notifId,
+        userId: result.record.acquirerUid,
+        senderName: displayUserName,
+        type: "acquisition_pre_approved",
+        title: "Personagem pré-aprovado para venda!",
+        body: `${displayUserName} pré-aprovou a venda de "${result.record.characterName}" para você na PT "${result.record.partyName}" por ${formatRC(result.record.finalPaid)}.`,
+        partyId: result.record.partyId,
+        partyName: result.record.partyName,
+        acquisitionId: result.record.id,
+        characterId: result.record.characterId,
+        status: "pending",
+        read: false,
+        createdAt: Date.now(),
+        targetRole: "Normal",
+      }).catch(() => {});
+    }
+
     // Pré-aprovação NÃO transfere direitos financeiros nem altera o slot. O
     // vínculo no slot só é gravado após o JOGADOR confirmar o pagamento.
     return result;

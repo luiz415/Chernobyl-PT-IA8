@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useState, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { isServiceOpenToAnyone } from "../utils/serviceVisibility";
+import { ACQUISITION_ACCEPT_EVENT, clearPendingAcquisitionAccept, peekPendingAcquisitionAccept, type AcquisitionAcceptRequestDetail } from "../utils/acquisitionAcceptNavigation";
 import ConfirmModal from "./ConfirmModal";
 import PausePartyModal from "./PausePartyModal";
 import {
@@ -1767,6 +1768,47 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
       ? "in_progress"
       : "pre_start";
   const canOrganizeParty = questState === "pre_start";
+  // ============================================================================
+  // "COMPRAR PERSONAGEM" VIA NOTIFICAÇÃO — abre o modal de aceite da compra
+  // ============================================================================
+  // O Centro de Notificações registra o pedido (acquisitionAcceptNavigation) e
+  // navega até esta PT. Aqui o pedido é processado nas DUAS situações de
+  // timing: painel JÁ montado (CustomEvent) e painel montado DEPOIS do clique
+  // (pedido pendente, verificado ao montar e a cada atualização das
+  // negociações — a latência do listener de characterAcquisitions não perde o
+  // pedido). O modal aberto é o MESMO do botão de aceite ✓ do slot
+  // (setAcquisitionPaymentPrompt), sob as MESMAS regras do
+  // canAcceptAcquisition: registro pre_approved, usuário atual = comprador e
+  // PT não finalizada/trancada/pausada. Pré-aprovação cancelada = registro
+  // inexistente → nada abre (o pedido expira sozinho); a confirmação em si
+  // continua revalidada pelo serviço e pelas Rules.
+  useEffect(() => {
+    function tryOpenFromRequest(detail: AcquisitionAcceptRequestDetail | null): void {
+      if (!detail || detail.partyId !== party.id) return;
+      const record = characterAcquisitions.find(item => item.id === detail.acquisitionId && item.partyId === party.id);
+      // Registro ainda não chegou pelo listener: mantém o pedido pendente —
+      // este efeito roda de novo quando `characterAcquisitions` atualizar.
+      if (!record) return;
+      clearPendingAcquisitionAccept();
+      if (!onConfirmCharacterAcquisitionPayment) return;
+      if (record.status !== "pre_approved") return;
+      if (!currentUser?.uid || currentUser.uid !== record.acquirerUid) return;
+      if (isLocked || party.isLocked || isPausedActive) return;
+      setAcquisitionPaymentPrompt(record);
+    }
+
+    // 1) Pedido pendente — o PartyPanel montou DEPOIS do clique na notificação.
+    tryOpenFromRequest(peekPendingAcquisitionAccept(party.id));
+
+    // 2) Painel já montado nesta PT no momento do clique.
+    function handleAcceptRequest(event: Event) {
+      const detail = (event as CustomEvent<AcquisitionAcceptRequestDetail>).detail;
+      tryOpenFromRequest(detail || null);
+    }
+    window.addEventListener(ACQUISITION_ACCEPT_EVENT, handleAcceptRequest as EventListener);
+    return () => window.removeEventListener(ACQUISITION_ACCEPT_EVENT, handleAcceptRequest as EventListener);
+  }, [party.id, party.isLocked, characterAcquisitions, currentUser?.uid, isLocked, isPausedActive, onConfirmCharacterAcquisitionPayment]);
+
   // ── ALTERAÇÃO DO SERVIDOR DA PT ───────────────────────────────────────────
   // Permitida SOMENTE enquanto a PT está na categoria "Com Vagas" do seletor
   // (espelho exato de `getPartyStage` no PartyManager): slot disponível
