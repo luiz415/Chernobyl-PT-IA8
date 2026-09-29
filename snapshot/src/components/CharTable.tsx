@@ -3,7 +3,7 @@ import { ArrowDown, ArrowUp, ArrowUpDown, Trash2, Pencil, Eye, EyeOff, Check, Ro
 import type { Character, PartyTab, ProbableMarkersMap, ItemSaleRecord } from "../types";
 import { VOCATIONS, VOC_COLORS, calcTotal, formatRC, formatDateBR, customConfirm } from "../types";
 import ItemSoldModal from "./ItemSoldModal";
-import { FilterSelect, FilterToggle, FilterNumber, FilterInline, type ToggleState } from "./FilterTypes";
+import { FilterMulti, FilterToggle, FilterNumber, FilterInline, type ToggleState } from "./FilterTypes";
 import { serverLabel } from "../constants/servers";
 
 type NumericOp = "gte" | "lte";
@@ -53,6 +53,11 @@ interface Props {
 const NUMERIC_COLUMNS = new Set(["level", "valorPago", "dropSW", "dropBakra", "valorVenda", "total"]);
 const BOOLEAN_COLUMNS = new Set(["soulwar", "sanguine", "vendido"]);
 const TEXT_FILTER_COLUMNS = new Set(["personagem", "dataCompra", "dataVenda", "notes"]);
+// Colunas de MÚLTIPLA seleção (FilterMulti, padrão do Painel Bazaar):
+// categorias com opções independentes onde combinar valores faz sentido.
+// Toggles binários (SW/SG/PT/Compartilhar/Vendido), textos e numéricos
+// continuam com os filtros atuais.
+const MULTI_CHOICE_COLUMNS = ["account", "servidor", "voc", "itemDropadoSW", "itemDropadoSG"] as const;
 
 const COLLAPSED_WIDTH = 22;
 
@@ -297,6 +302,11 @@ export default function CharTable({ characters, activeParties = [], readOnly, sh
 
   const [textFilters, setTextFilters] = usePersistedState<Record<string, string>>(storageKey("textFilters"), {});
   const [choiceFilters, setChoiceFilters] = usePersistedState<Record<string, string>>(storageKey("choiceFilters"), {});
+  // Filtros de MÚLTIPLA seleção (Conta/Servidor/Vocação/Drop SW/Drop SG) —
+  // mesmo componente e padrão do Painel Bazaar (FilterMulti). Vazio ou
+  // ausente = sem filtro; com valores = personagem precisa casar com ALGUM
+  // deles (OR dentro do filtro, AND entre filtros — como no Bazaar).
+  const [multiChoiceFilters, setMultiChoiceFilters] = usePersistedState<Record<string, string[]>>(storageKey("multiChoiceFilters"), {});
   const [numericFilters, setNumericFilters] = usePersistedState<Record<string, NumericFilterState>>(storageKey("numericFilters"), {});
   const [booleanFilters, setBooleanFilters] = usePersistedState<Record<string, BooleanFilter>>(storageKey("booleanFilters"), {});
   const [accountVisible, setAccountVisible] = usePersistedState(storageKey("accountVisible"), true);
@@ -304,6 +314,30 @@ export default function CharTable({ characters, activeParties = [], readOnly, sh
   const [colWidths, setColWidths] = usePersistedState<Record<string, number>>(storageKey("colWidths_v2"), { ...DEFAULT_COL_WIDTHS });
 
   const [ptFilter, setPtFilter] = usePersistedState<boolean>(storageKey("ptFilter"), false);
+
+  // MIGRAÇÃO ÚNICA do estado persistido: as colunas que eram de seleção
+  // ÚNICA (choiceFilters) e passaram a ser múltiplas viram arrays de um
+  // elemento em multiChoiceFilters — o filtro que o usuário tinha salvo
+  // continua ativo após a atualização, sem nenhuma perda de estado.
+  const multiMigrationRef = useRef(false);
+  useEffect(() => {
+    if (multiMigrationRef.current) return;
+    multiMigrationRef.current = true;
+    const legacy: Record<string, string[]> = {};
+    for (const key of MULTI_CHOICE_COLUMNS) {
+      const value = choiceFilters[key];
+      if (value) legacy[key] = [value];
+    }
+    if (Object.keys(legacy).length === 0) return;
+    // O valor já migrado (se existir) tem prioridade sobre o legado.
+    setMultiChoiceFilters(prev => ({ ...legacy, ...prev }));
+    setChoiceFilters(prev => {
+      const next = { ...prev };
+      for (const key of MULTI_CHOICE_COLUMNS) delete next[key];
+      return next;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Modal "Item Vendido" (Lucro SW/Lucro SG): personagem + quest do contexto.
   // A separação SW × SG é preservada — cada quest tem o próprio registro
@@ -803,8 +837,10 @@ export default function CharTable({ characters, activeParties = [], readOnly, sh
         }
 
         if (key === "account" || key === "servidor" || key === "voc" || key === "itemDropadoSW" || key === "itemDropadoSG") {
-          const sel = choiceFilters[key];
-          if (sel && String(col.get(c)) !== sel) return false;
+          // MÚLTIPLA seleção (padrão do Bazaar): sem valores = sem filtro;
+          // com valores, o personagem precisa casar com ALGUM deles.
+          const sel = multiChoiceFilters[key];
+          if (sel && sel.length > 0 && !sel.includes(String(col.get(c)))) return false;
           continue;
         }
 
@@ -838,7 +874,7 @@ export default function CharTable({ characters, activeParties = [], readOnly, sh
       }
       return true;
     });
-  }, [characters, orderedColumns, textFilters, choiceFilters, numericFilters, booleanFilters, ptFilter, characterInParty]);
+  }, [characters, orderedColumns, textFilters, choiceFilters, multiChoiceFilters, numericFilters, booleanFilters, ptFilter, characterInParty]);
 
   const sorted = useMemo(() => {
     if (sortStack.length === 0) return filtered;
@@ -894,48 +930,49 @@ export default function CharTable({ characters, activeParties = [], readOnly, sh
   function renderFilter(col: ColumnDef) {
     const key = col.key;
 
-    // 1. Conta — FilterSelect searchable
+    // 1. Conta — FilterMulti searchable (múltipla seleção, padrão do Bazaar)
     if (key === "account") {
       return (
         <div className="flex justify-center">
-          <FilterSelect
+          <FilterMulti
             label="Conta"
             options={accountOptions}
-            selected={choiceFilters.account || ""}
-            onSelect={(v) => setChoiceFilters((f) => ({ ...f, account: v }))}
+            selected={multiChoiceFilters.account || []}
+            onApply={(values) => setMultiChoiceFilters((f) => ({ ...f, account: values }))}
+            placeholder="Conta"
             searchable
-            allLabel="Todas"
           />
         </div>
       );
     }
 
     // 2. Personagem — FilterInline (TEXT_FILTER_COLUMNS, handled below)
-    // 3. Servidor — FilterSelect searchable
+    // 3. Servidor — FilterMulti searchable (múltipla seleção, padrão do Bazaar)
     if (key === "servidor") {
       return (
         <div className="flex justify-center">
-          <FilterSelect
+          <FilterMulti
             label="Servidor"
             options={serverOptions}
-            selected={choiceFilters.servidor || ""}
-            onSelect={(v) => setChoiceFilters((f) => ({ ...f, servidor: v }))}
+            selected={multiChoiceFilters.servidor || []}
+            onApply={(values) => setMultiChoiceFilters((f) => ({ ...f, servidor: values }))}
+            placeholder="Servidor"
             searchable
           />
         </div>
       );
     }
 
-    // 4. Vocação — FilterSelect sem searchable
+    // 4. Vocação — FilterMulti sem searchable (múltipla seleção, padrão do Bazaar)
     if (key === "voc") {
       return (
         <div className="flex justify-center">
-          <FilterSelect
+          <FilterMulti
             label="Vocação"
             options={vocOptions}
-            selected={choiceFilters.voc || ""}
-            onSelect={(v) => setChoiceFilters((f) => ({ ...f, voc: v }))}
-            allLabel="Todas"
+            selected={multiChoiceFilters.voc || []}
+            onApply={(values) => setMultiChoiceFilters((f) => ({ ...f, voc: values }))}
+            placeholder="Vocação"
           />
         </div>
       );
@@ -956,30 +993,32 @@ export default function CharTable({ characters, activeParties = [], readOnly, sh
       );
     }
 
-    // 10. Drop SW — FilterSelect searchable
+    // 10. Drop SW — FilterMulti searchable (múltipla seleção, padrão do Bazaar)
     if (key === "itemDropadoSW") {
       return (
         <div className="flex justify-center">
-          <FilterSelect
+          <FilterMulti
             label="Drop SW"
             options={SOULWAR_ITEMS}
-            selected={choiceFilters.itemDropadoSW || ""}
-            onSelect={(v) => setChoiceFilters((f) => ({ ...f, itemDropadoSW: v }))}
+            selected={multiChoiceFilters.itemDropadoSW || []}
+            onApply={(values) => setMultiChoiceFilters((f) => ({ ...f, itemDropadoSW: values }))}
+            placeholder="Drop SW"
             searchable
           />
         </div>
       );
     }
 
-    // 11. Drop SG — FilterSelect searchable
+    // 11. Drop SG — FilterMulti searchable (múltipla seleção, padrão do Bazaar)
     if (key === "itemDropadoSG") {
       return (
         <div className="flex justify-center">
-          <FilterSelect
+          <FilterMulti
             label="Drop SG"
             options={SANGUINE_ITEMS}
-            selected={choiceFilters.itemDropadoSG || ""}
-            onSelect={(v) => setChoiceFilters((f) => ({ ...f, itemDropadoSG: v }))}
+            selected={multiChoiceFilters.itemDropadoSG || []}
+            onApply={(values) => setMultiChoiceFilters((f) => ({ ...f, itemDropadoSG: values }))}
+            placeholder="Drop SG"
             searchable
           />
         </div>
@@ -1082,10 +1121,11 @@ export default function CharTable({ characters, activeParties = [], readOnly, sh
   const hasActiveFilters = useMemo(() => {
     return Object.values(textFilters).some(v => v.trim() !== "") ||
            Object.values(choiceFilters).some(v => v !== "") ||
+           Object.values(multiChoiceFilters).some(v => v.length > 0) ||
            Object.values(numericFilters).some(v => v.value.trim() !== "") ||
            Object.values(booleanFilters).some(v => v !== "") ||
            ptFilter;
-  }, [textFilters, choiceFilters, numericFilters, booleanFilters, ptFilter]);
+  }, [textFilters, choiceFilters, multiChoiceFilters, numericFilters, booleanFilters, ptFilter]);
 
   const totalW = orderedColumns.reduce((s, col) =>
     s + (hiddenSet.has(col.key) ? COLLAPSED_WIDTH : (colWidths[col.key] ?? DEFAULT_COL_WIDTHS[col.key] ?? 100))
@@ -1316,6 +1356,7 @@ export default function CharTable({ characters, activeParties = [], readOnly, sh
                 onClick={() => {
                   setTextFilters({});
                   setChoiceFilters({});
+                  setMultiChoiceFilters({});
                   setNumericFilters({});
                   setBooleanFilters({});
                   setPtFilter(false);
