@@ -5039,6 +5039,33 @@ require('./electron-bazaar-items.cjs').registerBazaarItemsMethod({
 });
 
 // ============================================================================
+// HISTÓRICO DO BAZAAR — registro do módulo isolado
+// ----------------------------------------------------------------------------
+// Mesmo desenho dos módulos irmãos: a consulta do HISTÓRICO oficial vive
+// inteira em `electron-bazaar-history.cjs`; aqui apenas INJETAMOS as funções
+// que já existem. Canal exclusivo `rubinot-bazaar-history-v1` — 100% API
+// JSON, sem nenhum fallback página-a-página. Responsabilidade separada das
+// consultas de quests (details/details-v2) e de itens (items-v2).
+// ============================================================================
+require('./electron-bazaar-history.cjs').registerBazaarHistoryMethod({
+  ipcMain,
+  diag: rubinotDiag,
+  runQueued: runRubinotQueued,
+  getContext: getRubinotContext,
+  ensureSessionReady: ensureRubinotSessionReady,
+  getSessionPage: getRubinotSessionPage,
+  fetchJsonDetailed: fetchRubinotJsonDetailed,
+  resolveBrowserKey: resolveRubinotBrowserKey,
+  isManualStopRequested: isRubinotManualStopRequested,
+  sendProgress: sendRubinotProgress,
+  buildProgress: buildRubinotProgress,
+  finishProgress: finishRubinotProgress,
+  getSelectedBrowser: () => rubinotSelectedBrowser,
+  getUseCleanProfile: () => rubinotUseCleanProfile,
+  apiBase: RUBINOT_BAZAAR_API,
+});
+
+// ============================================================================
 // AUTO BID — registro do módulo isolado
 // ----------------------------------------------------------------------------
 // Único ponto de contato com a função Auto Bid. Tudo o que ela faz vive em

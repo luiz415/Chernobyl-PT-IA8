@@ -376,7 +376,10 @@ function questDetailFromItemsResult(result: BazaarItemsCharacterResult): BazaarQ
 // scraper ("Elite Knight", "Royal Paladin", ...), cobrindo promovidas e não
 // promovidas ("Knight" casa com "Elite Knight" e "Knight").
 
-interface SkillDisplayDef {
+// EXPORTADOS para a tela "Estatísticas do Bazaar": as regras de skills por
+// vocação são ÚNICAS no app — a tela de estatísticas importa daqui em vez de
+// criar uma segunda interpretação (requisito da funcionalidade).
+export interface SkillDisplayDef {
   key: keyof ItemsCharacterSkills;
   /** Abreviação exibida (compacta, 1 linha). */
   abbr: string;
@@ -384,7 +387,7 @@ interface SkillDisplayDef {
   full: string;
 }
 
-const SKILL_DISPLAY: Record<string, SkillDisplayDef[]> = {
+export const SKILL_DISPLAY: Record<string, SkillDisplayDef[]> = {
   knight: [
     { key: "axe", abbr: "Axe", full: "Axe Fighting" },
     { key: "club", abbr: "Club", full: "Club Fighting" },
@@ -412,10 +415,10 @@ const SKILL_DISPLAY: Record<string, SkillDisplayDef[]> = {
  * coluna "Skills" (vale para todas as vocações e todas as skills). O dado
  * continua sendo lido/persistido normalmente — a regra é só de exibição.
  */
-const MIN_DISPLAY_SKILL = 20;
+export const MIN_DISPLAY_SKILL = 20;
 
 /** Skills a exibir para a vocação do personagem (null = vocação desconhecida). */
-function skillDefsForVocation(vocation: string): SkillDisplayDef[] | null {
+export function skillDefsForVocation(vocation: string): SkillDisplayDef[] | null {
   const text = String(vocation || "").toLowerCase();
   for (const [hint, defs] of Object.entries(SKILL_DISPLAY)) {
     if (text.includes(hint)) return defs;

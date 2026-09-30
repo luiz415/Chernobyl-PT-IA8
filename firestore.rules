@@ -509,8 +509,10 @@ service cloud.firestore {
     }
     match /bazaar/{docId} {
       allow read: if isAuth() && isApproved();
+      // 'history' = última consulta do HISTÓRICO oficial do Bazaar (doc
+      // único publicado pelo Boss para a tela "Estatísticas do Bazaar").
       allow create, update, delete: if isBoss()
-        && docId in ['metadata', 'current'];
+        && docId in ['metadata', 'current', 'history'];
     }
     // ── IMPORT RTC — perfis RECOMENDADOS (globais) ─────────────────────────
     // Documento único `rtcImports/recommended` com o mapa `entries`

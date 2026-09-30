@@ -1,7 +1,8 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import bazarBgUrl from "../assets/bazar-bg.png";
-import { AlertTriangle, ArrowDownUp, Check, CheckCircle2, ChevronDown, ChevronUp, Coins, Crown, ExternalLink, Filter, FlagTriangleRight, Flame, Package, Plus, RefreshCw, RotateCcw, ShieldAlert, ShoppingBag, Sparkles, Star, Target, Users, X } from "lucide-react";
+import { AlertTriangle, ArrowDownUp, BarChart3, Check, CheckCircle2, ChevronDown, ChevronUp, Coins, Crown, ExternalLink, Filter, FlagTriangleRight, Flame, Package, Plus, RefreshCw, RotateCcw, ShieldAlert, ShoppingBag, Sparkles, Star, Target, Users, X } from "lucide-react";
 import BazaarItemsPanel from "./BazaarItemsPanel";
+import BazaarStatsPanel from "./BazaarStatsPanel";
 import BazaarSearchFiltersModal from "./BazaarSearchFiltersModal";
 import BazaarUsedFiltersModal from "./BazaarUsedFiltersModal";
 import BazaarBrowserModal, { BAZAAR_BROWSER_KEY, BAZAAR_BROWSER_ORDER_KEY, BAZAAR_METHOD_KEY, BAZAAR_RETRY_BROWSERS_KEY, BAZAAR_RETRY_COUNTS_KEY, BAZAAR_SPEED_MODE_KEY, DEFAULT_BAZAAR_METHOD, DEFAULT_BROWSER_ORDER, normalizeBazaarMethod, normalizeRetryCounts } from "./BazaarBrowserModal";
@@ -1149,10 +1150,11 @@ function formatProgressMessage(progress: BazaarProgressEvent): string {
 }
 
 function isActiveProgress(progress: BazaarProgressEvent | null | undefined): progress is BazaarProgressEvent {
-  // `scope === 'itens'` pertence à consulta da GUIA ITENS: o painel de
+  // `scope === 'itens'` pertence à consulta da GUIA ITENS e `scope ===
+  // 'history'` à consulta do HISTÓRICO (tela Estatísticas): o painel de
   // quests IGNORA esses eventos (progresso independente por guia). Eventos
   // sem scope (compatibilidade) continuam tratados como quests.
-  if (progress?.scope === "itens") return false;
+  if (progress?.scope === "itens" || progress?.scope === "history") return false;
   return !!progress?.active && !!progress.message && (progress.stage === "bazaar" || progress.stage === "details");
 }
 
@@ -1396,28 +1398,41 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
   }, [availableInlineAccounts, inlineAccountSearch]);
   const isElectron = typeof window !== "undefined" && !!(window as any).require;
   const isBossUser = userProfile?.role === "Boss";
-  // ── MODO DO PAINEL: "quests" (atual, intacto) ou "itens" (novo, só Boss) ──
+  // ── MODO DO PAINEL: "quests" (SW/SG, intacto), "itens" (só Boss) ou
+  // "stats" (Estatísticas do Bazaar — visível a todos; CONSULTAR só Boss). ──
   // Estado deliberadamente NÃO persistido: o painel sempre abre no modo atual
-  // de quests; o modo itens é uma navegação pontual do Boss. A restrição é
-  // real: além dos botões ocultos, o modo "itens" nunca é renderizado sem
-  // Boss (ver o JSX do corpo) — e o useEffect abaixo derruba o modo caso a
+  // de quests; os demais modos são navegação pontual. A restrição do modo
+  // itens é real: além dos botões ocultos, ele nunca é renderizado sem Boss
+  // (ver o JSX do corpo) — e o useEffect abaixo derruba o modo caso a
   // permissão mude com o painel aberto.
-  const [panelMode, setPanelMode] = useState<"quests" | "itens">("quests");
+  const [panelMode, setPanelMode] = useState<"quests" | "itens" | "stats">("quests");
   const showItemsMode = panelMode === "itens" && isBossUser && !demoMode;
+  // Estatísticas: leitura para TODOS os usuários do painel (os dados chegam
+  // pelo doc publicado); a CONSULTA em si é bloqueada dentro do componente
+  // (Boss + Electron). Tutorial (demoMode) permanece nas quests.
+  const showStatsMode = panelMode === "stats" && !demoMode;
   // Consulta da GUIA ITENS em andamento (reportada pelo BazaarItemsPanel via
   // onRunningChange) — bloqueia o "Consultar Bazaar" das QUESTS enquanto
   // roda, exatamente como a consulta de quests bloqueia o da guia Itens.
   const [isItemsQueryRunning, setIsItemsQueryRunning] = useState(false);
+  // Consulta do HISTÓRICO (tela Estatísticas) em andamento — mesmo bloqueio
+  // cruzado: o navegador de sessão é um só para as três consultas.
+  const [isStatsQueryRunning, setIsStatsQueryRunning] = useState(false);
   // O painel de ITENS permanece MONTADO (oculto via CSS) depois da primeira
   // visita: trocar de guia durante uma consulta de itens NÃO desmonta o
   // componente — a consulta continua, o progresso não se perde e o navegador
   // não é fechado prematuramente. (O estado das quests vive neste componente,
   // que nunca desmonta — o mesmo já valia para o caminho inverso.)
   const [itemsPanelMounted, setItemsPanelMounted] = useState(false);
+  // Mesmo mecanismo para a tela de ESTATÍSTICAS: uma consulta do histórico
+  // em curso sobrevive à troca de guia (painel oculto via CSS, não desmonta).
+  const [statsPanelMounted, setStatsPanelMounted] = useState(false);
   useEffect(() => {
     // Permissão revogada (ou tutorial ativado) com o modo itens aberto:
-    // volta imediatamente para o painel de quests.
+    // volta imediatamente para o painel de quests. Tutorial também derruba
+    // o modo estatísticas (o tutorial vive nas quests).
     if (panelMode === "itens" && (!isBossUser || demoMode)) setPanelMode("quests");
+    if (panelMode === "stats" && demoMode) setPanelMode("quests");
   }, [panelMode, isBossUser, demoMode]);
   // Primeira visita à guia Itens marca o painel para permanecer montado
   // (oculto via CSS quando o usuário volta às quests). Perda de permissão
@@ -1426,6 +1441,11 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
     if (showItemsMode) setItemsPanelMounted(true);
     if (!isBossUser || demoMode) { setItemsPanelMounted(false); setIsItemsQueryRunning(false); }
   }, [showItemsMode, isBossUser, demoMode]);
+  // Estatísticas: primeira visita mantém montado; tutorial desmonta.
+  useEffect(() => {
+    if (showStatsMode) setStatsPanelMounted(true);
+    if (demoMode) { setStatsPanelMounted(false); setIsStatsQueryRunning(false); }
+  }, [showStatsMode, demoMode]);
   // ── Coluna "Valor Itens (kk)" — dados da ÚLTIMA consulta da guia Itens ────
   // Fonte: `rubinot_bazaar_items_last_query` (local, gravada pela própria guia
   // Itens — NUNCA Firestore, NUNCA nova consulta ao site). O estado é lido uma
@@ -3214,47 +3234,6 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
             linha: seletor de painéis no canto superior ESQUERDO e ações do
             painel ativo no canto superior DIREITO. */}
 
-        {/* ── SELETOR DE PAINÉIS (canto superior esquerdo, fora do quadro do
-            título) — exclusivo do Boss. Controle segmentado compacto: o modo
-            ativo ganha o preenchimento da sua cor (âmbar = quests, fúcsia =
-            itens). A restrição não é só visual: `showItemsMode` embute o
-            gate e o useEffect derruba o modo se a permissão mudar. */}
-        {isBossUser && !demoMode && (
-          <div className="absolute left-2 top-2 z-20 inline-flex items-center rounded-xl border border-[var(--th-line)]/60 bg-[var(--th-n-base)]/90 backdrop-blur-md p-0.5 shadow-lg shadow-black/40">
-            {/* Alternância SEMPRE liberada — inclusive durante consultas.
-                Trocar de guia não cancela, não reinicia e não fecha o
-                navegador: a consulta roda no processo principal e o
-                progresso é reconstruído ao voltar (current-progress). O
-                painel de itens permanece MONTADO via CSS (hidden) durante a
-                própria consulta, então o executeItemsQuery nunca é
-                interrompido pela troca. */}
-            <button
-              type="button"
-              onClick={() => setPanelMode("quests")}
-              className={`inline-flex h-6 items-center gap-1 px-2 rounded-[10px] text-[9px] font-black uppercase tracking-wide transition-all cursor-pointer ${
-                !showItemsMode
-                  ? "bg-amber-500/20 border border-amber-400/40 text-amber-200 shadow-[0_0_10px_color-mix(in_oklab,var(--color-amber-500)_18%,transparent)]"
-                  : "border border-transparent text-slate-400 hover:text-amber-300 hover:bg-amber-500/10"
-              }`}
-              title="Personagens Para Quests"
-            >
-              <ShoppingBag size={11} /> Quests
-            </button>
-            <button
-              type="button"
-              onClick={() => setPanelMode("itens")}
-              className={`inline-flex h-6 items-center gap-1 px-2 rounded-[10px] text-[9px] font-black uppercase tracking-wide transition-all cursor-pointer ${
-                showItemsMode
-                  ? "bg-fuchsia-500/20 border border-fuchsia-400/40 text-fuchsia-200 shadow-[0_0_10px_color-mix(in_oklab,var(--color-fuchsia-500)_18%,transparent)]"
-                  : "border border-transparent text-slate-400 hover:text-fuchsia-300 hover:bg-fuchsia-500/10"
-              }`}
-              title="Personagens com itens"
-            >
-              <Package size={11} /> Itens
-            </button>
-          </div>
-        )}
-
         {/* ── AÇÕES DO PAINEL (canto superior direito, fora do quadro do
             título — espelho do seletor à esquerda, na MESMA linha do
             cabeçalho). Cada painel exibe SOMENTE os seus botões:
@@ -3276,7 +3255,7 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
                 ? "absolute right-2 top-2 z-20 inline-flex items-center gap-1.5 rounded-xl border border-[var(--th-line)]/60 bg-[var(--th-n-base)]/90 backdrop-blur-md p-0.5 shadow-lg shadow-black/40 empty:hidden"
                 : "hidden"}
             />
-            {!showItemsMode && (
+            {panelMode === "quests" && (
               <div className="absolute right-2 top-2 z-20 inline-flex items-center gap-1.5 rounded-xl border border-[var(--th-line)]/60 bg-[var(--th-n-base)]/90 backdrop-blur-md p-0.5 shadow-lg shadow-black/40">
                 <button type="button" onClick={openSearchFiltersModal} disabled={isLoading || isCheckingDetails} className="inline-flex h-7 items-center gap-1 px-2.5 rounded-lg border border-amber-500/25 bg-amber-500/10 text-amber-300 text-[10px] font-black transition-all cursor-pointer hover:bg-amber-500/20 disabled:opacity-50 disabled:cursor-not-allowed">
                   <Filter size={12} /> Filtros Consulta
@@ -3285,10 +3264,11 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
                   <button
                     type="button"
                     onClick={requestBazaarQuery}
-                    // Bloqueado também enquanto a consulta da GUIA ITENS
-                    // roda — nenhuma consulta nova com o navegador em uso.
-                    disabled={isLoading || isOfficialSyncing || isItemsQueryRunning}
-                    title={isItemsQueryRunning ? "Consulta de Itens em andamento — aguarde a finalização." : undefined}
+                    // Bloqueado também enquanto a consulta da GUIA ITENS ou
+                    // do HISTÓRICO (Estatísticas) roda — nenhuma consulta
+                    // nova com o navegador em uso.
+                    disabled={isLoading || isOfficialSyncing || isItemsQueryRunning || isStatsQueryRunning}
+                    title={isItemsQueryRunning ? "Consulta de Itens em andamento — aguarde a finalização." : isStatsQueryRunning ? "Consulta do Histórico em andamento — aguarde a finalização." : undefined}
                     className="inline-flex h-7 items-center gap-1 px-2.5 rounded-lg bg-gradient-to-r from-amber-700/80 to-amber-600/80 hover:from-amber-600 hover:to-amber-500 border border-amber-500/40 text-black text-[10px] font-black transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed shadow-md shadow-amber-900/15"
                   >
                     <RefreshCw size={12} className={isLoading ? "animate-spin" : ""} />
@@ -3300,36 +3280,70 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
           </>
         )}
 
-        <div className="relative mx-auto w-full max-w-3xl flex items-center justify-center overflow-hidden rounded-2xl border border-amber-500/35 bg-[linear-gradient(135deg,color-mix(in_oklab,var(--th-brand)_94%,transparent),color-mix(in_oklab,var(--th-brand)_72%,transparent),color-mix(in_oklab,var(--th-brand)_94%,transparent))] backdrop-blur-md px-3 py-2 shadow-[0_14px_36px_rgba(0,0,0,0.34),0_0_28px_color-mix(in_oklab,var(--color-amber-500)_10%,transparent)] min-h-[46px] transition-all duration-500">
-          <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_50%_0%,color-mix(in_oklab,var(--color-amber-500)_18%,transparent),transparent_55%)]" />
+        {/* ── NAVEGAÇÃO DO PAINEL — o título "Painel Bazaar" foi REMOVIDO;
+            no lugar dele, TRÊS BOTÕES GRANDES de navegação entre as telas
+            (textos exatos exigidos pela funcionalidade):
+              • "Personagens para SW/SG" — a tela atual de quests (intacta);
+              • "Personagens com Itens" — exclusiva do Boss (gate real:
+                `showItemsMode` embute a permissão e o useEffect derruba o
+                modo se ela cair);
+              • "Estatísticas do Bazaar" — visível a todos os usuários do
+                painel (a CONSULTA do histórico é só Boss + Electron, dentro
+                da própria tela).
+            Alternância SEMPRE liberada, inclusive durante consultas: os
+            painéis permanecem MONTADOS (ocultos via CSS) e o progresso é
+            reconstruído via current-progress — nada é cancelado na troca. */}
+        <div className="relative mx-auto w-full max-w-3xl flex items-stretch justify-center gap-1.5 rounded-2xl border border-amber-500/35 bg-[linear-gradient(135deg,color-mix(in_oklab,var(--th-brand)_94%,transparent),color-mix(in_oklab,var(--th-brand)_72%,transparent),color-mix(in_oklab,var(--th-brand)_94%,transparent))] backdrop-blur-md px-2 py-1.5 shadow-[0_14px_36px_rgba(0,0,0,0.34),0_0_28px_color-mix(in_oklab,var(--color-amber-500)_10%,transparent)] min-h-[46px] transition-all duration-500">
+          <div className="pointer-events-none absolute inset-0 rounded-2xl bg-[radial-gradient(circle_at_50%_0%,color-mix(in_oklab,var(--color-amber-500)_18%,transparent),transparent_55%)]" />
           <div className="pointer-events-none absolute left-1/2 top-0 h-px w-2/3 -translate-x-1/2 bg-gradient-to-r from-transparent via-amber-300/60 to-transparent" />
-          <div className="pointer-events-none absolute -inset-px rounded-2xl border border-amber-300/10 animate-pulse" style={{ animationDuration: "3.6s" }} />
-          <div className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 w-8 h-8 rounded-xl bg-gradient-to-br from-amber-400/18 via-amber-800/18 to-red-950/55 border border-amber-400/35 flex items-center justify-center shadow-[0_0_18px_color-mix(in_oklab,var(--color-amber-500)_18%,transparent),inset_0_1px_0_rgba(255,255,255,0.08)]">
-            {showItemsMode
-              ? <Package size={16} className="text-fuchsia-300 drop-shadow-[0_0_8px_color-mix(in_oklab,var(--color-fuchsia-500)_45%,transparent)]" />
-              : <ShoppingBag size={16} className="text-amber-300 drop-shadow-[0_0_8px_color-mix(in_oklab,var(--color-amber-500)_45%,transparent)]" />}
-          </div>
-          {/* Título e COR mudam junto com o modo — âmbar (quests) / fúcsia (itens) */}
-          {showItemsMode ? (
-            <h2 className="relative text-lg font-black bg-gradient-to-r from-fuchsia-100 via-fuchsia-400 to-purple-300 bg-clip-text text-transparent tracking-[0.08em] truncate uppercase" style={{ filter: "drop-shadow(0 0 6px color-mix(in oklab, var(--color-fuchsia-500) 32%, transparent))" }}>
-              Personagens com Itens
-            </h2>
-          ) : (
-            <h2 className="relative text-lg font-black bg-gradient-to-r from-amber-100 via-yellow-400 to-amber-300 bg-clip-text text-transparent tracking-[0.08em] truncate uppercase" style={{ filter: "drop-shadow(0 0 6px color-mix(in oklab, var(--color-amber-500) 32%, transparent))" }}>
-              Painel Bazaar
-            </h2>
+          <button
+            type="button"
+            onClick={() => setPanelMode("quests")}
+            className={`relative flex-1 inline-flex items-center justify-center gap-1.5 rounded-xl px-3 py-1.5 text-[12px] font-black uppercase tracking-[0.06em] transition-all cursor-pointer ${
+              panelMode === "quests"
+                ? "bg-amber-500/20 border border-amber-400/50 text-amber-100 shadow-[0_0_14px_color-mix(in_oklab,var(--color-amber-500)_22%,transparent)]"
+                : "border border-transparent text-slate-400 hover:text-amber-300 hover:bg-amber-500/10"
+            }`}
+            title="Personagens do Bazaar para as quests Soul War / Sanguine"
+          >
+            <ShoppingBag size={15} /> Personagens para SW/SG
+          </button>
+          {isBossUser && !demoMode && (
+            <button
+              type="button"
+              onClick={() => setPanelMode("itens")}
+              className={`relative flex-1 inline-flex items-center justify-center gap-1.5 rounded-xl px-3 py-1.5 text-[12px] font-black uppercase tracking-[0.06em] transition-all cursor-pointer ${
+                showItemsMode
+                  ? "bg-fuchsia-500/20 border border-fuchsia-400/50 text-fuchsia-100 shadow-[0_0_14px_color-mix(in_oklab,var(--color-fuchsia-500)_22%,transparent)]"
+                  : "border border-transparent text-slate-400 hover:text-fuchsia-300 hover:bg-fuchsia-500/10"
+              }`}
+              title="Personagens do Bazaar com itens monitorados"
+            >
+              <Package size={15} /> Personagens com Itens
+            </button>
           )}
-
-          {/* Os botões de ação saíram do quadro do título — vivem no cartão
-              do canto superior DIREITO, fora do quadro, na mesma linha do
-              cabeçalho (espelho do seletor de painéis à esquerda). O quadro
-              contém SOMENTE o título. */}
+          {!demoMode && (
+            <button
+              type="button"
+              onClick={() => setPanelMode("stats")}
+              className={`relative flex-1 inline-flex items-center justify-center gap-1.5 rounded-xl px-3 py-1.5 text-[12px] font-black uppercase tracking-[0.06em] transition-all cursor-pointer ${
+                showStatsMode
+                  ? "bg-sky-500/20 border border-sky-400/50 text-sky-100 shadow-[0_0_14px_color-mix(in_oklab,var(--color-sky-500)_22%,transparent)]"
+                  : "border border-transparent text-slate-400 hover:text-sky-300 hover:bg-sky-500/10"
+              }`}
+              title="Estatísticas do histórico oficial do Bazaar (leilões finalizados com lance vencedor)"
+            >
+              <BarChart3 size={15} /> Estatísticas do Bazaar
+            </button>
+          )}
         </div>
 
         {/* ── CORPO DO PAINEL ─────────────────────────────────────────────
-            Modo "itens" (novo, exclusivo Boss): componente próprio, 100%
-            local. Modo "quests": todo o conteúdo atual, intacto. O modo
-            itens NUNCA monta sem Boss — `showItemsMode` já embute o gate. */}
+            Modo "itens" (exclusivo Boss): componente próprio, 100% local.
+            Modo "stats" (Estatísticas do Bazaar): componente próprio,
+            visível a todos. Modo "quests": todo o conteúdo atual, intacto.
+            O modo itens NUNCA monta sem Boss — `showItemsMode` já embute o
+            gate. */}
         {itemsPanelMounted && (
           // MONTADO após a primeira visita; oculto via CSS fora do modo
           // itens ("hidden"). Assim, alternar de guia DURANTE uma consulta
@@ -3354,10 +3368,11 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
               getViewState={getBazaarDetailViewState}
               markViewed={markBazaarDetailViewed}
               // Bloqueio CRUZADO das consultas: itens avisa quando roda
-              // (bloqueia o Consultar das quests) e recebe se quests roda
-              // (bloqueia o próprio Consultar).
+              // (bloqueia o Consultar das quests) e recebe se quests OU o
+              // histórico (Estatísticas) roda (bloqueia o próprio
+              // Consultar) — o navegador de sessão é um só.
               onRunningChange={setIsItemsQueryRunning}
-              isQuestsQueryRunning={isLoading || isCheckingDetails}
+              isQuestsQueryRunning={isLoading || isCheckingDetails || isStatsQueryRunning}
               // Coluna "Comprado" da guia Itens: nomes já cadastrados (mesma
               // fonte da guia Quests) + abertura do CharacterModal completo.
               personalCharacterNames={personalCharacterNameSet}
@@ -3365,7 +3380,23 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
             />
           </div>
         )}
-        {!showItemsMode && (
+        {/* Estatísticas do Bazaar — mesmo padrão de montagem persistente:
+            uma consulta do histórico em curso sobrevive à troca de guia
+            (painel oculto via CSS, nunca desmontado no meio da consulta). */}
+        {statsPanelMounted && (
+          <div className={showStatsMode ? "flex-1 min-h-0 flex flex-col" : "hidden"}>
+            <BazaarStatsPanel
+              isBossUser={isBossUser}
+              isElectron={isElectron}
+              // Bloqueio CRUZADO: o histórico avisa quando roda (bloqueia o
+              // Consultar das quests e dos itens) e recebe se qualquer uma
+              // das outras consultas roda (bloqueia o próprio Consultar).
+              isOtherQueryRunning={isLoading || isCheckingDetails || isItemsQueryRunning}
+              onRunningChange={setIsStatsQueryRunning}
+            />
+          </div>
+        )}
+        {panelMode === "quests" && (
         <>
         {error && (
           <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-300 flex items-center gap-2">
