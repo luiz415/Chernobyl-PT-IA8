@@ -1064,10 +1064,11 @@ function matchesQuestFilter(detail: BazaarDetails | undefined, filter: QuestFilt
 /**
  * Texto da coluna SW/SG.
  *
- * `questRequired` diz se ESTA quest foi exigida pelos filtros. Quando o filtro
- * está em "Todas", a quest nem é consultada — então o certo é "Não verificado",
- * e não "Indisp." (que sugeriria uma tentativa fracassada) nem "Disp." (que
- * seria inventar um resultado).
+ * Desde "Tanto Faz (consultar)", TODA consulta apura as duas quests — o
+ * filtro nunca decide o que é consultado, apenas o que exclui personagens.
+ * `questRequired` permanece por compatibilidade (default `true`): listas
+ * antigas, geradas quando "Todas" pulava a apuração, ainda podem chegar sem
+ * o dado da quest, e chamadas externas podem exibir "Não verificado".
  */
 export function formatQuestStatus(
   detail: BazaarQuestStatusDetail | undefined,
@@ -1095,8 +1096,9 @@ function formatQuestBossCount(detail: BazaarQuestStatusDetail | undefined, field
 
 export function isQuestSuspicious(detail: BazaarQuestStatusDetail | undefined, field: "soulwarCompleted" | "sanguineCompleted"): boolean {
   if (!detail) return false;
-  // Quest não verificada (filtro em "Todas") não pode ser suspeita: não houve
-  // apuração. `null` aqui significa ausência de dado, não um resultado ruim.
+  // Quest não apurada (falha na análise ou lista antiga gerada quando
+  // "Todas" pulava a consulta) não pode ser suspeita: não houve apuração.
+  // `null` aqui significa ausência de dado, não um resultado ruim.
   if (detail[field] === null || detail[field] === undefined) return false;
   const { current, total } = getQuestBossCount(detail, field);
   // FAIXA de suspeita, não um valor único.
@@ -1463,11 +1465,11 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
   // EMBUTIDOS na lista oficial (demais usuários) — os dois têm exatamente o
   // que o modal exibe (Item encontrado | Tier | QTD | Total).
   const [questsItemsDetailResult, setQuestsItemsDetailResult] = useState<QuestsItemsDetailView | null>(null);
-  const needsQuestDetails = soulwarFilter !== "all" || sanguineFilter !== "all";
-  // Quais quests os filtros atuais realmente exigem. Uma quest em "Todas" não
-  // é consultada e a coluna correspondente mostra "Não verificado".
-  const soulwarRequired = soulwarFilter !== "all";
-  const sanguineRequired = sanguineFilter !== "all";
+  // "Tanto Faz (consultar)" (`all`): TODA consulta apura as DUAS quests —
+  // o filtro decide apenas quem é critério de inclusão/exclusão, nunca o que
+  // é consultado. Por isso as colunas SW/SG sempre exibem o estado apurado
+  // (com contador de bosses), independentemente da configuração do filtro.
+  const needsQuestDetails = true;
 
   useEffect(() => {
     setOpenedLinksState(readBazaarOpenedLinksState(currentUser?.uid));
@@ -2390,7 +2392,12 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
       ...getCurrentConsultationFilters(),
       ...(options?.filtersOverride || {}),
     };
-    const activeNeedsQuestDetails = activeFilters.soulwarFilter !== "all" || activeFilters.sanguineFilter !== "all";
+    // ── CONSULTAR ≠ FILTRAR ───────────────────────────────────────────────
+    // As DUAS quests são SEMPRE apuradas na análise individual — inclusive
+    // quando o filtro está em "Tanto Faz (consultar)" (`all`). O valor do
+    // filtro decide somente quem entra/sai da lista (matchesQuestFilter,
+    // mais abaixo): `all` nunca exclui ninguém, mas o estado consultado da
+    // quest continua sendo armazenado e exibido normalmente.
 
     // ── MÉTODO DE CONSULTA ────────────────────────────────────────────────
     // Escolhido no modal, antes da consulta. "antigo" (padrão) mantém o fluxo
@@ -2529,18 +2536,17 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
       } | null = null;
 
       // Etapa 3: consultas individuais somente para quem passou nos filtros da API.
-      if (activeNeedsQuestDetails && apiFilteredAuctions.length > 0) {
+      if (apiFilteredAuctions.length > 0) {
         setQueryStatus("Verificando disponibilidade das Quests...");
         setIsCheckingDetails(true);
         setCheckingDetailsCount(apiFilteredAuctions.length);
-        // Só as quests realmente exigidas pelos filtros são apuradas. Uma quest
-        // em "Todas" não influencia o resultado, então seus bosses nem são
-        // consultados — e a coluna correspondente mostra "Não verificado".
+        // As DUAS quests são SEMPRE apuradas — "Tanto Faz (consultar)" (`all`)
+        // significa "consultar e informar, sem filtrar". A separação entre
+        // consulta e filtro acontece depois, em `matchesQuestFilter`: só as
+        // quests em Disponível/Concluída excluem personagens; a quest em
+        // `all` tem o estado apurado exibido/publicado, mas nunca descarta.
         const detailsResponse = await ipcRenderer.invoke(detailsChannel, apiFilteredAuctions, {
-          quests: {
-            soulwar: activeFilters.soulwarFilter !== "all",
-            sanguine: activeFilters.sanguineFilter !== "all",
-          },
+          quests: { soulwar: true, sanguine: true },
           // Ordem de preferência que decide a sequência do retry.
           browserOrder: options?.browserOrder || loadUIState<string[]>(BAZAAR_BROWSER_ORDER_KEY, DEFAULT_BROWSER_ORDER),
           // Navegadores marcados para a cadeia de retries. Vazio = retry único.
@@ -4460,8 +4466,8 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
                           );
                         })()}
                       </td>
-                      <td className={`h-12 px-1 py-2 text-center align-middle text-[10px] ${isSuspiciousSoulWar ? "bg-rose-500/10 ring-1 ring-inset ring-rose-400/35" : ""} ${detail?.soulwarCompleted === true ? "text-rose-300" : detail?.soulwarCompleted === false ? "text-emerald-300" : "text-slate-500"}`} title={isSuspiciousSoulWar ? "Soul War suspeita: 3/6 bosses encontrados indica alta chance de quest indisponível." : undefined}><div className="font-bold">{formatQuestStatus(detail, "soulwarCompleted", needsQuestDetails, soulwarRequired)}</div>{soulwarRequired && <QuestBossCounter detail={detail} field="soulwarCompleted" />}</td>
-                      <td className={`h-12 px-1 py-2 text-center align-middle text-[10px] ${isSuspiciousSanguine ? "bg-rose-500/10 ring-1 ring-inset ring-rose-400/35" : ""} ${detail?.sanguineCompleted === true ? "text-rose-300" : detail?.sanguineCompleted === false ? "text-emerald-300" : "text-slate-500"}`} title={isSuspiciousSanguine ? "Sanguine suspeita: 2/5 bosses encontrados indica alta chance de quest indisponível." : undefined}><div className="font-bold">{formatQuestStatus(detail, "sanguineCompleted", needsQuestDetails, sanguineRequired)}</div>{sanguineRequired && <QuestBossCounter detail={detail} field="sanguineCompleted" />}</td>
+                      <td className={`h-12 px-1 py-2 text-center align-middle text-[10px] ${isSuspiciousSoulWar ? "bg-rose-500/10 ring-1 ring-inset ring-rose-400/35" : ""} ${detail?.soulwarCompleted === true ? "text-rose-300" : detail?.soulwarCompleted === false ? "text-emerald-300" : "text-slate-500"}`} title={isSuspiciousSoulWar ? "Soul War suspeita: 3/6 bosses encontrados indica alta chance de quest indisponível." : undefined}><div className="font-bold">{formatQuestStatus(detail, "soulwarCompleted", needsQuestDetails)}</div><QuestBossCounter detail={detail} field="soulwarCompleted" /></td>
+                      <td className={`h-12 px-1 py-2 text-center align-middle text-[10px] ${isSuspiciousSanguine ? "bg-rose-500/10 ring-1 ring-inset ring-rose-400/35" : ""} ${detail?.sanguineCompleted === true ? "text-rose-300" : detail?.sanguineCompleted === false ? "text-emerald-300" : "text-slate-500"}`} title={isSuspiciousSanguine ? "Sanguine suspeita: 2/5 bosses encontrados indica alta chance de quest indisponível." : undefined}><div className="font-bold">{formatQuestStatus(detail, "sanguineCompleted", needsQuestDetails)}</div><QuestBossCounter detail={detail} field="sanguineCompleted" /></td>
                       <td className="h-10 px-1 py-1.5 text-center align-middle">
                         <div className="flex max-h-24 flex-col items-center justify-start gap-1 overflow-y-auto custom-scrollbar text-center">
                           {officialMetadata?.version && currentUser?.uid && (
