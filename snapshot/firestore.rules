@@ -509,10 +509,25 @@ service cloud.firestore {
     }
     match /bazaar/{docId} {
       allow read: if isAuth() && isApproved();
-      // 'history' = última consulta do HISTÓRICO oficial do Bazaar (doc
-      // único publicado pelo Boss para a tela "Estatísticas do Bazaar").
+      // 'historySync' = estado da ingestão do HISTÓRICO oficial (fronteira
+      // incremental + índice de meses). 'history' permanece na lista apenas
+      // para o Boss poder APAGAR o documento legado da versão anterior.
       allow create, update, delete: if isBoss()
-        && docId in ['metadata', 'current', 'history'];
+        && docId in ['metadata', 'current', 'history', 'historySync'];
+    }
+    // ── HISTÓRICO DO BAZAAR — BASE BRUTA (1 doc por DIA de término) ────────
+    // Fonte permanente/auditoria alimentada pela consulta do Boss. A tela de
+    // Estatísticas NUNCA lê esta coleção (ela usa somente as métricas);
+    // leitura liberada aos aprovados para auditoria/exportação futura.
+    match /bazaarHistoryRaw/{dayId} {
+      allow read: if isAuth() && isApproved();
+      allow create, update, delete: if isBoss();
+    }
+    // ── HISTÓRICO DO BAZAAR — MÉTRICAS (1 doc por MÊS × SERVIDOR) ──────────
+    // Células dimensionais pré-agregadas: é O QUE a tela de Estatísticas lê.
+    match /bazaarHistoryMetrics/{docId} {
+      allow read: if isAuth() && isApproved();
+      allow create, update, delete: if isBoss();
     }
     // ── IMPORT RTC — perfis RECOMENDADOS (globais) ─────────────────────────
     // Documento único `rtcImports/recommended` com o mapa `entries`

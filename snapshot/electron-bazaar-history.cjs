@@ -1,50 +1,55 @@
 // ============================================================================
 // BAZAAR — CONSULTA DO HISTÓRICO OFICIAL (canal `rubinot-bazaar-history-v1`)
 // ----------------------------------------------------------------------------
-// Módulo ADITIVO e ISOLADO da tela "Estatísticas do Bazaar". Segue exatamente
-// o desenho dos módulos irmãos (`electron-bazaar-new.cjs` para quests e
-// `electron-bazaar-items.cjs` para itens):
+// Módulo ADITIVO e ISOLADO da tela "Estatísticas do Bazaar". Segue o desenho
+// dos módulos irmãos (`electron-bazaar-new.cjs` e `electron-bazaar-items.cjs`):
+// NÃO importa `electron-main.cjs` — recebe tudo por injeção; usa a MESMA
+// sessão/cookies/fila global; é 100% API JSON (nenhuma página individual de
+// personagem é renderizada e NÃO existe fallback de scraping).
 //
-//   • NÃO importa `electron-main.cjs` — recebe tudo por injeção;
-//   • usa a MESMA sessão/cookies/fila global do restante do Bazaar;
-//   • é 100% API JSON: a listagem do histórico e os detalhes individuais são
-//     lidos por `fetch(...)` de dentro da página autenticada — ZERO
-//     renderização de página individual e ZERO fallback de scraping
-//     (requisito explícito da funcionalidade);
-//   • responsabilidade ÚNICA: histórico oficial. A consulta atual de
-//     personagens/quests e a consulta de itens continuam nos seus módulos.
+// ── PÁGINA E ROTA DO HISTÓRICO ──────────────────────────────────────────────
+// A página correta do histórico é `https://rubinot.com.br/bazaar/history`
+// (SPA que lista os leilões ENCERRADOS dos últimos ~30 dias). Este módulo:
 //
-// ── ENDPOINT DO HISTÓRICO ───────────────────────────────────────────────────
-// A página pública é `https://rubinot.com.br/bazaar/history` (SPA). A rota
-// JSON correspondente NÃO pôde ser confirmada do ambiente de desenvolvimento
-// (todo `/api/*` responde "Access denied" fora da sessão do site — inclusive
-// a rota de listagem que sabidamente funciona; o 403 não prova nada).
+//   1. valida a sessão (mesmo mecanismo das demais consultas);
+//   2. NAVEGA a página de sessão para `/bazaar/history` — nunca `/bazaar`
+//      (a rota de leilões atuais NÃO serve para o histórico);
+//   3. DESCOBRE a rota JSON real FAREJANDO as respostas de rede que a
+//      própria SPA dispara ao carregar o histórico (Playwright
+//      `page.on('response')`): a primeira resposta JSON de `/api/` cujo
+//      conteúdo é uma lista de leilões majoritariamente JÁ ENCERRADOS é a
+//      rota verdadeira — nada de formato assumido;
+//   4. se o farejamento não capturar nada (ex.: resposta servida de cache),
+//      sonda candidatas derivadas da rota real de listagem, agora COM o
+//      contexto/Referer corretos de `/bazaar/history`;
+//   5. pagina a listagem por COMPLETO dentro da janela pedida (até 30 dias),
+//      usando a DATA DE TÉRMINO de cada leilão como critério central de
+//      parada — nunca apenas a primeira página.
 //
-// Por isso este módulo NÃO assume uma única rota: ele SONDA os candidatos
-// plausíveis (derivados da rota de listagem real `/api/bazaar`) dentro da
-// sessão autenticada, valida a resposta e registra no diagnóstico a rota e o
-// shape reais. A validação é semântica: uma rota só é aceita se devolver uma
-// lista de leilões majoritariamente JÁ ENCERRADOS — o que impede a listagem
-// de leilões ATUAIS de ser confundida com o histórico caso o servidor ignore
-// parâmetros desconhecidos.
+// ── CONSULTA INCREMENTAL ────────────────────────────────────────────────────
+// O renderer envia `sinceEndTs` (última data de término já processada) e
+// `knownIds` (ids já processados perto dessa fronteira). A listagem para de
+// paginar assim que TODOS os leilões da página são mais antigos que o piso
+// (`floorTs = max(agora-30d, sinceEndTs - margem)`), e leilões já conhecidos
+// são pulados SEM nova consulta individual. A primeira carga (sem estado)
+// percorre os 30 dias completos — demorada por natureza; NENHUM teto
+// artificial pequeno é aplicado (apenas salva-vidas generosos contra loop).
 //
 // ── FILTRO OBRIGATÓRIO (Status Finalizado + Lance Vencedor) ────────────────
-// Um leilão do histórico só é aproveitado quando:
-//   1. o status indica FINALIZADO (campo textual quando existir; na ausência
-//      de campo, encerramento no passado sem indicação de cancelamento);
-//   2. houve LANCE VENCEDOR. Na API real da listagem, `currentValue > 0`
-//      significa "recebeu lance" (o site exibe "Lance Vencedor"); com
-//      `currentValue = 0` o site exibe o "Lance Mínimo" (`startingValue`) —
-//      ninguém deu lance, e o leilão é DESCARTADO.
+//   • FINALIZADO: campo textual de status quando existir (Cancelled /
+//     Currently Processed descartados); sem campo, exige término no passado
+//     e ausência de flag de cancelamento;
+//   • LANCE VENCEDOR: `currentValue > 0` (mesma semântica da API real da
+//     listagem: com 0 o site exibe o "Lance Mínimo" — ninguém deu lance).
+//     Sem prova de lance o leilão é DESCARTADO, nunca incluído.
 // ============================================================================
 
 'use strict';
 
-// Reuso explícito dos módulos irmãos — funções PURAS já testadas:
+// Reuso explícito dos módulos irmãos — funções PURAS já validadas:
 //   • walkJson / deriveQuestsFromApiPayload (método novo das quests);
 //   • collectItemMatches / collectGoldAndSkills / buildAuctionApiUrl /
-//     normalizeItemName (consulta de itens).
-// Nenhuma segunda implementação de extração de itens/skills/quests.
+//     normalizeItemName (consulta de itens — regras de skills idênticas).
 const { walkJson, deriveQuestsFromApiPayload } = require('./electron-bazaar-new.cjs');
 const {
   collectItemMatches,
@@ -54,16 +59,32 @@ const {
 } = require('./electron-bazaar-items.cjs');
 
 // ============================================================================
-// LISTAGEM DO HISTÓRICO — extração e classificação defensivas (funções puras)
+// FUNÇÕES PURAS — extração, classificação e utilitários de URL (testáveis)
 // ============================================================================
+
+/** Janela do site: ~30 dias de histórico. */
+const HISTORY_WINDOW_SECONDS = 30 * 24 * 3600;
+/** Margem de segurança da consulta incremental (reprocessa a fronteira). */
+const HISTORY_INCREMENTAL_MARGIN_SECONDS = 6 * 3600;
+
+/** Origem do site a partir da base da API (`https://rubinot.com.br`). */
+function siteOriginFromApiBase(apiBase) {
+  try {
+    return new URL(String(apiBase || '')).origin;
+  } catch {
+    return 'https://rubinot.com.br';
+  }
+}
+
+/** URL correta da PÁGINA do histórico — nunca `/bazaar`. */
+function historyPageUrlFromApiBase(apiBase) {
+  return `${siteOriginFromApiBase(apiBase)}/bazaar/history`;
+}
 
 /** Extrai o array de leilões do payload de UMA página da listagem. */
 function extractHistoryAuctions(payload) {
   if (Array.isArray(payload?.auctions)) return payload.auctions;
   if (Array.isArray(payload)) return payload;
-  // Defensivo: primeira propriedade que seja um array de objetos com cara de
-  // leilão (id + name/level). Não desce além do primeiro nível — a listagem
-  // real (`/api/bazaar`) entrega `auctions` na raiz.
   if (payload && typeof payload === 'object') {
     for (const value of Object.values(payload)) {
       if (Array.isArray(value) && value.length > 0 && typeof value[0] === 'object' && value[0] !== null
@@ -92,6 +113,70 @@ function normalizeEndTs(value) {
   return num > 1e11 ? Math.floor(num / 1000) : Math.floor(num);
 }
 
+/** endTs de um leilão bruto (cobre as variações de nome do campo). */
+function auctionEndTsOf(auction) {
+  return normalizeEndTs(auction?.auctionEnd ?? auction?.auctionEndTs ?? auction?.auction_end);
+}
+
+/**
+ * Um payload JSON "parece" a listagem do HISTÓRICO? Validação SEMÂNTICA:
+ * precisa conter uma lista de leilões cuja MAIORIA já encerrou — a listagem
+ * de leilões ATUAIS (majoritariamente futuros) nunca passa por histórico.
+ */
+function looksLikeHistoryListingJson(payload, nowSec) {
+  const auctions = extractHistoryAuctions(payload);
+  if (!auctions || auctions.length === 0) return { ok: false, auctions: null, endedCount: 0 };
+  const endedCount = auctions.filter(a => {
+    const endTs = auctionEndTsOf(a);
+    return endTs > 0 && endTs <= nowSec;
+  }).length;
+  return { ok: endedCount * 2 >= auctions.length, auctions, endedCount };
+}
+
+/** Substitui/insere o parâmetro `page` numa URL de listagem. */
+function withPageParam(urlString, pageNum) {
+  try {
+    const url = new URL(urlString);
+    url.searchParams.set('page', String(pageNum));
+    return url.toString();
+  } catch {
+    return urlString;
+  }
+}
+
+/** Ajusta um parâmetro APENAS se ele já existir na URL (não inventa API). */
+function withParamIfPresent(urlString, name, value) {
+  try {
+    const url = new URL(urlString);
+    if (!url.searchParams.has(name)) return urlString;
+    url.searchParams.set(name, String(value));
+    return url.toString();
+  } catch {
+    return urlString;
+  }
+}
+
+/**
+ * Ordenação da listagem pela data de término: 'desc' (mais novo primeiro),
+ * 'asc' ou 'unknown'. Auditada EM TEMPO DE EXECUÇÃO na primeira página —
+ * a estratégia de parada da paginação depende dela.
+ */
+function detectEndOrdering(auctions) {
+  const stamps = (Array.isArray(auctions) ? auctions : [])
+    .map(a => auctionEndTsOf(a))
+    .filter(ts => ts > 0);
+  if (stamps.length < 2) return 'unknown';
+  let descVotes = 0;
+  let ascVotes = 0;
+  for (let i = 1; i < stamps.length; i++) {
+    if (stamps[i] < stamps[i - 1]) descVotes += 1;
+    else if (stamps[i] > stamps[i - 1]) ascVotes += 1;
+  }
+  if (descVotes > ascVotes * 3) return 'desc';
+  if (ascVotes > descVotes * 3) return 'asc';
+  return 'unknown';
+}
+
 /** Campos textuais candidatos a STATUS do leilão no histórico. */
 const STATUS_FIELDS = ['status', 'state', 'auctionStatus', 'auction_status'];
 const FINISHED_PATTERN = /^(finished|finalizado|finalizada|ended|encerrado|completed|complete)$/i;
@@ -99,14 +184,9 @@ const CANCELLED_PATTERN = /cancel/i;
 const IN_PROGRESS_PATTERN = /(process|progress|andamento|current|active|ativo)/i;
 
 /**
- * Classifica UM leilão do histórico. Retorna:
+ * Classifica UM leilão do histórico:
  *   { finished, cancelled, hasWinningBid, winningBid, statusText }
- *
- * REGRAS (defensivas, documentadas acima):
- *   • status textual manda quando existe;
- *   • sem campo de status, "finalizado" = encerramento no PASSADO;
- *   • lance vencedor = `currentValue > 0` (mesma semântica da listagem real,
- *     onde o site exibe "Lance Vencedor" vs "Lance Mínimo").
+ * Regras defensivas documentadas no cabeçalho do arquivo.
  */
 function classifyHistoryAuction(auction, nowSec) {
   const now = Number.isFinite(nowSec) ? nowSec : Math.floor(Date.now() / 1000);
@@ -122,15 +202,11 @@ function classifyHistoryAuction(auction, nowSec) {
     cancelled = CANCELLED_PATTERN.test(statusText);
     finished = !cancelled && !IN_PROGRESS_PATTERN.test(statusText) && FINISHED_PATTERN.test(statusText);
   } else {
-    // Sem campo de status: histórico com encerramento no passado e sem flag
-    // de cancelamento é tratado como finalizado.
     cancelled = auction?.cancelled === true || auction?.canceled === true;
-    const endTs = normalizeEndTs(auction?.auctionEnd ?? auction?.auctionEndTs ?? auction?.auction_end);
+    const endTs = auctionEndTsOf(auction);
     finished = !cancelled && endTs > 0 && endTs <= now;
   }
 
-  // Lance vencedor: currentValue > 0 (recebeu lance). Campos alternativos
-  // cobertos por robustez, sempre com a mesma exigência de valor POSITIVO.
   const winningBid = Number(
     auction?.currentValue ?? auction?.currentBid ?? auction?.current_bid ?? auction?.winningBid ?? auction?.winning_bid ?? 0,
   );
@@ -155,32 +231,49 @@ function normalizeHistoryAuction(auction, nowSec) {
     level: Number(auction?.level || 0) || 0,
     server: String(auction?.worldName || auction?.world || ''),
     winningBid: info.winningBid,
-    auctionEndTs: normalizeEndTs(auction?.auctionEnd ?? auction?.auctionEndTs ?? auction?.auction_end) || null,
+    auctionEndTs: auctionEndTsOf(auction) || null,
     statusText: info.statusText,
   };
+}
+
+/**
+ * Seleção INCREMENTAL de uma página da listagem: devolve os leilões NOVOS
+ * aprovados (Finalizado + Lance Vencedor, dentro da janela, não conhecidos e
+ * não repetidos na execução) e contadores para o diagnóstico.
+ */
+function selectNewApprovedFromPage(auctions, { floorTs, nowSec, knownIds, seenIds }) {
+  const approved = [];
+  let knownSkipped = 0;
+  let belowFloor = 0;
+  let minEndTs = 0;
+  for (const raw of Array.isArray(auctions) ? auctions : []) {
+    const id = String(raw?.id || '');
+    const endTs = auctionEndTsOf(raw);
+    if (endTs > 0 && (minEndTs === 0 || endTs < minEndTs)) minEndTs = endTs;
+    if (!id || seenIds.has(id)) continue;
+    seenIds.add(id);
+    if (endTs > 0 && endTs < floorTs) { belowFloor += 1; continue; }
+    if (knownIds.has(id)) { knownSkipped += 1; continue; }
+    if (!isApprovedHistoryAuction(raw, nowSec)) continue;
+    approved.push(normalizeHistoryAuction(raw, nowSec));
+  }
+  return { approved, knownSkipped, belowFloor, minEndTs };
 }
 
 // ============================================================================
 // EXTRATORES ADITIVOS DO PAYLOAD INDIVIDUAL (`/api/bazaar/{ID}`)
 // ----------------------------------------------------------------------------
-// Mesma postura defensiva de collectGoldAndSkills: o schema exato NÃO é
+// Mesma postura defensiva de collectGoldAndSkills: o schema exato não é
 // assumido; a varredura reconhece formatos plausíveis por CHAVE e por PAR
-// rótulo/valor, e os caminhos encontrados vão para o diagnóstico (`paths`) —
-// o que permite confirmar o schema real na primeira execução com dado na mão.
+// rótulo/valor, e os caminhos encontrados vão para o diagnóstico (`paths`).
+// Dado ausente = null — nunca zero inventado.
 // ============================================================================
 
-/** Chaves numéricas que carregam o TOTAL de Charm Points. */
 const CHARM_KEY_HINTS = /^(totalCharmPoints|total_charm_points|charmPoints|charm_points|charmsPoints|totalCharms)$/i;
-/** Rótulo textual do total de charms num par rótulo/valor. */
 const CHARM_LABEL_HINTS = /^total\s*charm\s*points$/i;
-
-/** Segmentos de caminho que denunciam a seção de AURAS. */
 const AURA_PATH_HINTS = /aura/i;
-/** Segmentos de caminho que denunciam a seção de HIRELINGS. */
 const HIRELING_PATH_HINTS = /hireling/i;
-/** Segmentos de caminho que denunciam a seção de BATTLEPASS/PASSE. */
 const BATTLEPASS_PATH_HINTS = /(battlepass|battle_pass|passes|\bpass\b)/i;
-/** Chave/valor que marca um passe como DELUXE ("Sim"/true/"yes"). */
 const DELUXE_KEY_HINTS = /deluxe/i;
 
 /** Valor "afirmativo" de deluxe: true, "sim", "yes", 1. */
@@ -204,11 +297,6 @@ function readDirectCount(node, keyPattern) {
 /**
  * Charm Points + Auras + Hirelings + Passes Deluxe do MESMO payload já
  * baixado — nenhuma chamada extra ao site.
- *
- * Contagens de seção (auras/hirelings): preferem o ARRAY da seção (conta os
- * elementos); aceitam contagem numérica direta quando o payload trouxer o
- * número pronto. Passes Deluxe: elementos de uma seção de battlepass cujo
- * campo `deluxe` (ou equivalente) seja afirmativo ("Sim"/true).
  */
 function collectHistoryExtras(payload) {
   let charmPoints = null;
@@ -217,14 +305,12 @@ function collectHistoryExtras(payload) {
   let deluxePassCount = null;
   const paths = { charm: '', auras: '', hirelings: '', deluxe: '' };
 
-  // Contagens diretas na raiz (ex.: { auraCount: 12, hirelings: 2 }).
   const rootAuras = readDirectCount(payload, /^(auraCount|aura_count|auras|totalAuras|total_auras)$/i);
   if (rootAuras !== null) { auraCount = rootAuras; paths.auras = '(raiz)'; }
   const rootHirelings = readDirectCount(payload, /^(hirelingCount|hireling_count|hirelings|totalHirelings|total_hirelings)$/i);
   if (rootHirelings !== null) { hirelingCount = rootHirelings; paths.hirelings = '(raiz)'; }
 
   walkJson(payload, (node, path) => {
-    // ── Charm Points: chave numérica OU par rótulo/valor ───────────────────
     if (node && typeof node === 'object' && !Array.isArray(node)) {
       if (charmPoints === null) {
         for (const [key, value] of Object.entries(node)) {
@@ -243,7 +329,6 @@ function collectHistoryExtras(payload) {
           if (Number.isFinite(num) && num >= 0) { charmPoints = Math.floor(num); paths.charm = path; }
         }
       }
-      // ── Passe Deluxe: nó de seção battlepass com campo deluxe = "Sim" ───
       if (BATTLEPASS_PATH_HINTS.test(path)) {
         for (const [key, value] of Object.entries(node)) {
           if (DELUXE_KEY_HINTS.test(key) && isAffirmative(value)) {
@@ -255,7 +340,6 @@ function collectHistoryExtras(payload) {
       }
       return;
     }
-    // ── Auras/Hirelings: ARRAY cuja seção é denunciada pelo caminho ────────
     if (Array.isArray(node)) {
       if (auraCount === null && AURA_PATH_HINTS.test(path) && !BATTLEPASS_PATH_HINTS.test(path)) {
         auraCount = node.length;
@@ -268,13 +352,7 @@ function collectHistoryExtras(payload) {
     }
   });
 
-  return {
-    charmPoints,
-    auraCount,
-    hirelingCount,
-    deluxePassCount,
-    paths,
-  };
+  return { charmPoints, auraCount, hirelingCount, deluxePassCount, paths };
 }
 
 // ============================================================================
@@ -291,6 +369,7 @@ function registerBazaarHistoryMethod(deps) {
     fetchJsonDetailed,
     resolveBrowserKey,
     isManualStopRequested,
+    resetManualStop,
     sendProgress,
     buildProgress,
     finishProgress,
@@ -308,10 +387,12 @@ function registerBazaarHistoryMethod(deps) {
   const API_SPEEDUP_STREAK = 8;
   const API_MAX_ATTEMPTS = 3;
   const API_BACKOFF_MS = 1200;
-  /** Teto rígido de páginas da listagem do histórico por consulta. */
-  const MAX_HISTORY_PAGES = 50;
-  /** Teto rígido de personagens analisados individualmente por consulta. */
-  const MAX_HISTORY_DETAILS = 1500;
+  // SALVA-VIDAS generosos (o volume real esperado é ~10 mil/mês; estes tetos
+  // NÃO limitam a carga normal — só evitam loop infinito em falha do site).
+  const LIST_PAGES_SAFETY_CAP = 1000;
+  const DETAILS_SAFETY_CAP = 25000;
+  /** Tempo máximo aguardando a SPA do histórico disparar sua chamada JSON. */
+  const SNIFF_TIMEOUT_MS = 20000;
 
   let apiGapExtraMs = 0;
   let apiSuccessStreak = 0;
@@ -329,12 +410,15 @@ function registerBazaarHistoryMethod(deps) {
   };
 
   const base = String(apiBase || '').replace(/\/+$/, '');
+  const historyPageUrl = historyPageUrlFromApiBase(base);
+  const bazaarPageUrl = `${siteOriginFromApiBase(base)}/bazaar`;
 
-  /** Candidatos de rota da LISTAGEM do histórico (ver cabeçalho do arquivo). */
-  function historyListUrlCandidates(pageNum) {
-    const params = new URLSearchParams({ sortBy: 'auction_end', sortOrder: 'desc', limit: 100, page: pageNum });
+  /** Candidatas de rota da listagem — usadas SÓ se o farejamento falhar. */
+  function historyListUrlCandidates() {
+    const params = new URLSearchParams({ sortBy: 'auction_end', sortOrder: 'desc', limit: 100, page: 1 });
     return [
       `${base}/history?${params.toString()}`,
+      `${base}/history?${params.toString()}&status=all`,
       `${base}?${params.toString()}&history=true`,
       `${base}?${params.toString()}&state=history`,
     ];
@@ -383,68 +467,120 @@ function registerBazaarHistoryMethod(deps) {
   }
 
   /**
-   * SONDA a rota do histórico: a primeira candidata que devolver uma lista de
-   * leilões MAJORITARIAMENTE encerrados vence. Rota que devolve leilões
-   * futuros é a listagem ATUAL respondendo com parâmetros ignorados — é
-   * rejeitada (validação semântica, ver cabeçalho).
+   * FASE DE DESCOBERTA: navega para a PÁGINA CORRETA do histórico
+   * (`/bazaar/history`) farejando as respostas de rede da própria SPA.
+   * Devolve `{ urlTemplate, firstPage }` ou null.
    */
-  async function probeHistoryRoute(page) {
-    const nowSec = Math.floor(Date.now() / 1000);
-    for (const url of historyListUrlCandidates(1)) {
+  async function discoverHistoryRoute(page, nowSec) {
+    const sniffed = [];
+    const onResponse = (response) => {
+      // Handler assíncrono deliberadamente NÃO aguardado: Playwright emite o
+      // evento em paralelo; os resultados entram em `sniffed` quando prontos.
+      (async () => {
+        try {
+          const url = response.url();
+          if (!/\/api\//i.test(url)) return;
+          const contentType = String((response.headers() || {})['content-type'] || '');
+          if (!contentType.includes('json')) return;
+          const data = await response.json().catch(() => null);
+          if (!data) return;
+          const check = looksLikeHistoryListingJson(data, nowSec);
+          if (check.ok) sniffed.push({ url, data, total: check.auctions.length, endedCount: check.endedCount });
+        } catch { /* resposta descartável (abortada/binária) */ }
+      })();
+    };
+
+    page.on('response', onResponse);
+    try {
+      diag('history-v1', 'Navegando a página de sessão para o HISTÓRICO (rota correta).', { url: historyPageUrl });
+      // Recarrega mesmo se já estiver na URL: força a SPA a refazer a chamada.
+      await page.goto(historyPageUrl, { waitUntil: 'domcontentloaded', timeout: 60000 }).catch(error => {
+        diag('history-v1', 'Falha tolerada na navegação para /bazaar/history.', { error: String(error?.message || error) });
+      });
+      const sniffStartedAt = Date.now();
+      while (sniffed.length === 0 && Date.now() - sniffStartedAt < SNIFF_TIMEOUT_MS) {
+        if (isManualStopRequested()) break;
+        await page.waitForTimeout(250);
+      }
+    } finally {
+      try { page.off('response', onResponse); } catch { /* página fechada */ }
+    }
+
+    if (sniffed.length > 0) {
+      // Preferência: resposta cuja URL tem paginação explícita (page=...).
+      const withPage = sniffed.find(item => /[?&]page=/i.test(item.url)) || sniffed[0];
+      diag('history-v1', 'Rota JSON do histórico DESCOBERTA pela própria SPA.', {
+        url: withPage.url, leiloes: withPage.total, encerrados: withPage.endedCount,
+      });
+      return { urlTemplate: withPage.url, firstPage: withPage.data, discoveredBy: 'sniff' };
+    }
+
+    // Fallback: sondagem de candidatas — agora emitida DA PÁGINA CORRETA
+    // (Referer/contexto de /bazaar/history), o que corrige a sondagem cega
+    // anterior feita do contexto de /bazaar.
+    diag('history-v1', 'SPA não expôs a chamada JSON no tempo limite; sondando candidatas a partir de /bazaar/history.');
+    for (const url of historyListUrlCandidates()) {
       const result = await fetchJsonWithRetry(page, url, 'sonda-historico');
       if (!result.ok) {
-        diag('history-v1', 'Candidata de rota do histórico rejeitada (resposta inválida).', {
-          url, motivo: result.reason, status: result.status,
-        });
+        diag('history-v1', 'Candidata rejeitada (resposta inválida).', { url, motivo: result.reason, status: result.status });
         continue;
       }
-      const auctions = extractHistoryAuctions(result.data);
-      if (!auctions || auctions.length === 0) {
-        diag('history-v1', 'Candidata de rota do histórico rejeitada (sem lista de leilões).', { url });
+      const check = looksLikeHistoryListingJson(result.data, nowSec);
+      if (!check.ok) {
+        diag('history-v1', 'Candidata rejeitada (não é lista de leilões encerrados).', { url });
         continue;
       }
-      const endedCount = auctions.filter(a => {
-        const endTs = normalizeEndTs(a?.auctionEnd ?? a?.auctionEndTs ?? a?.auction_end);
-        return endTs > 0 && endTs <= nowSec;
-      }).length;
-      if (endedCount * 2 < auctions.length) {
-        diag('history-v1', 'Candidata de rota do histórico rejeitada (leilões majoritariamente futuros — é a listagem atual).', {
-          url, total: auctions.length, encerrados: endedCount,
-        });
-        continue;
-      }
-      diag('history-v1', 'Rota do histórico confirmada.', {
-        url, total: auctions.length, encerrados: endedCount, totalPages: extractHistoryTotalPages(result.data),
-      });
-      // O template da rota (sem o valor da página) é reconstituído trocando
-      // apenas `page=1` — as candidatas são geradas com page=1.
-      return { urlTemplate: url, firstPage: result.data };
+      diag('history-v1', 'Rota do histórico confirmada por sondagem.', { url, leiloes: check.auctions.length });
+      return { urlTemplate: url, firstPage: result.data, discoveredBy: 'probe' };
     }
     return null;
   }
 
   // ==========================================================================
-  // HANDLER — histórico por API JSON, sem fallback página-a-página
+  // HANDLER — histórico por API JSON, paginação completa e incremental
   // ==========================================================================
   ipcMain.handle('rubinot-bazaar-history-v1', async (event, options = {}) => {
-    const maxPages = Math.min(MAX_HISTORY_PAGES, Math.max(1, Math.floor(Number(options?.maxPages) || 10)));
     const watchSet = new Set(
       (Array.isArray(options?.watchKeys) ? options.watchKeys : [])
         .map(key => normalizeItemName(key))
         .filter(Boolean),
     );
+    const sinceEndTs = Math.max(0, Math.floor(Number(options?.sinceEndTs) || 0));
+    const knownIds = new Set(
+      (Array.isArray(options?.knownIds) ? options.knownIds : []).map(id => String(id || '')).filter(Boolean),
+    );
+    const fullReload = options?.fullReload === true;
 
     return runQueued('bazaar-history-v1', async () => {
       const startedAt = Date.now();
       const nowSec = Math.floor(startedAt / 1000);
-      const browserKey = resolveBrowserKey(getSelectedBrowser ? getSelectedBrowser() : '');
-      const cleanProfile = !!(getUseCleanProfile && getUseCleanProfile());
+      // Piso da janela: 30 dias; incremental encurta para a fronteira já
+      // processada (com margem de reprocessamento coberta pelos knownIds).
+      const windowFloor = nowSec - HISTORY_WINDOW_SECONDS;
+      const floorTs = (!fullReload && sinceEndTs > 0)
+        ? Math.max(windowFloor, sinceEndTs - HISTORY_INCREMENTAL_MARGIN_SECONDS)
+        : windowFloor;
 
-      diag('history-v1', 'HISTÓRICO: iniciando consulta por API JSON (sem renderizar página individual).', {
-        maxPages, itensMonitorados: watchSet.size, navegador: browserKey, endpointBase: base,
+      // Navegador ESCOLHIDO NO MODAL (BazaarBrowserModal) — enviado pelo
+      // renderer; o global só cobre chamadas legadas sem a opção.
+      const browserKey = resolveBrowserKey(options?.browser || (getSelectedBrowser ? getSelectedBrowser() : ''));
+      const cleanProfile = options?.cleanProfile === true || !!(getUseCleanProfile && getUseCleanProfile() && options?.cleanProfile !== false);
+
+      // Consulta iniciada AGORA: um "Parar" de execução anterior não pode
+      // encerrar esta (as demais consultas resetam no rubinot-bazaar-fetch;
+      // o histórico não passa por aquele canal).
+      if (typeof resetManualStop === 'function') resetManualStop();
+
+      diag('history-v1', 'HISTÓRICO: iniciando consulta por API JSON.', {
+        paginaCorreta: historyPageUrl,
+        incremental: !fullReload && sinceEndTs > 0,
+        sinceEndTs,
+        floorTs,
+        idsConhecidos: knownIds.size,
+        itensMonitorados: watchSet.size,
+        navegador: browserKey,
       });
 
-      // ── Sessão — mesma validação/reuso dos módulos irmãos ─────────────────
       let page = null;
       try {
         const context = await getContext(browserKey, cleanProfile);
@@ -465,71 +601,123 @@ function registerBazaarHistoryMethod(deps) {
       const failureReasons = {};
 
       try {
-        // ── FASE 1: listagem do histórico ────────────────────────────────────
-        sendProgress(event.sender, buildProgress('bazaar', 'Histórico: consultando listagem...', 0, maxPages, {
+        sendProgress(event.sender, buildProgress('bazaar', 'Histórico: localizando a rota JSON...', 0, 0, {
           methodLabel: 'Histórico (API JSON)', scope: 'history',
         }));
 
-        const probe = await probeHistoryRoute(page);
-        if (!probe) {
+        // ── FASE 1: página correta + descoberta da rota ────────────────────
+        const discovery = await discoverHistoryRoute(page, nowSec);
+        if (!discovery) {
           return {
             ok: false,
-            error: 'Não foi possível localizar a rota JSON do histórico do Bazaar. Nenhuma candidata respondeu com uma lista de leilões encerrados (detalhes no diagnóstico).',
+            error: 'Não foi possível localizar a rota JSON do histórico do Bazaar mesmo navegando em /bazaar/history. Detalhes no diagnóstico.',
           };
         }
 
-        const rawAuctions = [];
-        const firstAuctions = extractHistoryAuctions(probe.firstPage) || [];
-        rawAuctions.push(...firstAuctions);
-        const totalPagesApi = extractHistoryTotalPages(probe.firstPage);
-        const pagesToFetch = totalPagesApi > 0 ? Math.min(maxPages, totalPagesApi) : maxPages;
+        // Tentativa de acelerar a paginação: se o template tem `limit`,
+        // eleva para 100. Validação real: a página 1 precisa continuar
+        // respondendo com a listagem do histórico; senão, mantém o original.
+        let urlTemplate = discovery.urlTemplate;
+        let firstPageData = discovery.firstPage;
+        const boosted = withParamIfPresent(withPageParam(urlTemplate, 1), 'limit', 100);
+        if (boosted !== withPageParam(urlTemplate, 1)) {
+          const probe = await fetchJsonWithRetry(page, boosted, 'limite-100');
+          const check = probe.ok ? looksLikeHistoryListingJson(probe.data, nowSec) : { ok: false };
+          if (check.ok && check.auctions.length > extractHistoryAuctions(firstPageData).length) {
+            urlTemplate = boosted;
+            firstPageData = probe.data;
+            diag('history-v1', 'Paginação acelerada: limit=100 aceito pela rota do histórico.');
+          } else {
+            diag('history-v1', 'limit=100 não aceito; mantendo a paginação original da SPA.');
+          }
+        }
 
-        for (let pageNum = 2; pageNum <= pagesToFetch; pageNum++) {
+        // ── FASE 2: paginação COMPLETA da janela (data de término manda) ───
+        const firstAuctions = extractHistoryAuctions(firstPageData) || [];
+        const ordering = detectEndOrdering(firstAuctions);
+        const totalPagesApi = extractHistoryTotalPages(firstPageData);
+        diag('history-v1', 'Auditoria da listagem em tempo de execução.', {
+          rota: urlTemplate, ordenacao: ordering, totalPagesApi, porPagina: firstAuctions.length,
+        });
+
+        const seenIds = new Set();
+        const approvedNew = [];
+        let listedCount = 0;
+        let knownSkippedCount = 0;
+        let pagesScanned = 0;
+
+        const consumePage = (auctions) => {
+          listedCount += auctions.length;
+          const picked = selectNewApprovedFromPage(auctions, { floorTs, nowSec, knownIds, seenIds });
+          approvedNew.push(...picked.approved);
+          knownSkippedCount += picked.knownSkipped;
+          return picked;
+        };
+
+        let stopListing = false;
+        let pageNum = 1;
+        let auctionsOfPage = firstAuctions;
+        while (!stopListing) {
+          pagesScanned = pageNum;
+          const picked = consumePage(auctionsOfPage);
+          sendProgress(event.sender, buildProgress(
+            'bazaar',
+            `Histórico: listagem página ${pageNum} — ${approvedNew.length} novo(s) leilão(ões) com lance vencedor...`,
+            totalPagesApi > 0 ? Math.min(pageNum, totalPagesApi) : pageNum,
+            totalPagesApi,
+            { methodLabel: 'Histórico (API JSON)', scope: 'history' },
+          ));
+
+          // Critério CENTRAL de parada: a data de término. Com ordenação
+          // decrescente, uma página cujo leilão mais antigo já está abaixo do
+          // piso encerra a varredura — o resto é mais antigo ainda.
+          if (ordering === 'desc' && picked.minEndTs > 0 && picked.minEndTs < floorTs) {
+            diag('history-v1', 'Janela coberta: página alcançou leilões anteriores ao piso.', {
+              pagina: pageNum, minEndTs: picked.minEndTs, floorTs,
+            });
+            break;
+          }
+          if (totalPagesApi > 0 && pageNum >= totalPagesApi) break;
+          if (pageNum >= LIST_PAGES_SAFETY_CAP) {
+            diag('history-v1', 'Salva-vidas de páginas atingido — verifique o diagnóstico.', { pagina: pageNum });
+            break;
+          }
           if (isManualStopRequested()) { stoppedManually = true; break; }
+
+          // Próxima página.
+          pageNum += 1;
           await page.waitForTimeout(currentGapMs());
-          const url = probe.urlTemplate.replace(/([?&]page=)1\b/, `$1${pageNum}`);
-          const result = await fetchJsonWithRetry(page, url, `pagina-${pageNum}`);
+          const result = await fetchJsonWithRetry(page, withPageParam(urlTemplate, pageNum), `pagina-${pageNum}`);
           if (!result.ok) {
             failureReasons[result.reason] = (failureReasons[result.reason] || 0) + 1;
-            diag('history-v1', 'Página da listagem do histórico não respondeu; seguindo com o que já foi coletado.', {
+            diag('history-v1', 'Página da listagem não respondeu; encerrando a varredura no ponto alcançado.', {
               pagina: pageNum, motivo: result.reason, status: result.status,
             });
-            continue;
+            break;
           }
-          const pageAuctions = extractHistoryAuctions(result.data);
-          if (!pageAuctions || pageAuctions.length === 0) break; // fim real da listagem
-          rawAuctions.push(...pageAuctions);
-          sendProgress(event.sender, buildProgress('bazaar', 'Histórico: consultando listagem...', pageNum, pagesToFetch, {
-            methodLabel: 'Histórico (API JSON)', scope: 'history',
-          }));
+          auctionsOfPage = extractHistoryAuctions(result.data) || [];
+          if (auctionsOfPage.length === 0) break; // fim real da listagem
         }
 
-        // ── FILTRO OBRIGATÓRIO: Finalizado + Lance Vencedor ─────────────────
-        // Dedupe por id: uma mesma oferta nunca entra duas vezes (páginas
-        // podem deslizar entre uma chamada e outra).
-        const seenIds = new Set();
-        const approved = [];
-        for (const raw of rawAuctions) {
-          const id = String(raw?.id || '');
-          if (!id || seenIds.has(id)) continue;
-          seenIds.add(id);
-          if (!isApprovedHistoryAuction(raw, nowSec)) continue;
-          approved.push(normalizeHistoryAuction(raw, nowSec));
-        }
-        const detailTargets = approved.slice(0, MAX_HISTORY_DETAILS);
+        // ── FASE 3: detalhes individuais SÓ dos leilões NOVOS aprovados ────
+        // Ordem CRESCENTE de término: se a consulta for interrompida, tudo
+        // até `processedMaxEndTs` está completo e a próxima execução retoma
+        // exatamente da fronteira — nada é perdido nem refeito.
+        approvedNew.sort((a, b) => (a.auctionEndTs || 0) - (b.auctionEndTs || 0));
+        const detailTargets = approvedNew.slice(0, DETAILS_SAFETY_CAP);
 
         diag('history-v1', 'Listagem do histórico concluída.', {
-          paginasLidas: pagesToFetch,
-          leiloesListados: rawAuctions.length,
-          unicos: seenIds.size,
-          aprovados: approved.length,
+          paginas: pagesScanned,
+          listados: listedCount,
+          jaConhecidos: knownSkippedCount,
+          novosAprovados: approvedNew.length,
           analisar: detailTargets.length,
         });
 
-        // ── FASE 2: detalhes individuais (API JSON, um fetch por aprovado) ──
         const entries = [];
         let analyzedCount = 0;
         let failedCount = 0;
+        let processedMaxEndTs = 0;
 
         for (let index = 0; index < detailTargets.length; index++) {
           if (isManualStopRequested()) { stoppedManually = true; break; }
@@ -558,15 +746,20 @@ function registerBazaarHistoryMethod(deps) {
               deluxePassCount: extras.deluxePassCount,
               extraPaths: extras.paths,
             });
+          } else if (outcome.reason === 'ENCERRAMENTO_MANUAL') {
+            stoppedManually = true;
+            break; // NÃO grava o alvo: será reprocessado na próxima execução.
           } else {
             failedCount += 1;
             failureReasons[outcome.reason] = (failureReasons[outcome.reason] || 0) + 1;
-            // Falha no detalhe NÃO descarta o registro do histórico: os dados
-            // da LISTAGEM (lance vencedor, level, voc, servidor) são válidos.
+            // Falha no detalhe NÃO descarta o leilão: os dados da LISTAGEM
+            // (lance vencedor, level, vocação, servidor, término) são
+            // válidos e entram na base com a marca do erro.
             entries.push({ ...target, detailError: outcome.reason });
           }
+          if ((target.auctionEndTs || 0) > processedMaxEndTs) processedMaxEndTs = target.auctionEndTs || 0;
 
-          sendProgress(event.sender, buildProgress('details', 'Histórico: analisando personagens finalizados...', index + 1, detailTargets.length, {
+          sendProgress(event.sender, buildProgress('details', 'Histórico: analisando leilões finalizados...', index + 1, detailTargets.length, {
             methodLabel: 'Histórico (API JSON)', apiResolved: analyzedCount, scope: 'history',
           }));
 
@@ -574,8 +767,9 @@ function registerBazaarHistoryMethod(deps) {
         }
 
         diag('history-v1', 'Consulta do histórico finalizada.', {
-          listados: rawAuctions.length,
-          aprovados: approved.length,
+          listados: listedCount,
+          jaConhecidos: knownSkippedCount,
+          novosAprovados: approvedNew.length,
           analisados: analyzedCount,
           falhasDetalhe: failedCount,
           encerradoManualmente: stoppedManually,
@@ -586,13 +780,20 @@ function registerBazaarHistoryMethod(deps) {
         return {
           ok: true,
           fetchedAt: startedAt,
-          listedCount: rawAuctions.length,
-          approvedCount: approved.length,
+          routeUsed: urlTemplate,
+          discoveredBy: discovery.discoveredBy,
+          orderingDetected: ordering,
+          pagesScanned,
+          floorTs,
+          listedCount,
+          approvedNewCount: approvedNew.length,
+          knownSkippedCount,
           analyzedCount,
           failedCount,
           failureReasons,
           stoppedManually,
           entries,
+          processedMaxEndTs,
           totalDurationMs: Date.now() - startedAt,
           primaryBrowser: browserKey,
         };
@@ -600,26 +801,40 @@ function registerBazaarHistoryMethod(deps) {
         diag('history-v1', 'Erro na consulta do histórico.', { error: String(error?.message || error) });
         return { ok: false, error: String(error?.message || error) };
       } finally {
-        // O progresso desta consulta pertence SOMENTE ao scope 'history';
-        // finalizar aqui nunca interfere nas guias Quests/Itens (elas ignoram
-        // este scope) — mesmo padrão do módulo de itens.
-        try { if (finishProgress) finishProgress('history-finalizado'); } catch (_) {}
+        // Devolve a página de sessão ao estado que as OUTRAS consultas
+        // esperam (/bazaar) — a navegação para /bazaar/history é exclusiva
+        // deste fluxo e não pode vazar para quests/itens.
+        try {
+          if (page && !page.isClosed()) {
+            await page.goto(bazaarPageUrl, { waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {});
+          }
+        } catch { /* melhor esforço */ }
+        try { if (finishProgress) finishProgress('history-finalizado'); } catch { /* sem progresso ativo */ }
       }
     });
   });
 
   diag('context', 'Consulta do HISTÓRICO do Bazaar registrada (canal rubinot-bazaar-history-v1).', {
-    endpointBase: base,
+    paginaHistorico: historyPageUrl,
   });
 }
 
 module.exports = {
   registerBazaarHistoryMethod,
   // Exportados para testes — funções puras, sem efeito colateral.
+  HISTORY_WINDOW_SECONDS,
+  HISTORY_INCREMENTAL_MARGIN_SECONDS,
+  siteOriginFromApiBase,
+  historyPageUrlFromApiBase,
   extractHistoryAuctions,
   extractHistoryTotalPages,
+  looksLikeHistoryListingJson,
+  withPageParam,
+  withParamIfPresent,
+  detectEndOrdering,
   classifyHistoryAuction,
   isApprovedHistoryAuction,
   normalizeHistoryAuction,
+  selectNewApprovedFromPage,
   collectHistoryExtras,
 };

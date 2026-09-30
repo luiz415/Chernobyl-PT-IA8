@@ -1,47 +1,66 @@
 // ============================================================================
-// ESTATÍSTICAS DO BAZAAR — tela do histórico oficial (3º modo do painel)
+// ESTATÍSTICAS DO BAZAAR — interface ANALÍTICA do histórico oficial
 // ----------------------------------------------------------------------------
-// Consome o HISTÓRICO oficial do Bazaar (leilões FINALIZADOS com LANCE
-// VENCEDOR) e apresenta estatísticas 100% locais sobre o conjunto filtrado.
+// Esta tela NÃO é uma listagem de personagens: ela consome as MÉTRICAS
+// pré-agregadas da base histórica permanente do Chernobyl Team (leilões
+// FINALIZADOS com LANCE VENCEDOR coletados do histórico do RubinOT).
 //
-// FONTES DE DADOS (nesta ordem de prioridade, pela consulta mais RECENTE):
-//   • última consulta local (`rubinot_bazaar_history_last_query`) — gravada
-//     pelo próprio dispositivo do Boss ao consultar;
-//   • doc publicado `bazaar/history` (Firestore, doc único) — como TODOS os
-//     usuários do painel recebem os dados sem Electron/sessão.
+// O QUE A TELA LÊ (e só isso):
+//   • `bazaar/historySync` — 1 doc de estado (índice de meses + última
+//     consulta), com cache local + TTL;
+//   • `bazaarHistoryMetrics/{mês__servidor}` — docs de células agregadas,
+//     cada um cacheado localmente e relido APENAS quando o mês mudou.
+// A base bruta (`bazaarHistoryRaw`) NUNCA é lida aqui; filtros nunca
+// consultam o site nem percorrem leilões individuais — tudo é resolvido
+// nas células já em memória.
 //
-// A CONSULTA (botão "Consultar Histórico") é exclusiva do Boss no Electron:
-// canal dedicado `rubinot-bazaar-history-v1` (100% API JSON, sem fallback de
-// scraping — ver electron-bazaar-history.cjs). Os FILTROS desta tela nunca
-// disparam consulta nova: filtram o conjunto já salvo, localmente.
-//
-// REUSO (nenhuma reinterpretação):
-//   • skills por vocação: SKILL_DISPLAY/skillDefsForVocation/MIN_DISPLAY_
-//     SKILL exportados do BazaarItemsPanel — as MESMAS regras da guia Itens;
-//   • kk→RC: computeItemRC com a cotação carimbada NA consulta (coinRateKk);
-//   • filtros multi: FilterMulti (o mesmo componente das tabelas do Bazaar).
+// FLUXO DA CONSULTA (exclusiva Boss + Electron):
+//   Consultar Histórico → BazaarBrowserModal (mesma configuração das demais
+//   consultas; método travado em API JSON) → canal `rubinot-bazaar-history-
+//   v1` (navega em https://rubinot.com.br/bazaar/history, descobre a rota
+//   JSON real e pagina os ~30 dias por completo, incrementalmente) →
+//   precificação de itens no renderer (regras da guia Itens) → ingestão
+//   idempotente (base bruta por dia + métricas por mês×servidor + estado).
 // ============================================================================
 
 import { useEffect, useMemo, useState } from "react";
-import { AlertTriangle, BarChart3, Eraser, RefreshCw, Square } from "lucide-react";
+import { AlertTriangle, BarChart3, Database, Eraser, RefreshCw, Square } from "lucide-react";
 import { FilterMulti } from "./FilterTypes";
+import BazaarBrowserModal from "./BazaarBrowserModal";
 import { MIN_DISPLAY_SKILL, skillDefsForVocation } from "./BazaarItemsPanel";
-import { collectAllWatchKeys, loadWatchedItemsByServer } from "../utils/bazaarWatchedItems";
 import {
-  applyHistoryFilters,
-  buildHistoryLastQuery,
-  computeHistoryStats,
+  buildCharacterMatches,
+  buildWatchlistIndex,
+  canonicalServerKey,
+  collectAllWatchKeys,
+  getServerWatchedItems,
+  loadItemsCoinRate,
+  loadWatchedItemsByServer,
+  type WatchedItem,
+} from "../utils/bazaarWatchedItems";
+import { computeItemRC } from "../utils/itemSale";
+import {
+  BID_BUCKETS,
+  LEVEL_BANDS,
+  bandLabel,
+  computeStatsFromMetricDocs,
   defaultHistoryFilters,
   hasActiveHistoryFilters,
-  loadHistoryLastQuery,
-  saveHistoryLastQuery,
+  monthLabel,
   type BazaarHistoryEntry,
-  type BazaarHistoryFilters,
-  type BazaarHistoryLastQuery,
   type BazaarHistoryQueryResponse,
+  type HistoryMetricsFilters,
   type HistoryQuestFilter,
+  type MetricsDocData,
 } from "../utils/bazaarHistoryStats";
-import { publishBazaarHistory, readOfficialHistoryCache, syncBazaarHistory } from "../services/bazaarHistoryService";
+import {
+  fetchHistoryMetricDocs,
+  loadHistorySyncState,
+  persistHistoryIngestion,
+  recordEmptyHistoryRun,
+  type HistoryRunInfo,
+  type HistorySyncState,
+} from "../services/bazaarHistoryService";
 
 interface HistoryProgressEvent {
   active?: boolean;
@@ -68,7 +87,7 @@ function formatInt(value: number): string {
   return Math.round(value).toLocaleString("pt-BR");
 }
 
-/** Data/hora completa da consulta em pt-BR. */
+/** Data/hora completa em pt-BR. */
 function formatDateTime(ms: number): string {
   if (!ms) return "—";
   try {
@@ -90,32 +109,38 @@ const QUEST_FILTER_LABELS: { value: HistoryQuestFilter; label: string }[] = [
 ];
 
 export default function BazaarStatsPanel({ isBossUser, isElectron, isOtherQueryRunning, onRunningChange }: Props) {
-  // ── Fontes de dados ────────────────────────────────────────────────────────
-  const [localQuery, setLocalQuery] = useState<BazaarHistoryLastQuery | null>(() => loadHistoryLastQuery());
-  const [officialQuery, setOfficialQuery] = useState<BazaarHistoryLastQuery | null>(() => readOfficialHistoryCache()?.query || null);
+  // ── Estado analítico (métricas) ───────────────────────────────────────────
+  const [syncState, setSyncState] = useState<HistorySyncState | null>(null);
+  const [metricDocs, setMetricDocs] = useState<MetricsDocData[]>([]);
+  const [filters, setFilters] = useState<HistoryMetricsFilters>(() => defaultHistoryFilters());
+  // ── Estado da consulta (exclusiva Boss + Electron) ────────────────────────
   const [isRunning, setIsRunning] = useState(false);
+  const [isBrowserModalOpen, setIsBrowserModalOpen] = useState(false);
+  const [fullReload, setFullReload] = useState(false);
   const [progress, setProgress] = useState<HistoryProgressEvent | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [maxPagesText, setMaxPagesText] = useState("10");
-  const [filters, setFilters] = useState<BazaarHistoryFilters>(() => defaultHistoryFilters());
 
-  // Bloqueio cruzado: o BazarPanel precisa saber quando ESTA consulta roda
-  // (o navegador de sessão é um só). Efeito para cobrir também o unmount.
+  // Bloqueio cruzado: o navegador de sessão é um só para as três consultas.
   useEffect(() => {
     onRunningChange?.(isRunning);
     return () => { if (isRunning) onRunningChange?.(false); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isRunning]);
 
-  // Sincronização do doc publicado — cache local responde na hora; a
-  // releitura do Firestore respeita o TTL do serviço (custo mínimo).
+  /** Carrega estado + TODOS os docs de métricas (cache local absorve custo). */
+  async function refreshMetrics(options: { force?: boolean } = {}) {
+    const { state } = await loadHistorySyncState(options);
+    setSyncState(state);
+    if (!state) { setMetricDocs([]); return; }
+    const months = Object.keys(state.months || {});
+    const { docs } = await fetchHistoryMetricDocs(months, state);
+    setMetricDocs(docs);
+  }
+
   useEffect(() => {
-    let cancelled = false;
-    void syncBazaarHistory().then(result => {
-      if (!cancelled && result.cache) setOfficialQuery(result.cache.query);
-    });
-    return () => { cancelled = true; };
+    void refreshMetrics();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Progresso do processo principal — MESMO canal das outras guias, filtrado
@@ -140,76 +165,188 @@ export default function BazaarStatsPanel({ isBossUser, isElectron, isOtherQueryR
     }
   }, [isElectron]);
 
-  // Fonte EFETIVA = consulta mais recente entre a local e a publicada.
-  const activeQuery: BazaarHistoryLastQuery | null = useMemo(() => {
-    if (localQuery && officialQuery) {
-      return localQuery.fetchedAtMs >= officialQuery.fetchedAtMs ? localQuery : officialQuery;
+  const monthOptions = useMemo(
+    () => Object.keys(syncState?.months || {}).sort((a, b) => b.localeCompare(a)),
+    [syncState],
+  );
+  const serverOptions = useMemo(() => {
+    const set = new Set<string>();
+    for (const meta of Object.values(syncState?.months || {})) for (const server of meta.servers || []) set.add(server);
+    return Array.from(set).sort((a, b) => a.localeCompare(b, "pt-BR"));
+  }, [syncState]);
+  const vocationOptions = useMemo(() => {
+    const set = new Set<string>();
+    for (const docData of metricDocs) {
+      for (const key of Object.keys(docData.cells || {})) set.add(key.split("|")[0] || "—");
     }
-    return localQuery || officialQuery;
-  }, [localQuery, officialQuery]);
+    return Array.from(set).sort((a, b) => a.localeCompare(b, "pt-BR"));
+  }, [metricDocs]);
 
-  const entries: BazaarHistoryEntry[] = activeQuery?.entries || [];
-  const coinRateKk = activeQuery?.coinRateKk || 0;
+  const stats = useMemo(() => computeStatsFromMetricDocs(metricDocs, filters), [metricDocs, filters]);
 
-  const serverOptions = useMemo(() => Array.from(new Set(entries.map(e => e.server).filter(Boolean))).sort((a, b) => a.localeCompare(b, "pt-BR")), [entries]);
-  const vocationOptions = useMemo(() => Array.from(new Set(entries.map(e => e.vocation).filter(Boolean))).sort((a, b) => a.localeCompare(b, "pt-BR")), [entries]);
-
-  const filtered = useMemo(() => applyHistoryFilters(entries, filters, coinRateKk), [entries, filters, coinRateKk]);
-  const stats = useMemo(() => computeHistoryStats(filtered, coinRateKk), [filtered, coinRateKk]);
-
-  // Médias de skills POR VOCAÇÃO — exibindo somente as skills que a guia
-  // Itens exibe para aquela vocação (skillDefsForVocation, regras únicas).
-  const skillsByVocation = useMemo(() => {
+  /**
+   * Skills médias por vocação — EXIBINDO somente as skills que a guia Itens
+   * exibe para aquela vocação (skillDefsForVocation/MIN_DISPLAY_SKILL:
+   * regras únicas do app, reutilizadas, nunca reinterpretadas).
+   */
+  const skillsDisplay = useMemo(() => {
     const groups: { vocation: string; count: number; skills: { abbr: string; full: string; avg: number }[] }[] = [];
-    for (const vocation of Array.from(new Set(filtered.map(e => e.vocation).filter(Boolean)))) {
-      const defs = skillDefsForVocation(vocation);
+    for (const group of stats.skillsByVocation) {
+      const defs = skillDefsForVocation(group.vocation);
       if (!defs) continue;
-      const subset = filtered.filter(e => e.vocation === vocation);
-      const subsetStats = computeHistoryStats(subset, coinRateKk);
       const skills = defs
-        .map(def => ({ abbr: def.abbr, full: def.full, avg: subsetStats.avgSkills[def.key] ?? 0 }))
-        .filter(skill => skill.avg >= MIN_DISPLAY_SKILL);
-      if (skills.length > 0) groups.push({ vocation, count: subset.length, skills });
+        .map(def => {
+          const found = group.skills.find(skill => skill.key === def.key);
+          return found ? { abbr: def.abbr, full: def.full, avg: found.avg } : null;
+        })
+        .filter((skill): skill is { abbr: string; full: string; avg: number } => !!skill && skill.avg >= MIN_DISPLAY_SKILL);
+      if (skills.length > 0) groups.push({ vocation: group.vocation, count: group.count, skills });
     }
-    return groups.sort((a, b) => b.count - a.count || a.vocation.localeCompare(b.vocation, "pt-BR"));
-  }, [filtered, coinRateKk]);
+    return groups;
+  }, [stats]);
 
-  function updateFilters(patch: Partial<BazaarHistoryFilters>) {
+  function updateFilters(patch: Partial<HistoryMetricsFilters>) {
     setFilters(prev => ({ ...prev, ...patch }));
   }
 
-  // ── Consulta (exclusiva Boss + Electron) ──────────────────────────────────
-  async function runHistoryQuery() {
-    if (!isBossUser || !isElectron || isRunning || isOtherQueryRunning) return;
+  // ── Consulta: Consultar Histórico → BazaarBrowserModal → executar ────────
+  /**
+   * 1º passo: validações e abertura do MODAL de configuração — o navegador
+   * NUNCA abre direto no clique (mesmo padrão das consultas de Quests e
+   * Itens). A execução só começa no onConfirm do modal.
+   */
+  function requestHistoryQuery() {
+    if (!isBossUser) { setError("Apenas usuários Boss podem consultar o histórico do Bazaar."); return; }
+    if (!isElectron) { setError("A consulta do histórico precisa ser executada no aplicativo Desktop (Electron)."); return; }
+    if (isOtherQueryRunning) { setError("Há outra consulta do Bazaar em andamento. Aguarde a finalização."); return; }
+    if (isRunning) return;
     setError(null);
     setNotice(null);
+    setIsBrowserModalOpen(true);
+  }
+
+  /** 2º passo (onConfirm do modal): executa a consulta de fato. */
+  async function executeHistoryQuery(options: { browserKey: string; cleanProfile: boolean }) {
+    if (!isBossUser || !isElectron || isRunning || isOtherQueryRunning) return;
+    const startedAt = Date.now();
     setIsRunning(true);
+    setError(null);
+    setNotice(null);
     setProgress(null);
     try {
       const { ipcRenderer } = (window as any).require("electron");
-      const maxPages = Math.min(50, Math.max(1, Math.floor(Number(maxPagesText) || 10)));
+
+      // Fronteira incremental FRESCA (força a leitura do doc de estado):
+      // é ela que impede reprocessar os milhares de leilões já ingeridos.
+      const { state: prevState } = await loadHistorySyncState({ force: true });
+
       const response = await ipcRenderer.invoke("rubinot-bazaar-history-v1", {
-        maxPages,
-        // Itens monitorados de TODOS os servidores: o Electron devolve os
-        // matches brutos; a precificação (lista do servidor do personagem,
-        // sem fallback) acontece aqui no renderer, em buildHistoryLastQuery.
+        // Itens monitorados de TODOS os servidores; a precificação (lista
+        // do servidor do personagem, SEM fallback) acontece aqui no
+        // renderer, com as mesmas funções da guia Itens.
         watchKeys: collectAllWatchKeys(loadWatchedItemsByServer()),
+        sinceEndTs: fullReload ? 0 : (prevState?.lastEndTs || 0),
+        knownIds: Object.keys(prevState?.recent || {}),
+        fullReload,
+        browser: options.browserKey,
+        cleanProfile: options.cleanProfile,
       }) as BazaarHistoryQueryResponse;
+
       if (!response?.ok) {
         setError(response?.error || "Falha na consulta do histórico do Bazaar.");
         return;
       }
-      const query = buildHistoryLastQuery(response);
-      saveHistoryLastQuery(query);
-      setLocalQuery(query);
-      // Publicação (1 escrita, doc único) — os demais usuários recebem via
-      // sync. Falha aqui NÃO invalida a consulta local: apenas avisa.
-      const publish = await publishBazaarHistory(query);
-      if (!publish.ok) {
-        setNotice(`Consulta salva neste dispositivo, mas a publicação para os demais usuários falhou: ${publish.error || "erro desconhecido"}`);
-      } else if (response.stoppedManually) {
-        setNotice("Consulta encerrada manualmente — os resultados já analisados foram salvos e publicados.");
+
+      // ── Precificação de itens (regras idênticas à guia Itens) ────────────
+      const coinRate = loadItemsCoinRate();
+      const watchedByServer = loadWatchedItemsByServer();
+      const indexCache = new Map<string, Map<string, WatchedItem>>();
+      const indexFor = (server: string) => {
+        const key = canonicalServerKey(server);
+        let index = indexCache.get(key);
+        if (!index) {
+          index = buildWatchlistIndex(getServerWatchedItems(watchedByServer, key));
+          indexCache.set(key, index);
+        }
+        return index;
+      };
+
+      const entries: BazaarHistoryEntry[] = (response.entries || [])
+        .filter(raw => raw.id && raw.auctionEndTs)
+        .map(raw => {
+          const { matches, totalKk } = buildCharacterMatches(raw.matches || [], indexFor(raw.server));
+          const entry: BazaarHistoryEntry = {
+            id: raw.id,
+            name: raw.name,
+            vocation: raw.vocation,
+            level: raw.level,
+            server: raw.server,
+            endTs: raw.auctionEndTs || 0,
+            bidRc: raw.winningBid,
+            itemsKk: totalKk,
+            itemsRc: coinRate > 0 && totalKk > 0 ? computeItemRC(coinRate, totalKk) : 0,
+            coinRateKk: coinRate,
+            soulwar: raw.soulwarCompleted ?? null,
+            sanguine: raw.sanguineCompleted ?? null,
+            charmPoints: raw.charmPoints ?? null,
+            auraCount: raw.auraCount ?? null,
+            hirelingCount: raw.hirelingCount ?? null,
+            deluxePassCount: raw.deluxePassCount ?? null,
+          };
+          if (matches.length > 0) {
+            entry.matches = matches.map(match => ({
+              foundName: match.foundName,
+              tier: match.tier,
+              amount: match.amount,
+              totalKk: match.totalKk,
+            }));
+          }
+          if (Number(raw.gold || 0) > 0) entry.goldKk = Number(raw.gold);
+          if (raw.skills && Object.keys(raw.skills).length > 0) entry.skills = raw.skills;
+          if (raw.statusText) entry.statusText = raw.statusText;
+          if (raw.detailError) entry.detailError = raw.detailError;
+          return entry;
+        });
+
+      const run: HistoryRunInfo = {
+        startedAtMs: startedAt,
+        durationMs: response.totalDurationMs || (Date.now() - startedAt),
+        listedCount: response.listedCount || 0,
+        approvedNewCount: response.approvedNewCount || 0,
+        knownSkippedCount: response.knownSkippedCount || 0,
+        analyzedCount: response.analyzedCount || 0,
+        failedCount: response.failedCount || 0,
+        stoppedManually: response.stoppedManually === true,
+        ...(response.routeUsed ? { routeUsed: response.routeUsed } : {}),
+        ...(response.pagesScanned ? { pagesScanned: response.pagesScanned } : {}),
+        ...(response.processedMaxEndTs ? { processedMaxEndTs: response.processedMaxEndTs } : {}),
+      };
+
+      // ── Ingestão idempotente (base bruta + métricas + estado) ────────────
+      const result = entries.length > 0
+        ? await persistHistoryIngestion(entries, run, prevState)
+        : await recordEmptyHistoryRun(run, prevState);
+
+      if (!result.ok) {
+        setError(`Consulta concluída, mas a gravação no Firestore falhou: ${result.error || "erro desconhecido"}. Nada foi perdido no site — repita a consulta.`);
+        return;
       }
+      setSyncState(result.state);
+      // Docs de métricas recém-escritos já estão no cache local: recarregar
+      // aqui custa ZERO leituras extras.
+      if (result.state) {
+        const { docs } = await fetchHistoryMetricDocs(Object.keys(result.state.months || {}), result.state);
+        setMetricDocs(docs);
+      }
+
+      const pieces = [
+        `${formatInt(entries.length)} leilão(ões) novo(s) adicionados à base histórica`,
+        response.knownSkippedCount ? `${formatInt(response.knownSkippedCount)} já conhecidos ignorados` : "",
+        response.failedCount ? `${formatInt(response.failedCount)} detalhes sem resposta (dados da listagem preservados)` : "",
+        response.stoppedManually ? "consulta encerrada manualmente — a próxima retoma da fronteira" : "",
+      ].filter(Boolean);
+      setNotice(pieces.join(" · ") + ".");
+      setFullReload(false);
     } catch (err: any) {
       setError(String(err?.message || err));
     } finally {
@@ -226,8 +363,9 @@ export default function BazaarStatsPanel({ isBossUser, isElectron, isOtherQueryR
     } catch { /* Electron indisponível */ }
   }
 
-  const inputClass = "h-6 w-20 rounded-md border border-[var(--th-line)]/60 bg-black/30 px-1.5 text-[10px] text-slate-200 outline-none focus:border-sky-400/60";
   const labelClass = "text-[9px] font-black uppercase tracking-wide text-slate-400";
+  const lastRun = syncState?.lastRun;
+  const totalCount = syncState?.totalCount || 0;
 
   return (
     <div className="flex-1 min-h-0 flex flex-col gap-1.5 overflow-hidden">
@@ -237,61 +375,67 @@ export default function BazaarStatsPanel({ isBossUser, isElectron, isOtherQueryR
         </div>
       )}
       {notice && (
-        <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-200 flex items-center gap-2">
-          <AlertTriangle size={15} className="text-amber-400" /> {notice}
+        <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-200 flex items-center gap-2">
+          <Database size={15} className="text-emerald-400 flex-shrink-0" /> {notice}
         </div>
       )}
 
-      {/* ── ÚLTIMA CONSULTA + CONTROLES ──────────────────────────────────── */}
+      {/* ── BASE HISTÓRICA + ÚLTIMA CONSULTA + CONTROLES ─────────────────── */}
       <div className="rounded-xl border border-[var(--th-line)]/60 bg-[var(--th-n-base)]/80 backdrop-blur-md px-3 py-2 flex flex-wrap items-center gap-x-4 gap-y-1.5">
         <div className="flex items-center gap-2 min-w-0">
           <BarChart3 size={14} className="text-sky-300 flex-shrink-0" />
           <div className="min-w-0">
-            <div className="text-[10px] font-black text-slate-200">Última consulta do histórico</div>
-            {activeQuery ? (
+            <div className="text-[10px] font-black text-slate-200">
+              Base histórica: {formatInt(totalCount)} leilão(ões) finalizados com lance vencedor
+              {monthOptions.length > 0 && <span className="text-slate-400 font-bold"> · {monthOptions.length} mês(es)</span>}
+            </div>
+            {lastRun ? (
               <div className="text-[10px] text-slate-400">
-                {formatDateTime(activeQuery.fetchedAtMs)}
-                {" · "}<span className="text-slate-300">{formatInt(activeQuery.listedCount)}</span> leilões encontrados
-                {" · "}<span className="text-emerald-300">{formatInt(activeQuery.approvedCount)}</span> aprovados (finalizados com lance vencedor)
-                {activeQuery.failedCount > 0 && <>{" · "}<span className="text-amber-300">{formatInt(activeQuery.failedCount)}</span> detalhes sem resposta</>}
-                {activeQuery.stoppedManually && <span className="text-amber-300"> · encerrada manualmente</span>}
+                Última consulta: {formatDateTime(lastRun.startedAtMs)}
+                {" · "}<span className="text-slate-300">{formatInt(lastRun.listedCount)}</span> listados
+                {" · "}<span className="text-emerald-300">{formatInt(lastRun.approvedNewCount)}</span> novos aprovados
+                {lastRun.knownSkippedCount > 0 && <>{" · "}<span className="text-slate-300">{formatInt(lastRun.knownSkippedCount)}</span> já conhecidos</>}
+                {lastRun.failedCount > 0 && <>{" · "}<span className="text-amber-300">{formatInt(lastRun.failedCount)}</span> falhas de detalhe</>}
+                {lastRun.stoppedManually && <span className="text-amber-300"> · encerrada manualmente</span>}
               </div>
             ) : (
-              <div className="text-[10px] text-slate-500">Nenhuma consulta do histórico disponível ainda.</div>
+              <div className="text-[10px] text-slate-500">Nenhuma consulta do histórico registrada ainda.</div>
             )}
           </div>
         </div>
 
-        {/* Controles de consulta — SOMENTE Boss no Electron. Os filtros da
-            tela nunca consultam o site: filtram o que já foi salvo. */}
+        {/* Controles — SOMENTE Boss no Electron. O clique abre o MODAL de
+            configuração (BazaarBrowserModal); o navegador nunca abre direto. */}
         {isBossUser && isElectron && (
           <div className="ml-auto flex items-center gap-1.5">
-            <label className={labelClass} htmlFor="history-max-pages">Páginas</label>
-            <input
-              id="history-max-pages"
-              type="text"
-              inputMode="numeric"
-              value={maxPagesText}
-              onChange={e => setMaxPagesText(e.target.value.replace(/[^0-9]/g, "").slice(0, 2))}
-              disabled={isRunning}
-              className="h-7 w-12 rounded-lg border border-[var(--th-line)]/60 bg-black/30 px-2 text-center text-[11px] font-bold text-slate-200 outline-none focus:border-sky-400/60 disabled:opacity-50"
-              title="Quantas páginas da listagem do histórico consultar (100 leilões por página)"
-            />
+            <label
+              className="inline-flex h-7 items-center gap-1 px-2 rounded-lg border border-[var(--th-line)]/60 bg-black/20 text-[9px] font-black uppercase tracking-wide text-slate-400 cursor-pointer select-none"
+              title="Ignora a fronteira incremental e repassa os 30 dias completos do site (leilões já conhecidos continuam sem duplicar)"
+            >
+              <input
+                type="checkbox"
+                checked={fullReload}
+                onChange={e => setFullReload(e.target.checked)}
+                disabled={isRunning}
+                className="accent-sky-500"
+              />
+              30 dias completos
+            </label>
             {isRunning ? (
               <button
                 type="button"
                 onClick={() => void requestStop()}
                 className="inline-flex h-7 items-center gap-1 px-2.5 rounded-lg border border-amber-500/40 bg-amber-500/10 text-amber-200 text-[10px] font-black transition-all cursor-pointer hover:bg-amber-500/20 hover:border-amber-400/60"
-                title="Encerra a consulta após o personagem atual. Os resultados já analisados são mantidos."
+                title="Encerra a consulta após o leilão atual. Tudo que já foi processado é salvo; a próxima consulta retoma da fronteira."
               >
                 <Square size={11} /> Parar
               </button>
             ) : (
               <button
                 type="button"
-                onClick={() => void runHistoryQuery()}
+                onClick={requestHistoryQuery}
                 disabled={!!isOtherQueryRunning}
-                title={isOtherQueryRunning ? "Outra consulta do Bazaar em andamento — aguarde a finalização." : "Consulta o histórico oficial (leilões finalizados com lance vencedor)"}
+                title={isOtherQueryRunning ? "Outra consulta do Bazaar em andamento — aguarde a finalização." : "Abre a configuração da consulta (navegador) e coleta os leilões finalizados do histórico oficial"}
                 className="inline-flex h-7 items-center gap-1 px-2.5 rounded-lg bg-gradient-to-r from-sky-700/80 to-sky-600/80 hover:from-sky-600 hover:to-sky-500 border border-sky-500/40 text-black text-[10px] font-black transition-all cursor-pointer shadow-md shadow-sky-900/15 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <RefreshCw size={12} /> Consultar Histórico
@@ -319,8 +463,12 @@ export default function BazaarStatsPanel({ isBossUser, isElectron, isOtherQueryR
         )}
       </div>
 
-      {/* ── FILTROS (100% locais — nunca disparam consulta nova) ─────────── */}
+      {/* ── FILTROS (dimensões das métricas — 100% locais) ────────────────── */}
       <div className="rounded-xl border border-[var(--th-line)]/60 bg-[var(--th-n-base)]/80 backdrop-blur-md px-3 py-2 flex flex-wrap items-end gap-x-3 gap-y-1.5">
+        <div className="flex flex-col gap-0.5">
+          <span className={labelClass}>Meses</span>
+          <FilterMulti label="Meses" options={monthOptions} selected={filters.months} onApply={values => updateFilters({ months: values })} placeholder="Meses" searchable />
+        </div>
         <div className="flex flex-col gap-0.5">
           <span className={labelClass}>Servidor</span>
           <FilterMulti label="Servidor" options={serverOptions} selected={filters.servers} onApply={values => updateFilters({ servers: values })} placeholder="Servidor" searchable />
@@ -329,43 +477,38 @@ export default function BazaarStatsPanel({ isBossUser, isElectron, isOtherQueryR
           <span className={labelClass}>Vocação</span>
           <FilterMulti label="Vocação" options={vocationOptions} selected={filters.vocations} onApply={values => updateFilters({ vocations: values })} placeholder="Vocação" searchable />
         </div>
+        <div className="flex flex-col gap-0.5">
+          <span className={labelClass}>Level</span>
+          <FilterMulti
+            label="Level"
+            options={LEVEL_BANDS.map(band => band.label)}
+            selected={filters.levelBands.map(key => bandLabel(LEVEL_BANDS, key))}
+            onApply={labels => updateFilters({ levelBands: LEVEL_BANDS.filter(band => labels.includes(band.label)).map(band => band.key) })}
+            placeholder="Level"
+          />
+        </div>
+        <div className="flex flex-col gap-0.5">
+          <span className={labelClass}>Lance</span>
+          <FilterMulti
+            label="Lance"
+            options={BID_BUCKETS.map(bucket => bucket.label)}
+            selected={filters.bidBuckets.map(key => bandLabel(BID_BUCKETS, key))}
+            onApply={labels => updateFilters({ bidBuckets: BID_BUCKETS.filter(bucket => labels.includes(bucket.label)).map(bucket => bucket.key) })}
+            placeholder="Lance"
+          />
+        </div>
         {([["Soul War", "soulwar"], ["Sanguine", "sanguine"]] as const).map(([label, field]) => (
           <div key={field} className="flex flex-col gap-0.5">
             <span className={labelClass}>{label}</span>
             <select
               value={filters[field]}
-              onChange={e => updateFilters({ [field]: e.target.value as HistoryQuestFilter } as Partial<BazaarHistoryFilters>)}
+              onChange={e => updateFilters({ [field]: e.target.value as HistoryQuestFilter } as Partial<HistoryMetricsFilters>)}
               className="h-6 rounded-md border border-[var(--th-line)]/60 bg-black/30 px-1.5 text-[10px] text-slate-200 outline-none focus:border-sky-400/60 cursor-pointer"
             >
               {QUEST_FILTER_LABELS.map(option => (
                 <option key={option.value} value={option.value} className="bg-slate-900">{option.label}</option>
               ))}
             </select>
-          </div>
-        ))}
-        {([
-          ["Level", "levelMin", "levelMax"],
-          ["Lance (RC)", "bidMin", "bidMax"],
-          ["Itens (RC)", "itemsRcMin", "itemsRcMax"],
-          ["Charm Points", "charmMin", "charmMax"],
-        ] as const).map(([label, minField, maxField]) => (
-          <div key={minField} className="flex flex-col gap-0.5">
-            <span className={labelClass}>{label}</span>
-            <div className="flex items-center gap-1">
-              <input type="text" inputMode="numeric" placeholder="mín" value={filters[minField]} onChange={e => updateFilters({ [minField]: e.target.value.replace(/[^0-9]/g, "") } as Partial<BazaarHistoryFilters>)} className={inputClass} />
-              <span className="text-[10px] text-slate-500">–</span>
-              <input type="text" inputMode="numeric" placeholder="máx" value={filters[maxField]} onChange={e => updateFilters({ [maxField]: e.target.value.replace(/[^0-9]/g, "") } as Partial<BazaarHistoryFilters>)} className={inputClass} />
-            </div>
-          </div>
-        ))}
-        {([
-          ["Auras ≥", "aurasMin"],
-          ["Hirelings ≥", "hirelingsMin"],
-          ["Passe Deluxe ≥", "deluxeMin"],
-        ] as const).map(([label, field]) => (
-          <div key={field} className="flex flex-col gap-0.5">
-            <span className={labelClass}>{label}</span>
-            <input type="text" inputMode="numeric" placeholder="mín" value={filters[field]} onChange={e => updateFilters({ [field]: e.target.value.replace(/[^0-9]/g, "") } as Partial<BazaarHistoryFilters>)} className={inputClass} />
           </div>
         ))}
         {hasActiveHistoryFilters(filters) && (
@@ -378,21 +521,21 @@ export default function BazaarStatsPanel({ isBossUser, isElectron, isOtherQueryR
           </button>
         )}
         <div className="ml-auto text-[10px] text-slate-400">
-          <span className="font-black text-slate-200">{formatInt(stats.count)}</span> de {formatInt(entries.length)} personagens no filtro
+          <span className="font-black text-slate-200">{formatInt(stats.count)}</span> de {formatInt(totalCount)} leilões no filtro
         </div>
       </div>
 
-      {/* ── ESTATÍSTICAS ─────────────────────────────────────────────────── */}
+      {/* ── ESTATÍSTICAS (somente métricas agregadas) ─────────────────────── */}
       <div className="flex-1 min-h-0 overflow-y-auto space-y-1.5 pr-0.5">
-        {entries.length === 0 ? (
+        {metricDocs.length === 0 ? (
           <div className="rounded-xl border border-[var(--th-line)]/60 bg-[var(--th-n-base)]/80 px-4 py-8 text-center text-xs text-slate-400">
             {isBossUser && isElectron
-              ? "Nenhum dado do histórico ainda. Defina as páginas e clique em “Consultar Histórico”."
-              : "Nenhum dado do histórico publicado ainda. Aguarde a próxima consulta do Boss."}
+              ? "Base histórica vazia. Clique em “Consultar Histórico” para a primeira carga dos 30 dias disponíveis no site."
+              : "Base histórica vazia. Aguarde a primeira consulta do Boss."}
           </div>
         ) : (
           <>
-            {/* VALOR MÉDIO DO LANCE VENCEDOR — o destaque pedido da tela */}
+            {/* VALOR MÉDIO DO LANCE VENCEDOR — o destaque da tela */}
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-1.5">
               <div className="rounded-xl border border-sky-500/40 bg-gradient-to-br from-sky-500/15 to-sky-900/20 px-3 py-2.5 shadow-[0_0_18px_color-mix(in_oklab,var(--color-sky-500)_12%,transparent)]">
                 <div className="text-[9px] font-black uppercase tracking-wide text-sky-300">Valor médio do lance vencedor</div>
@@ -409,13 +552,12 @@ export default function BazaarStatsPanel({ isBossUser, isElectron, isOtherQueryR
               <div className="rounded-xl border border-[var(--th-line)]/60 bg-[var(--th-n-base)]/80 px-3 py-2.5">
                 <div className="text-[9px] font-black uppercase tracking-wide text-slate-400">Valor médio dos itens monitorados</div>
                 <div className="text-lg font-black text-slate-100">
-                  {coinRateKk > 0 && stats.withItemsCount > 0 ? `${formatInt(stats.avgItemsRc)} RC` : "—"}
+                  {stats.withItemsCount > 0 ? `${formatInt(stats.avgItemsRc)} RC` : "—"}
                 </div>
                 <div className="text-[10px] text-slate-500">
-                  {coinRateKk > 0
-                    ? `${formatInt(stats.withItemsCount)} personagens com itens da lista · cotação ${formatDec1(coinRateKk)} kk/coin da consulta`
-                    : "sem cotação do coin registrada na consulta"}
-                  {stats.avgItemsToBidPercent !== null && <> · itens/lance médio: <span className="text-slate-300 font-bold">{formatDec1(stats.avgItemsToBidPercent)}%</span></>}
+                  {stats.withItemsCount > 0
+                    ? `${formatInt(stats.withItemsCount)} personagens com itens da lista (cotação da ingestão)`
+                    : "nenhum personagem com itens avaliados no filtro"}
                 </div>
               </div>
             </div>
@@ -436,6 +578,22 @@ export default function BazaarStatsPanel({ isBossUser, isElectron, isOtherQueryR
                 </div>
               ))}
             </div>
+
+            {/* EVOLUÇÃO MENSAL — análise histórica (partição central por mês) */}
+            {stats.byMonth.length > 0 && (
+              <div className="rounded-xl border border-[var(--th-line)]/60 bg-[var(--th-n-base)]/80 px-3 py-2">
+                <div className="text-[9px] font-black uppercase tracking-wide text-slate-400 mb-1">Evolução mensal (vendidos · lance médio)</div>
+                <div className="flex flex-wrap gap-x-4 gap-y-1">
+                  {stats.byMonth.map(month => (
+                    <div key={month.label} className="text-[10px] text-slate-400">
+                      <span className="font-bold text-slate-300">{monthLabel(month.label)}</span>:{" "}
+                      <span className="text-slate-200 font-bold">{formatInt(month.count)}</span> vendidos ·{" "}
+                      <span className="text-sky-300 font-bold">{formatInt(month.avgBid)} RC</span> médio
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {/* SW/SG + DISTRIBUIÇÕES */}
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-1.5">
@@ -470,12 +628,34 @@ export default function BazaarStatsPanel({ isBossUser, isElectron, isOtherQueryR
               ))}
             </div>
 
+            {/* DISTRIBUIÇÕES DE LANCE E CHARM (histogramas das células) */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-1.5">
+              {([["Distribuição do lance vencedor", stats.bidDistribution], ["Distribuição de Charm Points", stats.charmDistribution]] as const).map(([title, dist]) => (
+                dist.length > 0 && (
+                  <div key={title} className="rounded-xl border border-[var(--th-line)]/60 bg-[var(--th-n-base)]/80 px-3 py-2">
+                    <div className="text-[9px] font-black uppercase tracking-wide text-slate-400 mb-1">{title}</div>
+                    <div className="space-y-0.5">
+                      {dist.map(row => (
+                        <div key={row.label} className="flex items-center gap-2 text-[10px]">
+                          <span className="w-24 truncate text-slate-300 font-bold flex-shrink-0">{row.label}</span>
+                          <div className="flex-1 h-1.5 rounded bg-black/40 overflow-hidden">
+                            <div className="h-full bg-gradient-to-r from-sky-600 to-sky-400" style={{ width: `${stats.count > 0 ? Math.max(3, Math.round((row.count / stats.count) * 100)) : 0}%` }} />
+                          </div>
+                          <span className="w-10 text-right font-mono text-slate-400 flex-shrink-0">{formatInt(row.count)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )
+              ))}
+            </div>
+
             {/* SKILLS MÉDIAS POR VOCAÇÃO — mesmas regras da guia Itens */}
-            {skillsByVocation.length > 0 && (
+            {skillsDisplay.length > 0 && (
               <div className="rounded-xl border border-[var(--th-line)]/60 bg-[var(--th-n-base)]/80 px-3 py-2">
                 <div className="text-[9px] font-black uppercase tracking-wide text-slate-400 mb-1">Skills médias por vocação</div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-x-4 gap-y-1">
-                  {skillsByVocation.map(group => (
+                  {skillsDisplay.map(group => (
                     <div key={group.vocation} className="flex items-center justify-between gap-2 text-[10px]">
                       <span className="font-bold text-slate-300 truncate">{group.vocation} <span className="text-slate-500">({formatInt(group.count)})</span></span>
                       <span className="text-slate-400 flex-shrink-0">
@@ -494,6 +674,19 @@ export default function BazaarStatsPanel({ isBossUser, isElectron, isOtherQueryR
           </>
         )}
       </div>
+
+      {/* ── Configuração da consulta — MESMO modal das demais consultas do
+          Bazaar (navegador/perfil/velocidade); método travado em API JSON.
+          O navegador SÓ abre depois do "Iniciar consulta" daqui. ──────────── */}
+      <BazaarBrowserModal
+        open={isBrowserModalOpen}
+        forcedMethod="novo"
+        onCancel={() => setIsBrowserModalOpen(false)}
+        onConfirm={(browserKey, _browserOrder, cleanProfile) => {
+          setIsBrowserModalOpen(false);
+          void executeHistoryQuery({ browserKey, cleanProfile });
+        }}
+      />
     </div>
   );
 }

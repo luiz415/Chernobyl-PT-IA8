@@ -5057,6 +5057,10 @@ require('./electron-bazaar-history.cjs').registerBazaarHistoryMethod({
   fetchJsonDetailed: fetchRubinotJsonDetailed,
   resolveBrowserKey: resolveRubinotBrowserKey,
   isManualStopRequested: isRubinotManualStopRequested,
+  // O histórico NÃO passa pelo canal rubinot-bazaar-fetch (que é quem zera o
+  // pedido de parada das demais consultas): precisa zerar por conta própria
+  // no início de cada execução, senão um "Parar" antigo mataria a nova.
+  resetManualStop: resetRubinotManualStop,
   sendProgress: sendRubinotProgress,
   buildProgress: buildRubinotProgress,
   finishProgress: finishRubinotProgress,
