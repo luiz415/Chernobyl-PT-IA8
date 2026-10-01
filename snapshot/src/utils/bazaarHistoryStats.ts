@@ -6,8 +6,11 @@
 // responsabilidades EXPLICITAMENTE separadas:
 //
 //   • BASE HISTÓRICA (bruta): cada leilão aprovado (Finalizado + Lance
-//     Vencedor) vira uma entrada completa e auto-suficiente, particionada
-//     por DIA de término (`bazaarHistoryRaw/{YYYY-MM-DD}` — ver serviço).
+//     Vencedor) vira UM DOCUMENTO completo e auto-suficiente, cujo ID é o
+//     identificador estável do leilão no RubinOT
+//     (`bazaarHistoryRaw/{auctionId}` — ver serviço), com `day`/`ym`/
+//     `endTs`/`server` no topo para reagregações futuras. Nenhum doc
+//     cresce com o tempo e regravar é fisicamente idempotente.
 //     Serve de fonte permanente/auditoria; a TELA NUNCA a lê.
 //
 //   • MÉTRICAS (agregadas): células dimensionais pré-processadas no momento
@@ -46,7 +49,7 @@ export function monthKeyFromTs(endTs: number): string {
   return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`;
 }
 
-/** 'YYYY-MM-DD' (UTC) do timestamp de término — partição da base bruta. */
+/** 'YYYY-MM-DD' (UTC) do timestamp de término — campo `day` da base bruta. */
 export function dayKeyFromTs(endTs: number): string {
   const date = new Date(endTs * 1000);
   return `${monthKeyFromTs(endTs)}-${String(date.getUTCDate()).padStart(2, "0")}`;

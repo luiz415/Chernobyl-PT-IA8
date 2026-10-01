@@ -60,7 +60,29 @@ import {
   recordEmptyHistoryRun,
   type HistoryRunInfo,
   type HistorySyncState,
+  type IngestionPhase,
+  type IngestionResult,
 } from "../services/bazaarHistoryService";
+
+/** Gravação pendente (consulta coletada mas não 100% persistida). */
+interface PendingSave {
+  entries: BazaarHistoryEntry[];
+  run: HistoryRunInfo;
+}
+
+/** Progresso da gravação em lotes (fase + lote atual/total). */
+interface SaveProgress {
+  phase: IngestionPhase;
+  done: number;
+  total: number;
+}
+
+const SAVE_PHASE_LABELS: Record<IngestionPhase, string> = {
+  raw: "Gravando base histórica (lotes)",
+  metrics: "Atualizando métricas",
+  state: "Finalizando estado incremental",
+  done: "Gravação concluída",
+};
 
 interface HistoryProgressEvent {
   active?: boolean;
@@ -120,6 +142,14 @@ export default function BazaarStatsPanel({ isBossUser, isElectron, isOtherQueryR
   const [progress, setProgress] = useState<HistoryProgressEvent | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  // ── Gravação retomável: entradas coletadas ficam retidas até persistir ───
+  // 100%. Se QUALQUER fase da gravação falhar, "Tentar gravar novamente"
+  // reaproveita as MESMAS entradas — sem repetir a consulta no site e sem
+  // duplicar nada (base bruta regrava por id; métricas pulam ids já
+  // contabilizados).
+  const [pendingSave, setPendingSave] = useState<PendingSave | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveProgress, setSaveProgress] = useState<SaveProgress | null>(null);
 
   // Bloqueio cruzado: o navegador de sessão é um só para as três consultas.
   useEffect(() => {
@@ -219,7 +249,11 @@ export default function BazaarStatsPanel({ isBossUser, isElectron, isOtherQueryR
     if (!isBossUser) { setError("Apenas usuários Boss podem consultar o histórico do Bazaar."); return; }
     if (!isElectron) { setError("A consulta do histórico precisa ser executada no aplicativo Desktop (Electron)."); return; }
     if (isOtherQueryRunning) { setError("Há outra consulta do Bazaar em andamento. Aguarde a finalização."); return; }
-    if (isRunning) return;
+    if (isRunning || isSaving) return;
+    if (pendingSave) {
+      setError("Há uma gravação pendente da última consulta. Use \"Tentar gravar novamente\" para concluí-la antes de consultar de novo (nada será duplicado).");
+      return;
+    }
     setError(null);
     setNotice(null);
     setIsBrowserModalOpen(true);
@@ -227,7 +261,7 @@ export default function BazaarStatsPanel({ isBossUser, isElectron, isOtherQueryR
 
   /** 2º passo (onConfirm do modal): executa a consulta de fato. */
   async function executeHistoryQuery(options: { browserKey: string; cleanProfile: boolean }) {
-    if (!isBossUser || !isElectron || isRunning || isOtherQueryRunning) return;
+    if (!isBossUser || !isElectron || isRunning || isSaving || isOtherQueryRunning) return;
     const startedAt = Date.now();
     setIsRunning(true);
     setError(null);
@@ -322,15 +356,59 @@ export default function BazaarStatsPanel({ isBossUser, isElectron, isOtherQueryR
         ...(response.processedMaxEndTs ? { processedMaxEndTs: response.processedMaxEndTs } : {}),
       };
 
-      // ── Ingestão idempotente (base bruta + métricas + estado) ────────────
-      const result = entries.length > 0
-        ? await persistHistoryIngestion(entries, run, prevState)
-        : await recordEmptyHistoryRun(run, prevState);
+      // ── Ingestão idempotente e RETOMÁVEL (lotes seguros) ─────────────────
+      // As entradas ficam retidas em `pendingSave` ATÉ a persistência
+      // completa: se algo falhar, nada precisa ser consultado de novo.
+      const pending: PendingSave = { entries, run };
+      setPendingSave(pending);
+      await persistCollectedEntries(pending, prevState, {
+        knownSkippedCount: response.knownSkippedCount || 0,
+        failedCount: response.failedCount || 0,
+        stoppedManually: response.stoppedManually === true,
+      });
+    } catch (err: any) {
+      setError(String(err?.message || err));
+    } finally {
+      setIsRunning(false);
+      setProgress(null);
+    }
+  }
+
+  /**
+   * Persistência compartilhada entre a consulta e o "Tentar gravar
+   * novamente". Só limpa `pendingSave` (e só anuncia sucesso) quando as
+   * TRÊS fases — base bruta em lotes, métricas e estado — terminarem.
+   */
+  async function persistCollectedEntries(
+    pending: PendingSave,
+    freshState: HistorySyncState | null,
+    runNotes: { knownSkippedCount: number; failedCount: number; stoppedManually: boolean },
+  ): Promise<void> {
+    setIsSaving(true);
+    setSaveProgress(null);
+    try {
+      const result: IngestionResult = pending.entries.length > 0
+        ? await persistHistoryIngestion(pending.entries, pending.run, freshState,
+            (phase, done, total) => setSaveProgress({ phase, done, total }))
+        : await recordEmptyHistoryRun(pending.run, freshState);
 
       if (!result.ok) {
-        setError(`Consulta concluída, mas a gravação no Firestore falhou: ${result.error || "erro desconhecido"}. Nada foi perdido no site — repita a consulta.`);
+        // Diagnóstico preciso por fase + retomada SEM nova consulta ao site.
+        const saved: string[] = [];
+        if (result.rawDocsWritten > 0) saved.push(`${formatInt(result.rawDocsWritten)} leilões já gravados na base histórica (${result.rawBatchesDone}/${result.rawBatchesTotal} lotes)`);
+        if (result.rawFailedCount > 0) saved.push(`${formatInt(result.rawFailedCount)} ainda não gravados`);
+        if (result.addedToMetrics > 0) saved.push(`${formatInt(result.addedToMetrics)} já contabilizados nas métricas`);
+        if (result.failedMetricDocIds.length > 0) saved.push(`${result.failedMetricDocIds.length} documento(s) de métricas pendentes`);
+        setError(
+          `A gravação parou na fase "${SAVE_PHASE_LABELS[result.phase]}": ${result.error || "erro desconhecido"}.`
+          + (saved.length ? ` Progresso preservado: ${saved.join(" · ")}.` : "")
+          + ` Nada se perdeu e NADA será duplicado — use "Tentar gravar novamente" para concluir a partir deste ponto (a consulta ao site NÃO precisa ser repetida).`,
+        );
         return;
       }
+
+      // Sucesso completo: libera as entradas retidas e atualiza a tela.
+      setPendingSave(null);
       setSyncState(result.state);
       // Docs de métricas recém-escritos já estão no cache local: recarregar
       // aqui custa ZERO leituras extras.
@@ -340,19 +418,36 @@ export default function BazaarStatsPanel({ isBossUser, isElectron, isOtherQueryR
       }
 
       const pieces = [
-        `${formatInt(entries.length)} leilão(ões) novo(s) adicionados à base histórica`,
-        response.knownSkippedCount ? `${formatInt(response.knownSkippedCount)} já conhecidos ignorados` : "",
-        response.failedCount ? `${formatInt(response.failedCount)} detalhes sem resposta (dados da listagem preservados)` : "",
-        response.stoppedManually ? "consulta encerrada manualmente — a próxima retoma da fronteira" : "",
+        `${formatInt(result.addedToMetrics)} leilão(ões) novo(s) contabilizados na base histórica e nas métricas`,
+        result.alreadyInMetrics > 0 ? `${formatInt(result.alreadyInMetrics)} já contabilizados antes (nada duplicado)` : "",
+        runNotes.knownSkippedCount ? `${formatInt(runNotes.knownSkippedCount)} já conhecidos ignorados` : "",
+        runNotes.failedCount ? `${formatInt(runNotes.failedCount)} detalhes sem resposta (dados da listagem preservados)` : "",
+        runNotes.stoppedManually ? "consulta encerrada manualmente — a próxima retoma da fronteira" : "",
       ].filter(Boolean);
       setNotice(pieces.join(" · ") + ".");
       setFullReload(false);
-    } catch (err: any) {
-      setError(String(err?.message || err));
     } finally {
-      setIsRunning(false);
-      setProgress(null);
+      setIsSaving(false);
+      setSaveProgress(null);
     }
+  }
+
+  /**
+   * Retomada da gravação pendente: reaproveita as entradas coletadas na
+   * última consulta (nenhum acesso ao site). Idempotente de ponta a ponta —
+   * pode ser acionada quantas vezes for preciso.
+   */
+  async function retryPendingSave() {
+    if (!pendingSave || isSaving || isRunning) return;
+    setError(null);
+    setNotice(null);
+    // Fronteira FRESCA do Firestore: a retomada pode acontecer bem depois.
+    const { state: freshState } = await loadHistorySyncState({ force: true });
+    await persistCollectedEntries(pendingSave, freshState, {
+      knownSkippedCount: pendingSave.run.knownSkippedCount,
+      failedCount: pendingSave.run.failedCount,
+      stoppedManually: pendingSave.run.stoppedManually,
+    });
   }
 
   /** Encerramento antecipado — mesmo canal de parada das demais consultas. */
@@ -370,8 +465,20 @@ export default function BazaarStatsPanel({ isBossUser, isElectron, isOtherQueryR
   return (
     <div className="flex-1 min-h-0 flex flex-col gap-1.5 overflow-hidden">
       {error && (
-        <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-300 flex items-center gap-2">
-          <AlertTriangle size={15} /> {error}
+        <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-300 flex items-start gap-2">
+          <AlertTriangle size={15} className="flex-shrink-0 mt-0.5" />
+          <span className="min-w-0 flex-1">{error}</span>
+          {/* Retomada da gravação pendente — NÃO repete a consulta ao site. */}
+          {pendingSave && !isRunning && !isSaving && (
+            <button
+              type="button"
+              onClick={() => void retryPendingSave()}
+              className="flex-shrink-0 inline-flex h-7 items-center gap-1 px-2.5 rounded-lg border border-emerald-500/40 bg-emerald-500/10 text-emerald-200 text-[10px] font-black transition-all cursor-pointer hover:bg-emerald-500/20 hover:border-emerald-400/60"
+              title="Conclui a gravação a partir do ponto em que parou, com as entradas já coletadas — sem nova consulta ao site e sem duplicar nada."
+            >
+              <RefreshCw size={11} /> Tentar gravar novamente
+            </button>
+          )}
         </div>
       )}
       {notice && (
@@ -416,7 +523,7 @@ export default function BazaarStatsPanel({ isBossUser, isElectron, isOtherQueryR
                 type="checkbox"
                 checked={fullReload}
                 onChange={e => setFullReload(e.target.checked)}
-                disabled={isRunning}
+                disabled={isRunning || isSaving}
                 className="accent-sky-500"
               />
               30 dias completos
@@ -434,8 +541,12 @@ export default function BazaarStatsPanel({ isBossUser, isElectron, isOtherQueryR
               <button
                 type="button"
                 onClick={requestHistoryQuery}
-                disabled={!!isOtherQueryRunning}
-                title={isOtherQueryRunning ? "Outra consulta do Bazaar em andamento — aguarde a finalização." : "Abre a configuração da consulta (navegador) e coleta os leilões finalizados do histórico oficial"}
+                disabled={!!isOtherQueryRunning || isSaving}
+                title={isOtherQueryRunning
+                  ? "Outra consulta do Bazaar em andamento — aguarde a finalização."
+                  : isSaving
+                    ? "Gravação em andamento — aguarde a conclusão."
+                    : "Abre a configuração da consulta (navegador) e coleta os leilões finalizados do histórico oficial"}
                 className="inline-flex h-7 items-center gap-1 px-2.5 rounded-lg bg-gradient-to-r from-sky-700/80 to-sky-600/80 hover:from-sky-600 hover:to-sky-500 border border-sky-500/40 text-black text-[10px] font-black transition-all cursor-pointer shadow-md shadow-sky-900/15 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <RefreshCw size={12} /> Consultar Histórico
@@ -444,9 +555,11 @@ export default function BazaarStatsPanel({ isBossUser, isElectron, isOtherQueryR
           </div>
         )}
 
-        {/* Progresso ao vivo — apenas o da CONSULTA DO HISTÓRICO */}
-        {isRunning && (
+        {/* Progresso ao vivo — consulta E/OU gravação (a retomada da
+            gravação acontece sem consulta, por isso o `|| isSaving`) */}
+        {(isRunning || isSaving) && (
           <div className="w-full space-y-0.5">
+            {isRunning && (
             <div className="flex items-center gap-2 text-[10px] text-sky-200">
               <RefreshCw size={11} className="animate-spin" />
               <span className="truncate">{progress?.message || "Consultando histórico..."}</span>
@@ -454,6 +567,17 @@ export default function BazaarStatsPanel({ isBossUser, isElectron, isOtherQueryR
                 <span className="font-mono flex-shrink-0">{progress?.processed}/{progress?.total}</span>
               )}
             </div>
+            )}
+            {/* Progresso da GRAVAÇÃO em lotes (fase de persistência) */}
+            {isSaving && saveProgress && (
+              <div className="flex items-center gap-2 text-[10px] text-emerald-200">
+                <Database size={11} className="flex-shrink-0" />
+                <span className="truncate">{SAVE_PHASE_LABELS[saveProgress.phase]}</span>
+                {saveProgress.total > 0 && (
+                  <span className="font-mono flex-shrink-0">{saveProgress.done}/{saveProgress.total}</span>
+                )}
+              </div>
+            )}
             {(progress?.total || 0) > 0 && (
               <div className="h-1 rounded bg-black/40 overflow-hidden">
                 <div className="h-full bg-gradient-to-r from-sky-600 to-sky-400 transition-all" style={{ width: `${progress?.percent || 0}%` }} />

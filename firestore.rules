@@ -515,16 +515,19 @@ service cloud.firestore {
       allow create, update, delete: if isBoss()
         && docId in ['metadata', 'current', 'history', 'historySync'];
     }
-    // ── HISTÓRICO DO BAZAAR — BASE BRUTA (1 doc por DIA de término) ────────
-    // Fonte permanente/auditoria alimentada pela consulta do Boss. A tela de
-    // Estatísticas NUNCA lê esta coleção (ela usa somente as métricas);
-    // leitura liberada aos aprovados para auditoria/exportação futura.
-    match /bazaarHistoryRaw/{dayId} {
+    // ── HISTÓRICO DO BAZAAR — BASE BRUTA (1 doc por LEILÃO) ────────────────
+    // ID do doc = identificador estável do leilão no RubinOT (idempotência
+    // física da regravação). Fonte permanente/auditoria alimentada pela
+    // consulta do Boss, gravada em lotes seguros. A tela de Estatísticas
+    // NUNCA lê esta coleção (ela usa somente as métricas); leitura liberada
+    // aos aprovados para auditoria/exportação futura.
+    match /bazaarHistoryRaw/{auctionId} {
       allow read: if isAuth() && isApproved();
       allow create, update, delete: if isBoss();
     }
     // ── HISTÓRICO DO BAZAAR — MÉTRICAS (1 doc por MÊS × SERVIDOR) ──────────
-    // Células dimensionais pré-agregadas: é O QUE a tela de Estatísticas lê.
+    // Células dimensionais pré-agregadas + mapa `ids` dos leilões já
+    // contabilizados (idempotência exata): é O QUE a tela de Estatísticas lê.
     match /bazaarHistoryMetrics/{docId} {
       allow read: if isAuth() && isApproved();
       allow create, update, delete: if isBoss();
