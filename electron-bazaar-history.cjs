@@ -276,11 +276,111 @@ const HIRELING_PATH_HINTS = /hireling/i;
 const BATTLEPASS_PATH_HINTS = /(battlepass|battle_pass|passes|\bpass\b)/i;
 const DELUXE_KEY_HINTS = /deluxe/i;
 
-/** Valor "afirmativo" de deluxe: true, "sim", "yes", 1. */
+/**
+ * Valor "afirmativo" da coluna Deluxe: true, 1, "sim", "yes", "true", "1".
+ * Robusto a maiúsculas/minúsculas, espaços e acento ("Sim ", "SIM").
+ */
 function isAffirmative(value) {
   if (value === true || value === 1) return true;
   if (typeof value === 'string') return /^(sim|yes|true|1)$/i.test(value.trim());
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    // Alguns payloads embrulham o valor: { value: "sim" } / { text: "yes" }.
+    return isAffirmative(value.value ?? value.text ?? value.label);
+  }
   return false;
+}
+
+/**
+ * Valor "negativo" explícito da coluna Deluxe: false, 0, "não", "nao",
+ * "no", "false", "0". Células vazias/desconhecidas NÃO são negativas nem
+ * afirmativas — simplesmente não contam (mas provam que a coluna existe).
+ */
+function isNegative(value) {
+  if (value === false || value === 0) return true;
+  if (typeof value === 'string') return /^(n[aã]o|no|false|0)$/i.test(value.trim());
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    return isNegative(value.value ?? value.text ?? value.label);
+  }
+  return false;
+}
+
+/**
+ * PASSES DELUXE — conta quantas TEMPORADAS do Battlepass têm Deluxe = "sim".
+ *
+ * A seção "Battlepass" do personagem é uma tabela (Temporada / Deluxe /
+ * Pontos / Pontos da Loja / Resgatado) e o JSON real pode representá-la de
+ * formas diferentes. A varredura cobre, NESTA ordem de prioridade:
+ *
+ *   1. CONTAGEM DIRETA na raiz (`deluxeCount`, `totalDeluxe`, ...);
+ *   2. OBJETOS DE TEMPORADA: qualquer objeto com uma chave ~/deluxe/i em
+ *      QUALQUER caminho do payload (não só caminhos nomeados "battlepass" —
+ *      era essa exigência de caminho que fazia o dado não ser encontrado).
+ *      Conta 1 por objeto com valor afirmativo; valores negativos/vazios
+ *      não contam, mas PROVAM que a coluna Deluxe existe (resultado 0, e
+ *      não null = desconhecido);
+ *   3. TABELA COM CABEÇALHO: objeto com `headers`/`columns` contendo um
+ *      rótulo ~/deluxe/i e linhas em `rows`/`data` — conta as linhas cuja
+ *      célula NA COLUNA DELUXE é afirmativa (nunca confunde com Pontos/
+ *      Pontos da Loja/Resgatado, porque usa o índice exato da coluna).
+ *
+ * Retorno: { count, found, path } — `found=false` (count=null) somente
+ * quando NENHUMA estrutura com Deluxe foi vista no payload.
+ */
+function collectBattlepassDeluxe(payload) {
+  // 1) Contagem direta na raiz.
+  const direct = readDirectCount(payload, /^(deluxeCount|deluxe_count|totalDeluxe|total_deluxe|deluxePasses|deluxe_passes)$/i);
+  if (direct !== null) return { count: direct, found: true, path: '(raiz)' };
+
+  let count = 0;
+  let found = false;
+  let where = '';
+
+  walkJson(payload, (node, path) => {
+    if (!node || typeof node !== 'object') return;
+
+    if (!Array.isArray(node)) {
+      // 2) Objeto de temporada com chave "deluxe".
+      for (const [key, value] of Object.entries(node)) {
+        if (!DELUXE_KEY_HINTS.test(key)) continue;
+        // Chaves agregadas tipo deluxePoints/deluxeReward não são a coluna
+        // sim/não — só contam valores claramente afirmativos/negativos.
+        if (isAffirmative(value)) {
+          count += 1; found = true; if (!where) where = `${path}.${key}`;
+          break;
+        }
+        if (isNegative(value) || value === '' || value === null) {
+          found = true; if (!where) where = `${path}.${key}`;
+          break;
+        }
+      }
+
+      // 3) Tabela com cabeçalho + linhas (headers/columns × rows/data).
+      const headers = Array.isArray(node.headers) ? node.headers
+        : Array.isArray(node.columns) ? node.columns : null;
+      const rows = Array.isArray(node.rows) ? node.rows
+        : Array.isArray(node.data) ? node.data : null;
+      if (headers && rows) {
+        const headerText = (header) => {
+          if (typeof header === 'string') return header;
+          if (header && typeof header === 'object') return String(header.label ?? header.name ?? header.title ?? '');
+          return '';
+        };
+        const deluxeIndex = headers.findIndex(header => DELUXE_KEY_HINTS.test(headerText(header)));
+        if (deluxeIndex >= 0) {
+          found = true;
+          if (!where) where = `${path}.headers[${deluxeIndex}]`;
+          for (const row of rows) {
+            // Só linhas POSICIONAIS (arrays): linhas-objeto com chave
+            // "Deluxe" já são contadas pelo caso 2 (sem dupla contagem).
+            if (!Array.isArray(row)) continue;
+            if (isAffirmative(row[deluxeIndex])) count += 1;
+          }
+        }
+      }
+    }
+  });
+
+  return found ? { count, found: true, path: where } : { count: null, found: false, path: '' };
 }
 
 /** Chaves de contagem direta (ex.: `auraCount`, `hirelings: 3`). */
@@ -302,8 +402,14 @@ function collectHistoryExtras(payload) {
   let charmPoints = null;
   let auraCount = null;
   let hirelingCount = null;
-  let deluxePassCount = null;
   const paths = { charm: '', auras: '', hirelings: '', deluxe: '' };
+
+  // Passes Deluxe — varredura dedicada (ver collectBattlepassDeluxe):
+  // conta temporadas com Deluxe = "sim"; "não"/vazio não contam, mas
+  // produzem 0 (coluna encontrada) em vez de null (desconhecido).
+  const deluxe = collectBattlepassDeluxe(payload);
+  const deluxePassCount = deluxe.found ? deluxe.count : null;
+  paths.deluxe = deluxe.path;
 
   const rootAuras = readDirectCount(payload, /^(auraCount|aura_count|auras|totalAuras|total_auras)$/i);
   if (rootAuras !== null) { auraCount = rootAuras; paths.auras = '(raiz)'; }
@@ -327,15 +433,6 @@ function collectHistoryExtras(payload) {
         if (label && CHARM_LABEL_HINTS.test(label.trim())) {
           const num = Number(node.value ?? node.amount ?? node.total);
           if (Number.isFinite(num) && num >= 0) { charmPoints = Math.floor(num); paths.charm = path; }
-        }
-      }
-      if (BATTLEPASS_PATH_HINTS.test(path)) {
-        for (const [key, value] of Object.entries(node)) {
-          if (DELUXE_KEY_HINTS.test(key) && isAffirmative(value)) {
-            deluxePassCount = (deluxePassCount === null ? 0 : deluxePassCount) + 1;
-            if (!paths.deluxe) paths.deluxe = path;
-            break;
-          }
         }
       }
       return;
@@ -837,4 +934,5 @@ module.exports = {
   normalizeHistoryAuction,
   selectNewApprovedFromPage,
   collectHistoryExtras,
+  collectBattlepassDeluxe,
 };

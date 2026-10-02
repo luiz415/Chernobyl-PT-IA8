@@ -20,15 +20,18 @@
 //     e ainda há um guarda defensivo de tamanho individual por documento.
 //     A tela NUNCA lê esta coleção; ela é a fonte permanente/auditoria.
 //
-//   • `bazaarHistoryMetrics/{YYYY-MM__servidor}` (MÉTRICAS, 1 doc por MÊS ×
-//     SERVIDOR): células dimensionais pré-agregadas + mapa `ids` com os
-//     leilões JÁ CONTABILIZADOS naquele doc. O `ids` é a segunda linha de
-//     defesa da idempotência: mesmo que a mesma entrada chegue duas vezes
-//     (repetição de consulta, recarga completa de 30 dias, retomada após
-//     falha parcial), ela é contada UMA única vez — a fusão só agrega
-//     entradas cujo id ainda não está no documento. A tela lê SOMENTE
-//     esses docs (cache local invalidado por `updatedAtMs`; o mapa `ids`
-//     NÃO vai para o cache da tela — só as células).
+//   • `bazaarHistoryMetrics/{YYYY-MM__servidor}` (MÉTRICAS v2, 1 doc por
+//     MÊS × SERVIDOR): mapa `a` de TUPLAS COMPACTAS por leilão
+//     (`a[auctionId] = {v,l,b,i,...}` — ver entryToTuple). O próprio mapa
+//     é a idempotência: regravar um leilão SOBRESCREVE a mesma chave —
+//     nunca conta duas vezes E ainda REPARA dados históricos (ex.: Passe
+//     Deluxe corrigido numa recarga "30 dias completos"). `n` = tamanho do
+//     mapa. A tela lê SOMENTE esses docs (cache local invalidado por
+//     `updatedAtMs`) e calcula todas as estatísticas das tuplas em
+//     memória — filtros por faixa livre sem explosão combinatória e sem
+//     releitura da base bruta. Docs no formato ANTERIOR (células `cells`,
+//     sem `a`) são entregues à tela marcados como LEGADO: ficam fora das
+//     estatísticas até uma recarga completa convertê-los.
 //
 // ── GRAVAÇÃO EM LOTES SEGUROS (correção do estouro de payload) ─────────────
 // O Firestore impõe DOIS limites independentes: ~500 operações por
@@ -69,15 +72,12 @@
 import { doc, getDoc, setDoc, writeBatch } from "firebase/firestore";
 import { db } from "../firebase/config";
 import {
-  addEntryToCell,
   dayKeyFromTs,
-  emptyMetricCell,
-  mergeCellInto,
-  metricCellKey,
+  entryToTuple,
   monthKeyFromTs,
   HISTORY_INCREMENTAL_MARGIN_SECONDS,
+  type AuctionTuple,
   type BazaarHistoryEntry,
-  type MetricCell,
   type MetricsDocData,
 } from "../utils/bazaarHistoryStats";
 
@@ -162,7 +162,7 @@ export interface IngestionResult {
   failedMetricDocIds: string[];
   /** Leilões contabilizados nas métricas AGORA (primeira vez). */
   addedToMetrics: number;
-  /** Leilões que as métricas já conheciam (pulados pelos `ids`). */
+  /** Leilões que as métricas já conheciam (tupla atualizada, contagem intacta). */
   alreadyInMetrics: number;
   error?: string;
 }
@@ -323,13 +323,34 @@ function readMetricsDocCache(docId: string): MetricsDocCache | null {
     const raw = localStorage.getItem(METRICS_CACHE_PREFIX + docId);
     if (!raw) return null;
     const parsed = JSON.parse(raw);
-    if (!parsed?.data?.cells) return null;
+    // Cache v2 guarda o mapa de TUPLAS; caches do formato anterior (cells)
+    // são simplesmente inválidos e serão regravados na próxima leitura.
+    if (!parsed?.data?.auctions) return null;
     return parsed as MetricsDocCache;
   } catch { return null; }
 }
 
+/**
+ * Grava o cache local de um doc de métricas. Tuplas ocupam mais espaço que
+ * as células antigas: se o localStorage estourar (QuotaExceeded), TODOS os
+ * caches de métricas são descartados e a gravação é retentada UMA vez —
+ * o cache é opcional (a falta dele só custa releitura do Firestore).
+ */
 function writeMetricsDocCache(docId: string, cache: MetricsDocCache): void {
-  try { localStorage.setItem(METRICS_CACHE_PREFIX + docId, JSON.stringify(cache)); } catch { /* quota: cache é opcional */ }
+  const payload = JSON.stringify(cache);
+  try {
+    localStorage.setItem(METRICS_CACHE_PREFIX + docId, payload);
+  } catch {
+    try {
+      const stale: string[] = [];
+      for (let i = 0; i < localStorage.length; i += 1) {
+        const key = localStorage.key(i);
+        if (key && key.startsWith(METRICS_CACHE_PREFIX)) stale.push(key);
+      }
+      for (const key of stale) localStorage.removeItem(key);
+      localStorage.setItem(METRICS_CACHE_PREFIX + docId, payload);
+    } catch { /* quota persistente: segue sem cache */ }
+  }
 }
 
 /**
@@ -357,10 +378,22 @@ export async function fetchHistoryMetricDocs(months: string[], state: HistorySyn
         const snap = await getDoc(doc(db, METRICS_COLLECTION, docId));
         reads += 1;
         if (!snap.exists()) continue;
-        const data = snap.data() as MetricsDocData & { updatedAtMs?: number };
-        const docData: MetricsDocData = { ym: data.ym || ym, server: data.server || server, cells: data.cells || {} };
+        const data = snap.data() as any;
+        // v2 = mapa de tuplas `a`; doc ANTIGO (cells, sem `a`) vira LEGADO:
+        // a tela o exclui das estatísticas e orienta a conversão via
+        // recarga "30 dias completos" (sem misturar números incomparáveis).
+        const docData: MetricsDocData = data.a
+          ? { ym: data.ym || ym, server: data.server || server, auctions: data.a }
+          : {
+              ym: data.ym || ym, server: data.server || server, auctions: {},
+              legacy: true, legacyCount: Number(data.n || Object.keys(data.ids || {}).length || 0),
+            };
         docs.push(docData);
-        writeMetricsDocCache(docId, { updatedAtMs: Number(data.updatedAtMs || meta.updatedAtMs || now()), data: docData });
+        // Docs legados NÃO entram no cache: assim a conversão é notada na
+        // próxima leitura mesmo se o updatedAtMs do índice não mudar.
+        if (!docData.legacy) {
+          writeMetricsDocCache(docId, { updatedAtMs: Number(data.updatedAtMs || meta.updatedAtMs || now()), data: docData });
+        }
       } catch (err: any) {
         error = String(err?.message || err);
       }
@@ -439,7 +472,12 @@ export async function persistHistoryIngestion(
       onProgress?.("raw", index + 1, batches.length);
     }
 
-    // ── 2. MÉTRICAS: dedupe exato por doc via mapa `ids` ──────────────────
+    // ── 2. MÉTRICAS v2: fusão por doc via mapa de TUPLAS `a` ──────────────
+    // O id do leilão é a chave: inédito = adiciona; conhecido = SOBRESCREVE
+    // a tupla (nunca conta duas vezes E repara dados históricos — ex.: a
+    // recarga "30 dias completos" corrige o Passe Deluxe de leilões já
+    // ingeridos). Docs no formato antigo (cells) são CONVERTIDOS: passam a
+    // conter só as tuplas desta ingestão (a recarga completa repõe o resto).
     result.phase = "metrics";
     const groups = new Map<string, { ym: string; server: string; entries: BazaarHistoryEntry[] }>();
     for (const entry of valid) {
@@ -462,35 +500,37 @@ export async function persistHistoryIngestion(
         const snap = await getDoc(ref);
         result.metricDocsRead += 1;
         const existing = snap.exists() ? (snap.data() as any) : {};
-        const cells: Record<string, MetricCell> = existing.cells || {};
-        const ids: Record<string, number> = existing.ids || {};
-        // SÓ entradas inéditas contam — repetição/retomada/recarga completa
-        // nunca contabiliza o mesmo leilão duas vezes.
-        const fresh = group.entries.filter(entry => !ids[entry.id]);
-        result.alreadyInMetrics += group.entries.length - fresh.length;
-        const docCount = () => Object.keys(ids).length;
-        if (fresh.length === 0 && snap.exists()) {
-          // Nada novo neste doc; apenas espelha a contagem no índice local.
-          applyMonthMeta(base, group.ym, group.server, docCount(), Number(existing.updatedAtMs || 0));
+        // v2 = mapa de tuplas `a`; doc antigo (cells, sem `a`) = recomeça
+        // vazio e será convertido nesta escrita.
+        const auctions: Record<string, AuctionTuple> = { ...(existing.a || {}) };
+        let changed = !snap.exists() || !existing.a;
+        for (const entry of group.entries) {
+          const tuple = entryToTuple(entry);
+          const prior = auctions[entry.id];
+          if (prior === undefined) {
+            result.addedToMetrics += 1; // inédito neste doc
+            changed = true;
+          } else {
+            // Já contabilizado: NÃO conta de novo; sobrescreve a tupla
+            // (reparo de dados — só gera escrita se algo mudou de fato).
+            result.alreadyInMetrics += 1;
+            if (JSON.stringify(prior) !== JSON.stringify(tuple)) changed = true;
+          }
+          auctions[entry.id] = tuple;
+        }
+        const docCount = Object.keys(auctions).length;
+        if (!changed) {
+          // Nada novo nem alterado; apenas espelha a contagem no índice.
+          applyMonthMeta(base, group.ym, group.server, docCount, Number(existing.updatedAtMs || 0));
           onProgress?.("metrics", index + 1, groupIds.length);
           continue;
         }
-        for (const entry of fresh) {
-          const key = metricCellKey(entry);
-          if (!cells[key]) cells[key] = emptyMetricCell();
-          const delta = emptyMetricCell();
-          addEntryToCell(delta, entry);
-          mergeCellInto(cells[key], delta);
-          ids[entry.id] = 1;
-        }
         const updatedAtMs = now();
-        await setDoc(ref, { ym: group.ym, server: group.server, updatedAtMs, n: docCount(), cells, ids });
+        await setDoc(ref, { v: 2, ym: group.ym, server: group.server, updatedAtMs, n: docCount, a: auctions });
         result.metricDocsWritten += 1;
-        result.addedToMetrics += fresh.length;
-        // O dispositivo que escreveu já tem o doc mais novo em memória
-        // (cache da tela SEM o mapa `ids`).
-        writeMetricsDocCache(docId, { updatedAtMs, data: { ym: group.ym, server: group.server, cells } });
-        applyMonthMeta(base, group.ym, group.server, docCount(), updatedAtMs);
+        // O dispositivo que escreveu já tem o doc mais novo em memória.
+        writeMetricsDocCache(docId, { updatedAtMs, data: { ym: group.ym, server: group.server, auctions } });
+        applyMonthMeta(base, group.ym, group.server, docCount, updatedAtMs);
       } catch (err: any) {
         // Falha NESTE doc não derruba os demais; a retomada reaplica só o
         // que falta (os aplicados pulam pelos `ids`).

@@ -23,11 +23,11 @@
 //   idempotente (base bruta por dia + métricas por mês×servidor + estado).
 // ============================================================================
 
-import { useEffect, useMemo, useState } from "react";
-import { AlertTriangle, BarChart3, Database, Eraser, RefreshCw, Square } from "lucide-react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { AlertTriangle, BarChart3, Database, Eraser, RefreshCw, SlidersHorizontal, Square } from "lucide-react";
 import { FilterMulti } from "./FilterTypes";
 import BazaarBrowserModal from "./BazaarBrowserModal";
-import { MIN_DISPLAY_SKILL, skillDefsForVocation } from "./BazaarItemsPanel";
+import { MIN_DISPLAY_SKILL, SKILL_DISPLAY, skillDefsForVocation } from "./BazaarItemsPanel";
 import {
   buildCharacterMatches,
   buildWatchlistIndex,
@@ -40,18 +40,19 @@ import {
 } from "../utils/bazaarWatchedItems";
 import { computeItemRC } from "../utils/itemSale";
 import {
-  BID_BUCKETS,
-  LEVEL_BANDS,
-  bandLabel,
   computeStatsFromMetricDocs,
+  countActiveHistoryFilters,
   defaultHistoryFilters,
+  emptyRange,
   hasActiveHistoryFilters,
   monthLabel,
+  rangeActive,
   type BazaarHistoryEntry,
   type BazaarHistoryQueryResponse,
   type HistoryMetricsFilters,
   type HistoryQuestFilter,
   type MetricsDocData,
+  type NumberRange,
 } from "../utils/bazaarHistoryStats";
 import {
   fetchHistoryMetricDocs,
@@ -130,6 +131,75 @@ const QUEST_FILTER_LABELS: { value: HistoryQuestFilter; label: string }[] = [
   { value: "completed", label: "Feita" },
 ];
 
+// ── Skills filtráveis — derivadas das regras ÚNICAS da guia Itens ──────────
+// SKILL_DISPLAY é a fonte de verdade de "qual skill pertence a qual
+// vocação"; aqui só se agrega a lista de skills distintas + as vocações em
+// que cada uma se aplica (exibido como dica no filtro). A exigência é
+// aplicada por personagem em tupleMatchesFilters (via skillDefsForVocation).
+const VOCATION_HINT_LABELS: Record<string, string> = {
+  knight: "Knight", paladin: "Paladin", druid: "Druid", sorcerer: "Sorcerer", monk: "Monk",
+};
+const SKILL_FILTER_DEFS: { key: string; abbr: string; full: string; vocations: string[] }[] = (() => {
+  const map = new Map<string, { key: string; abbr: string; full: string; vocations: string[] }>();
+  for (const [vocationHint, defs] of Object.entries(SKILL_DISPLAY)) {
+    for (const def of defs) {
+      const existing = map.get(def.key) || { key: def.key, abbr: def.abbr, full: def.full, vocations: [] };
+      const label = VOCATION_HINT_LABELS[vocationHint] || vocationHint;
+      if (!existing.vocations.includes(label)) existing.vocations.push(label);
+      map.set(def.key, existing);
+    }
+  }
+  return Array.from(map.values());
+})();
+
+/** Campo de FAIXA mín/máx (inteiros ≥ 0; vazio = sem limite no lado). */
+function RangeField({ label, range, onChange, hint }: {
+  label: string;
+  range: NumberRange;
+  onChange: (next: NumberRange) => void;
+  hint?: string;
+}) {
+  const parse = (text: string): number | null => {
+    if (text.trim() === "") return null;
+    const value = Math.floor(Number(text));
+    return Number.isFinite(value) ? Math.max(0, value) : null;
+  };
+  const active = rangeActive(range);
+  const inputClass = (filled: boolean) =>
+    `h-7 w-16 rounded-md border bg-black/30 px-1.5 text-[10px] outline-none focus:border-sky-400/60 `
+    + (filled ? "border-sky-400/50 text-sky-200 font-bold" : "border-[var(--th-line)]/60 text-slate-200");
+  return (
+    <div className="flex flex-col gap-0.5" title={hint}>
+      <span className={`text-[9px] font-black uppercase tracking-wide ${active ? "text-sky-300" : "text-slate-400"}`}>{label}</span>
+      <div className="flex items-center gap-1">
+        <input
+          type="number" inputMode="numeric" min={0} placeholder="mín."
+          value={range.min ?? ""}
+          onChange={e => onChange({ ...range, min: parse(e.target.value) })}
+          className={inputClass(range.min !== null)}
+        />
+        <span className="text-[9px] text-slate-600">–</span>
+        <input
+          type="number" inputMode="numeric" min={0} placeholder="máx."
+          value={range.max ?? ""}
+          onChange={e => onChange({ ...range, max: parse(e.target.value) })}
+          className={inputClass(range.max !== null)}
+        />
+      </div>
+    </div>
+  );
+}
+
+/** Agrupador visual de uma CATEGORIA do quadro de filtros. */
+function FilterCategory({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <div className="rounded-lg border border-[var(--th-line)]/40 bg-black/15 px-2.5 py-1.5">
+      <div className="text-[8px] font-black uppercase tracking-widest text-slate-500 mb-1">{title}</div>
+      <div className="flex flex-wrap items-end gap-x-3 gap-y-1.5">{children}</div>
+    </div>
+  );
+}
+
 export default function BazaarStatsPanel({ isBossUser, isElectron, isOtherQueryRunning, onRunningChange }: Props) {
   // ── Estado analítico (métricas) ───────────────────────────────────────────
   const [syncState, setSyncState] = useState<HistorySyncState | null>(null);
@@ -207,12 +277,20 @@ export default function BazaarStatsPanel({ isBossUser, isElectron, isOtherQueryR
   const vocationOptions = useMemo(() => {
     const set = new Set<string>();
     for (const docData of metricDocs) {
-      for (const key of Object.keys(docData.cells || {})) set.add(key.split("|")[0] || "—");
+      for (const tuple of Object.values(docData.auctions || {})) set.add(tuple.v || "—");
     }
     return Array.from(set).sort((a, b) => a.localeCompare(b, "pt-BR"));
   }, [metricDocs]);
 
-  const stats = useMemo(() => computeStatsFromMetricDocs(metricDocs, filters), [metricDocs, filters]);
+  // Docs de métricas no formato ANTERIOR (células, sem tuplas): ficam fora
+  // das estatísticas e geram o aviso de conversão (recarga completa).
+  const legacyDocs = useMemo(() => metricDocs.filter(docData => docData.legacy), [metricDocs]);
+  const legacyCount = useMemo(() => legacyDocs.reduce((sum, docData) => sum + (docData.legacyCount || 0), 0), [legacyDocs]);
+
+  // TODAS as estatísticas saem das tuplas filtradas; as regras de skill por
+  // vocação são as da guia Itens (skillDefsForVocation), injetadas aqui.
+  const stats = useMemo(() => computeStatsFromMetricDocs(metricDocs, filters, skillDefsForVocation), [metricDocs, filters]);
+  const activeFilterCount = countActiveHistoryFilters(filters);
 
   /**
    * Skills médias por vocação — EXIBINDO somente as skills que a guia Itens
@@ -237,6 +315,16 @@ export default function BazaarStatsPanel({ isBossUser, isElectron, isOtherQueryR
 
   function updateFilters(patch: Partial<HistoryMetricsFilters>) {
     setFilters(prev => ({ ...prev, ...patch }));
+  }
+
+  /** Atualiza a faixa mín/máx de uma SKILL (chave da guia Itens). */
+  function updateSkillRange(skillKey: string, next: NumberRange) {
+    setFilters(prev => {
+      const skills = { ...prev.skills };
+      if (next.min === null && next.max === null) delete skills[skillKey];
+      else skills[skillKey] = next;
+      return { ...prev, skills };
+    });
   }
 
   // ── Consulta: Consultar Histórico → BazaarBrowserModal → executar ────────
@@ -280,7 +368,11 @@ export default function BazaarStatsPanel({ isBossUser, isElectron, isOtherQueryR
         // renderer, com as mesmas funções da guia Itens.
         watchKeys: collectAllWatchKeys(loadWatchedItemsByServer()),
         sinceEndTs: fullReload ? 0 : (prevState?.lastEndTs || 0),
-        knownIds: Object.keys(prevState?.recent || {}),
+        // "30 dias completos" é também o MECANISMO DE REPARO da base: sem
+        // knownIds, TODOS os leilões da janela são reanalisados e as tuplas
+        // regravadas por id (corrige dados históricos — ex.: Passe Deluxe —
+        // sem duplicar nada; a contagem vem do mapa por id).
+        knownIds: fullReload ? [] : Object.keys(prevState?.recent || {}),
         fullReload,
         browser: options.browserKey,
         cleanProfile: options.cleanProfile,
@@ -419,7 +511,7 @@ export default function BazaarStatsPanel({ isBossUser, isElectron, isOtherQueryR
 
       const pieces = [
         `${formatInt(result.addedToMetrics)} leilão(ões) novo(s) contabilizados na base histórica e nas métricas`,
-        result.alreadyInMetrics > 0 ? `${formatInt(result.alreadyInMetrics)} já contabilizados antes (nada duplicado)` : "",
+        result.alreadyInMetrics > 0 ? `${formatInt(result.alreadyInMetrics)} já contabilizados antes — dados atualizados sem duplicar` : "",
         runNotes.knownSkippedCount ? `${formatInt(runNotes.knownSkippedCount)} já conhecidos ignorados` : "",
         runNotes.failedCount ? `${formatInt(runNotes.failedCount)} detalhes sem resposta (dados da listagem preservados)` : "",
         runNotes.stoppedManually ? "consulta encerrada manualmente — a próxima retoma da fronteira" : "",
@@ -517,7 +609,7 @@ export default function BazaarStatsPanel({ isBossUser, isElectron, isOtherQueryR
           <div className="ml-auto flex items-center gap-1.5">
             <label
               className="inline-flex h-7 items-center gap-1 px-2 rounded-lg border border-[var(--th-line)]/60 bg-black/20 text-[9px] font-black uppercase tracking-wide text-slate-400 cursor-pointer select-none"
-              title="Ignora a fronteira incremental e repassa os 30 dias completos do site (leilões já conhecidos continuam sem duplicar)"
+              title="Ignora a fronteira incremental e REANALISA os 30 dias completos do site, incluindo leilões já conhecidos: as tuplas são regravadas por id (nada duplica) e dados corrigidos — como o Passe Deluxe — são atualizados na base histórica e nas métricas. Também converte documentos de métricas do formato antigo."
             >
               <input
                 type="checkbox"
@@ -587,65 +679,117 @@ export default function BazaarStatsPanel({ isBossUser, isElectron, isOtherQueryR
         )}
       </div>
 
-      {/* ── FILTROS (dimensões das métricas — 100% locais) ────────────────── */}
-      <div className="rounded-xl border border-[var(--th-line)]/60 bg-[var(--th-n-base)]/80 backdrop-blur-md px-3 py-2 flex flex-wrap items-end gap-x-3 gap-y-1.5">
-        <div className="flex flex-col gap-0.5">
-          <span className={labelClass}>Meses</span>
-          <FilterMulti label="Meses" options={monthOptions} selected={filters.months} onApply={values => updateFilters({ months: values })} placeholder="Meses" searchable />
+      {/* ── MÉTRICAS NO FORMATO ANTERIOR — aviso de conversão ─────────────── */}
+      {legacyDocs.length > 0 && (
+        <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-200 flex items-start gap-2">
+          <AlertTriangle size={14} className="flex-shrink-0 mt-0.5" />
+          <span className="min-w-0 flex-1">
+            {legacyDocs.length} documento(s) de métricas ({formatInt(legacyCount)} leilão(ões)) estão no formato anterior e
+            {" "}<span className="font-black">não entram nas estatísticas abaixo</span> — os filtros por faixa não se aplicam a eles.
+            {isBossUser && isElectron
+              ? " Rode uma consulta com “30 dias completos” marcado para convertê-los (nada será duplicado)."
+              : " Aguarde o Boss rodar uma consulta com “30 dias completos” para convertê-los."}
+          </span>
         </div>
-        <div className="flex flex-col gap-0.5">
-          <span className={labelClass}>Servidor</span>
-          <FilterMulti label="Servidor" options={serverOptions} selected={filters.servers} onApply={values => updateFilters({ servers: values })} placeholder="Servidor" searchable />
-        </div>
-        <div className="flex flex-col gap-0.5">
-          <span className={labelClass}>Vocação</span>
-          <FilterMulti label="Vocação" options={vocationOptions} selected={filters.vocations} onApply={values => updateFilters({ vocations: values })} placeholder="Vocação" searchable />
-        </div>
-        <div className="flex flex-col gap-0.5">
-          <span className={labelClass}>Level</span>
-          <FilterMulti
-            label="Level"
-            options={LEVEL_BANDS.map(band => band.label)}
-            selected={filters.levelBands.map(key => bandLabel(LEVEL_BANDS, key))}
-            onApply={labels => updateFilters({ levelBands: LEVEL_BANDS.filter(band => labels.includes(band.label)).map(band => band.key) })}
-            placeholder="Level"
-          />
-        </div>
-        <div className="flex flex-col gap-0.5">
-          <span className={labelClass}>Lance</span>
-          <FilterMulti
-            label="Lance"
-            options={BID_BUCKETS.map(bucket => bucket.label)}
-            selected={filters.bidBuckets.map(key => bandLabel(BID_BUCKETS, key))}
-            onApply={labels => updateFilters({ bidBuckets: BID_BUCKETS.filter(bucket => labels.includes(bucket.label)).map(bucket => bucket.key) })}
-            placeholder="Lance"
-          />
-        </div>
-        {([["Soul War", "soulwar"], ["Sanguine", "sanguine"]] as const).map(([label, field]) => (
-          <div key={field} className="flex flex-col gap-0.5">
-            <span className={labelClass}>{label}</span>
-            <select
-              value={filters[field]}
-              onChange={e => updateFilters({ [field]: e.target.value as HistoryQuestFilter } as Partial<HistoryMetricsFilters>)}
-              className="h-6 rounded-md border border-[var(--th-line)]/60 bg-black/30 px-1.5 text-[10px] text-slate-200 outline-none focus:border-sky-400/60 cursor-pointer"
-            >
-              {QUEST_FILTER_LABELS.map(option => (
-                <option key={option.value} value={option.value} className="bg-slate-900">{option.label}</option>
-              ))}
-            </select>
+      )}
+
+      {/* ── FILTROS DA ANÁLISE (quadro dedicado — 100% local, zero leituras) ─
+          Todas as condições valem EM CONJUNTO sobre as tuplas em memória:
+          mudar filtro NUNCA consulta o site nem relê documentos. ─────────── */}
+      <div className="rounded-xl border border-[var(--th-line)]/60 bg-[var(--th-n-base)]/80 backdrop-blur-md px-3 py-2 space-y-1.5 flex-shrink-0 max-h-[45%] overflow-y-auto">
+        {/* Cabeçalho do quadro: título + selo de filtros ativos + limpar */}
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+          <div className="flex items-center gap-1.5 text-slate-200">
+            <SlidersHorizontal size={13} className="text-sky-300" />
+            <span className="text-[11px] font-black uppercase tracking-wide">Filtros da Análise</span>
           </div>
-        ))}
-        {hasActiveHistoryFilters(filters) && (
-          <button
-            type="button"
-            onClick={() => setFilters(defaultHistoryFilters())}
-            className="inline-flex h-6 items-center gap-1 px-2 rounded-md border border-rose-500/25 bg-rose-500/10 text-rose-300 text-[9px] font-black transition-all cursor-pointer hover:bg-rose-500/20"
-          >
-            <Eraser size={10} /> Limpar Filtros
-          </button>
-        )}
-        <div className="ml-auto text-[10px] text-slate-400">
-          <span className="font-black text-slate-200">{formatInt(stats.count)}</span> de {formatInt(totalCount)} leilões no filtro
+          {activeFilterCount > 0 ? (
+            <span className="inline-flex items-center gap-1 px-1.5 h-5 rounded-md border border-sky-400/40 bg-sky-500/15 text-sky-200 text-[9px] font-black">
+              {activeFilterCount} filtro(s) ativo(s)
+            </span>
+          ) : (
+            <span className="text-[9px] text-slate-500 font-bold">nenhum filtro ativo — estatísticas da base completa</span>
+          )}
+          {hasActiveHistoryFilters(filters) && (
+            <button
+              type="button"
+              onClick={() => setFilters(defaultHistoryFilters())}
+              title="Remove todos os filtros e restaura o padrão (base completa)"
+              className="inline-flex h-6 items-center gap-1 px-2 rounded-md border border-rose-500/25 bg-rose-500/10 text-rose-300 text-[9px] font-black transition-all cursor-pointer hover:bg-rose-500/20"
+            >
+              <Eraser size={10} /> Limpar Filtros
+            </button>
+          )}
+          <div className="ml-auto text-[10px] text-slate-400">
+            <span className="font-black text-sky-200">{formatInt(stats.count)}</span> de {formatInt(totalCount)} leilões no filtro
+          </div>
+        </div>
+
+        {/* Categorias de filtros */}
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-1.5">
+          <FilterCategory title="Período e Origem">
+            <div className="flex flex-col gap-0.5">
+              <span className={labelClass}>Meses</span>
+              <FilterMulti label="Meses" options={monthOptions} selected={filters.months} onApply={values => updateFilters({ months: values })} placeholder="Meses" searchable />
+            </div>
+            <div className="flex flex-col gap-0.5">
+              <span className={labelClass}>Servidor</span>
+              <FilterMulti label="Servidor" options={serverOptions} selected={filters.servers} onApply={values => updateFilters({ servers: values })} placeholder="Servidor" searchable />
+            </div>
+          </FilterCategory>
+
+          <FilterCategory title="Personagem">
+            <div className="flex flex-col gap-0.5">
+              <span className={labelClass}>Vocação</span>
+              <FilterMulti label="Vocação" options={vocationOptions} selected={filters.vocations} onApply={values => updateFilters({ vocations: values })} placeholder="Vocação" searchable />
+            </div>
+            <RangeField label="Level" range={filters.level} onChange={range => updateFilters({ level: range })} hint="Intervalo de level (mín/máx livres — ex.: 400 a 800)" />
+          </FilterCategory>
+
+          <FilterCategory title="Valores (RC)">
+            <RangeField label="Lance Vencedor" range={filters.bid} onChange={range => updateFilters({ bid: range })} hint="Lance vencedor em Rubini Coins (mín/máx)" />
+            <RangeField label="Valor dos Itens" range={filters.items} onChange={range => updateFilters({ items: range })} hint="Valor dos itens monitorados em RC pela cotação da ingestão (0 = sem itens avaliados)" />
+          </FilterCategory>
+
+          <FilterCategory title="Quests">
+            {([["Soul War", "soulwar"], ["Sanguine", "sanguine"]] as const).map(([label, field]) => (
+              <div key={field} className="flex flex-col gap-0.5">
+                <span className={`text-[9px] font-black uppercase tracking-wide ${filters[field] !== "any" ? "text-sky-300" : "text-slate-400"}`}>{label}</span>
+                <select
+                  value={filters[field]}
+                  onChange={e => updateFilters({ [field]: e.target.value as HistoryQuestFilter } as Partial<HistoryMetricsFilters>)}
+                  className="h-7 rounded-md border border-[var(--th-line)]/60 bg-black/30 px-1.5 text-[10px] text-slate-200 outline-none focus:border-sky-400/60 cursor-pointer"
+                >
+                  {QUEST_FILTER_LABELS.map(option => (
+                    <option key={option.value} value={option.value} className="bg-slate-900">{option.label}</option>
+                  ))}
+                </select>
+              </div>
+            ))}
+          </FilterCategory>
+
+          <FilterCategory title="Progresso da Conta">
+            <RangeField label="Charm Points" range={filters.charm} onChange={range => updateFilters({ charm: range })} hint="Total Charm Points armazenado (ex.: mín. 800 e máx. 1500). Personagens sem o dado ficam fora quando a faixa está ativa." />
+            <RangeField label="Auras" range={filters.auras} onChange={range => updateFilters({ auras: range })} hint="Quantidade de auras (mín/máx)" />
+            <RangeField label="Hirelings" range={filters.hirelings} onChange={range => updateFilters({ hirelings: range })} hint="Quantidade de hirelings (mín/máx)" />
+            <RangeField label="Passes Deluxe" range={filters.deluxe} onChange={range => updateFilters({ deluxe: range })} hint="Temporadas do Battlepass com Deluxe = “sim” (0 = nenhuma, 1, 2…). Use mín=máx para um valor exato — ex.: 0–0 só sem Deluxe." />
+          </FilterCategory>
+
+          <FilterCategory title="Skills (regras por vocação da guia Itens)">
+            {SKILL_FILTER_DEFS.map(def => (
+              <RangeField
+                key={def.key}
+                label={def.abbr}
+                range={filters.skills[def.key] || emptyRange()}
+                onChange={range => updateSkillRange(def.key, range)}
+                hint={`${def.full} — aplicável a: ${def.vocations.join(", ")}. Com a faixa ativa, só entram personagens dessas vocações E com a skill coletada (sem valores fictícios).`}
+              />
+            ))}
+          </FilterCategory>
+        </div>
+
+        <div className="text-[9px] text-slate-500">
+          Todos os indicadores e gráficos abaixo consideram <span className="font-black text-slate-400">exclusivamente</span> o conjunto filtrado; as médias com “com dado” usam só os personagens que possuem aquela informação. Filtros de skill seguem as regras por vocação da guia Itens.
         </div>
       </div>
 
@@ -693,7 +837,7 @@ export default function BazaarStatsPanel({ isBossUser, isElectron, isOtherQueryR
                 ["Charm Points médios", stats.charmSampleCount > 0 ? formatInt(stats.avgCharmPoints) : "—", `${formatInt(stats.charmSampleCount)} com dado`],
                 ["Auras médias", stats.auraSampleCount > 0 ? formatDec1(stats.avgAuras) : "—", `${formatInt(stats.auraSampleCount)} com dado`],
                 ["Hirelings médios", stats.hirelingSampleCount > 0 ? formatDec1(stats.avgHirelings) : "—", `${formatInt(stats.hirelingSampleCount)} com dado`],
-                ["Passes Deluxe médios", stats.deluxeSampleCount > 0 ? formatDec1(stats.avgDeluxePasses) : "—", `${formatInt(stats.deluxeSampleCount)} com dado`],
+                ["Passes Deluxe médios", stats.deluxeSampleCount > 0 ? formatDec1(stats.avgDeluxePasses) : "—", `${formatInt(stats.deluxeSampleCount)} com dado · ${formatInt(stats.totalDeluxePasses)} passes no total`],
               ] as const).map(([title, value, hint]) => (
                 <div key={title} className="rounded-xl border border-[var(--th-line)]/60 bg-[var(--th-n-base)]/80 px-3 py-2">
                   <div className="text-[9px] font-black uppercase tracking-wide text-slate-400">{title}</div>
@@ -752,9 +896,9 @@ export default function BazaarStatsPanel({ isBossUser, isElectron, isOtherQueryR
               ))}
             </div>
 
-            {/* DISTRIBUIÇÕES DE LANCE E CHARM (histogramas das células) */}
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-1.5">
-              {([["Distribuição do lance vencedor", stats.bidDistribution], ["Distribuição de Charm Points", stats.charmDistribution]] as const).map(([title, dist]) => (
+            {/* DISTRIBUIÇÕES DE LANCE, CHARM E DELUXE (histogramas das tuplas) */}
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-1.5">
+              {([["Distribuição do lance vencedor", stats.bidDistribution], ["Distribuição de Charm Points", stats.charmDistribution], ["Distribuição de Passes Deluxe", stats.deluxeDistribution]] as const).map(([title, dist]) => (
                 dist.length > 0 && (
                   <div key={title} className="rounded-xl border border-[var(--th-line)]/60 bg-[var(--th-n-base)]/80 px-3 py-2">
                     <div className="text-[9px] font-black uppercase tracking-wide text-slate-400 mb-1">{title}</div>
