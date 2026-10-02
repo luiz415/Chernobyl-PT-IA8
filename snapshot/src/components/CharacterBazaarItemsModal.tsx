@@ -97,6 +97,16 @@ export default function CharacterBazaarItemsModal({ character, coinRate, onClose
               </tr>
             </thead>
             <tbody>
+              {snapshot.matches.length === 0 && (
+                <tr>
+                  {/* Personagem comprado só com Ouro relevante (> 1kk): sem
+                      itens monitorados — o total vem exclusivamente do Ouro,
+                      detalhado logo abaixo ("Inclui Ouro"). */}
+                  <td colSpan={7} className="px-1.5 py-2.5 text-center italic text-slate-500">
+                    Nenhum item monitorado encontrado — o valor deste personagem vem apenas do Ouro.
+                  </td>
+                </tr>
+              )}
               {snapshot.matches.map((match, index) => (
                 <tr key={`${match.foundName}-${index}`} className="border-b border-[var(--th-line)]/25">
                   <td className="px-1.5 py-1.5 text-left font-bold text-slate-100">{match.foundName}</td>

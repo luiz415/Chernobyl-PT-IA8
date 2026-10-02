@@ -64,6 +64,21 @@ function formatItemsKk(value: number): string {
 }
 
 /**
+ * REGRA ÚNICA de relevância do resultado de itens de um personagem:
+ * há informação para exibir quando existe ao menos UM item monitorado
+ * encontrado OU quando o Ouro lido no leilão passa de 1kk. A presença de
+ * itens deixou de ser a única condição — personagem só com Ouro (> 1kk)
+ * também gera resultado, botão "Ver" e valor na coluna. Ouro até 1kk
+ * continua irrelevante sozinho (comportamento anterior preservado).
+ * Todos os pontos que decidem "tem dados de itens?" usam ESTE predicado.
+ */
+const RELEVANT_GOLD_KK_THRESHOLD = 1;
+function hasRelevantLoot(matchCount: number, goldKk: number): boolean {
+  const gold = Number(goldKk || 0);
+  return matchCount > 0 || (Number.isFinite(gold) && gold > RELEVANT_GOLD_KK_THRESHOLD);
+}
+
+/**
  * Dados exibidos pela coluna "Valor Itens (kk)" e pelo modal "Ver" — shape
  * NEUTRO que unifica as DUAS fontes possíveis:
  *   • LOCAL (dispositivo do Boss): última consulta da guia Itens
@@ -105,11 +120,14 @@ function itemsViewFromLocalResult(result: BazaarItemsCharacterResult): QuestsIte
 
 /** Constrói a view a partir dos campos EMBUTIDOS na lista oficial. */
 function itemsViewFromAuction(auction: BazaarAuction): QuestsItemsDetailView | null {
-  if (typeof auction.itemsTotalKk !== "number" || !Array.isArray(auction.itemsMatches) || auction.itemsMatches.length === 0) return null;
+  // Resultado embutido é válido com itens OU Ouro relevante (> 1kk) — mesma
+  // regra única (hasRelevantLoot) usada na coleta da consulta.
+  const embeddedMatches = Array.isArray(auction.itemsMatches) ? auction.itemsMatches : [];
+  if (typeof auction.itemsTotalKk !== "number" || !hasRelevantLoot(embeddedMatches.length, Number(auction.itemsGoldKk || 0))) return null;
   return {
     name: String(auction.name || ""),
     server: String(auction.server || ""),
-    matches: auction.itemsMatches.map(match => ({
+    matches: embeddedMatches.map(match => ({
       foundName: String(match.foundName || ""),
       tier: Number(match.tier || 0),
       amount: Number(match.amount || 0),
@@ -148,17 +166,19 @@ function buildPurchaseItemsSnapshot(
   localResult: BazaarItemsCharacterResult | undefined,
   auction: BazaarAuction,
 ): CharacterBazaarItemsSnapshot | undefined {
-  if (localResult && Array.isArray(localResult.matches) && localResult.matches.length > 0) {
+  // Mesma regra única (hasRelevantLoot) da coluna "Valor Itens (kk)":
+  // snapshot também existe para personagem só com Ouro relevante (> 1kk).
+  if (localResult && hasRelevantLoot(Array.isArray(localResult.matches) ? localResult.matches.length : 0, Number(localResult.goldKk || 0))) {
     return {
       server: localResult.server,
       totalKk: Number(localResult.totalKk || 0),
       ...(typeof localResult.goldKk === "number" && localResult.goldKk > 0 ? { goldKk: localResult.goldKk } : {}),
       manualTotalKk: typeof localResult.manualTotalKk === "number" && localResult.manualTotalKk > 0 ? localResult.manualTotalKk : null,
-      matches: localResult.matches.map(match => ({ ...match })),
+      matches: (localResult.matches || []).map(match => ({ ...match })),
       capturedAtMs: Date.now(),
     };
   }
-  if (typeof auction.itemsTotalKk === "number" && Array.isArray(auction.itemsMatches) && auction.itemsMatches.length > 0) {
+  if (typeof auction.itemsTotalKk === "number" && hasRelevantLoot(Array.isArray(auction.itemsMatches) ? auction.itemsMatches.length : 0, Number(auction.itemsGoldKk || 0))) {
     return {
       server: String(auction.server || ""),
       totalKk: Number(auction.itemsTotalKk || 0),
@@ -166,7 +186,7 @@ function buildPurchaseItemsSnapshot(
       // A correção manual do Boss é local ao dispositivo dele — o publicado
       // é sempre o valor calculado pela consulta.
       manualTotalKk: null,
-      matches: auction.itemsMatches.map(match => {
+      matches: (auction.itemsMatches || []).map(match => {
         const amount = Number(match.amount || 0);
         const totalKk = Number(match.totalKk || 0);
         const tier = Math.max(0, Number(match.tier || 0));
@@ -2759,11 +2779,19 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
             for (const auction of itemsStepAuctions) {
               const key = auction.id || auction.name || auction.url;
               const detail = key ? itemsResponse.details?.[key] : null;
-              if (!detail || detail.error || !Array.isArray(detail.matches) || detail.matches.length === 0) continue;
-              const { matches, totalKk } = buildCharacterMatches(detail.matches, getServerIndex(String(auction.server || "")));
-              if (matches.length === 0) continue;
+              if (!detail || detail.error) continue;
+              const { matches, totalKk } = buildCharacterMatches(
+                Array.isArray(detail.matches) ? detail.matches : [],
+                getServerIndex(String(auction.server || "")),
+              );
               const goldRaw = Number(detail.gold || 0);
               const goldKk = Number.isFinite(goldRaw) && goldRaw > 0 ? Math.round((goldRaw / 1_000_000) * 100) / 100 : 0;
+              // Resultado VÁLIDO = itens monitorados OU Ouro relevante
+              // (> 1kk) — regra única (hasRelevantLoot). Personagem só com
+              // Ouro acima de 1kk agora entra nos resultados (coluna "Valor
+              // Itens (kk)" + "Ver" + embutido publicado); sem itens e com
+              // Ouro até 1kk continua fora, como antes.
+              if (!hasRelevantLoot(matches.length, goldKk)) continue;
               itemsResults.push({
                 id: String(auction.id || ""),
                 name: String(auction.name || ""),
@@ -4528,7 +4556,7 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
                             return (
                               <span
                                 className="font-mono text-[10px] font-bold text-slate-600"
-                                title="Personagem sem itens monitorados na última consulta da guia Itens (ou consulta de itens ainda não realizada)."
+                                title="Personagem sem itens monitorados e sem Ouro relevante (acima de 1kk) na última consulta da guia Itens (ou consulta de itens ainda não realizada)."
                               >
                                 —
                               </span>
@@ -4941,6 +4969,16 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
                   </tr>
                 </thead>
                 <tbody>
+                  {questsItemsDetailResult.matches.length === 0 && (
+                    <tr>
+                      {/* Personagem só com Ouro relevante (> 1kk): sem itens
+                          monitorados — o total vem exclusivamente do Ouro,
+                          detalhado logo abaixo ("Inclui Ouro"). */}
+                      <td colSpan={4} className="px-1.5 py-2.5 text-center italic text-slate-500">
+                        Nenhum item monitorado encontrado — o valor deste personagem vem apenas do Ouro.
+                      </td>
+                    </tr>
+                  )}
                   {questsItemsDetailResult.matches.map((match, index) => (
                     <tr key={`${match.foundName}-${index}`} className="border-b border-[var(--th-line)]/25">
                       <td className="px-1.5 py-1.5 text-left font-bold text-slate-100">{match.foundName}</td>

@@ -439,6 +439,15 @@ function PersonalPartyHistoryCard({ entry, overrides, canEdit, userName, onOverr
   const renderCharacterRow = (slot: PersonalPartyHistorySlot) => {
     const own = ownSlotIds.has(slot.slotId);
     const nameCopied = copiedSlotId === slot.slotId;
+    // "Nome - VOC LEVEL" (ex.: "Dragon Slayer - EK 552"): vocação/level vêm
+    // congelados da projeção do backend (mesmo snapshot do nome). Registros
+    // antigos (sem os campos) ou dados parciais degradam com elegância —
+    // exibe-se apenas o que existe; sem nada, apenas o nome, como antes.
+    // O botão continua copiando EXCLUSIVAMENTE o nome (handleCopyCharacterName).
+    const vocLevelSuffix = [
+      String(slot.characterVoc || "").trim(),
+      Number(slot.characterLevel || 0) > 0 ? String(Math.floor(Number(slot.characterLevel))) : "",
+    ].filter(Boolean).join(" ");
     const dropEditable = canEdit && own;
     const profitEditable = isSlotProfitEditable(slot);
     const dropOverridden = overrides.drops?.[slot.slotId] !== undefined;
@@ -462,7 +471,14 @@ function PersonalPartyHistoryCard({ entry, overrides, canEdit, userName, onOverr
                 : "text-slate-200 hover:bg-white/[0.07] hover:text-white"
             }`}
           >
-            <span className="truncate">{slot.characterName || "Personagem"}</span>
+            <span className="truncate">
+              {slot.characterName || "Personagem"}
+              {vocLevelSuffix && (
+                <span className="font-semibold text-slate-400" title={`Vocação e level na conclusão da PT (apenas exibição — o botão copia somente o nome)`}>
+                  {" - "}{vocLevelSuffix}
+                </span>
+              )}
+            </span>
             {nameCopied
               ? <Check size={10} strokeWidth={3} className="flex-shrink-0 text-emerald-400" />
               : <Copy size={10} className="flex-shrink-0 text-slate-500 opacity-0 transition-opacity group-hover:opacity-80" />}

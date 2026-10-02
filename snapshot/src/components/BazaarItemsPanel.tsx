@@ -3016,6 +3016,17 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                   </tr>
                 </thead>
                 <tbody>
+                  {detailResult.matches.length === 0 && (
+                    <tr>
+                      {/* Personagem com Ouro relevante (> 1kk) e nenhum item
+                          monitorado — resultado válido vindo da consulta do
+                          Painel Bazaar (regra única hasRelevantLoot): o total
+                          vem exclusivamente do Ouro, exibido no rodapé. */}
+                      <td colSpan={7} className="px-1.5 py-2.5 text-center italic text-slate-500">
+                        Nenhum item monitorado encontrado — o valor deste personagem vem apenas do Ouro.
+                      </td>
+                    </tr>
+                  )}
                   {detailResult.matches.map((match, index) => {
                     const isEditingMatch = detailEdit?.matchIndex === index;
                     // Chave do feedback de cópia — uma por linha do modal.

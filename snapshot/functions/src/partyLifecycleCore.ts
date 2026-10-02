@@ -15,6 +15,14 @@ type UnknownRecord = Record<string, unknown>;
 export interface LifecycleSlot {
   id: string;
   characterName: string;
+  /**
+   * Vocação e level do personagem, congelados do MESMO memberSnapshot que já
+   * fornece o characterName (nenhuma leitura extra). Snapshot sem os campos
+   * (registros antigos/externos) => "" e 0 — a interface degrada para exibir
+   * apenas o nome.
+   */
+  characterVoc: string;
+  characterLevel: number;
   ownerName: string;
   ownerUid: string;
   playerName: string;
@@ -103,6 +111,8 @@ export interface PersonalHistoryProjection {
   personalSlots: Array<{
     slotId: string;
     characterName: string;
+    characterVoc: string;
+    characterLevel: number;
     ownerName: string;
     playerName: string;
     deaths: number;
@@ -123,6 +133,8 @@ export interface PersonalHistoryProjection {
   allSlots: Array<{
     slotId: string;
     characterName: string;
+    characterVoc: string;
+    characterLevel: number;
     ownerName: string;
     playerName: string;
     deaths: number;
@@ -293,6 +305,10 @@ function slotFromRaw(id: string, rawSlot: UnknownRecord, rawSnapshot: UnknownRec
   return {
     id,
     characterName: text(rawSnapshot?.personagem, 120),
+    // Mesma fonte do characterName (memberSnapshot congelado na PT) — para o
+    // histórico exibir "Nome - VOC LEVEL" sem nenhuma leitura adicional.
+    characterVoc: text(rawSnapshot?.voc, 20),
+    characterLevel: integer(rawSnapshot?.level),
     ownerName: text(rawSlot.owner ?? rawSnapshot?.ownerName, 120),
     ownerUid,
     playerName: text(rawSlot.player, 120),
@@ -346,7 +362,9 @@ export function parseLifecycleParty(partyId: unknown, raw: unknown): LifecyclePa
     const parsed = slotFromRaw(slotId, slot, snapshot);
     const custom = customById.get(slotId);
     return custom && !parsed.characterName
-      ? { ...parsed, characterName: custom.label, isService: true }
+      // Membro "+ Externo": sem memberSnapshot — voc/level vêm do próprio
+      // customMember (mesma origem do label usado como nome).
+      ? { ...parsed, characterName: custom.label, characterVoc: text(custom.voc, 20), characterLevel: integer(custom.level), isService: true }
       : parsed;
   });
 
@@ -475,6 +493,8 @@ export function buildPersonalPartyHistory(
     .map(slot => ({
       slotId: slot.id,
       characterName: slot.characterName,
+      characterVoc: slot.characterVoc,
+      characterLevel: slot.characterLevel,
       ownerName: slot.ownerName,
       playerName: slot.playerName,
       deaths: slot.deaths,
@@ -494,6 +514,8 @@ export function buildPersonalPartyHistory(
   const allSlots = party.slots.map(slot => ({
     slotId: slot.id,
     characterName: slot.characterName,
+    characterVoc: slot.characterVoc,
+    characterLevel: slot.characterLevel,
     ownerName: slot.ownerName,
     playerName: slot.playerName,
     deaths: slot.deaths,
@@ -570,8 +592,10 @@ export function buildSanitizedPartyArchive(
     id: slot.id,
     personagem: slot.characterName,
     servidor: party.server,
-    voc: "",
-    level: 0,
+    // Antes ficavam vazios por falta do dado no LifecycleSlot; agora o slot
+    // carrega voc/level congelados do memberSnapshot original.
+    voc: slot.characterVoc,
+    level: slot.characterLevel,
     ownerUid: slot.ownerUid,
     ownerName: slot.ownerName,
   }]));

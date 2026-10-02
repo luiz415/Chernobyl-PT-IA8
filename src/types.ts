@@ -344,6 +344,14 @@ export type PartyFinalizationReason = "payment" | "quest_failed";
 export interface PersonalPartyHistorySlot {
   slotId: string;
   characterName: string;
+  /**
+   * Vocação e level do personagem, congelados pelo backend do MESMO
+   * memberSnapshot que fornece o characterName (nenhuma leitura extra).
+   * Opcionais: projeções materializadas antes destes campos existirem não os
+   * possuem — o card degrada para exibir apenas o nome.
+   */
+  characterVoc?: string;
+  characterLevel?: number;
   ownerName: string;
   playerName: string;
   deaths: number;
