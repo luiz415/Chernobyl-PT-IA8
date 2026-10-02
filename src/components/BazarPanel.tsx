@@ -1331,10 +1331,12 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
   // ele existe justamente para demonstrar esse estado.
   const [hideEndedAuctions, setHideEndedAuctions] = useState(() => demoMode ? false : readHideEndedAuctionsPreference());
   // "Mostrar/Ocultar Legenda": liga/desliga os efeitos visuais dos cards
-  // EXPLICADOS pela legenda (fundo/borda/brilho da linha + selos). Persistido
-  // localmente — sobrevive à troca de guia e ao reinício, sem Firestore.
+  // EXPLICADOS pela legenda (fundo/borda/brilho da linha + selos). PADRÃO:
+  // OCULTA (false) — quem nunca mexeu vê os cards neutros. A escolha do
+  // usuário é persistida localmente e sempre prevalece sobre o padrão —
+  // sobrevive à troca de guia e ao reinício, sem Firestore.
   // EXCEÇÃO permanente: o aviso de Quest suspeita continua sempre visível.
-  const [showLegendEffects, setShowLegendEffects] = useState<boolean>(() => demoMode ? true : loadUIState(BAZAAR_LEGEND_EFFECTS_KEY, true));
+  const [showLegendEffects, setShowLegendEffects] = useState<boolean>(() => demoMode ? false : loadUIState(BAZAAR_LEGEND_EFFECTS_KEY, false));
   const toggleLegendEffects = () => {
     setShowLegendEffects(previous => {
       const next = !previous;
