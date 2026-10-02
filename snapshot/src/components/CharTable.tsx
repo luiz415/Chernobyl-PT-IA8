@@ -344,6 +344,24 @@ export default function CharTable({ characters, activeParties = [], readOnly, sh
   // (itemSaleSW/itemSaleSG) e o próprio campo de lucro (dropSW/dropBakra).
   const [itemSaleTarget, setItemSaleTarget] = useState<{ characterId: string; quest: "soulwar" | "sanguine" } | null>(null);
 
+  // ── EDIÇÃO INLINE da disponibilidade de Quest (SW/SG) ─────────────────────
+  // 1º clique no ✓/✕ arma a CONFIRMAÇÃO (o botão vira "Confirmar"); o 2º
+  // clique NO MESMO botão salva via onCharacterInlineChange — a MESMA
+  // persistência do app (nenhuma segunda fonte de verdade; o modal continua
+  // intocado). Clique em outro personagem/quest move a confirmação para o
+  // novo alvo; clique em qualquer área externa cancela sem salvar.
+  const [questConfirm, setQuestConfirm] = useState<{ id: string; quest: "soulwar" | "sanguine" } | null>(null);
+
+  // Cancelamento natural: mousedown em qualquer lugar FORA do botão armado
+  // (os botões interrompem a propagação do próprio mousedown) desarma a
+  // confirmação — mesma mecânica do menu de contexto desta tabela.
+  useEffect(() => {
+    if (!questConfirm) return;
+    function handleOutside() { setQuestConfirm(null); }
+    window.addEventListener("mousedown", handleOutside);
+    return () => window.removeEventListener("mousedown", handleOutside);
+  }, [questConfirm]);
+
   const [hiddenColumns, setHiddenColumns] = usePersistedState<string[]>(storageKey("hiddenColumns"), []);
   const hiddenSet = useMemo(() => new Set(hiddenColumns), [hiddenColumns]);
 
@@ -356,6 +374,7 @@ export default function CharTable({ characters, activeParties = [], readOnly, sh
     setCtxMenu(null);
     setCopiedId(null);
     setCopiedCharId(null);
+    setQuestConfirm(null);
   }, [tableScope]);
 
   useEffect(() => {
@@ -456,6 +475,79 @@ export default function CharTable({ characters, activeParties = [], readOnly, sh
     return () => { window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); };
   }, [resizingCol]);
 
+  /**
+   * Célula de disponibilidade de Quest (SW/SG) com EDIÇÃO INLINE em 2
+   * cliques. Permissões = EXATAMENTE as do caminho inline já existente
+   * ("Item Vendido"): sem `onCharacterInlineChange`, em modo somente
+   * leitura ou com a Quest travada por negociação (lockedQuestFinancialIds
+   * — a mesma guarda que o App aplica no handler), a célula continua o
+   * texto estático de antes (o modal de edição segue disponível como hoje).
+   * A gravação reutiliza onCharacterInlineChange (mesma persistência/
+   * sincronização do app — nenhuma segunda fonte de verdade) e o aviso ⚠
+   * de "provavelmente já fez" é preservado sem alteração.
+   */
+  function renderQuestAvailabilityCell(c: Character, quest: "soulwar" | "sanguine") {
+    const value = quest === "soulwar" ? c.soulwar : c.sanguine;
+    const questLabel = quest === "soulwar" ? "Soulwar" : "Sanguine";
+    const showWarning = probableMarkers[c.id]?.[quest] === true && value;
+    const warningTitle = `Esse personagem provavelmente já fez ${questLabel} e precisa ser atualizado.`;
+    const locked = lockedQuestFinancialIds.has(c.id);
+    const canEditInline = !readOnly && !locked && !!onCharacterInlineChange;
+
+    const warningIcon = showWarning && (
+      <span className="text-rose-500 text-[12px] animate-pulse leading-none" title={warningTitle}>⚠</span>
+    );
+
+    // Sem permissão de edição inline: exibição IDÊNTICA à anterior.
+    if (!canEditInline) {
+      return (
+        <span className={`inline-flex items-center gap-0.5 ${showWarning ? "relative" : ""}`} title={showWarning ? warningTitle : undefined}>
+          <span className={`font-semibold text-[14px] ${value ? "text-emerald-400" : "text-rose-400"}`}>
+            {value ? "✓" : "✕"}
+          </span>
+          {warningIcon}
+        </span>
+      );
+    }
+
+    const confirming = questConfirm?.id === c.id && questConfirm.quest === quest;
+    return (
+      <span className={`inline-flex items-center justify-center gap-0.5 ${showWarning ? "relative" : ""}`}>
+        <button
+          type="button"
+          // stopPropagation em mousedown (não cancelar a própria confirmação
+          // pelo listener global), click (não selecionar a linha) e
+          // dblclick (NUNCA abrir o modal de edição pela linha).
+          onMouseDown={(e) => e.stopPropagation()}
+          onDoubleClick={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            e.stopPropagation();
+            if (confirming) {
+              // 2º clique: salva pela MESMA função inline persistente do app
+              // e a tabela reflete na hora (estado → re-render imediato).
+              onCharacterInlineChange?.({ ...c, [quest]: !value });
+              setQuestConfirm(null);
+            } else {
+              // 1º clique: só arma a confirmação (nada é salvo).
+              setQuestConfirm({ id: c.id, quest });
+            }
+          }}
+          title={confirming
+            ? `Clique novamente para confirmar: ${questLabel} ficará ${value ? "indisponível (✕)" : "disponível (✓)"}. Clique fora para cancelar sem salvar.`
+            : `${questLabel} ${value ? "disponível" : "indisponível"} — clique para alterar para ${value ? "✕" : "✓"} (pede confirmação no 2º clique).${showWarning ? ` ${warningTitle}` : ""}`}
+          className={confirming
+            ? "inline-flex h-5 items-center justify-center px-1 rounded-md border border-amber-500/50 bg-amber-500/15 text-amber-300 text-[8px] font-black uppercase tracking-tight whitespace-nowrap cursor-pointer animate-pulse transition-all"
+            : `inline-flex h-5 w-5 items-center justify-center rounded-md border border-transparent font-semibold text-[14px] cursor-pointer transition-all ${value
+              ? "text-emerald-400 hover:border-emerald-500/40 hover:bg-emerald-500/10"
+              : "text-rose-400 hover:border-rose-500/40 hover:bg-rose-500/10"}`}
+        >
+          {confirming ? "Confirmar" : (value ? "✓" : "✕")}
+        </button>
+        {warningIcon}
+      </span>
+    );
+  }
+
   const columns: ColumnDef[] = useMemo(() => [
     {
       key: "account", label: "Account", align: "center",
@@ -528,38 +620,14 @@ export default function CharTable({ characters, activeParties = [], readOnly, sh
     {
       key: "soulwar", label: "SW", align: "center",
       get: (c) => (c.soulwar ? "Sim" : "Não"),
-      render: (c) => {
-        const hasProbableMarker = probableMarkers[c.id]?.soulwar === true;
-        const showWarning = hasProbableMarker && c.soulwar;
-        return (
-          <span className={`inline-flex items-center gap-0.5 ${showWarning ? "relative" : ""}`} title={showWarning ? "Esse personagem provavelmente já fez Soulwar e precisa ser atualizado." : undefined}>
-            <span className={`font-semibold text-[14px] ${c.soulwar ? "text-emerald-400" : "text-rose-400"}`}>
-              {c.soulwar ? "✓" : "✕"}
-            </span>
-            {showWarning && (
-              <span className="text-rose-500 text-[12px] animate-pulse leading-none" title="Esse personagem provavelmente já fez Soulwar e precisa ser atualizado.">⚠</span>
-            )}
-          </span>
-        );
-      },
+      // Edição INLINE em 2 cliques (mesmas permissões do caminho inline
+      // existente); ordenação/filtro inalterados (get acima).
+      render: (c) => renderQuestAvailabilityCell(c, "soulwar"),
     },
     {
       key: "sanguine", label: "SG", align: "center",
       get: (c) => (c.sanguine ? "Sim" : "Não"),
-      render: (c) => {
-        const hasProbableMarker = probableMarkers[c.id]?.sanguine === true;
-        const showWarning = hasProbableMarker && c.sanguine;
-        return (
-          <span className={`inline-flex items-center gap-0.5 ${showWarning ? "relative" : ""}`} title={showWarning ? "Esse personagem provavelmente já fez Sanguine e precisa ser atualizado." : undefined}>
-            <span className={`font-semibold text-[14px] ${c.sanguine ? "text-emerald-400" : "text-rose-400"}`}>
-              {c.sanguine ? "✓" : "✕"}
-            </span>
-            {showWarning && (
-              <span className="text-rose-500 text-[12px] animate-pulse leading-none" title="Esse personagem provavelmente já fez Sanguine e precisa ser atualizado.">⚠</span>
-            )}
-          </span>
-        );
-      },
+      render: (c) => renderQuestAvailabilityCell(c, "sanguine"),
     },
     {
       key: "pt", label: "PT", align: "center",
@@ -798,7 +866,8 @@ export default function CharTable({ characters, activeParties = [], readOnly, sh
         <span className="text-slate-600" title="Sem itens do Bazaar associados a este personagem">—</span>
       ),
     }] : []),
-  ], [accountVisible, personagemVisible, showSaleDate, copiedId, copiedCharId, onToggleShare, characterInParty, onCharacterInlineChange, probableMarkers, negotiatedCharacterIds, lockedQuestFinancialIds, showBazaarItemsColumn, onViewBazaarItems]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  ], [accountVisible, personagemVisible, showSaleDate, copiedId, copiedCharId, onToggleShare, characterInParty, onCharacterInlineChange, probableMarkers, negotiatedCharacterIds, lockedQuestFinancialIds, showBazaarItemsColumn, onViewBazaarItems, questConfirm, readOnly]);
 
   const orderedColumns = useMemo(() => {
     const baseCols = [...columns];
