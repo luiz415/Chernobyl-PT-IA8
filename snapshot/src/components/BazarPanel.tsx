@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import bazarBgUrl from "../assets/bazar-bg.png";
-import { AlertTriangle, ArrowDownUp, BarChart3, Check, CheckCircle2, ChevronDown, ChevronUp, Coins, Crown, ExternalLink, Filter, FlagTriangleRight, Flame, Package, Plus, RefreshCw, RotateCcw, ShieldAlert, ShoppingBag, Sparkles, Star, Target, Users, X } from "lucide-react";
+import { AlertTriangle, ArrowDownUp, BarChart3, Check, CheckCircle2, ChevronDown, ChevronUp, Coins, Crown, ExternalLink, Eye, EyeOff, Filter, FlagTriangleRight, Flame, Package, Plus, RefreshCw, RotateCcw, ShieldAlert, ShoppingBag, Sparkles, Star, Target, Users, X } from "lucide-react";
 import BazaarItemsPanel from "./BazaarItemsPanel";
 import BazaarStatsPanel from "./BazaarStatsPanel";
 import BazaarSearchFiltersModal from "./BazaarSearchFiltersModal";
@@ -462,6 +462,11 @@ const BAZAR_FILTERS_KEY = "rubinot_bazaar_filters";
 const BAZAR_LAST_SUMMARY_KEY = "rubinot_bazaar_last_summary";
 const BAZAR_TABLE_FILTERS_KEY = "rubinot_bazaar_table_filters";
 const BAZAR_HIDE_ENDED_KEY = "rubinot_bazaar_hide_ended_auctions";
+// Preferência LOCAL (padrão do app p/ estados de interface: loadUIState/
+// saveUIState, zero Firestore): efeitos visuais da LEGENDA nos cards da
+// tabela (destaques de linha + selos de prioridade/melhor vocação).
+// O aviso de Quest suspeita NUNCA é afetado por esta preferência.
+const BAZAAR_LEGEND_EFFECTS_KEY = "rubinot_bazaar_legend_effects_visible";
 // ── ATUALIZAR VALORES (Boss) — preferências locais do dispositivo ─────────
 const BAZAAR_AUTO_REMOVE_ENABLED_KEY = "rubinot_bazaar_auto_remove_interest_enabled";
 const BAZAAR_AUTO_REMOVE_LIMIT_KEY = "rubinot_bazaar_auto_remove_interest_limit";
@@ -1325,6 +1330,18 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
   // demo: `false` para o leilão "Encerrado" fictício aparecer na tabela —
   // ele existe justamente para demonstrar esse estado.
   const [hideEndedAuctions, setHideEndedAuctions] = useState(() => demoMode ? false : readHideEndedAuctionsPreference());
+  // "Mostrar/Ocultar Legenda": liga/desliga os efeitos visuais dos cards
+  // EXPLICADOS pela legenda (fundo/borda/brilho da linha + selos). Persistido
+  // localmente — sobrevive à troca de guia e ao reinício, sem Firestore.
+  // EXCEÇÃO permanente: o aviso de Quest suspeita continua sempre visível.
+  const [showLegendEffects, setShowLegendEffects] = useState<boolean>(() => demoMode ? true : loadUIState(BAZAAR_LEGEND_EFFECTS_KEY, true));
+  const toggleLegendEffects = () => {
+    setShowLegendEffects(previous => {
+      const next = !previous;
+      if (!demoMode) saveUIState(BAZAAR_LEGEND_EFFECTS_KEY, next);
+      return next;
+    });
+  };
   const [isFiltersModalOpen, setIsFiltersModalOpen] = useState(false);
   const [isUsedFiltersOpen, setIsUsedFiltersOpen] = useState(false);
   const [isFriendsSummaryOpen, setIsFriendsSummaryOpen] = useState(false);
@@ -3576,13 +3593,16 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
 
         <div className="rounded-lg border border-[var(--th-line)]/60 bg-[var(--th-n-base)]/85 px-2.5 py-1 text-[11px] text-slate-400">
           <div className="flex flex-col gap-0.5 lg:flex-row lg:items-start lg:justify-between lg:gap-3">
-            <div className="min-w-0 flex-1 space-y-0.5">
-              <div className="flex flex-wrap items-center gap-2">
-                <div className="inline-flex items-center gap-1.5 font-black text-amber-300 uppercase tracking-wide">
+            <div className="min-w-0 flex-1 space-y-1">
+              {/* LINHA 1 — título INLINE com as informações da consulta: o
+                  título deixa de ocupar uma linha própria e vira o primeiro
+                  item da linha de infos (mesmos dados, menos altura). As
+                  informações principais vêm primeiro; as secundárias
+                  continuam na mesma corrente com quebra automática. */}
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[10px] leading-tight">
+                <div className="inline-flex items-center gap-1.5 text-[11px] font-black text-amber-300 uppercase tracking-wide">
                   <Sparkles size={12} /> Última consulta
                 </div>
-              </div>
-              <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[10px] leading-tight">
                 {displayedLastSummary ? (
                   <>
                     <span>Concluída: <span className="font-mono text-slate-200">{formatDateTimeWithOffset(displayedLastSummary.completedAtMs, timezoneOffsetMinutes)}</span></span>
@@ -3773,20 +3793,53 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
                   <span className="text-slate-500">Nenhuma consulta oficial carregada ainda.</span>
                 )}
               </div>
-              {/* Legenda compacta dos indicadores da coluna Personagem */}
-              <div className="mt-0.5 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[9px] leading-tight text-slate-500">
-                <span className="font-black uppercase tracking-wide text-slate-600">Legenda:</span>
-                <span className="inline-flex items-center gap-1"><span aria-label="Prioridade" title="Prioridade — menor quantidade desta vocação neste servidor" className="bazaar-badge bazaar-badge-priority"><Star size={11} strokeWidth={2.5} /></span> Prioridade</span>
-                <span className="inline-flex items-center gap-1"><span aria-label="Prioridade Máxima" title="Prioridade Máxima — nenhum personagem desta vocação neste servidor" className="bazaar-badge bazaar-badge-max"><Flame size={12} strokeWidth={2.5} /></span> Prioridade Máxima</span>
-                <span className="inline-flex items-center gap-1"><span aria-label="Prioridade para você" title="Prioridade para você — você não possui personagem neste servidor" className="bazaar-badge bazaar-badge-you"><Star size={11} strokeWidth={2.5} /></span> Prioridade p/ você</span>
-                <span className="inline-flex items-center gap-1"><span aria-label="Quest suspeita" title="Quest suspeita — alta chance de quest indisponível" className="bazaar-badge bazaar-badge-suspicious"><ShieldAlert size={12} strokeWidth={2.5} /></span> Quest suspeita</span>
-                <span className="inline-flex items-center gap-1"><span aria-label="Melhor vocação para você" title="Melhor vocação para você neste servidor" className="bazaar-badge bazaar-badge-bestvoc"><Target size={11} strokeWidth={2.5} /></span> Melhor vocação</span>
-              </div>
-              <div className="flex min-w-0 items-center gap-2 text-[11px] leading-tight">
-                <span className="truncate text-slate-400">{queryStatus || (result?.ok ? `${filteredAuctions.length}/${result.total} personagem(ns) na lista oficial` : isBossUser && isElectron ? "Defina filtros de consulta e clique em Consultar Bazaar" : "Clique em Atualizar para sincronizar a lista oficial")}</span>
-                <button type="button" onClick={() => setIsUsedFiltersOpen(true)} className="inline-flex h-6 flex-shrink-0 items-center gap-1 rounded-md border border-white/10 bg-white/5 px-2 text-[10px] font-black text-slate-300 hover:bg-white/10 hover:text-white transition-colors cursor-pointer">
-                  Filtros Usados
-                </button>
+              {/* LINHA 2 — legenda + controle (esquerda) · status + Filtros
+                  Usados (direita), numa ÚNICA linha com quebra automática:
+                  duas linhas antigas viram uma no desktop; no mobile os dois
+                  grupos quebram naturalmente um abaixo do outro. */}
+              <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+                {/* Legenda compacta dos indicadores da coluna Personagem +
+                    botão Mostrar/Ocultar Legenda. O botão alterna SOMENTE os
+                    efeitos visuais explicados pela legenda; o aviso de Quest
+                    suspeita é permanente e segue listado mesmo com a legenda
+                    oculta (o destaque dele continua ativo na tabela). */}
+                <div className="flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-1 text-[9px] leading-tight text-slate-500">
+                  <button
+                    type="button"
+                    onClick={toggleLegendEffects}
+                    aria-pressed={!showLegendEffects}
+                    className={`inline-flex h-6 flex-shrink-0 items-center gap-1 rounded-md border px-2 text-[9px] font-black uppercase tracking-wide transition-colors cursor-pointer ${
+                      showLegendEffects
+                        ? "border-white/10 bg-white/5 text-slate-300 hover:bg-white/10 hover:text-white"
+                        : "border-sky-500/30 bg-sky-500/10 text-sky-300 hover:bg-sky-500/20"
+                    }`}
+                    title={showLegendEffects
+                      ? "Desativa os destaques visuais da legenda nos cards da tabela (cores de fundo, bordas, brilhos e selos de prioridade). O aviso de Quest suspeita permanece sempre visível."
+                      : "Reativa os destaques visuais da legenda nos cards da tabela."}
+                  >
+                    {showLegendEffects ? <><EyeOff size={11} /> Ocultar Legenda</> : <><Eye size={11} /> Mostrar Legenda</>}
+                  </button>
+                  <span className="font-black uppercase tracking-wide text-slate-600">Legenda:</span>
+                  {showLegendEffects && (
+                    <>
+                      <span className="inline-flex items-center gap-1"><span aria-label="Prioridade" title="Prioridade — menor quantidade desta vocação neste servidor" className="bazaar-badge bazaar-badge-priority"><Star size={11} strokeWidth={2.5} /></span> Prioridade</span>
+                      <span className="inline-flex items-center gap-1"><span aria-label="Prioridade Máxima" title="Prioridade Máxima — nenhum personagem desta vocação neste servidor" className="bazaar-badge bazaar-badge-max"><Flame size={12} strokeWidth={2.5} /></span> Prioridade Máxima</span>
+                      <span className="inline-flex items-center gap-1"><span aria-label="Prioridade para você" title="Prioridade para você — você não possui personagem neste servidor" className="bazaar-badge bazaar-badge-you"><Star size={11} strokeWidth={2.5} /></span> Prioridade p/ você</span>
+                    </>
+                  )}
+                  <span className="inline-flex items-center gap-1"><span aria-label="Quest suspeita" title="Quest suspeita — alta chance de quest indisponível" className="bazaar-badge bazaar-badge-suspicious"><ShieldAlert size={12} strokeWidth={2.5} /></span> Quest suspeita</span>
+                  {showLegendEffects ? (
+                    <span className="inline-flex items-center gap-1"><span aria-label="Melhor vocação para você" title="Melhor vocação para você neste servidor" className="bazaar-badge bazaar-badge-bestvoc"><Target size={11} strokeWidth={2.5} /></span> Melhor vocação</span>
+                  ) : (
+                    <span className="text-slate-600" title="Os destaques de prioridade e melhor vocação estão desativados nos cards. O aviso de Quest suspeita permanece sempre ativo.">demais destaques ocultos</span>
+                  )}
+                </div>
+                <div className="flex min-w-0 items-center gap-2 text-[11px] leading-tight">
+                  <span className="truncate text-slate-400">{queryStatus || (result?.ok ? `${filteredAuctions.length}/${result.total} personagem(ns) na lista oficial` : isBossUser && isElectron ? "Defina filtros de consulta e clique em Consultar Bazaar" : "Clique em Atualizar para sincronizar a lista oficial")}</span>
+                  <button type="button" onClick={() => setIsUsedFiltersOpen(true)} className="inline-flex h-6 flex-shrink-0 items-center gap-1 rounded-md border border-white/10 bg-white/5 px-2 text-[10px] font-black text-slate-300 hover:bg-white/10 hover:text-white transition-colors cursor-pointer">
+                    Filtros Usados
+                  </button>
+                </div>
               </div>
             </div>
 
@@ -4347,18 +4400,21 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
                   // ── Precedência visual da LINHA (maior primeiro) ───────────────
                   // Quest suspeita > Prioridade para você > Prioridade Máxima > Prioridade.
                   // A linha usa apenas a cor do indicador de maior prioridade.
+                  // Com a legenda OCULTA (showLegendEffects=false) os destaques
+                  // de prioridade são neutralizados; o de Quest suspeita é
+                  // PERMANENTE — nunca é neutralizado por essa preferência.
                   let rowHighlightClass = "border-[var(--th-line)]/30 hover:bg-amber-500/[0.03]";
                   let rowHighlightTitle = "";
                   if (hasSuspiciousQuest) {
                     rowHighlightClass = "bazaar-row-suspicious";
                     rowHighlightTitle = "Quest suspeita";
-                  } else if (isUserPriorityServer) {
+                  } else if (showLegendEffects && isUserPriorityServer) {
                     rowHighlightClass = "bazaar-row-user-priority";
                     rowHighlightTitle = "Prioridade para você";
-                  } else if (isMaxPriorityPurchase) {
+                  } else if (showLegendEffects && isMaxPriorityPurchase) {
                     rowHighlightClass = "bazaar-row-max-priority";
                     rowHighlightTitle = "Prioridade Máxima";
-                  } else if (isPriorityPurchase) {
+                  } else if (showLegendEffects && isPriorityPurchase) {
                     rowHighlightClass = "bazaar-row-priority";
                     rowHighlightTitle = "Prioridade";
                   }
@@ -4395,7 +4451,9 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
                           </span>
                         )}
                       </td>
-                      <td className="h-12 px-1.5 py-2 align-middle font-bold text-white"><div className="flex items-center gap-1.5 min-w-0"><span className="truncate" title={auction.name || ""}>{auction.name || "—"}</span>{hasSuspiciousQuest && <span aria-label="Quest suspeita" title="Quest suspeita — contador de bosses muito próximo do total: alta chance de quest indisponível" className="bazaar-badge bazaar-badge-suspicious"><ShieldAlert size={12} strokeWidth={2.5} /></span>}{isMaxPriorityPurchase && <span aria-label="Prioridade Máxima" title="Prioridade Máxima — nenhum personagem desta vocação neste servidor" className="bazaar-badge bazaar-badge-max"><Flame size={12} strokeWidth={2.5} /></span>}{isPriorityPurchase && <span aria-label="Prioridade" title="Prioridade — menor quantidade desta vocação neste servidor" className="bazaar-badge bazaar-badge-priority"><Star size={11} strokeWidth={2.5} /></span>}{isUserPriorityServer && <span aria-label="Prioridade para você" title="Prioridade para você — você não possui personagem neste servidor" className="bazaar-badge bazaar-badge-you"><Star size={11} strokeWidth={2.5} /></span>}</div></td>
+                      {/* Selos: o de Quest suspeita é PERMANENTE (independe da legenda);
+                          os de prioridade seguem o controle Mostrar/Ocultar Legenda. */}
+                      <td className="h-12 px-1.5 py-2 align-middle font-bold text-white"><div className="flex items-center gap-1.5 min-w-0"><span className="truncate" title={auction.name || ""}>{auction.name || "—"}</span>{hasSuspiciousQuest && <span aria-label="Quest suspeita" title="Quest suspeita — contador de bosses muito próximo do total: alta chance de quest indisponível" className="bazaar-badge bazaar-badge-suspicious"><ShieldAlert size={12} strokeWidth={2.5} /></span>}{showLegendEffects && isMaxPriorityPurchase && <span aria-label="Prioridade Máxima" title="Prioridade Máxima — nenhum personagem desta vocação neste servidor" className="bazaar-badge bazaar-badge-max"><Flame size={12} strokeWidth={2.5} /></span>}{showLegendEffects && isPriorityPurchase && <span aria-label="Prioridade" title="Prioridade — menor quantidade desta vocação neste servidor" className="bazaar-badge bazaar-badge-priority"><Star size={11} strokeWidth={2.5} /></span>}{showLegendEffects && isUserPriorityServer && <span aria-label="Prioridade para você" title="Prioridade para você — você não possui personagem neste servidor" className="bazaar-badge bazaar-badge-you"><Star size={11} strokeWidth={2.5} /></span>}</div></td>
                       {/* Comprado — fluxo de inclusão do personagem comprado
                           (mesma ação/botão, agora posicionado após Personagem). */}
                       <td className="h-12 px-1 py-2 text-center align-middle">
@@ -4436,7 +4494,7 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
                               {sameVocOnServer}
                             </span>
                           )}
-                          {isUserPriorityVocation && (
+                          {showLegendEffects && isUserPriorityVocation && (
                             <span aria-label="Melhor vocação para você" title="Melhor vocação para você neste servidor (grupo dos amigos com menos desta vocação)" className="bazaar-badge bazaar-badge-bestvoc"><Target size={11} strokeWidth={2.5} /></span>
                           )}
                         </span>
