@@ -24,7 +24,7 @@
 // ============================================================================
 
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { AlertTriangle, BarChart3, Database, Eraser, RefreshCw, SlidersHorizontal, Square } from "lucide-react";
+import { AlertTriangle, BarChart3, Coins, Database, Eraser, HelpCircle, RefreshCw, SlidersHorizontal, Square } from "lucide-react";
 import { FilterMulti } from "./FilterTypes";
 import BazaarBrowserModal from "./BazaarBrowserModal";
 import { MIN_DISPLAY_SKILL, SKILL_DISPLAY, skillDefsForVocation } from "./BazaarItemsPanel";
@@ -152,36 +152,59 @@ const SKILL_FILTER_DEFS: { key: string; abbr: string; full: string; vocations: s
   return Array.from(map.values());
 })();
 
+/**
+ * Rótulo padrão de um campo do quadro de filtros: nome + ícone de ajuda com
+ * TOOLTIP nativo (padrão `title` já usado no app — funciona em desktop e,
+ * no mobile, via toque longo). O tooltip também cobre o campo inteiro.
+ */
+function FieldLabel({ text, hint, active, disabled }: { text: string; hint: string; active?: boolean; disabled?: boolean }) {
+  return (
+    <span
+      className={`inline-flex items-center gap-1 text-[9px] font-black uppercase tracking-wide cursor-help ${disabled ? "text-slate-600" : active ? "text-sky-300" : "text-slate-400"}`}
+      title={hint}
+    >
+      {text}
+      <HelpCircle size={9} className={disabled ? "text-slate-700" : "text-slate-500"} />
+    </span>
+  );
+}
+
 /** Campo de FAIXA mín/máx (inteiros ≥ 0; vazio = sem limite no lado). */
-function RangeField({ label, range, onChange, hint }: {
+function RangeField({ label, range, onChange, hint, disabled }: {
   label: string;
   range: NumberRange;
   onChange: (next: NumberRange) => void;
-  hint?: string;
+  hint: string;
+  /** Campo dependente desabilitado (ex.: Valor RC sem o desconto ativo). */
+  disabled?: boolean;
 }) {
   const parse = (text: string): number | null => {
     if (text.trim() === "") return null;
     const value = Math.floor(Number(text));
     return Number.isFinite(value) ? Math.max(0, value) : null;
   };
-  const active = rangeActive(range);
+  const active = !disabled && rangeActive(range);
   const inputClass = (filled: boolean) =>
-    `h-7 w-16 rounded-md border bg-black/30 px-1.5 text-[10px] outline-none focus:border-sky-400/60 `
-    + (filled ? "border-sky-400/50 text-sky-200 font-bold" : "border-[var(--th-line)]/60 text-slate-200");
+    `h-7 w-16 rounded-md border bg-black/30 px-1.5 text-[10px] outline-none focus:border-sky-400/60 transition-colors `
+    + (disabled
+      ? "border-[var(--th-line)]/30 text-slate-600 cursor-not-allowed opacity-60"
+      : filled ? "border-sky-400/50 text-sky-200 font-bold" : "border-[var(--th-line)]/60 text-slate-200");
   return (
     <div className="flex flex-col gap-0.5" title={hint}>
-      <span className={`text-[9px] font-black uppercase tracking-wide ${active ? "text-sky-300" : "text-slate-400"}`}>{label}</span>
+      <FieldLabel text={label} hint={hint} active={active} disabled={disabled} />
       <div className="flex items-center gap-1">
         <input
           type="number" inputMode="numeric" min={0} placeholder="mín."
           value={range.min ?? ""}
+          disabled={disabled}
           onChange={e => onChange({ ...range, min: parse(e.target.value) })}
           className={inputClass(range.min !== null)}
         />
-        <span className="text-[9px] text-slate-600">–</span>
+        <span className={`text-[9px] ${disabled ? "text-slate-700" : "text-slate-600"}`}>–</span>
         <input
           type="number" inputMode="numeric" min={0} placeholder="máx."
           value={range.max ?? ""}
+          disabled={disabled}
           onChange={e => onChange({ ...range, max: parse(e.target.value) })}
           className={inputClass(range.max !== null)}
         />
@@ -193,8 +216,8 @@ function RangeField({ label, range, onChange, hint }: {
 /** Agrupador visual de uma CATEGORIA do quadro de filtros. */
 function FilterCategory({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <div className="rounded-lg border border-[var(--th-line)]/40 bg-black/15 px-2.5 py-1.5">
-      <div className="text-[8px] font-black uppercase tracking-widest text-slate-500 mb-1">{title}</div>
+    <div className="rounded-lg border border-[var(--th-line)]/50 bg-black/20 px-2.5 py-2">
+      <div className="text-[8px] font-black uppercase tracking-widest text-sky-400/70 mb-1.5 border-b border-[var(--th-line)]/30 pb-1">{title}</div>
       <div className="flex flex-wrap items-end gap-x-3 gap-y-1.5">{children}</div>
     </div>
   );
@@ -550,7 +573,6 @@ export default function BazaarStatsPanel({ isBossUser, isElectron, isOtherQueryR
     } catch { /* Electron indisponível */ }
   }
 
-  const labelClass = "text-[9px] font-black uppercase tracking-wide text-slate-400";
   const lastRun = syncState?.lastRun;
   const totalCount = syncState?.totalCount || 0;
 
@@ -696,15 +718,20 @@ export default function BazaarStatsPanel({ isBossUser, isElectron, isOtherQueryR
       {/* ── FILTROS DA ANÁLISE (quadro dedicado — 100% local, zero leituras) ─
           Todas as condições valem EM CONJUNTO sobre as tuplas em memória:
           mudar filtro NUNCA consulta o site nem relê documentos. ─────────── */}
-      <div className="rounded-xl border border-[var(--th-line)]/60 bg-[var(--th-n-base)]/80 backdrop-blur-md px-3 py-2 space-y-1.5 flex-shrink-0 max-h-[45%] overflow-y-auto">
+      <div className="rounded-xl border border-sky-500/25 bg-[var(--th-n-base)]/90 backdrop-blur-md px-3 py-2 space-y-2 flex-shrink-0 max-h-[45%] overflow-y-auto shadow-[0_0_14px_color-mix(in_oklab,var(--color-sky-500)_6%,transparent)]">
         {/* Cabeçalho do quadro: título + selo de filtros ativos + limpar */}
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-          <div className="flex items-center gap-1.5 text-slate-200">
-            <SlidersHorizontal size={13} className="text-sky-300" />
+          <div className="flex items-center gap-2 text-slate-100">
+            <span className="inline-flex h-6 w-6 items-center justify-center rounded-md border border-sky-400/40 bg-sky-500/15">
+              <SlidersHorizontal size={12} className="text-sky-300" />
+            </span>
             <span className="text-[11px] font-black uppercase tracking-wide">Filtros da Análise</span>
           </div>
           {activeFilterCount > 0 ? (
-            <span className="inline-flex items-center gap-1 px-1.5 h-5 rounded-md border border-sky-400/40 bg-sky-500/15 text-sky-200 text-[9px] font-black">
+            <span
+              className="inline-flex items-center gap-1 px-1.5 h-5 rounded-md border border-sky-400/40 bg-sky-500/15 text-sky-200 text-[9px] font-black cursor-help"
+              title="Quantidade de filtros/opções em efeito agora. Todos os indicadores e gráficos abaixo consideram apenas o conjunto filtrado."
+            >
               {activeFilterCount} filtro(s) ativo(s)
             </span>
           ) : (
@@ -714,13 +741,16 @@ export default function BazaarStatsPanel({ isBossUser, isElectron, isOtherQueryR
             <button
               type="button"
               onClick={() => setFilters(defaultHistoryFilters())}
-              title="Remove todos os filtros e restaura o padrão (base completa)"
-              className="inline-flex h-6 items-center gap-1 px-2 rounded-md border border-rose-500/25 bg-rose-500/10 text-rose-300 text-[9px] font-black transition-all cursor-pointer hover:bg-rose-500/20"
+              title="Remove todos os filtros (incluindo o desconto de itens) e restaura o padrão: estatísticas da base completa com o Lance Vencedor original."
+              className="inline-flex h-6 items-center gap-1 px-2 rounded-md border border-rose-500/25 bg-rose-500/10 text-rose-300 text-[9px] font-black transition-all cursor-pointer hover:bg-rose-500/20 hover:border-rose-400/40"
             >
               <Eraser size={10} /> Limpar Filtros
             </button>
           )}
-          <div className="ml-auto text-[10px] text-slate-400">
+          <div
+            className="ml-auto text-[10px] text-slate-400 cursor-help"
+            title="Quantos leilões da base histórica atendem a TODOS os filtros ativos, sobre o total de leilões disponíveis."
+          >
             <span className="font-black text-sky-200">{formatInt(stats.count)}</span> de {formatInt(totalCount)} leilões no filtro
           </div>
         </div>
@@ -728,51 +758,78 @@ export default function BazaarStatsPanel({ isBossUser, isElectron, isOtherQueryR
         {/* Categorias de filtros */}
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-1.5">
           <FilterCategory title="Período e Origem">
-            <div className="flex flex-col gap-0.5">
-              <span className={labelClass}>Meses</span>
+            <div className="flex flex-col gap-0.5" title="Meses (pela data de término do leilão) incluídos na análise. Seleção múltipla; nenhum selecionado = todos os meses da base.">
+              <FieldLabel text="Meses" hint="Meses (pela data de término do leilão) incluídos na análise. Seleção múltipla; nenhum selecionado = todos os meses da base." active={filters.months.length > 0} />
               <FilterMulti label="Meses" options={monthOptions} selected={filters.months} onApply={values => updateFilters({ months: values })} placeholder="Meses" searchable />
             </div>
-            <div className="flex flex-col gap-0.5">
-              <span className={labelClass}>Servidor</span>
+            <div className="flex flex-col gap-0.5" title="Servidores dos personagens vendidos. Seleção múltipla; nenhum selecionado = todos os servidores.">
+              <FieldLabel text="Servidor" hint="Servidores dos personagens vendidos. Seleção múltipla; nenhum selecionado = todos os servidores." active={filters.servers.length > 0} />
               <FilterMulti label="Servidor" options={serverOptions} selected={filters.servers} onApply={values => updateFilters({ servers: values })} placeholder="Servidor" searchable />
             </div>
           </FilterCategory>
 
           <FilterCategory title="Personagem">
-            <div className="flex flex-col gap-0.5">
-              <span className={labelClass}>Vocação</span>
+            <div className="flex flex-col gap-0.5" title="Vocações consideradas. Seleção múltipla; nenhuma selecionada = todas. Também delimita os filtros de skill (cada skill só se aplica às vocações da guia Itens).">
+              <FieldLabel text="Vocação" hint="Vocações consideradas. Seleção múltipla; nenhuma selecionada = todas. Também delimita os filtros de skill (cada skill só se aplica às vocações da guia Itens)." active={filters.vocations.length > 0} />
               <FilterMulti label="Vocação" options={vocationOptions} selected={filters.vocations} onApply={values => updateFilters({ vocations: values })} placeholder="Vocação" searchable />
             </div>
-            <RangeField label="Level" range={filters.level} onChange={range => updateFilters({ level: range })} hint="Intervalo de level (mín/máx livres — ex.: 400 a 800)" />
+            <RangeField label="Level" range={filters.level} onChange={range => updateFilters({ level: range })} hint="Intervalo de level do personagem (mín/máx livres — ex.: 400 a 800). Vazio em um lado = sem limite naquele lado." />
           </FilterCategory>
 
           <FilterCategory title="Valores (RC)">
-            <RangeField label="Lance Vencedor" range={filters.bid} onChange={range => updateFilters({ bid: range })} hint="Lance vencedor em Rubini Coins (mín/máx)" />
-            <RangeField label="Valor dos Itens" range={filters.items} onChange={range => updateFilters({ items: range })} hint="Valor dos itens monitorados em RC pela cotação da ingestão (0 = sem itens avaliados)" />
+            {/* DESCONTAR VALOR DOS ITENS — muda a MEDIDA de preço de toda a
+                análise e habilita o campo dependente "Valor RC". */}
+            <label
+              className={`inline-flex h-7 items-center gap-1.5 px-2 rounded-md border text-[9px] font-black uppercase tracking-wide cursor-pointer select-none transition-colors ${filters.discountItems ? "border-amber-400/60 bg-amber-500/15 text-amber-200" : "border-[var(--th-line)]/60 bg-black/25 text-slate-300 hover:border-amber-400/40"}`}
+              title="Quando ativado, subtrai do Lance Vencedor o valor estimado dos itens do personagem, convertido para RC (mesma conversão kk→RC da guia Itens, registrada na ingestão). As estatísticas de preço (média, mínimo, máximo, evolução mensal e distribuição) passam a representar o valor estimado do personagem SEM os itens. Sem itens avaliados, nada é descontado; itens valendo mais que o lance contam como valor 0 (nunca negativo). O Lance Vencedor original do histórico não é alterado."
+            >
+              <input
+                type="checkbox"
+                checked={filters.discountItems}
+                onChange={e => updateFilters({ discountItems: e.target.checked })}
+                className="accent-amber-500"
+              />
+              <Coins size={11} className={filters.discountItems ? "text-amber-300" : "text-slate-500"} />
+              Descontar valor dos itens
+            </label>
+            <RangeField label="Lance Vencedor" range={filters.bid} onChange={range => updateFilters({ bid: range })} hint="Faixa do Lance Vencedor ORIGINAL em Rubini Coins (mín/máx), sem nenhum desconto — independe da opção “Descontar valor dos itens”." />
+            <RangeField
+              label="Valor RC"
+              range={filters.value}
+              onChange={range => updateFilters({ value: range })}
+              disabled={!filters.discountItems}
+              hint={filters.discountItems
+                ? "Define a faixa de preço dos personagens considerados na análise, usando o VALOR ESTIMADO após subtrair os itens (Lance Vencedor − itens em RC, mínimo 0). Ex.: mín. 500 e máx. 2000."
+                : "Faixa do valor estimado do personagem SEM os itens. Disponível apenas com “Descontar valor dos itens” ativado."}
+            />
+            <RangeField label="Valor dos Itens" range={filters.items} onChange={range => updateFilters({ items: range })} hint="Faixa do valor dos itens monitorados do personagem, em RC pela cotação registrada na ingestão (0 = sem itens avaliados). Útil junto com o desconto para isolar personagens com muitos ou poucos itens." />
           </FilterCategory>
 
           <FilterCategory title="Quests">
-            {([["Soul War", "soulwar"], ["Sanguine", "sanguine"]] as const).map(([label, field]) => (
-              <div key={field} className="flex flex-col gap-0.5">
-                <span className={`text-[9px] font-black uppercase tracking-wide ${filters[field] !== "any" ? "text-sky-300" : "text-slate-400"}`}>{label}</span>
-                <select
-                  value={filters[field]}
-                  onChange={e => updateFilters({ [field]: e.target.value as HistoryQuestFilter } as Partial<HistoryMetricsFilters>)}
-                  className="h-7 rounded-md border border-[var(--th-line)]/60 bg-black/30 px-1.5 text-[10px] text-slate-200 outline-none focus:border-sky-400/60 cursor-pointer"
-                >
-                  {QUEST_FILTER_LABELS.map(option => (
-                    <option key={option.value} value={option.value} className="bg-slate-900">{option.label}</option>
-                  ))}
-                </select>
-              </div>
-            ))}
+            {([["Soul War", "soulwar"], ["Sanguine", "sanguine"]] as const).map(([label, field]) => {
+              const hint = `${label}: “Tanto Faz” ignora a quest; “Disponível” só personagens com a quest AINDA DISPONÍVEL para fazer; “Feita” só personagens que já a concluíram. Personagens sem o dado ficam fora quando uma opção específica é escolhida.`;
+              return (
+                <div key={field} className="flex flex-col gap-0.5" title={hint}>
+                  <FieldLabel text={label} hint={hint} active={filters[field] !== "any"} />
+                  <select
+                    value={filters[field]}
+                    onChange={e => updateFilters({ [field]: e.target.value as HistoryQuestFilter } as Partial<HistoryMetricsFilters>)}
+                    className="h-7 rounded-md border border-[var(--th-line)]/60 bg-black/30 px-1.5 text-[10px] text-slate-200 outline-none focus:border-sky-400/60 cursor-pointer"
+                  >
+                    {QUEST_FILTER_LABELS.map(option => (
+                      <option key={option.value} value={option.value} className="bg-slate-900">{option.label}</option>
+                    ))}
+                  </select>
+                </div>
+              );
+            })}
           </FilterCategory>
 
           <FilterCategory title="Progresso da Conta">
-            <RangeField label="Charm Points" range={filters.charm} onChange={range => updateFilters({ charm: range })} hint="Total Charm Points armazenado (ex.: mín. 800 e máx. 1500). Personagens sem o dado ficam fora quando a faixa está ativa." />
-            <RangeField label="Auras" range={filters.auras} onChange={range => updateFilters({ auras: range })} hint="Quantidade de auras (mín/máx)" />
-            <RangeField label="Hirelings" range={filters.hirelings} onChange={range => updateFilters({ hirelings: range })} hint="Quantidade de hirelings (mín/máx)" />
-            <RangeField label="Passes Deluxe" range={filters.deluxe} onChange={range => updateFilters({ deluxe: range })} hint="Temporadas do Battlepass com Deluxe = “sim” (0 = nenhuma, 1, 2…). Use mín=máx para um valor exato — ex.: 0–0 só sem Deluxe." />
+            <RangeField label="Charm Points" range={filters.charm} onChange={range => updateFilters({ charm: range })} hint="Faixa do Total Charm Points armazenado (ex.: mín. 800 e máx. 1500, limites inclusivos). Personagens sem o dado coletado ficam fora quando a faixa está ativa." />
+            <RangeField label="Auras" range={filters.auras} onChange={range => updateFilters({ auras: range })} hint="Faixa da quantidade de auras do personagem (mín/máx). Sem o dado coletado, o personagem fica fora quando a faixa está ativa." />
+            <RangeField label="Hirelings" range={filters.hirelings} onChange={range => updateFilters({ hirelings: range })} hint="Faixa da quantidade de hirelings do personagem (mín/máx). Sem o dado coletado, o personagem fica fora quando a faixa está ativa." />
+            <RangeField label="Passes Deluxe" range={filters.deluxe} onChange={range => updateFilters({ deluxe: range })} hint="Faixa de temporadas do Battlepass com Deluxe = “sim” (0 = nenhuma, 1, 2…). Use mín=máx para valor exato — ex.: 0–0 só personagens sem nenhum passe. Sem o dado, o personagem fica fora quando a faixa está ativa." />
           </FilterCategory>
 
           <FilterCategory title="Skills (regras por vocação da guia Itens)">
@@ -782,14 +839,17 @@ export default function BazaarStatsPanel({ isBossUser, isElectron, isOtherQueryR
                 label={def.abbr}
                 range={filters.skills[def.key] || emptyRange()}
                 onChange={range => updateSkillRange(def.key, range)}
-                hint={`${def.full} — aplicável a: ${def.vocations.join(", ")}. Com a faixa ativa, só entram personagens dessas vocações E com a skill coletada (sem valores fictícios).`}
+                hint={`Faixa de ${def.full} (mín/máx). Aplicável a: ${def.vocations.join(", ")} — com a faixa ativa, só entram personagens dessas vocações E com a skill coletada (sem valores fictícios).`}
               />
             ))}
           </FilterCategory>
         </div>
 
-        <div className="text-[9px] text-slate-500">
+        <div className="text-[9px] text-slate-500 border-t border-[var(--th-line)]/30 pt-1.5">
           Todos os indicadores e gráficos abaixo consideram <span className="font-black text-slate-400">exclusivamente</span> o conjunto filtrado; as médias com “com dado” usam só os personagens que possuem aquela informação. Filtros de skill seguem as regras por vocação da guia Itens.
+          {filters.discountItems && (
+            <span className="text-amber-300/90 font-bold"> Preços no modo “valor estimado sem itens”: Lance Vencedor − itens (RC); o lance original do histórico permanece intacto.</span>
+          )}
         </div>
       </div>
 
@@ -803,19 +863,40 @@ export default function BazaarStatsPanel({ isBossUser, isElectron, isOtherQueryR
           </div>
         ) : (
           <>
-            {/* VALOR MÉDIO DO LANCE VENCEDOR — o destaque da tela */}
+            {/* AVISO DE MODO AJUSTADO — preços = valor estimado SEM itens */}
+            {stats.priceAdjusted && (
+              <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-1.5 text-[10px] text-amber-200 flex items-center gap-2 flex-wrap">
+                <Coins size={13} className="text-amber-300 flex-shrink-0" />
+                <span className="min-w-0">
+                  <span className="font-black">Valores ajustados:</span> as estatísticas de preço mostram o valor estimado do personagem <span className="font-black">sem os itens</span> (Lance Vencedor − itens em RC) — não confundir com o Lance Vencedor original, que permanece intacto no histórico.
+                  {stats.negativeAdjustedCount > 0 && (
+                    <> {formatInt(stats.negativeAdjustedCount)} personagem(ns) com itens valendo mais que o lance entram com valor 0 (nunca negativo).</>
+                  )}
+                </span>
+              </div>
+            )}
+
+            {/* VALOR MÉDIO (lance vencedor OU valor estimado sem itens) */}
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-1.5">
-              <div className="rounded-xl border border-sky-500/40 bg-gradient-to-br from-sky-500/15 to-sky-900/20 px-3 py-2.5 shadow-[0_0_18px_color-mix(in_oklab,var(--color-sky-500)_12%,transparent)]">
-                <div className="text-[9px] font-black uppercase tracking-wide text-sky-300">Valor médio do lance vencedor</div>
-                <div className="text-2xl font-black text-sky-100">{stats.count > 0 ? `${formatInt(stats.avgWinningBidRc)} RC` : "—"}</div>
-                <div className="text-[10px] text-sky-300/80">{formatInt(stats.count)} personagens vendidos no filtro</div>
+              <div className={`rounded-xl border px-3 py-2.5 ${stats.priceAdjusted ? "border-amber-500/40 bg-gradient-to-br from-amber-500/15 to-amber-900/20 shadow-[0_0_18px_color-mix(in_oklab,var(--color-amber-500)_12%,transparent)]" : "border-sky-500/40 bg-gradient-to-br from-sky-500/15 to-sky-900/20 shadow-[0_0_18px_color-mix(in_oklab,var(--color-sky-500)_12%,transparent)]"}`}>
+                <div className={`text-[9px] font-black uppercase tracking-wide ${stats.priceAdjusted ? "text-amber-300" : "text-sky-300"}`}>
+                  {stats.priceAdjusted ? "Valor médio estimado (sem itens)" : "Valor médio do lance vencedor"}
+                </div>
+                <div className={`text-2xl font-black ${stats.priceAdjusted ? "text-amber-100" : "text-sky-100"}`}>{stats.count > 0 ? `${formatInt(stats.avgWinningBidRc)} RC` : "—"}</div>
+                <div className={`text-[10px] ${stats.priceAdjusted ? "text-amber-300/80" : "text-sky-300/80"}`}>
+                  {formatInt(stats.count)} personagens vendidos no filtro{stats.priceAdjusted ? " · lance − itens (RC)" : ""}
+                </div>
               </div>
               <div className="rounded-xl border border-[var(--th-line)]/60 bg-[var(--th-n-base)]/80 px-3 py-2.5">
-                <div className="text-[9px] font-black uppercase tracking-wide text-slate-400">Lance mínimo / máximo</div>
+                <div className="text-[9px] font-black uppercase tracking-wide text-slate-400">
+                  {stats.priceAdjusted ? "Valor estimado mínimo / máximo" : "Lance mínimo / máximo"}
+                </div>
                 <div className="text-lg font-black text-slate-100">
                   {stats.count > 0 ? <>{formatInt(stats.minWinningBidRc)} <span className="text-slate-500 text-sm">/</span> {formatInt(stats.maxWinningBidRc)} RC</> : "—"}
                 </div>
-                <div className="text-[10px] text-slate-500">entre os lances vencedores do filtro</div>
+                <div className="text-[10px] text-slate-500">
+                  {stats.priceAdjusted ? "entre os valores estimados sem itens do filtro" : "entre os lances vencedores do filtro"}
+                </div>
               </div>
               <div className="rounded-xl border border-[var(--th-line)]/60 bg-[var(--th-n-base)]/80 px-3 py-2.5">
                 <div className="text-[9px] font-black uppercase tracking-wide text-slate-400">Valor médio dos itens monitorados</div>
@@ -850,7 +931,9 @@ export default function BazaarStatsPanel({ isBossUser, isElectron, isOtherQueryR
             {/* EVOLUÇÃO MENSAL — análise histórica (partição central por mês) */}
             {stats.byMonth.length > 0 && (
               <div className="rounded-xl border border-[var(--th-line)]/60 bg-[var(--th-n-base)]/80 px-3 py-2">
-                <div className="text-[9px] font-black uppercase tracking-wide text-slate-400 mb-1">Evolução mensal (vendidos · lance médio)</div>
+                <div className="text-[9px] font-black uppercase tracking-wide text-slate-400 mb-1">
+                  Evolução mensal (vendidos · {stats.priceAdjusted ? "valor médio estimado sem itens" : "lance médio"})
+                </div>
                 <div className="flex flex-wrap gap-x-4 gap-y-1">
                   {stats.byMonth.map(month => (
                     <div key={month.label} className="text-[10px] text-slate-400">
@@ -898,7 +981,7 @@ export default function BazaarStatsPanel({ isBossUser, isElectron, isOtherQueryR
 
             {/* DISTRIBUIÇÕES DE LANCE, CHARM E DELUXE (histogramas das tuplas) */}
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-1.5">
-              {([["Distribuição do lance vencedor", stats.bidDistribution], ["Distribuição de Charm Points", stats.charmDistribution], ["Distribuição de Passes Deluxe", stats.deluxeDistribution]] as const).map(([title, dist]) => (
+              {([[stats.priceAdjusted ? "Distribuição do valor estimado (sem itens)" : "Distribuição do lance vencedor", stats.bidDistribution], ["Distribuição de Charm Points", stats.charmDistribution], ["Distribuição de Passes Deluxe", stats.deluxeDistribution]] as const).map(([title, dist]) => (
                 dist.length > 0 && (
                   <div key={title} className="rounded-xl border border-[var(--th-line)]/60 bg-[var(--th-n-base)]/80 px-3 py-2">
                     <div className="text-[9px] font-black uppercase tracking-wide text-slate-400 mb-1">{title}</div>

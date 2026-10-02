@@ -297,6 +297,21 @@ export interface HistoryMetricsFilters {
    * têm o dado coletado — sem valores fictícios nem descarte indevido.
    */
   skills: Record<string, NumberRange>;
+  /**
+   * "DESCONTAR VALOR DOS ITENS": quando ativo, TODA métrica de preço usa o
+   * VALOR ESTIMADO do personagem = Lance Vencedor (RC) − valor dos itens
+   * monitorados (RC — já convertido de kk NA INGESTÃO pela mesma regra da
+   * guia Itens, `computeItemRC`; nenhuma taxa nova é inventada aqui). O
+   * lance original persistido NUNCA é alterado — o desconto é um cálculo
+   * de exibição/filtragem sobre a tupla, aplicado exatamente UMA vez.
+   */
+  discountItems: boolean;
+  /**
+   * Faixa do VALOR ESTIMADO (RC) — dependente de `discountItems`: só é
+   * aplicada quando o desconto está ativo (a interface desabilita o campo
+   * caso contrário).
+   */
+  value: NumberRange;
 }
 
 export function defaultHistoryFilters(): HistoryMetricsFilters {
@@ -306,7 +321,21 @@ export function defaultHistoryFilters(): HistoryMetricsFilters {
     charm: emptyRange(), auras: emptyRange(), hirelings: emptyRange(), deluxe: emptyRange(),
     soulwar: "any", sanguine: "any",
     skills: {},
+    discountItems: false,
+    value: emptyRange(),
   };
+}
+
+/**
+ * VALOR ESTIMADO do personagem SEM os itens (RC): Lance Vencedor − itens.
+ * `i` já está em RC pela conversão kk→RC feita na ingestão (regra única do
+ * app); `i = 0` significa "sem itens monitorados avaliados" → desconto 0
+ * (nenhum valor é inventado). Itens valendo MAIS que o lance NÃO produzem
+ * preço negativo: o valor estimado é truncado em 0 e o caso é contado à
+ * parte (`negativeAdjustedCount`) para a tela explicitar.
+ */
+export function adjustedPriceOf(tuple: AuctionTuple): number {
+  return Math.max(0, tuple.b - tuple.i);
 }
 
 /** Quantidade de filtros ATIVOS (para o selo do quadro de filtros). */
@@ -322,6 +351,12 @@ export function countActiveHistoryFilters(filters: HistoryMetricsFilters): numbe
   if (filters.sanguine !== "any") active += 1;
   for (const range of Object.values(filters.skills)) {
     if (rangeActive(range)) active += 1;
+  }
+  // O desconto muda a MEDIDA de preço (resultados deixam de ser os padrão);
+  // a faixa de Valor RC só conta quando o desconto que a habilita está on.
+  if (filters.discountItems) {
+    active += 1;
+    if (rangeActive(filters.value)) active += 1;
   }
   return active;
 }
@@ -359,6 +394,9 @@ export function tupleMatchesFilters(
   if (!inRange(tuple.l, filters.level)) return false;
   if (!inRange(tuple.b, filters.bid)) return false;
   if (!inRange(tuple.i, filters.items)) return false;
+  // Faixa do VALOR ESTIMADO (RC): dependente do desconto de itens — sem o
+  // desconto ativo ela é ignorada (campo desabilitado na interface).
+  if (filters.discountItems && rangeActive(filters.value) && !inRange(adjustedPriceOf(tuple), filters.value)) return false;
   if (!matchQuest(tuple.w, filters.soulwar)) return false;
   if (!matchQuest(tuple.g, filters.sanguine)) return false;
   if (rangeActive(filters.charm) && (tuple.c === undefined || !inRange(tuple.c, filters.charm))) return false;
@@ -383,9 +421,18 @@ export function tupleMatchesFilters(
 
 export interface BazaarHistoryStats {
   count: number;
+  /**
+   * As três métricas de preço abaixo usam o LANCE VENCEDOR (RC) — ou, com
+   * "Descontar valor dos itens" ativo (`priceAdjusted`), o VALOR ESTIMADO
+   * sem itens (lance − itens em RC, truncado em 0).
+   */
   avgWinningBidRc: number;
   minWinningBidRc: number;
   maxWinningBidRc: number;
+  /** As métricas de preço estão no modo "valor estimado sem itens"? */
+  priceAdjusted: boolean;
+  /** Personagens cujos itens valem MAIS que o lance (estimado truncado em 0). */
+  negativeAdjustedCount: number;
   avgItemsRc: number;
   withItemsCount: number;
   avgLevel: number;
@@ -428,7 +475,10 @@ export function computeStatsFromMetricDocs(
   skillDefs: SkillDefsResolver,
 ): BazaarHistoryStats {
   let count = 0;
-  let bidSum = 0; let bidMin = 0; let bidMax = 0;
+  // Preço: lance vencedor OU valor estimado sem itens (ver `priceAdjusted`).
+  // Mínimo com sentinela null — 0 é preço VÁLIDO no modo ajustado.
+  let bidSum = 0; let bidMin: number | null = null; let bidMax = 0;
+  let negativeAdjustedCount = 0;
   let itemsSum = 0; let itemsN = 0;
   let levelSum = 0; let levelMin = 0; let levelMax = 0;
   let charmSum = 0; let charmN = 0;
@@ -453,9 +503,14 @@ export function computeStatsFromMetricDocs(
       if (!tupleMatchesFilters(tuple, filters, skillDefs)) continue;
 
       count += 1;
-      bidSum += tuple.b;
-      bidMin = bidMin === 0 ? tuple.b : Math.min(bidMin, tuple.b);
-      bidMax = Math.max(bidMax, tuple.b);
+      // MEDIDA DE PREÇO: com o desconto ativo, o valor dos itens (já em RC
+      // pela conversão da ingestão) é subtraído EXATAMENTE uma vez do
+      // lance; sem desconto, o lance original intacto.
+      const price = filters.discountItems ? adjustedPriceOf(tuple) : tuple.b;
+      if (filters.discountItems && tuple.i > tuple.b) negativeAdjustedCount += 1;
+      bidSum += price;
+      bidMin = bidMin === null ? price : Math.min(bidMin, price);
+      bidMax = Math.max(bidMax, price);
       if (tuple.i > 0) { itemsSum += tuple.i; itemsN += 1; }
       levelSum += tuple.l;
       levelMin = levelMin === 0 ? tuple.l : Math.min(levelMin, tuple.l);
@@ -478,11 +533,11 @@ export function computeStatsFromMetricDocs(
       byServer.set(docData.server, (byServer.get(docData.server) || 0) + 1);
       const month = byMonth.get(docData.ym) || { count: 0, bidSum: 0 };
       month.count += 1;
-      month.bidSum += tuple.b;
+      month.bidSum += price; // evolução mensal segue a MESMA medida de preço
       byMonth.set(docData.ym, month);
       if (tuple.w === 0) sw.available += 1; else if (tuple.w === 1) sw.completed += 1; else sw.unknown += 1;
       if (tuple.g === 0) sg.available += 1; else if (tuple.g === 1) sg.completed += 1; else sg.unknown += 1;
-      const bidBucket = bidBucketKey(tuple.b);
+      const bidBucket = bidBucketKey(price); // histograma na mesma medida
       bidDist.set(bidBucket, (bidDist.get(bidBucket) || 0) + 1);
 
       const vocSkills = skillsByVoc.get(tuple.v) || { count: 0, sk: {} };
@@ -507,8 +562,10 @@ export function computeStatsFromMetricDocs(
   return {
     count,
     avgWinningBidRc: count > 0 ? Math.round(bidSum / count) : 0,
-    minWinningBidRc: bidMin,
+    minWinningBidRc: bidMin ?? 0,
     maxWinningBidRc: bidMax,
+    priceAdjusted: filters.discountItems,
+    negativeAdjustedCount,
     avgItemsRc: itemsN > 0 ? Math.round(itemsSum / itemsN) : 0,
     withItemsCount: itemsN,
     avgLevel: count > 0 ? Math.round(levelSum / count) : 0,
