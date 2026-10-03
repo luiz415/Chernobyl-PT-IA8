@@ -78,6 +78,17 @@ const NEW_SANGUINE_BOSSES = [
 ];
 const NEW_SOUL_WAR_FINAL_BOSS = "goshnar's megalomania";
 const NEW_SANGUINE_FINAL_BOSS = 'bakragore';
+// CRYPT — "The Roost of the Graveborn" no site; "Crypt" no aplicativo.
+// Bosses definidos pelo usuário (17ª tarefa); o final (bonelord's
+// phylactery) também participa da verificação, como Megalomania/Bakragore.
+const NEW_CRYPT_BOSSES = [
+  'adventurer group',
+  'eldritch dragon lord',
+  'ice horror',
+  'the gravedigger',
+  "bonelord's phylactery",
+];
+const NEW_CRYPT_FINAL_BOSS = "bonelord's phylactery";
 
 /** Mesma normalização do método antigo (acentos, aspas curvas, hífens). */
 function normalizeBossName(value) {
@@ -144,7 +155,7 @@ function walkJson(root, visit) {
  */
 function collectBossMentions(payload) {
   const found = new Map();
-  const allBosses = [...NEW_SOUL_WAR_BOSSES, ...NEW_SANGUINE_BOSSES];
+  const allBosses = [...NEW_SOUL_WAR_BOSSES, ...NEW_SANGUINE_BOSSES, ...NEW_CRYPT_BOSSES];
 
   walkJson(payload, (node, path) => {
     if (typeof node !== 'string') return;
@@ -260,18 +271,19 @@ function summarizeJsonShape(payload) {
 }
 
 /**
- * Conclui Soul War / Sanguine a partir do payload da API individual.
+ * Conclui Soul War / Sanguine / Crypt a partir do payload da API individual.
  *
  * ── REGRA DE NEGÓCIO: IDÊNTICA À DO MÉTODO ANTIGO ─────────────────────────
  *   • Soul War concluída  = os 6 Goshnar's presentes OU Megalomania presente
  *   • Sanguine concluída  = os 5 presentes OU Bakragore presente
+ *   • Crypt concluída     = os 5 presentes OU Bonelord's Phylactery presente
  *   • Quest fora do escopo do filtro (`all`) => `null` (= "Não verificado"),
  *     nunca `false`, que significaria "disponível" e seria inventar resultado.
  *
  * `resolved: false` significa "esta resposta não permite concluir" — e nesse
  * caso o personagem vai para o FALLBACK no método antigo. Nunca chutamos.
  */
-function deriveQuestsFromApiPayload(payload, quests = { soulwar: true, sanguine: true }) {
+function deriveQuestsFromApiPayload(payload, quests = { soulwar: true, sanguine: true, crypt: true }) {
   const mentions = collectBossMentions(payload);
   const containers = findBosstiaryContainers(payload);
   const storages = collectStorageEntries(payload);
@@ -291,14 +303,17 @@ function deriveQuestsFromApiPayload(payload, quests = { soulwar: true, sanguine:
       reason: 'SEM_ESTRUTURA_DE_BOSSTIARY',
       soulwarCompleted: null,
       sanguineCompleted: null,
+      cryptCompleted: null,
       evidence: { shape: summarizeJsonShape(payload), storages, containers, bossPaths: mentions.paths },
     };
   }
 
   const soulWarFoundBosses = NEW_SOUL_WAR_BOSSES.filter(boss => bossSet.has(normalizeBossName(boss)));
   const sanguineFoundBosses = NEW_SANGUINE_BOSSES.filter(boss => bossSet.has(normalizeBossName(boss)));
+  const cryptFoundBosses = NEW_CRYPT_BOSSES.filter(boss => bossSet.has(normalizeBossName(boss)));
   const soulWarFinalFound = bossSet.has(normalizeBossName(NEW_SOUL_WAR_FINAL_BOSS));
   const sanguineFinalFound = bossSet.has(normalizeBossName(NEW_SANGUINE_FINAL_BOSS));
+  const cryptFinalFound = bossSet.has(normalizeBossName(NEW_CRYPT_FINAL_BOSS));
 
   return {
     resolved: true,
@@ -309,10 +324,19 @@ function deriveQuestsFromApiPayload(payload, quests = { soulwar: true, sanguine:
     sanguineCompleted: quests.sanguine
       ? (sanguineFoundBosses.length === NEW_SANGUINE_BOSSES.length || sanguineFinalFound)
       : null,
+    // Crypt: MESMA lógica (todos os bosses OU o final). `quests.crypt !== false`
+    // (e não `quests.crypt === true`) para que chamadas existentes sem o campo
+    // (guia Itens/Histórico) também recebam o dado — elas simplesmente o
+    // ignoram, sem mudança de comportamento.
+    cryptCompleted: quests.crypt !== false
+      ? (cryptFoundBosses.length === NEW_CRYPT_BOSSES.length || cryptFinalFound)
+      : null,
     soulWarFoundBosses,
     sanguineFoundBosses,
+    cryptFoundBosses,
     soulWarBossCount: soulWarFoundBosses.length,
     sanguineBossCount: sanguineFoundBosses.length,
+    cryptBossCount: cryptFoundBosses.length,
     totalBosstiaryBosses: bossSet.size,
     // `shape` também no caminho de SUCESSO: sem ele o log de descoberta
     // imprimia `{ type: 'object', keys: [] }` (o fallback), escondendo
@@ -348,6 +372,10 @@ function deriveQuestsFromApiPayload(payload, quests = { soulwar: true, sanguine:
 // ============================================================================
 const NEW_QUEST_NAME_SOULWAR = 'soul war';
 const NEW_QUEST_NAME_SANGUINE = 'rotten blood';
+// Crypt — nome OFICIAL no site: "The Roost of the Graveborn". Sem o artigo
+// inicial para casar tanto "The Roost of the Graveborn" quanto variações
+// sem o "The" (a comparação usa includes sobre o texto normalizado).
+const NEW_QUEST_NAME_CRYPT = 'roost of the graveborn';
 
 /** Flags booleanos de conclusão aceitos num objeto de quest do JSON. */
 const QUEST_DONE_FLAG_KEYS = /^(isCompleted|completed|complete|isComplete|finished|isFinished|done|isDone|claimed|concluded|isConcluded)$/i;
@@ -402,6 +430,7 @@ function collectQuestEntries(payload) {
       let quest = '';
       if (normalized === NEW_QUEST_NAME_SOULWAR || normalized.includes(NEW_QUEST_NAME_SOULWAR)) quest = 'soulwar';
       else if (normalized === NEW_QUEST_NAME_SANGUINE || normalized.includes(NEW_QUEST_NAME_SANGUINE)) quest = 'sanguine';
+      else if (normalized.includes(NEW_QUEST_NAME_CRYPT)) quest = 'crypt';
       if (!quest) return;
       const completed = parent && typeof parent === 'object' && !Array.isArray(parent)
         ? interpretQuestCompletionFlag(parent)
@@ -444,6 +473,9 @@ function collectQuestEntries(payload) {
 const QUEST_STORAGE_RULES = {
   soulwar: { name: 'Soul War', storageId: 21216, requiredValue: 1n },
   sanguine: { name: 'Rotten Blood', storageId: 10301, requiredValue: 4n },
+  // Crypt no aplicativo. Entrada LITERAL do QUEST_REWARDS do site:
+  // { name: "The Roost of the Graveborn", storageId: 3291, requiredValue: 16 }
+  crypt: { name: 'The Roost of the Graveborn', storageId: 3291, requiredValue: 16n },
 };
 
 /** Réplica fiel do toStoragesMap do site (chaves normalizadas p/ Number). */
@@ -474,7 +506,7 @@ function deriveQuestsFromStorages(payload) {
   // Lista ausente/vazia/inválida: sem base para afirmar nada — "?" honesto.
   // (Qualquer personagem real tem centenas de storages; vazio = anômalo.)
   if (!raw || raw.length === 0 || map.size === 0) {
-    return { usable: false, soulwar: { value: null, status: 'SEM_STORAGES' }, sanguine: { value: null, status: 'SEM_STORAGES' }, evidence: { present: !!raw, pares: raw ? raw.length : 0 } };
+    return { usable: false, soulwar: { value: null, status: 'SEM_STORAGES' }, sanguine: { value: null, status: 'SEM_STORAGES' }, crypt: { value: null, status: 'SEM_STORAGES' }, evidence: { present: !!raw, pares: raw ? raw.length : 0 } };
   }
   const decide = (questKey) => {
     const rule = QUEST_STORAGE_RULES[questKey];
@@ -485,11 +517,13 @@ function deriveQuestsFromStorages(payload) {
     usable: true,
     soulwar: decide('soulwar'),
     sanguine: decide('sanguine'),
+    crypt: decide('crypt'),
     evidence: {
       present: true,
       pares: raw.length,
       soulwarStorage: map.has(QUEST_STORAGE_RULES.soulwar.storageId) ? String(map.get(QUEST_STORAGE_RULES.soulwar.storageId)) : null,
       sanguineStorage: map.has(QUEST_STORAGE_RULES.sanguine.storageId) ? String(map.get(QUEST_STORAGE_RULES.sanguine.storageId)) : null,
+      cryptStorage: map.has(QUEST_STORAGE_RULES.crypt.storageId) ? String(map.get(QUEST_STORAGE_RULES.crypt.storageId)) : null,
     },
   };
 }
@@ -509,7 +543,7 @@ function deriveQuestsFromStorages(payload) {
  *     personagem segue para a leitura DOM (se houver retries).
  *   • quest fora do escopo => null ("Não verificado"), nunca false.
  */
-function deriveQuestsFromQuestEntries(payload, quests = { soulwar: true, sanguine: true }) {
+function deriveQuestsFromQuestEntries(payload, quests = { soulwar: true, sanguine: true, crypt: true }) {
   const storages = deriveQuestsFromStorages(payload);
   const entries = collectQuestEntries(payload);
 
@@ -530,16 +564,21 @@ function deriveQuestsFromQuestEntries(payload, quests = { soulwar: true, sanguin
 
   const soulwar = decide('soulwar');
   const sanguine = decide('sanguine');
+  const crypt = decide('crypt');
   const needSoulwar = quests.soulwar !== false;
   const needSanguine = quests.sanguine !== false;
-  const resolved = (!needSoulwar || soulwar.status === 'OK') && (!needSanguine || sanguine.status === 'OK');
+  const needCrypt = quests.crypt !== false;
+  const resolved = (!needSoulwar || soulwar.status === 'OK')
+    && (!needSanguine || sanguine.status === 'OK')
+    && (!needCrypt || crypt.status === 'OK');
 
   return {
     resolved,
     reason: resolved ? 'OK' : 'QUESTS_INCONCLUSIVAS_NO_JSON',
     soulwarCompleted: needSoulwar && soulwar.status === 'OK' ? soulwar.value : null,
     sanguineCompleted: needSanguine && sanguine.status === 'OK' ? sanguine.value : null,
-    questStatuses: { soulwar: soulwar.status, sanguine: sanguine.status },
+    cryptCompleted: needCrypt && crypt.status === 'OK' ? crypt.value : null,
+    questStatuses: { soulwar: soulwar.status, sanguine: sanguine.status, crypt: crypt.status },
     // `questEntries` no diagnóstico: é o log de DESCOBERTA que revela, na
     // primeira execução real, se/como o payload traz a lista de quests.
     // `storages` registra a fonte oficial usada (pares e valores lidos).
@@ -604,7 +643,7 @@ function extractQuestRowsInPage() {
  *   • linha com círculo DESMARCADO → quest DISPONÍVEL;
  *   • quest ausente das linhas, ou linhas contraditórias → inconclusivo.
  */
-function decideQuestsFromDomRows(rows, quests = { soulwar: true, sanguine: true }) {
+function decideQuestsFromDomRows(rows, quests = { soulwar: true, sanguine: true, crypt: true }) {
   const list = Array.isArray(rows) ? rows : [];
   const decide = (needle) => {
     const matches = list.filter(row => row && typeof row.text === 'string' && row.text.includes(needle));
@@ -616,18 +655,24 @@ function decideQuestsFromDomRows(rows, quests = { soulwar: true, sanguine: true 
   };
   const soulwar = decide(NEW_QUEST_NAME_SOULWAR);
   const sanguine = decide(NEW_QUEST_NAME_SANGUINE);
+  const crypt = decide(NEW_QUEST_NAME_CRYPT);
   const needSoulwar = quests.soulwar !== false;
   const needSanguine = quests.sanguine !== false;
-  const resolved = (!needSoulwar || soulwar.status === 'OK') && (!needSanguine || sanguine.status === 'OK');
+  const needCrypt = quests.crypt !== false;
+  const resolved = (!needSoulwar || soulwar.status === 'OK')
+    && (!needSanguine || sanguine.status === 'OK')
+    && (!needCrypt || crypt.status === 'OK');
   const failStatus = [
     ...(needSoulwar ? [soulwar.status] : []),
     ...(needSanguine ? [sanguine.status] : []),
+    ...(needCrypt ? [crypt.status] : []),
   ].find(status => status !== 'OK') || 'QUEST_NAO_LISTADA';
   return {
     resolved,
     reason: resolved ? 'OK' : failStatus,
     soulwarCompleted: needSoulwar && soulwar.status === 'OK' ? soulwar.value : null,
     sanguineCompleted: needSanguine && sanguine.status === 'OK' ? sanguine.value : null,
+    cryptCompleted: needCrypt && crypt.status === 'OK' ? crypt.value : null,
   };
 }
 
@@ -638,8 +683,8 @@ function decideQuestsFromDomRows(rows, quests = { soulwar: true, sanguine: true 
  *     guia Quests (indicador oficial renderizado) tem prioridade; na ausência
  *     dele, preserva-se o que o JSON já tinha concluído;
  *   • sem nenhum dado conclusivo, fica `null` (o renderer exibe "?");
- *   • SW e SG são INDEPENDENTES: uma quest conclusiva NUNCA é descartada
- *     porque a outra ficou sem dado.
+ *   • SW, SG e Crypt são INDEPENDENTES: uma quest conclusiva NUNCA é
+ *     descartada porque outra ficou sem dado.
  */
 function mergeQuestOutcomes(jsonOutcome, domOutcome) {
   const pick = (domValue, jsonValue) => {
@@ -650,6 +695,7 @@ function mergeQuestOutcomes(jsonOutcome, domOutcome) {
   return {
     soulwarCompleted: pick(domOutcome?.soulwarCompleted, jsonOutcome?.soulwarCompleted),
     sanguineCompleted: pick(domOutcome?.sanguineCompleted, jsonOutcome?.sanguineCompleted),
+    cryptCompleted: pick(domOutcome?.cryptCompleted, jsonOutcome?.cryptCompleted),
   };
 }
 
@@ -768,7 +814,7 @@ function registerBazaarNewMethod(deps) {
     ABA_QUESTS_NAO_ENCONTRADA: 'A página abriu, mas não expõe a aba Quests.',
     ABA_QUESTS_NAO_CLICAVEL: 'A aba Quests não respondeu ao clique.',
     LISTA_DE_QUESTS_NAO_MONTOU: 'A lista da guia Quests não terminou de montar.',
-    QUEST_NAO_LISTADA: 'A guia Quests montou, mas não lista Soul War/Rotten Blood.',
+    QUEST_NAO_LISTADA: 'A guia Quests montou, mas não lista Soul War/Rotten Blood/The Roost of the Graveborn.',
     CONFLITO: 'A guia Quests apresentou estados conflitantes para a mesma quest.',
     QUESTS_INCONCLUSIVAS_NO_JSON: 'O JSON não trouxe a situação das quests.',
   };
@@ -1058,6 +1104,7 @@ function registerBazaarNewMethod(deps) {
               questSource: 'quests',
               soulwarCompleted: outcome.soulwarCompleted,
               sanguineCompleted: outcome.sanguineCompleted,
+              cryptCompleted: outcome.cryptCompleted,
               fetchedAt: Date.now(),
             }
             : {
@@ -1065,8 +1112,10 @@ function registerBazaarNewMethod(deps) {
               method: 'api_json_v2',
               soulwarCompleted: outcome.soulwarCompleted,
               sanguineCompleted: outcome.sanguineCompleted,
+              cryptCompleted: outcome.cryptCompleted,
               soulWarBossCount: outcome.soulWarBossCount,
               sanguineBossCount: outcome.sanguineBossCount,
+              cryptBossCount: outcome.cryptBossCount,
               totalBosstiaryBosses: outcome.totalBosstiaryBosses,
               fetchedAt: Date.now(),
             };
@@ -1090,6 +1139,7 @@ function registerBazaarNewMethod(deps) {
             jsonPartialByKey[key] = {
               soulwarCompleted: outcome.soulwarCompleted === true || outcome.soulwarCompleted === false ? outcome.soulwarCompleted : null,
               sanguineCompleted: outcome.sanguineCompleted === true || outcome.sanguineCompleted === false ? outcome.sanguineCompleted : null,
+              cryptCompleted: outcome.cryptCompleted === true || outcome.cryptCompleted === false ? outcome.cryptCompleted : null,
               reason: outcome.reason || 'QUESTS_INCONCLUSIVAS_NO_JSON',
             };
           }
@@ -1148,11 +1198,11 @@ function registerBazaarNewMethod(deps) {
         for (const auction of unresolved) {
           const key = auction?.id || auction?.name || auction?.url;
           if (!key || details[key]) continue;
-          const partial = jsonPartialByKey[key] || { soulwarCompleted: null, sanguineCompleted: null, reason: 'QUESTS_INCONCLUSIVAS_NO_JSON' };
+          const partial = jsonPartialByKey[key] || { soulwarCompleted: null, sanguineCompleted: null, cryptCompleted: null, reason: 'QUESTS_INCONCLUSIVAS_NO_JSON' };
           pendingByKey.set(key, {
             auction,
-            partial: { soulwarCompleted: partial.soulwarCompleted, sanguineCompleted: partial.sanguineCompleted },
-            hadJsonData: partial.soulwarCompleted !== null || partial.sanguineCompleted !== null,
+            partial: { soulwarCompleted: partial.soulwarCompleted, sanguineCompleted: partial.sanguineCompleted, cryptCompleted: partial.cryptCompleted ?? null },
+            hadJsonData: partial.soulwarCompleted !== null || partial.sanguineCompleted !== null || (partial.cryptCompleted ?? null) !== null,
             jsonReason: partial.reason || 'QUESTS_INCONCLUSIVAS_NO_JSON',
             domReadable: false,
             lastReason: partial.reason || 'QUESTS_INCONCLUSIVAS_NO_JSON',
@@ -1239,8 +1289,10 @@ function registerBazaarNewMethod(deps) {
 
               const needSoulwar = quests.soulwar !== false;
               const needSanguine = quests.sanguine !== false;
+              const needCrypt = quests.crypt !== false;
               const complete = (!needSoulwar || entry.partial.soulwarCompleted !== null)
-                && (!needSanguine || entry.partial.sanguineCompleted !== null);
+                && (!needSanguine || entry.partial.sanguineCompleted !== null)
+                && (!needCrypt || entry.partial.cryptCompleted !== null);
               if (complete) {
                 domResolvedCount += 1;
                 stat.recovered += 1;
@@ -1251,6 +1303,7 @@ function registerBazaarNewMethod(deps) {
                   questSource: 'quests',
                   soulwarCompleted: entry.partial.soulwarCompleted,
                   sanguineCompleted: entry.partial.sanguineCompleted,
+                  cryptCompleted: entry.partial.cryptCompleted ?? null,
                   fetchedAt: Date.now(),
                 };
                 pendingByKey.delete(key);
@@ -1287,7 +1340,7 @@ function registerBazaarNewMethod(deps) {
         //     conclusivo → FALHA real (`error` + `failureReason`), quests
         //     `null` ("?"), nunca presumidas.
         for (const [key, entry] of pendingByKey) {
-          const hasAnyConclusive = entry.partial.soulwarCompleted !== null || entry.partial.sanguineCompleted !== null;
+          const hasAnyConclusive = entry.partial.soulwarCompleted !== null || entry.partial.sanguineCompleted !== null || (entry.partial.cryptCompleted ?? null) !== null;
           const jsonReadable = !QUESTS_JSON_TRANSPORT_REASONS.has(entry.jsonReason);
           const attemptedDom = questsRetryStats.length > 0;
           if (hasAnyConclusive || jsonReadable || entry.domReadable) {
@@ -1299,6 +1352,7 @@ function registerBazaarNewMethod(deps) {
               questSource: 'quests',
               soulwarCompleted: entry.partial.soulwarCompleted,
               sanguineCompleted: entry.partial.sanguineCompleted,
+              cryptCompleted: entry.partial.cryptCompleted ?? null,
               fetchedAt: Date.now(),
               // Diagnóstico (NÃO é falha): por que restou "?" neste
               // personagem. O renderer ignora o campo.
@@ -1311,6 +1365,7 @@ function registerBazaarNewMethod(deps) {
               questSource: 'quests',
               soulwarCompleted: null,
               sanguineCompleted: null,
+              cryptCompleted: null,
               fetchedAt: Date.now(),
               failureReason: entry.lastReason,
               error: QUESTS_DOM_REASON_TEXT[entry.lastReason]
@@ -1441,4 +1496,7 @@ module.exports = {
   mergeQuestOutcomes,
   NEW_QUEST_NAME_SOULWAR,
   NEW_QUEST_NAME_SANGUINE,
+  NEW_QUEST_NAME_CRYPT,
+  NEW_CRYPT_BOSSES,
+  NEW_CRYPT_FINAL_BOSS,
 };

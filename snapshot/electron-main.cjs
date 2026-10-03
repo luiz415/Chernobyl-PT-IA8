@@ -2731,6 +2731,16 @@ const RUBINOT_SANGUINE_BOSSES = [
 ];
 const RUBINOT_SOUL_WAR_FINAL_BOSS = "goshnar's megalomania";
 const RUBINOT_SANGUINE_FINAL_BOSS = 'bakragore';
+// CRYPT — "The Roost of the Graveborn" no site; "Crypt" no aplicativo.
+// MESMA regra das demais: todos os bosses presentes OU o final presente.
+const RUBINOT_CRYPT_BOSSES = [
+  'adventurer group',
+  'eldritch dragon lord',
+  'ice horror',
+  'the gravedigger',
+  "bonelord's phylactery",
+];
+const RUBINOT_CRYPT_FINAL_BOSS = "bonelord's phylactery";
 
 function normalizeRubinotBossName(value) {
   return String(value || '')
@@ -3066,9 +3076,9 @@ function findRubinotBossesInSearchResult(targetBosses, resultBosses) {
   return targetBosses.filter(boss => resultSet.has(normalizeRubinotBossName(boss)));
 }
 
-async function collectRubinotBosstiaryBosses(page, id, quests = { soulwar: true, sanguine: true }, sentinel = null) {
+async function collectRubinotBosstiaryBosses(page, id, quests = { soulwar: true, sanguine: true, crypt: true }, sentinel = null) {
   // Nenhuma quest exigida: não há o que apurar. Evita paginar/pesquisar à toa.
-  if (!quests.soulwar && !quests.sanguine) {
+  if (!quests.soulwar && !quests.sanguine && !quests.crypt) {
     rubinotDiag('details', 'Nenhuma quest exigida pelos filtros; Bosstiary não percorrida.', { id });
     return { bosses: [], strategy: 'skipped-no-quest-required', pageCount: 0, searchSummaries: [] };
   }
@@ -3085,7 +3095,7 @@ async function collectRubinotBosstiaryBosses(page, id, quests = { soulwar: true,
   // quests estão disponíveis. A checagem vem depois de limpar a busca, para
   // não confundir com "Nenhum boss encontrado com ..." de uma pesquisa ativa.
   if (await detectRubinotBosstiaryNoProgress(page)) {
-    rubinotDiag('details', 'Bosstiary sem nenhum progresso; Soul War e Sanguine disponíveis.', { id });
+    rubinotDiag('details', 'Bosstiary sem nenhum progresso; Soul War, Sanguine e Crypt disponíveis.', { id });
     return { bosses: [], strategy: 'empty-no-progress', pageCount: 0, searchSummaries: [], noProgress: true };
   }
 
@@ -3129,11 +3139,11 @@ async function collectRubinotBosstiaryBosses(page, id, quests = { soulwar: true,
   return collectRubinotBosstiaryBossesBySearch(page, id, pageCount, quests, sentinel);
 }
 
-async function collectRubinotBosstiaryBossesBySearch(page, id, pageCount = 0, quests = { soulwar: true, sanguine: true }, sentinel = null) {
+async function collectRubinotBosstiaryBossesBySearch(page, id, pageCount = 0, quests = { soulwar: true, sanguine: true, crypt: true }, sentinel = null) {
   const foundBosses = new Set();
   const searchSummaries = [];
   rubinotDiag('details', 'Bosstiary possui múltiplas páginas; usando pesquisa interna.', {
-    id, pageCount, verificando: { soulwar: !!quests.soulwar, sanguine: !!quests.sanguine },
+    id, pageCount, verificando: { soulwar: !!quests.soulwar, sanguine: !!quests.sanguine, crypt: !!quests.crypt },
   });
 
   // Uma única busca por "gosh" cobre os 6 bosses de Soul War.
@@ -3162,6 +3172,19 @@ async function collectRubinotBosstiaryBossesBySearch(page, id, pageCount = 0, qu
     }
   }
 
+  // Crypt: mesma mecânica da Sanguine — uma busca por boss (5 no total),
+  // com a MESMA checagem barata de falha antes de cada busca. Pular quando a
+  // quest não é exigida economiza as 5 buscas por personagem.
+  if (quests.crypt) {
+    for (const boss of RUBINOT_CRYPT_BOSSES) {
+      await assertRubinotPageNotFailed(page, id, `pesquisa-crypt:${boss}`);
+      const results = await searchRubinotBosstiaryBosses(page, id, boss, sentinel);
+      const found = findRubinotBossesInSearchResult([boss], results);
+      found.forEach(foundBoss => foundBosses.add(normalizeRubinotBossName(foundBoss)));
+      searchSummaries.push({ query: boss, results: results.length, matchedBosses: found });
+    }
+  }
+
   try {
     const searchInput = getRubinotBosstiarySearchInput(page);
     await fillWithoutFocus(page, searchInput, '', 1500);
@@ -3177,7 +3200,9 @@ function getCachedRubinotDetails(id) {
     rubinotDetailsCache.delete(id);
     return null;
   }
-  const hasUnavailableInfo = cached.soulwarCompleted === null || cached.sanguineCompleted === null;
+  // `== null` (e não `===`) para a Crypt: entradas antigas do cache (sem o
+  // campo) contam como informação indisponível → TTL curto, nunca reuso longo.
+  const hasUnavailableInfo = cached.soulwarCompleted === null || cached.sanguineCompleted === null || cached.cryptCompleted == null;
   const ttl = cached.error || hasUnavailableInfo ? RUBINOT_DETAILS_ERROR_TTL_MS : RUBINOT_DETAILS_TTL_MS;
   if (Date.now() - cached.fetchedAt > ttl) {
     rubinotDetailsCache.delete(id);
@@ -3204,7 +3229,8 @@ async function fetchRubinotCharacterDetails(page, auction, options = {}, runStat
     if (cached) {
       const covers =
         (!quests.soulwar || cached.soulwarCompleted !== null || !!cached.error) &&
-        (!quests.sanguine || cached.sanguineCompleted !== null || !!cached.error);
+        (!quests.sanguine || cached.sanguineCompleted !== null || !!cached.error) &&
+        (!quests.crypt || (cached.cryptCompleted ?? null) !== null || !!cached.error);
       if (covers) return cached;
       rubinotDetailsCache.delete(id);
     }
@@ -3217,11 +3243,11 @@ async function fetchRubinotCharacterDetails(page, auction, options = {}, runStat
   return request;
 }
 
-async function fetchRubinotCharacterDetailsUncached(page, auction, runState = null, quests = { soulwar: true, sanguine: true }) {
+async function fetchRubinotCharacterDetailsUncached(page, auction, runState = null, quests = { soulwar: true, sanguine: true, crypt: true }) {
   const id = auction?.id || auction?.name || auction?.url;
   const url = normalizeRubinotAuctionUrl(auction);
   if (!url) {
-    return cacheRubinotDetails(id, { id, method: RUBINOT_DETAILS_METHOD, soulwarCompleted: null, sanguineCompleted: null, fetchedAt: Date.now(), error: 'URL do personagem ausente ou inválida.' });
+    return cacheRubinotDetails(id, { id, method: RUBINOT_DETAILS_METHOD, soulwarCompleted: null, sanguineCompleted: null, cryptCompleted: null, fetchedAt: Date.now(), error: 'URL do personagem ausente ou inválida.' });
   }
 
   // Observador de falha vivo durante TODA a análise deste personagem. É
@@ -3251,11 +3277,11 @@ async function fetchRubinotCharacterDetailsUncached(page, auction, runState = nu
         rubinotDiag('details', 'Cloudflare reapareceu durante a página individual. Pausando e aguardando validação.', { id, url, attempt, currentUrl: challenge.currentUrl });
         const cleared = await waitForRubinotChallengeToClear(page, context, runState, 'details-challenge', url);
         if (!cleared.ok) {
-          return cacheRubinotDetails(id, { id, method: RUBINOT_DETAILS_METHOD, soulwarCompleted: null, sanguineCompleted: null, fetchedAt: Date.now(), error: cleared.error || 'Cloudflare não liberou a página individual.' });
+          return cacheRubinotDetails(id, { id, method: RUBINOT_DETAILS_METHOD, soulwarCompleted: null, sanguineCompleted: null, cryptCompleted: null, fetchedAt: Date.now(), error: cleared.error || 'Cloudflare não liberou a página individual.' });
         }
         const session = await ensureRubinotSessionReady(context, runState, 'details-session-recheck');
         if (!session.ok) {
-          return cacheRubinotDetails(id, { id, method: RUBINOT_DETAILS_METHOD, soulwarCompleted: null, sanguineCompleted: null, fetchedAt: Date.now(), error: session.message || 'Sessão Rubinot não foi revalidada após Cloudflare individual.' });
+          return cacheRubinotDetails(id, { id, method: RUBINOT_DETAILS_METHOD, soulwarCompleted: null, sanguineCompleted: null, cryptCompleted: null, fetchedAt: Date.now(), error: session.message || 'Sessão Rubinot não foi revalidada após Cloudflare individual.' });
         }
         rubinotDiag('details', 'Sessão revalidada após Cloudflare individual. Retomando o mesmo personagem.', { id, url, attempt });
         continue;
@@ -3265,7 +3291,7 @@ async function fetchRubinotCharacterDetailsUncached(page, auction, runState = nu
     }
 
     if (!navigationReady) {
-      return cacheRubinotDetails(id, { id, method: RUBINOT_DETAILS_METHOD, soulwarCompleted: null, sanguineCompleted: null, fetchedAt: Date.now(), error: 'Não foi possível abrir a página individual após revalidações do Cloudflare.' });
+      return cacheRubinotDetails(id, { id, method: RUBINOT_DETAILS_METHOD, soulwarCompleted: null, sanguineCompleted: null, cryptCompleted: null, fetchedAt: Date.now(), error: 'Não foi possível abrir a página individual após revalidações do Cloudflare.' });
     }
 
     // ==========================================================================
@@ -3502,7 +3528,7 @@ async function fetchRubinotCharacterDetailsUncached(page, auction, runState = nu
       }[reason] || 'Botão Bosstiary não encontrado.';
       rubinotDiag('details', 'Personagem descartado: Bosstiary indisponível.', { id, url, reason, diagnosis: lastPageDiagnosis });
       return cacheRubinotDetails(id, {
-        id, method: RUBINOT_DETAILS_METHOD, soulwarCompleted: null, sanguineCompleted: null,
+        id, method: RUBINOT_DETAILS_METHOD, soulwarCompleted: null, sanguineCompleted: null, cryptCompleted: null,
         fetchedAt: Date.now(), failureReason: reason,
         error: reasonText,
       });
@@ -3537,7 +3563,7 @@ async function fetchRubinotCharacterDetailsUncached(page, auction, runState = nu
       // `failureReason` recuperável faz o personagem entrar no retry final.
       return cacheRubinotDetails(id, {
         id, method: RUBINOT_DETAILS_METHOD,
-        soulwarCompleted: null, sanguineCompleted: null,
+        soulwarCompleted: null, sanguineCompleted: null, cryptCompleted: null,
         fetchedAt: Date.now(), failureReason: finalCheck.reason,
         error: 'A página falhou durante a análise da Bosstiary; resultado descartado.',
       });
@@ -3546,8 +3572,10 @@ async function fetchRubinotCharacterDetailsUncached(page, auction, runState = nu
     const bossSet = new Set(bosstiary.bosses.map(normalizeRubinotBossName));
     const soulWarFoundBosses = RUBINOT_SOUL_WAR_BOSSES.filter(boss => bossSet.has(normalizeRubinotBossName(boss)));
     const sanguineFoundBosses = RUBINOT_SANGUINE_BOSSES.filter(boss => bossSet.has(normalizeRubinotBossName(boss)));
+    const cryptFoundBosses = RUBINOT_CRYPT_BOSSES.filter(boss => bossSet.has(normalizeRubinotBossName(boss)));
     const soulWarFinalFound = bossSet.has(normalizeRubinotBossName(RUBINOT_SOUL_WAR_FINAL_BOSS));
     const sanguineFinalFound = bossSet.has(normalizeRubinotBossName(RUBINOT_SANGUINE_FINAL_BOSS));
+    const cryptFinalFound = bossSet.has(normalizeRubinotBossName(RUBINOT_CRYPT_FINAL_BOSS));
 
     // Quest NÃO exigida pelo filtro => `null` (= "Não verificado").
     // Nunca um boolean: `false` significaria "quest disponível", o que seria
@@ -3564,10 +3592,15 @@ async function fetchRubinotCharacterDetailsUncached(page, auction, runState = nu
       sanguineCompleted: quests.sanguine
         ? (noProgress ? false : (sanguineFoundBosses.length === RUBINOT_SANGUINE_BOSSES.length || sanguineFinalFound))
         : null,
+      cryptCompleted: quests.crypt
+        ? (noProgress ? false : (cryptFoundBosses.length === RUBINOT_CRYPT_BOSSES.length || cryptFinalFound))
+        : null,
       soulWarFoundBosses,
       sanguineFoundBosses,
+      cryptFoundBosses,
       soulWarBossCount: soulWarFoundBosses.length,
       sanguineBossCount: sanguineFoundBosses.length,
+      cryptBossCount: cryptFoundBosses.length,
       totalBosstiaryBosses: bossSet.size,
       bosstiaryStrategy: bosstiary.strategy,
       bosstiaryPageCount: bosstiary.pageCount,
@@ -3594,7 +3627,8 @@ async function fetchRubinotCharacterDetailsUncached(page, auction, runState = nu
     // Um `null` por filtro em "Todas" é intencional, não uma falha.
     const hasUnavailableInfo =
       (quests.soulwar && details.soulwarCompleted === null) ||
-      (quests.sanguine && details.sanguineCompleted === null);
+      (quests.sanguine && details.sanguineCompleted === null) ||
+      (quests.crypt && details.cryptCompleted === null);
     rubinotDiag('details', 'Bosstiary lida para disponibilidade de quests.', {
       id,
       totalBosstiaryBosses: details.totalBosstiaryBosses,
@@ -3603,18 +3637,23 @@ async function fetchRubinotCharacterDetailsUncached(page, auction, runState = nu
       bosstiarySearchSummaries: details.bosstiarySearchSummaries,
       soulWarBossCount: details.soulWarBossCount,
       sanguineBossCount: details.sanguineBossCount,
+      cryptBossCount: details.cryptBossCount,
       soulWarFoundBosses: details.soulWarFoundBosses,
       sanguineFoundBosses: details.sanguineFoundBosses,
+      cryptFoundBosses: details.cryptFoundBosses,
       soulwarCompleted: details.soulwarCompleted,
       sanguineCompleted: details.sanguineCompleted,
+      cryptCompleted: details.cryptCompleted,
     });
     const result = {
       id,
       method: RUBINOT_DETAILS_METHOD,
       soulwarCompleted: details.soulwarCompleted,
       sanguineCompleted: details.sanguineCompleted,
+      cryptCompleted: details.cryptCompleted,
       soulWarBossCount: details.soulWarBossCount,
       sanguineBossCount: details.sanguineBossCount,
+      cryptBossCount: details.cryptBossCount,
       fetchedAt: Date.now(),
       ...(hasUnavailableInfo ? { error: 'Informação de Bosstiary indisponível no DOM atual do personagem.' } : {}),
     };
@@ -3646,14 +3685,14 @@ async function fetchRubinotCharacterDetailsUncached(page, auction, runState = nu
       });
       return cacheRubinotDetails(id, {
         id, method: RUBINOT_DETAILS_METHOD,
-        soulwarCompleted: null, sanguineCompleted: null,
+        soulwarCompleted: null, sanguineCompleted: null, cryptCompleted: null,
         fetchedAt: Date.now(), failureReason: 'RUBINOT_ERRO_APP',
         failureStage: error.stage,
         error: 'O RubinOT exibiu "Falha ao carregar leilão" durante a análise.',
       });
     }
 
-    return cacheRubinotDetails(id, { id, method: RUBINOT_DETAILS_METHOD, soulwarCompleted: null, sanguineCompleted: null, fetchedAt: Date.now(), error: String(error?.message || error) });
+    return cacheRubinotDetails(id, { id, method: RUBINOT_DETAILS_METHOD, soulwarCompleted: null, sanguineCompleted: null, cryptCompleted: null, fetchedAt: Date.now(), error: String(error?.message || error) });
   } finally {
     // Limpeza garantida: nenhum observador, timer ou promessa sobrevive ao
     // personagem, qualquer que tenha sido o desfecho.
@@ -3881,8 +3920,9 @@ function isRubinotRecoverableFailure(detail) {
 function resolveRubinotQuestScope(options = {}) {
   const scope = options?.quests;
   // Sem informação explícita, mantém o comportamento antigo (verifica tudo).
-  if (!scope || typeof scope !== 'object') return { soulwar: true, sanguine: true };
-  return { soulwar: scope.soulwar !== false, sanguine: scope.sanguine !== false };
+  if (!scope || typeof scope !== 'object') return { soulwar: true, sanguine: true, crypt: true };
+  // Crypt segue o MESMO contrato: só sai do escopo com `false` explícito.
+  return { soulwar: scope.soulwar !== false, sanguine: scope.sanguine !== false, crypt: scope.crypt !== false };
 }
 
 /** Falhas consecutivas a partir das quais suspeitamos de sessão expirada. */

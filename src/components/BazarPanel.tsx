@@ -216,10 +216,13 @@ interface BazaarAuction {
   url: string;
   soulwarCompleted?: boolean | null;
   sanguineCompleted?: boolean | null;
+  cryptCompleted?: boolean | null;
   soulWarBossCount?: number;
   sanguineBossCount?: number;
+  cryptBossCount?: number;
   soulWarBossTotal?: number;
   sanguineBossTotal?: number;
+  cryptBossTotal?: number;
   /**
    * Identificação usada na apuração das quests ("bosstiary" ausente/padrão;
    * "quests" = guia Quests da página oficial). Um único campo curto no
@@ -250,10 +253,14 @@ interface BazaarAuction {
 export interface BazaarQuestStatusDetail {
   soulwarCompleted: boolean | null;
   sanguineCompleted: boolean | null;
+  /** Crypt ("The Roost of the Graveborn"). Ausente em dados antigos => "?". */
+  cryptCompleted?: boolean | null;
   soulWarBossCount?: number;
   sanguineBossCount?: number;
+  cryptBossCount?: number;
   soulWarBossTotal?: number;
   sanguineBossTotal?: number;
+  cryptBossTotal?: number;
   /**
    * Como a situação foi identificada no método API JSON:
    *   • ausente/"bosstiary" = derivada da Bosstiary (contador "X/Y" faz
@@ -373,6 +380,7 @@ interface QuestsItemsStepResponse {
     /** Quests REAIS do payload (deriveQuestsFromApiPayload): true = feita. */
     soulwarCompleted?: boolean | null;
     sanguineCompleted?: boolean | null;
+    cryptCompleted?: boolean | null;
     /** Origem da identificação ("quests" = lista de quests do payload). */
     questSource?: "bosstiary" | "quests";
     /** Contadores de bosses ("X/Y") — mesma função, mesmo payload. */
@@ -537,6 +545,27 @@ const BAZAR_TIMEZONE_OPTIONS = Array.from({ length: 27 }, (_, index) => {
 
 type ServerSelectionMode = "all" | "custom";
 type QuestFilter = "all" | "available" | "completed";
+
+/** Colunas de Quest da tabela — SW, SG e Crypt, avaliadas INDEPENDENTEMENTE. */
+type QuestField = "soulwarCompleted" | "sanguineCompleted" | "cryptCompleted";
+
+/**
+ * Metadados por Quest usados pelos helpers de exibição. Totais: SW 6 bosses,
+ * SG 5, Crypt 5. `minSuspicious` segue a régua existente (total-based):
+ * SW 3/6..5/6; SG 2/5..4/5; Crypt (5 bosses) espelha a SG: 2/5..4/5.
+ */
+const QUEST_FIELD_META: Record<QuestField, { label: string; countKey: "soulWarBossCount" | "sanguineBossCount" | "cryptBossCount"; totalKey: "soulWarBossTotal" | "sanguineBossTotal" | "cryptBossTotal"; defaultTotal: number; minSuspicious: number }> = {
+  soulwarCompleted: { label: "Soul War", countKey: "soulWarBossCount", totalKey: "soulWarBossTotal", defaultTotal: 6, minSuspicious: 3 },
+  sanguineCompleted: { label: "Sanguine", countKey: "sanguineBossCount", totalKey: "sanguineBossTotal", defaultTotal: 5, minSuspicious: 2 },
+  cryptCompleted: { label: "Crypt", countKey: "cryptBossCount", totalKey: "cryptBossTotal", defaultTotal: 5, minSuspicious: 2 },
+};
+
+/**
+ * Opções dos filtros das colunas de Quest da tabela (SW/SG/Crypt) — os
+ * MESMOS estados que a coluna exibe. "?" = sem dado conclusivo (inconclusivo
+ * ou dado antigo sem a quest): nunca vira Disponível nem Concluída.
+ */
+const QUEST_STATE_FILTER_OPTIONS = ["Disponível", "Concluída", "?"];
 type SortKey = "name" | "vocation" | "level" | "server" | "bid" | "auctionEndTs";
 type SortDir = "asc" | "desc";
 
@@ -551,6 +580,8 @@ interface BazarSavedFilters {
   maxValue?: string;
   soulwarFilter?: QuestFilter;
   sanguineFilter?: QuestFilter;
+  /** Crypt. Ausente em configurações antigas => padrão "all" (Tanto Faz). */
+  cryptFilter?: QuestFilter;
   endUntil?: string;
   timezoneOffsetMinutes?: number;
   /** Minutos de antecedência da notificação de encerramento (1 a 60). */
@@ -580,6 +611,7 @@ interface BazarConsultationFilters {
   maxValue: string;
   soulwarFilter: QuestFilter;
   sanguineFilter: QuestFilter;
+  cryptFilter: QuestFilter;
   endUntil: string;
   timezoneOffsetMinutes: number;
 }
@@ -595,6 +627,12 @@ interface BazaarTableFilters {
   endUntil: string;
   /** Exibe apenas leilões marcados como interesse pelo usuário logado. */
   onlyMyInterests: boolean;
+  // ── FILTROS DAS COLUNAS DE QUEST (SW/SG/Crypt) ─────────────────────────
+  // Valores = rótulos exibidos ("Disponível" | "Concluída" | "?").
+  // Vazio = coluna sem filtro (todas as linhas passam).
+  swStates: string[];
+  sgStates: string[];
+  cryptStates: string[];
 }
 
 function defaultVocationFilters(): VocationLevelFilters {
@@ -734,6 +772,9 @@ function defaultBazarTableFilters(): BazaarTableFilters {
     bidOperator: "lte",
     endUntil: "",
     onlyMyInterests: false,
+    swStates: [],
+    sgStates: [],
+    cryptStates: [],
   };
 }
 
@@ -747,6 +788,10 @@ function readBazarTableFilters(): BazaarTableFilters {
       ...saved,
       // Migração segura dos filtros já salvos: só `true` ativa o filtro novo.
       onlyMyInterests: saved.onlyMyInterests === true,
+      // Colunas de quest: arrays válidos ou vazio (configurações antigas).
+      swStates: Array.isArray(saved.swStates) ? saved.swStates : [],
+      sgStates: Array.isArray(saved.sgStates) ? saved.sgStates : [],
+      cryptStates: Array.isArray(saved.cryptStates) ? saved.cryptStates : [],
     };
   } catch {
     return defaultBazarTableFilters();
@@ -1065,15 +1110,18 @@ function saveDetailsCache(details: Record<string, BazaarDetails>) {
 }
 
 function getAuctionEmbeddedDetails(auction: BazaarAuction): BazaarDetails | undefined {
-  if (auction.soulwarCompleted === undefined && auction.sanguineCompleted === undefined) return undefined;
+  if (auction.soulwarCompleted === undefined && auction.sanguineCompleted === undefined && auction.cryptCompleted === undefined) return undefined;
   return {
     id: getAuctionKey(auction),
     soulwarCompleted: auction.soulwarCompleted ?? null,
     sanguineCompleted: auction.sanguineCompleted ?? null,
+    cryptCompleted: auction.cryptCompleted ?? null,
     soulWarBossCount: auction.soulWarBossCount ?? 0,
     sanguineBossCount: auction.sanguineBossCount ?? 0,
+    cryptBossCount: auction.cryptBossCount ?? 0,
     soulWarBossTotal: auction.soulWarBossTotal ?? 6,
     sanguineBossTotal: auction.sanguineBossTotal ?? 5,
+    cryptBossTotal: auction.cryptBossTotal ?? 5,
     ...(auction.questSource ? { questSource: auction.questSource } : {}),
     fetchedAt: Date.now(),
   };
@@ -1094,17 +1142,23 @@ function mergeAuctionWithQuestDetails(auction: BazaarAuction, detail: BazaarDeta
     ...auction,
     soulwarCompleted: detail.soulwarCompleted,
     sanguineCompleted: detail.sanguineCompleted,
+    cryptCompleted: detail.cryptCompleted ?? null,
     soulWarBossCount: detail.soulWarBossCount ?? 0,
     sanguineBossCount: detail.sanguineBossCount ?? 0,
+    cryptBossCount: detail.cryptBossCount ?? 0,
     soulWarBossTotal: detail.soulWarBossTotal ?? 6,
     sanguineBossTotal: detail.sanguineBossTotal ?? 5,
+    cryptBossTotal: detail.cryptBossTotal ?? 5,
     ...(detail.questSource ? { questSource: detail.questSource } : {}),
   };
 }
 
-function matchesQuestFilter(detail: BazaarDetails | undefined, filter: QuestFilter, field: "soulwarCompleted" | "sanguineCompleted") {
+function matchesQuestFilter(detail: BazaarDetails | undefined, filter: QuestFilter, field: QuestField) {
   if (filter === "all") return true;
-  if (!detail || detail[field] === null) return false;
+  // `== null` cobre `null` E `undefined` (Crypt ausente em dados antigos):
+  // sem dado conclusivo, o personagem NÃO passa num filtro efetivo — regra
+  // idêntica à que SW/SG já seguiam para `null`.
+  if (!detail || detail[field] == null) return false;
   return filter === "completed" ? detail[field] === true : detail[field] === false;
 }
 
@@ -1125,7 +1179,7 @@ function matchesQuestFilter(detail: BazaarDetails | undefined, filter: QuestFilt
  */
 export function formatQuestStatus(
   detail: BazaarQuestStatusDetail | undefined,
-  field: "soulwarCompleted" | "sanguineCompleted",
+  field: QuestField,
   needsQuestDetails: boolean,
   questRequired = true,
 ) {
@@ -1136,18 +1190,19 @@ export function formatQuestStatus(
   return "?";
 }
 
-function getQuestBossCount(detail: BazaarQuestStatusDetail | undefined, field: "soulwarCompleted" | "sanguineCompleted") {
-  const current = field === "soulwarCompleted" ? detail?.soulWarBossCount : detail?.sanguineBossCount;
-  const total = field === "soulwarCompleted" ? (detail?.soulWarBossTotal ?? 6) : (detail?.sanguineBossTotal ?? 5);
+function getQuestBossCount(detail: BazaarQuestStatusDetail | undefined, field: QuestField) {
+  const meta = QUEST_FIELD_META[field];
+  const current = detail?.[meta.countKey];
+  const total = detail?.[meta.totalKey] ?? meta.defaultTotal;
   return { current: Math.max(0, current ?? 0), total };
 }
 
-function formatQuestBossCount(detail: BazaarQuestStatusDetail | undefined, field: "soulwarCompleted" | "sanguineCompleted") {
+function formatQuestBossCount(detail: BazaarQuestStatusDetail | undefined, field: QuestField) {
   const { current, total } = getQuestBossCount(detail, field);
   return `${current}/${total}`;
 }
 
-export function isQuestSuspicious(detail: BazaarQuestStatusDetail | undefined, field: "soulwarCompleted" | "sanguineCompleted"): boolean {
+export function isQuestSuspicious(detail: BazaarQuestStatusDetail | undefined, field: QuestField): boolean {
   if (!detail) return false;
   // Quest não apurada (falha na análise ou lista antiga gerada quando
   // "Todas" pulava a consulta) não pode ser suspeita: não houve apuração.
@@ -1163,19 +1218,19 @@ export function isQuestSuspicious(detail: BazaarQuestStatusDetail | undefined, f
   // está concluída (resultado legítimo, não suspeito). O inferior é o ponto a
   // partir do qual o progresso parcial passa a indicar alta chance de a quest
   // estar indisponível.
-  const minSuspicious = field === "soulwarCompleted" ? 3 : 2;
-  const expectedTotal = field === "soulwarCompleted" ? 6 : 5;
+  const minSuspicious = QUEST_FIELD_META[field].minSuspicious;
+  const expectedTotal = QUEST_FIELD_META[field].defaultTotal;
   if (total !== expectedTotal) return false;
   return current >= minSuspicious && current <= total - 1;
 }
 
-function getQuestBossCountClass(detail: BazaarQuestStatusDetail | undefined, field: "soulwarCompleted" | "sanguineCompleted") {
+function getQuestBossCountClass(detail: BazaarQuestStatusDetail | undefined, field: QuestField) {
   if (isQuestSuspicious(detail, field)) return "font-mono text-[9px] font-black text-rose-200";
   const { current } = getQuestBossCount(detail, field);
   return current > 0 ? "font-mono text-[9px] font-black text-amber-300" : "font-mono text-[9px] text-slate-500";
 }
 
-export function QuestBossCounter({ detail, field }: { detail: BazaarQuestStatusDetail | undefined; field: "soulwarCompleted" | "sanguineCompleted" }) {
+export function QuestBossCounter({ detail, field }: { detail: BazaarQuestStatusDetail | undefined; field: QuestField }) {
   if (!detail) return <div className="font-mono text-[9px] text-slate-500">—</div>;
   // Identificação pela guia QUESTS: o resultado vem direto do site (círculo
   // marcado/desmarcado) e NÃO existe contagem de bosses — exibir "0/6" aqui
@@ -1193,7 +1248,7 @@ export function QuestBossCounter({ detail, field }: { detail: BazaarQuestStatusD
   const { current } = getQuestBossCount(detail, field);
   const hasBosses = current > 0;
   const suspicious = isQuestSuspicious(detail, field);
-  const questLabel = field === "soulwarCompleted" ? "Soul War" : "Sanguine";
+  const questLabel = QUEST_FIELD_META[field].label;
   const title = suspicious
     ? `${questLabel} suspeita: contador ${formatQuestBossCount(detail, field)} indica alta chance de quest indisponível.`
     : hasBosses
@@ -1446,6 +1501,10 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
   const [maxValue, setMaxValue] = useState(() => savedFiltersRef.current.maxValue || "");
   const [soulwarFilter, setSoulwarFilter] = useState<QuestFilter>(() => savedFiltersRef.current.soulwarFilter || "available");
   const [sanguineFilter, setSanguineFilter] = useState<QuestFilter>(() => savedFiltersRef.current.sanguineFilter || "available");
+  // Crypt: padrão "Tanto Faz (consultar)" — consultas já configuradas seguem
+  // retornando EXATAMENTE os mesmos personagens de antes (a Crypt é apurada
+  // e exibida, mas só exclui quando o usuário escolher Disponível/Concluída).
+  const [cryptFilter, setCryptFilter] = useState<QuestFilter>(() => savedFiltersRef.current.cryptFilter || "all");
   const [endUntil, setEndUntil] = useState(() => savedFiltersRef.current.endUntil || "");
   // Modo do "Encerra até" e o horário do modo automático. Ambos persistidos;
   // a DATA do modo automático nunca é — ela é calculada a cada consulta.
@@ -1680,6 +1739,7 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
       maxValue,
       soulwarFilter,
       sanguineFilter,
+      cryptFilter,
       endUntil,
       timezoneOffsetMinutes,
       // Precisa ser reenviado aqui: saveBazarFilters reescreve o objeto inteiro,
@@ -1691,7 +1751,7 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
       endUntilAutoTime,
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [serverSelectionMode, selectedServers, vocationLevels, maxValue, soulwarFilter, sanguineFilter, endUntil, timezoneOffsetMinutes, notifyBeforeMinutes, endUntilMode, endUntilAutoTime]);
+  }, [serverSelectionMode, selectedServers, vocationLevels, maxValue, soulwarFilter, sanguineFilter, cryptFilter, endUntil, timezoneOffsetMinutes, notifyBeforeMinutes, endUntilMode, endUntilAutoTime]);
 
   useEffect(() => {
     if (demoMode) return; // demo: nunca sobrescrever os filtros reais salvos
@@ -2171,6 +2231,20 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
       }
       const auctionEndTs = normalizeAuctionEndTimestamp(auction.auctionEndTs);
       if (tableEndLimit > 0 && auctionEndTs && auctionEndTs > tableEndLimit) return false;
+      // ── FILTROS DAS COLUNAS SW/SG/Crypt ─────────────────────────────────
+      // Mesmo detail da renderização da linha (cache local ou embutido na
+      // lista). Estado exibido → rótulo: Concl.="Concluída", Disp.=
+      // "Disponível", sem dado conclusivo="?". Filtro vazio = coluna livre.
+      if (tableFilters.swStates.length > 0 || tableFilters.sgStates.length > 0 || tableFilters.cryptStates.length > 0) {
+        const rowDetail = detailsCache[getAuctionKey(auction)] || getAuctionEmbeddedDetails(auction);
+        const stateLabel = (field: QuestField) => {
+          const value = rowDetail?.[field];
+          return value === true ? "Concluída" : value === false ? "Disponível" : "?";
+        };
+        if (tableFilters.swStates.length > 0 && !tableFilters.swStates.includes(stateLabel("soulwarCompleted"))) return false;
+        if (tableFilters.sgStates.length > 0 && !tableFilters.sgStates.includes(stateLabel("sanguineCompleted"))) return false;
+        if (tableFilters.cryptStates.length > 0 && !tableFilters.cryptStates.includes(stateLabel("cryptCompleted"))) return false;
+      }
       return true;
     });
 
@@ -2186,7 +2260,7 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
       return sortDir === "asc" ? cmp : -cmp;
     });
     return filtered;
-  }, [baseFilteredAuctions, bazaarInterests, currentUser?.uid, sortKey, sortDir, tableFilters, timezoneOffsetMinutes]);
+  }, [baseFilteredAuctions, bazaarInterests, currentUser?.uid, detailsCache, sortKey, sortDir, tableFilters, timezoneOffsetMinutes]);
 
   function setVocationLevel(vocation: string, key: "min" | "max", value: string) {
     setVocationLevels(prev => ({
@@ -2212,6 +2286,7 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
       maxValue,
       soulwarFilter,
       sanguineFilter,
+      cryptFilter,
       // ── LIMITE DE ENCERRAMENTO RESOLVIDO AGORA ──────────────────────────
       // No modo automático o valor é calculado NESTE INSTANTE ("amanhã às
       // HH:MM"). Como esta função é chamada no início de cada consulta, a
@@ -2646,13 +2721,14 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
         setQueryStatus("Verificando disponibilidade das Quests...");
         setIsCheckingDetails(true);
         setCheckingDetailsCount(apiFilteredAuctions.length);
-        // As DUAS quests são SEMPRE apuradas — "Tanto Faz (consultar)" (`all`)
-        // significa "consultar e informar, sem filtrar". A separação entre
-        // consulta e filtro acontece depois, em `matchesQuestFilter`: só as
-        // quests em Disponível/Concluída excluem personagens; a quest em
-        // `all` tem o estado apurado exibido/publicado, mas nunca descarta.
+        // As TRÊS quests (SW/SG/Crypt) são SEMPRE apuradas — "Tanto Faz
+        // (consultar)" (`all`) significa "consultar e informar, sem filtrar".
+        // A separação entre consulta e filtro acontece depois, em
+        // `matchesQuestFilter`: só as quests em Disponível/Concluída excluem
+        // personagens; a quest em `all` tem o estado apurado
+        // exibido/publicado, mas nunca descarta.
         const detailsResponse = await ipcRenderer.invoke(detailsChannel, apiFilteredAuctions, {
-          quests: { soulwar: true, sanguine: true },
+          quests: { soulwar: true, sanguine: true, crypt: true },
           // Identificação das quests — consumida apenas pelo canal v2 (API
           // JSON): "bosstiary" mantém a derivação atual; "quests" usa a guia
           // Quests da página do personagem. O canal antigo ignora o campo.
@@ -2738,6 +2814,9 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
           const detail = nextDetailsCache[getAuctionKey(auction)];
           if (!matchesQuestFilter(detail, activeFilters.soulwarFilter, "soulwarCompleted")) return false;
           if (!matchesQuestFilter(detail, activeFilters.sanguineFilter, "sanguineCompleted")) return false;
+          // Crypt: MESMA regra e INDEPENDENTE — uma quest nunca descarta
+          // pela outra; "all" nunca exclui (matchesQuestFilter retorna true).
+          if (!matchesQuestFilter(detail, activeFilters.cryptFilter ?? "all", "cryptCompleted")) return false;
           return true;
         });
       } else {
@@ -3093,7 +3172,7 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
     }
     window.addEventListener("auto-bazaar-run-request", handleAutoBazaarRun);
     return () => window.removeEventListener("auto-bazaar-run-request", handleAutoBazaarRun);
-  }, [isBossUser, isElectron, isLoading, isCheckingDetails, isItemsQueryRunning, serverSelectionMode, selectedServers, vocationLevels, maxValue, soulwarFilter, sanguineFilter, endUntil, timezoneOffsetMinutes]);
+  }, [isBossUser, isElectron, isLoading, isCheckingDetails, isItemsQueryRunning, serverSelectionMode, selectedServers, vocationLevels, maxValue, soulwarFilter, sanguineFilter, cryptFilter, endUntil, timezoneOffsetMinutes]);
 
   function updateTableFilters(patch: Partial<BazaarTableFilters>) {
     setTableFilters(prev => ({ ...prev, ...patch }));
@@ -3270,7 +3349,10 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
     tableFilters.levelValue !== null ||
     tableFilters.bidValue !== null ||
     !!tableFilters.endUntil ||
-    tableFilters.onlyMyInterests
+    tableFilters.onlyMyInterests ||
+    tableFilters.swStates.length > 0 ||
+    tableFilters.sgStates.length > 0 ||
+    tableFilters.cryptStates.length > 0
   );
 
   const activeElapsedMs = queryStartMs ? Math.max(0, queryNowMs - queryStartMs) : 0;
@@ -3387,7 +3469,7 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
         {/* ── NAVEGAÇÃO DO PAINEL — o título "Painel Bazaar" foi REMOVIDO;
             no lugar dele, TRÊS BOTÕES GRANDES de navegação entre as telas
             (textos exatos exigidos pela funcionalidade):
-              • "Personagens para SW/SG" — a tela atual de quests (intacta);
+              • "Personagens para SW/SG/Crypt" — a tela atual de quests (intacta);
               • "Personagens com Itens" — exclusiva do Boss (gate real:
                 `showItemsMode` embute a permissão e o useEffect derruba o
                 modo se ela cair);
@@ -3408,9 +3490,9 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
                 ? "bg-amber-500/20 border border-amber-400/50 text-amber-100 shadow-[0_0_14px_color-mix(in_oklab,var(--color-amber-500)_22%,transparent)]"
                 : "border border-transparent text-slate-400 hover:text-amber-300 hover:bg-amber-500/10"
             }`}
-            title="Personagens do Bazaar para as quests Soul War / Sanguine"
+            title="Personagens do Bazaar para as quests Soul War / Sanguine / Crypt"
           >
-            <ShoppingBag size={15} /> Personagens para SW/SG
+            <ShoppingBag size={15} /> Personagens para SW/SG/Crypt
           </button>
           {isBossUser && !demoMode && (
             <button
@@ -4315,7 +4397,7 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
               </p>
             </div>
           ) : (
-            <table className="w-full min-w-[920px] table-fixed border-separate border-spacing-0 text-xs">
+            <table className="w-full min-w-[950px] table-fixed border-separate border-spacing-0 text-xs">
               {/* Distribuição responsiva (abordagem original restaurada):
                   table-fixed + colgroup percentual — as 12 colunas de dados
                   redistribuem o espaço de forma dinâmica conforme a largura
@@ -4327,19 +4409,21 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
                   min-w-[920px] e o pequeno excedente é redistribuído. */}
               <colgroup>
                 <col className="w-9" />
-                <col className="w-[12%]" />
+                <col className="w-[11%]" />
                 <col className="w-[5%]" />
                 <col className="w-[6%]" />
                 <col className="w-[6%]" />
                 <col className="w-[9%]" />
                 <col className="w-[9%]" />
-                <col className="w-[10%]" />
+                <col className="w-[9%]" />
                 {/* Valor Itens (kk) — integração com a guia Itens. */}
                 <col className="w-[8%]" />
                 <col className="w-[5%]" />
                 <col className="w-[5%]" />
-                <col className="w-[11%]" />
-                <col className="w-[10%]" />
+                {/* Crypt — mesma largura de SW/SG. */}
+                <col className="w-[5%]" />
+                <col className="w-[9%]" />
+                <col className="w-[9%]" />
               </colgroup>
               <thead className="text-[10px] uppercase tracking-wider text-slate-400">
                 <tr>
@@ -4363,6 +4447,7 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
                   <th className={`${STICKY_HEAD_CELL_CLASS} h-10 px-1 py-2 text-center align-middle leading-none`} title="Valor total dos itens monitorados encontrados para este personagem na última consulta da guia Itens (mesmos valores e regras de cálculo/Tier da guia Itens — nenhuma consulta extra). '—' = personagem sem itens na última consulta da guia Itens.">Valor Itens (kk)</th>
                   <th className={`${STICKY_HEAD_CELL_CLASS} h-10 px-1 py-2 text-center align-middle leading-none`}>SW</th>
                   <th className={`${STICKY_HEAD_CELL_CLASS} h-10 px-1 py-2 text-center align-middle leading-none`}>SG</th>
+                  <th className={`${STICKY_HEAD_CELL_CLASS} h-10 px-1 py-2 text-center align-middle leading-none`} title="The Roost of the Graveborn">Crypt</th>
                   <th className={`${STICKY_HEAD_CELL_CLASS} h-10 px-1 py-2 text-center align-middle leading-none`}>Interessados</th>
                   <th className={`${STICKY_HEAD_CELL_CLASS} h-10 px-1 py-2 text-center align-middle leading-none`}>Link</th>
                 </tr>
@@ -4392,10 +4477,13 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
                   <th className={`${STICKY_FILTER_CELL_CLASS} h-10 px-1 py-1.5 align-middle`}><div className="flex w-full items-center justify-center [&>button]:w-full [&>button]:max-w-[96px]"><FilterMulti label="Servidor" options={tableServerOptions} selected={tableFilters.servers} onApply={values => updateTableFilters({ servers: values })} placeholder="Servidor" searchable /></div></th>
                   <th className={`${STICKY_FILTER_CELL_CLASS} h-10 px-1 py-1.5 align-middle`}><div className="flex w-full items-center justify-center [&>button]:w-full [&>button]:max-w-[80px]"><FilterNumber label="Valor" value={tableFilters.bidValue} operator={tableFilters.bidOperator} onChange={(value, operator) => updateTableFilters({ bidValue: value, bidOperator: operator })} placeholder="Valor" /></div></th>
                   <th className={`${STICKY_FILTER_CELL_CLASS} h-10 px-1 py-1.5 align-middle`}><div className="flex w-full items-center justify-center [&>div]:w-full [&>div]:max-w-[122px]"><FilterDateMax label="Encerra até" value={tableFilters.endUntil} onChange={value => updateTableFilters({ endUntil: value })} placeholder="Encerra" /></div></th>
-                  {/* Valor Itens (kk), SW e SG: sem filtro próprio. */}
+                  {/* Valor Itens (kk): sem filtro próprio. */}
                   <th className={`${STICKY_FILTER_CELL_CLASS} h-10 px-1 py-1.5 text-center align-middle text-[10px] text-slate-600`}>—</th>
-                  <th className={`${STICKY_FILTER_CELL_CLASS} h-10 px-1 py-1.5 text-center align-middle text-[10px] text-slate-600`}>—</th>
-                  <th className={`${STICKY_FILTER_CELL_CLASS} h-10 px-1 py-1.5 text-center align-middle text-[10px] text-slate-600`}>—</th>
+                  {/* Filtros das colunas de Quest (SW/SG/Crypt): estado
+                      exibido na coluna — Disponível / Concluída / "?". */}
+                  <th className={`${STICKY_FILTER_CELL_CLASS} h-10 px-1 py-1.5 align-middle`}><div className="flex w-full items-center justify-center [&>button]:w-full [&>button]:max-w-[64px]"><FilterMulti label="SW" options={QUEST_STATE_FILTER_OPTIONS} selected={tableFilters.swStates} onApply={values => updateTableFilters({ swStates: values })} placeholder="SW" /></div></th>
+                  <th className={`${STICKY_FILTER_CELL_CLASS} h-10 px-1 py-1.5 align-middle`}><div className="flex w-full items-center justify-center [&>button]:w-full [&>button]:max-w-[64px]"><FilterMulti label="SG" options={QUEST_STATE_FILTER_OPTIONS} selected={tableFilters.sgStates} onApply={values => updateTableFilters({ sgStates: values })} placeholder="SG" /></div></th>
+                  <th className={`${STICKY_FILTER_CELL_CLASS} h-10 px-1 py-1.5 align-middle`}><div className="flex w-full items-center justify-center [&>button]:w-full [&>button]:max-w-[64px]"><FilterMulti label="Crypt" options={QUEST_STATE_FILTER_OPTIONS} selected={tableFilters.cryptStates} onApply={values => updateTableFilters({ cryptStates: values })} placeholder="Crypt" /></div></th>
                   <th className={`${STICKY_FILTER_CELL_CLASS} h-10 px-1 py-1.5 text-center align-middle`}>
                     <button
                       type="button"
@@ -4483,7 +4571,8 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
                       : "border-amber-600/30 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20";
                   const isSuspiciousSoulWar = isQuestSuspicious(detail, "soulwarCompleted");
                   const isSuspiciousSanguine = isQuestSuspicious(detail, "sanguineCompleted");
-                  const hasSuspiciousQuest = isSuspiciousSoulWar || isSuspiciousSanguine;
+                  const isSuspiciousCrypt = isQuestSuspicious(detail, "cryptCompleted");
+                  const hasSuspiciousQuest = isSuspiciousSoulWar || isSuspiciousSanguine || isSuspiciousCrypt;
                   // ── Precedência visual da LINHA (maior primeiro) ───────────────
                   // Quest suspeita > Prioridade para você > Prioridade Máxima > Prioridade.
                   // A linha usa apenas a cor do indicador de maior prioridade.
@@ -4644,6 +4733,7 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
                       </td>
                       <td className={`h-12 px-1 py-2 text-center align-middle text-[10px] ${isSuspiciousSoulWar ? "bg-rose-500/10 ring-1 ring-inset ring-rose-400/35" : ""} ${detail?.soulwarCompleted === true ? "text-rose-300" : detail?.soulwarCompleted === false ? "text-emerald-300" : "text-slate-500"}`} title={isSuspiciousSoulWar ? "Soul War suspeita: 3/6 bosses encontrados indica alta chance de quest indisponível." : (detail && detail.soulwarCompleted == null ? "Sem dado conclusivo para a Soul War nesta consulta — o app não presume disponível nem indisponível." : undefined)}><div className="font-bold">{formatQuestStatus(detail, "soulwarCompleted", needsQuestDetails)}</div><QuestBossCounter detail={detail} field="soulwarCompleted" /></td>
                       <td className={`h-12 px-1 py-2 text-center align-middle text-[10px] ${isSuspiciousSanguine ? "bg-rose-500/10 ring-1 ring-inset ring-rose-400/35" : ""} ${detail?.sanguineCompleted === true ? "text-rose-300" : detail?.sanguineCompleted === false ? "text-emerald-300" : "text-slate-500"}`} title={isSuspiciousSanguine ? "Sanguine suspeita: 2/5 bosses encontrados indica alta chance de quest indisponível." : (detail && detail.sanguineCompleted == null ? "Sem dado conclusivo para a Sanguine nesta consulta — o app não presume disponível nem indisponível." : undefined)}><div className="font-bold">{formatQuestStatus(detail, "sanguineCompleted", needsQuestDetails)}</div><QuestBossCounter detail={detail} field="sanguineCompleted" /></td>
+                      <td className={`h-12 px-1 py-2 text-center align-middle text-[10px] ${isSuspiciousCrypt ? "bg-rose-500/10 ring-1 ring-inset ring-rose-400/35" : ""} ${detail?.cryptCompleted === true ? "text-rose-300" : detail?.cryptCompleted === false ? "text-emerald-300" : "text-slate-500"}`} title={isSuspiciousCrypt ? "Crypt suspeita: 2/5 bosses encontrados indica alta chance de quest indisponível." : (detail && detail.cryptCompleted == null ? "Sem dado conclusivo para a Crypt nesta consulta — o app não presume disponível nem indisponível." : undefined)}><div className="font-bold">{formatQuestStatus(detail, "cryptCompleted", needsQuestDetails)}</div><QuestBossCounter detail={detail} field="cryptCompleted" /></td>
                       <td className="h-10 px-1 py-1.5 text-center align-middle">
                         <div className="flex max-h-24 flex-col items-center justify-start gap-1 overflow-y-auto custom-scrollbar text-center">
                           {officialMetadata?.version && currentUser?.uid && (
@@ -5192,6 +5282,8 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
         onSoulwarFilterChange={setSoulwarFilter}
         sanguineFilter={sanguineFilter}
         onSanguineFilterChange={setSanguineFilter}
+        cryptFilter={cryptFilter}
+        onCryptFilterChange={setCryptFilter}
         endUntil={endUntil}
         onEndUntilChange={setEndUntil}
         endUntilMode={endUntilMode}
@@ -5208,7 +5300,7 @@ function BazarVipAccessPanel() {
   const benefits = [
     "Busca automática dos melhores personagens do Character Bazaar",
     "Filtros avançados por servidor, level, vocação, quests, valor e encerramento",
-    "Consulta automática de Soul War e Sanguine via Bosstiary",
+    "Consulta automática de Soul War, Sanguine e Crypt via Bosstiary",
     "Resumo inteligente dos servidores e recomendação de compras",
     "Lista oficial compartilhada, interesses e alertas de encerramento",
   ];

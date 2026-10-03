@@ -99,15 +99,60 @@ check('escopo: quest fora do escopo fica null (nunca false)', () => {
 
 // ── Formatos alternativos de schema (defensivo) ────────────────────────────
 check('status textual decide; aninhamento profundo é alcançado', () => {
+  // Escopo SW/SG explícito: valida o contrato original sem exigir a Crypt
+  // (payload textual sem entrada da Crypt). Com o escopo padrão (3 quests),
+  // o caso é coberto pelo teste seguinte.
+  const out = deriveQuestsFromQuestEntries({
+    data: { character: { questlines: [
+      { title: 'Soul War', status: 'Finished' },
+      { title: 'Rotten Blood', status: 'Open' },
+    ] } },
+  }, { soulwar: true, sanguine: true, crypt: false });
+  assert.equal(out.resolved, true);
+  assert.equal(out.soulwarCompleted, true);
+  assert.equal(out.sanguineCompleted, false);
+  assert.equal(out.cryptCompleted, null);
+});
+
+check('CRYPT: sem dado da Crypt no escopo padrão → SW/SG preservadas e Crypt null', () => {
   const out = deriveQuestsFromQuestEntries({
     data: { character: { questlines: [
       { title: 'Soul War', status: 'Finished' },
       { title: 'Rotten Blood', status: 'Open' },
     ] } },
   });
-  assert.equal(out.resolved, true);
+  // As TRÊS quests estão no escopo padrão; sem storages nem entrada da
+  // Crypt, o personagem segue pendente (resolved=false) mas NUNCA perde o
+  // que foi conclusivo — e a Crypt fica "?" (null), nunca presumida.
+  assert.equal(out.resolved, false);
   assert.equal(out.soulwarCompleted, true);
   assert.equal(out.sanguineCompleted, false);
+  assert.equal(out.cryptCompleted, null);
+  assert.equal(out.questStatuses.crypt, 'SEM_FLAG_CLARO');
+});
+
+check('CRYPT: storages oficiais decidem as 3 quests (16 = concluída; 13 = disponível)', () => {
+  const done = deriveQuestsFromQuestEntries({ storages: [[21216, '2'], [10301, '4'], [3291, '16']] });
+  assert.equal(done.resolved, true);
+  assert.deepEqual([done.soulwarCompleted, done.sanguineCompleted, done.cryptCompleted], [true, true, true]);
+  const open = deriveQuestsFromQuestEntries({ storages: [[21216, '2'], [10301, '4'], [3291, '13']] });
+  assert.equal(open.resolved, true);
+  assert.deepEqual([open.soulwarCompleted, open.sanguineCompleted, open.cryptCompleted], [true, true, false]);
+});
+
+check('CRYPT: guia Quests (DOM) decide a Crypt de forma independente', () => {
+  const rows = [
+    { text: 'soul war', checked: true },
+    { text: 'rotten blood', checked: false },
+    { text: 'the roost of the graveborn', checked: true },
+  ];
+  const out = decideQuestsFromDomRows(rows);
+  assert.equal(out.resolved, true);
+  assert.deepEqual([out.soulwarCompleted, out.sanguineCompleted, out.cryptCompleted], [true, false, true]);
+  // Linha da Crypt ausente: SW/SG continuam conclusivas; Crypt "?" e pendente.
+  const semCrypt = decideQuestsFromDomRows(rows.slice(0, 2));
+  assert.equal(semCrypt.resolved, false);
+  assert.deepEqual([semCrypt.soulwarCompleted, semCrypt.sanguineCompleted, semCrypt.cryptCompleted], [true, false, null]);
 });
 
 check('lista de strings SEM flag → inconclusivo (vai para a leitura DOM)', () => {

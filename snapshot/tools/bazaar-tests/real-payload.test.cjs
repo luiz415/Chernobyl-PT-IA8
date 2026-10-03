@@ -61,6 +61,20 @@ check('bosstiary: SW concluída (Megalomania presente)', b.soulwarCompleted === 
 check('bosstiary: SG concluída (Bakragore presente)', b.sanguineCompleted === true);
 check('bosstiary: contagens SW/SG do payload real', b.soulWarBossCount === 5 && b.sanguineBossCount === 4,
   `sw=${b.soulWarBossCount} sg=${b.sanguineBossCount}`);
+// CRYPT via Bosstiary: 4 dos 5 bosses presentes, final (bonelord's
+// phylactery) AUSENTE => NÃO concluída — CONCORDA com a fonte storages.
+check('crypt: bosstiary do payload real => NÃO concluída (4/5, sem o final)',
+  b.cryptCompleted === false && b.cryptBossCount === 4,
+  `crypt=${b.cryptCompleted} count=${b.cryptBossCount}`);
+// Regras unitárias da Crypt via bosses (mesma lógica de SW/SG):
+const onlyFinal = nm.deriveQuestsFromApiPayload({ bosstiaries: [{ name: "bonelord's phylactery" }] });
+check('crypt: boss FINAL presente => concluída', onlyFinal.cryptCompleted === true);
+const allFive = nm.deriveQuestsFromApiPayload({ bosstiaries: ['adventurer group', 'eldritch dragon lord', 'ice horror', 'the gravedigger', "bonelord's phylactery"].map(name => ({ name })) });
+check('crypt: os 5 bosses presentes => concluída', allFive.cryptCompleted === true);
+const fourNoFinal = nm.deriveQuestsFromApiPayload({ bosstiaries: ['adventurer group', 'eldritch dragon lord', 'ice horror', 'the gravedigger'].map(name => ({ name })) });
+check('crypt: 4/5 sem o final => DISPONÍVEL', fourNoFinal.cryptCompleted === false);
+check('crypt: SW/SG não mudam com a presença dos bosses da Crypt',
+  fourNoFinal.soulwarCompleted === false && fourNoFinal.sanguineCompleted === false);
 
 // ---------------------------------------------------------------------------
 // 2) MODO QUESTS — derivação OFICIAL por storages (regras do frontend do
@@ -75,6 +89,13 @@ check('quests: coincide com a derivação Bosstiary (validação cruzada)',
 check('quests: evidência registra os storages lidos',
   q.evidence?.storages?.soulwarStorage === '2' && q.evidence?.storages?.sanguineStorage === '4',
   JSON.stringify(q.evidence?.storages));
+// CRYPT ("The Roost of the Graveborn", storage 3291 >= 16 — QUEST_REWARDS
+// oficial). Dios Zeus: storage 3291 = 13 < 16 => NÃO concluída (disponível).
+check('crypt: payload real => DISPONÍVEL (storage 3291 = 13 < 16)',
+  q.cryptCompleted === false && q.evidence?.storages?.cryptStorage === '13',
+  JSON.stringify({ crypt: q.cryptCompleted, storage: q.evidence?.storages?.cryptStorage }));
+check('crypt: validação CRUZADA bosstiary × storages coincide',
+  b.cryptCompleted === q.cryptCompleted);
 
 // Predicado oficial isolado + fronteiras (sintético)
 const qa = nm.deriveQuestsFromQuestEntries({ storages: [[999, '1'], [10301, '3']] });
@@ -88,9 +109,14 @@ check('quests: payload SEM storages => inconclusivo honesto ("?")',
   qc.resolved === false && qc.soulwarCompleted === null && qc.sanguineCompleted === null);
 const qd = nm.deriveQuestsFromQuestEntries({ storages: [] });
 check('quests: storages VAZIO => inconclusivo (nunca presume)', qd.resolved === false);
-const qe = nm.deriveQuestsFromQuestEntries({ quests: [{ name: 'Soul War', completed: true }, { name: 'Rotten Blood', completed: false }] });
+const qe = nm.deriveQuestsFromQuestEntries({ quests: [{ name: 'Soul War', completed: true }, { name: 'Rotten Blood', completed: false }] }, { soulwar: true, sanguine: true, crypt: false });
 check('quests: fallback textual preservado quando não há storages',
-  qe.resolved === true && qe.soulwarCompleted === true && qe.sanguineCompleted === false);
+  qe.resolved === true && qe.soulwarCompleted === true && qe.sanguineCompleted === false && qe.cryptCompleted === null);
+// Com a Crypt no escopo padrão e sem dado dela, SW/SG seguem conclusivas
+// e a Crypt fica "?" (pendente) — nunca presumida.
+const qeDefault = nm.deriveQuestsFromQuestEntries({ quests: [{ name: 'Soul War', completed: true }, { name: 'Rotten Blood', completed: false }] });
+check('quests: Crypt sem dado => "?" sem perder SW/SG conclusivas',
+  qeDefault.resolved === false && qeDefault.soulwarCompleted === true && qeDefault.sanguineCompleted === false && qeDefault.cryptCompleted === null);
 
 // ---------------------------------------------------------------------------
 // 3) ITENS — collectItemMatches + collectGoldAndSkills

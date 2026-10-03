@@ -21,6 +21,8 @@ interface BazaarSearchFiltersModalProps {
   onSoulwarFilterChange: (value: QuestFilter) => void;
   sanguineFilter: QuestFilter;
   onSanguineFilterChange: (value: QuestFilter) => void;
+  cryptFilter: QuestFilter;
+  onCryptFilterChange: (value: QuestFilter) => void;
   endUntil: string;
   onEndUntilChange: (value: string) => void;
   /** "manual" usa a data fixa; "automatico" calcula sempre o próximo dia. */
@@ -57,6 +59,8 @@ export default function BazaarSearchFiltersModal({
   maxValue,
   onMaxValueChange,
   soulwarFilter,
+  onCryptFilterChange,
+  cryptFilter,
   onSoulwarFilterChange,
   sanguineFilter,
   onSanguineFilterChange,
@@ -188,6 +192,19 @@ export default function BazaarSearchFiltersModal({
                   <option value="completed">Concluída</option>
                   {/* Mesmo comportamento do Soul War: consultar e informar,
                       sem usar o resultado como critério de exclusão. */}
+                  <option value="all">Tanto Faz (consultar)</option>
+                </select>
+              </label>
+
+              <label className="space-y-1">
+                <span className="text-[10px] text-slate-500 uppercase tracking-wide">Crypt</span>
+                {/* Crypt = "The Roost of the Graveborn" no site. MESMO padrão
+                    de SW/SG, avaliada de forma INDEPENDENTE: em "Tanto Faz
+                    (consultar)" o estado é apurado e exibido, mas nunca
+                    exclui personagens da consulta. */}
+                <select value={cryptFilter} onChange={event => onCryptFilterChange(event.target.value as QuestFilter)} className="w-full rounded-lg border border-[var(--th-line)]/70 bg-black/35 px-3 py-2 text-xs text-white outline-none focus:border-amber-600/60">
+                  <option value="available">Disponível</option>
+                  <option value="completed">Concluída</option>
                   <option value="all">Tanto Faz (consultar)</option>
                 </select>
               </label>
