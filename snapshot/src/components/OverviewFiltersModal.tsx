@@ -200,10 +200,28 @@ export default function OverviewFiltersModal({
             </div>
           </div>
 
-          {/* Grupo 3: Nível Mínimo */}
+          {/* Grupo 3: Level Mínimo — POR QUEST. Os campos exibem/editam o
+              conjunto da Quest Alvo selecionada acima (SW = Soul War,
+              SG = Sanguine; "Todas" usa o conjunto de Soul War, o mesmo
+              fallback da análise). Alternar a Quest Alvo troca os valores
+              exibidos sem sobrescrever a configuração da outra quest. */}
           <div className="bg-[var(--th-bg-base)] border border-[var(--th-line)]/30 rounded-xl p-3">
-            <label className="block text-[9px] text-red-400/80 uppercase font-black tracking-wider mb-2.5 flex items-center gap-1">
-              <Target size={10} className="text-amber-500" /> Nível Mínimo por Vocação
+            <label className="block text-[9px] text-red-400/80 uppercase font-black tracking-wider mb-2.5 flex items-center gap-1.5">
+              <Target size={10} className="text-amber-500" /> Level Mínimo por Vocação
+              <span
+                className={`inline-flex items-center rounded border px-1.5 py-px text-[8px] font-black uppercase tracking-wide ${
+                  questFilter === "sanguine"
+                    ? "border-rose-500/40 bg-rose-500/10 text-rose-300"
+                    : "border-slate-400/40 bg-slate-400/10 text-slate-300"
+                }`}
+                title={questFilter === "sanguine"
+                  ? "Editando os levels mínimos da Sanguine — a configuração de Soul War permanece guardada."
+                  : questFilter === "soulwar"
+                    ? "Editando os levels mínimos da Soul War — a configuração de Sanguine permanece guardada."
+                    : "Com Quest Alvo \"Todas\", a análise usa os levels de Soul War (edite SW/SG selecionando a quest acima)."}
+              >
+                {questFilter === "sanguine" ? "Sanguine" : "Soul War"}
+              </span>
             </label>
             <div className="flex items-center justify-between gap-1.5">
               {(["EK", "ED", "MS", "RP", "MK"] as const).map(voc => (
@@ -223,6 +241,9 @@ export default function OverviewFiltersModal({
                 </div>
               ))}
             </div>
+            <p className="mt-2 text-[8px] leading-snug text-slate-500">
+              SW e SG guardam levels independentes — alternar a Quest Alvo troca os valores exibidos sem perder a configuração da outra quest.
+            </p>
           </div>
 
         </div>

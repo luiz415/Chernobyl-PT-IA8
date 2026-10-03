@@ -68,6 +68,7 @@ import { normalizeServerName } from "./constants/servers";
 import { syncNotificationPrefsToCloud } from "./services/notificationPrefsSyncService";
 import { buildAcceptedFriendSet, filterVisibleEntitiesWithException } from "./utils/friendshipAccess";
 import { useModalViewportBounds } from "./hooks/useModalViewportBounds";
+import { hydrateQuestMinLevels, setQuestMinLevelsCloudSaver } from "./hooks/useQuestMinLevels";
 
 // Firestore imports
 import {
@@ -239,6 +240,31 @@ export default function App() {
   const appFooterRef = useRef<HTMLElement | null>(null);
   const hasApplicationChrome = !authLoading && !!currentUser && userProfile?.status === "aprovado";
   useModalViewportBounds(appHeaderRef, appFooterRef, hasApplicationChrome);
+
+  // ── LEVEL MÍNIMO POR QUEST (Sugestão de PT + Filtros Visão Geral/Resumo) ──
+  // Hidrata a fonte única com a preferência do PERFIL (users/{uid}) — que já
+  // foi carregado no login, nenhuma leitura extra. Nuvem presente vence
+  // (persistência entre dispositivos); sem nuvem, vale o cache local do uid
+  // ou a migração do conjunto único legado. Logout/troca de conta rehidrata.
+  useEffect(() => {
+    hydrateQuestMinLevels(currentUser?.uid || null, userProfile?.questMinLevels);
+  }, [currentUser?.uid, userProfile?.questMinLevels]);
+
+  // Saver das edições (debounced na fonte única): reutiliza o
+  // updateUserProfile existente — mesma estrutura de preferências do perfil,
+  // uma única gravação por rajada de edições. Em simulação não grava nada.
+  // A ref garante que o saver sempre use o updateUserProfile mais recente
+  // (closure velho poderia regravar um perfil desatualizado).
+  const updateUserProfileRef = useRef(updateUserProfile);
+  updateUserProfileRef.current = updateUserProfile;
+  useEffect(() => {
+    if (isSimulation || !currentUser?.uid) {
+      setQuestMinLevelsCloudSaver(null);
+      return;
+    }
+    setQuestMinLevelsCloudSaver(prefs => { void updateUserProfileRef.current({ questMinLevels: prefs }); });
+    return () => setQuestMinLevelsCloudSaver(null);
+  }, [isSimulation, currentUser?.uid]);
 
   const [adminOpen, setAdminOpen] = useState(false);
   // Estado para controlar tooltips das abas

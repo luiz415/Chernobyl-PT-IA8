@@ -52,6 +52,18 @@ export interface UserProfile {
   autoCharUpdate?: boolean;
   twitchChannel?: string;
   serviceiro?: boolean;
+  /**
+   * Level mínimo por Quest (SW/SG) dos dois recursos que usam o filtro —
+   * Sugestão Automática de PT ("suggest") e Filtros Visão Geral/Resumo de
+   * Amigos ("overview"). Preferência pessoal gravada pelo próprio usuário
+   * via updateUserProfile (as regras já permitem campos fora de role/status);
+   * a leitura vem de graça com o carregamento normal do perfil no login,
+   * garantindo a persistência entre sessões e dispositivos.
+   */
+  questMinLevels?: {
+    suggest?: Partial<Record<"soulwar" | "sanguine", Record<string, number>>>;
+    overview?: Partial<Record<"soulwar" | "sanguine", Record<string, number>>>;
+  };
 }
 export interface AuthNotification {
   id: string;

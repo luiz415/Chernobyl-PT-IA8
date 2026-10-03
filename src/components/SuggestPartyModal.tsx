@@ -10,6 +10,7 @@ import { canViewServiceForViewer } from "../utils/serviceVisibility";
 import { getCharacterAccountKey } from "../utils/accountIdentity";
 import { collectBusyIdsForQuest } from "../utils/questEligibility";
 import { loadUIState, saveUIState } from "../storage";
+import { useQuestMinLevels } from "../hooks/useQuestMinLevels";
 import { SERVER_OPTIONS, isOfficialServer, normalizeServerName, serverKey } from "../constants/servers";
 
 // ============================================================================
@@ -316,8 +317,12 @@ export default function SuggestPartyModal({
     loadUIState(`${PERSIST_KEY}.serverMode`, "auto" as "auto" | "specific"));
   const [specificServer, setSpecificServer] = useState<string>(() =>
     loadUIState(`${PERSIST_KEY}.specificServer`, ""));
-  const [minLevels, setMinLevels] = useState<Record<string, number>>(() =>
-    loadUIState(`${PERSIST_KEY}.minLevels`, { EK: 500, ED: 400, MS: 400, RP: 500, MK: 600 }));
+  // LEVEL MÍNIMO POR QUEST — fonte única useQuestMinLevels("suggest"):
+  // SW e SG guardam conjuntos independentes, salvos por usuário (cache local
+  // + perfil, persistindo entre sessões e dispositivos). A chave legada
+  // `suggest_modal_prefs.minLevels` (conjunto único) é migrada lá dentro —
+  // preferências personalizadas antigas nunca são sobrescritas.
+  const { byQuest: minLevelsByQuest, setForQuest: setMinLevelsForQuest } = useQuestMinLevels("suggest");
 
   // Quest e Visibilidade — persistidas
   const [internalPtType, setInternalPtType] = useState<"soulwar" | "sanguine">(() =>
@@ -326,6 +331,12 @@ export default function SuggestPartyModal({
     ? (party.ptType === "sanguine" ? "sanguine" : "soulwar")
     : internalPtType;
   const effectivePartyId = party?.id || "__suggest_standalone__";
+
+  // Conjunto ATIVO: selecionar SW exibe/aplica os níveis de Soul War; SG, os
+  // de Sanguine. Alternar a quest recupera o salvo da outra, sem sobrescrever.
+  // Todos os usos abaixo (elegibilidade, chamadas do algoritmo, dependências)
+  // continuam lendo `minLevels` exatamente como antes.
+  const minLevels = minLevelsByQuest[effectivePtType];
 
   const [internalVisibility, setInternalVisibility] = useState<"public" | "private">(() =>
     loadUIState(`${PERSIST_KEY}.visibility`, "public" as "public" | "private"));
@@ -389,7 +400,9 @@ export default function SuggestPartyModal({
   useEffect(() => { saveUIState(`${PERSIST_KEY}.noServiceLoan`, noServiceLoan); }, [noServiceLoan]);
   useEffect(() => { saveUIState(`${PERSIST_KEY}.prioritizeServices`, prioritizeServices); }, [prioritizeServices]);
   useEffect(() => { saveUIState(`${PERSIST_KEY}.strength`, strength); }, [strength]);
-  useEffect(() => { saveUIState(`${PERSIST_KEY}.minLevels`, minLevels); }, [minLevels]);
+  // (minLevels não persiste mais aqui: a fonte única useQuestMinLevels salva
+  //  por quest/usuário; a chave legada fica intacta apenas como insumo da
+  //  migração única.)
   useEffect(() => { saveUIState(`${PERSIST_KEY}.ptType`, internalPtType); }, [internalPtType]);
   useEffect(() => { saveUIState(`${PERSIST_KEY}.visibility`, internalVisibility); }, [internalVisibility]);
   useEffect(() => { saveUIState(`${PERSIST_KEY}.templateType`, templateType); }, [templateType]);
@@ -1524,17 +1537,31 @@ export default function SuggestPartyModal({
           {/* Grid: Níveis + Servidor + Quest/Visibilidade */}
           <div className="grid grid-cols-1 sm:grid-cols-12 gap-2">
 
-            {/* Card: Nível Mínimo */}
+            {/* Card: Level Mínimo — POR QUEST: os campos exibem/editam o
+                conjunto da Quest selecionada (SW = Soul War, SG = Sanguine).
+                Alternar a Quest troca os valores sem sobrescrever o da outra. */}
             <div className="col-span-1 sm:col-span-5 bg-[var(--th-n-base)] border border-[var(--th-line)]/80 rounded-xl p-2.5">
               <div className="flex items-center gap-1.5 text-[9px] font-bold text-red-400/80 uppercase tracking-wider mb-2">
-                <Target size={10} /> Nível Mínimo
+                <Target size={10} /> Level Mínimo
+                <span
+                  className={`inline-flex items-center rounded border px-1.5 py-px text-[8px] font-black uppercase tracking-wide ${
+                    effectivePtType === "sanguine"
+                      ? "border-rose-500/40 bg-rose-500/10 text-rose-300"
+                      : "border-slate-400/40 bg-slate-400/10 text-slate-300"
+                  }`}
+                  title={effectivePtType === "sanguine"
+                    ? "Editando os levels mínimos da Sanguine — a configuração de Soul War permanece guardada."
+                    : "Editando os levels mínimos da Soul War — a configuração de Sanguine permanece guardada."}
+                >
+                  {effectivePtType === "sanguine" ? "SG" : "SW"}
+                </span>
               </div>
               <div className="flex items-center gap-1.5">
                 {(["EK", "ED", "MS", "RP", "MK"] as const).map(voc => (
                   <div key={voc} className="flex items-center gap-1">
                     <span className="text-[9px] font-bold" style={{ color: VOC_COLORS[voc] }}>{voc}</span>
                     <input type="text" inputMode="numeric" value={minLevels[voc] ?? ""}
-                      onChange={e => { const raw = e.target.value.replace(/\D/g, ""); const val = raw ? parseInt(raw, 10) : 0; setMinLevels(prev => ({ ...prev, [voc]: val })); }}
+                      onChange={e => { const raw = e.target.value.replace(/\D/g, ""); const val = raw ? parseInt(raw, 10) : 0; setMinLevelsForQuest(effectivePtType, { ...minLevels, [voc]: val }); }}
                       placeholder="0" className="w-10 text-center bg-black/40 border border-red-900/40 rounded px-1 py-1 text-[10px] font-bold tabular-nums text-white focus:outline-none focus:border-red-700/50" />
                   </div>
                 ))}
