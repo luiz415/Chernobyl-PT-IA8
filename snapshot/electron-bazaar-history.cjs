@@ -426,6 +426,24 @@ function collectHistoryExtras(payload) {
   const rootHirelings = readDirectCount(payload, /^(hirelingCount|hireling_count|hirelings|totalHirelings|total_hirelings)$/i);
   if (rootHirelings !== null) { hirelingCount = rootHirelings; paths.hirelings = '(raiz)'; }
 
+  // CAMPOS REAIS do payload /api/bazaar/{id} (auditoria amostras/Exemplo1.json):
+  // o site exibe "Total Charm Points" = spentCharmPoints + availableCharmPoints.
+  // O campo `general.charmPoints` sozinho é o NÃO USADO (igual a
+  // availableCharmPoints) — usá-lo como total estava ERRADO. Esta passada
+  // dedicada tem prioridade sobre a varredura genérica por hints abaixo,
+  // que permanece apenas como fallback para formatos diferentes.
+  walkJson(payload, (node, path) => {
+    if (charmPoints !== null) return;
+    if (!node || typeof node !== 'object' || Array.isArray(node)) return;
+    const spent = Number(node.spentCharmPoints ?? node.spent_charm_points);
+    if (!Number.isFinite(spent) || spent < 0) return;
+    const availRaw = node.availableCharmPoints ?? node.available_charm_points
+      ?? node.charmPoints ?? node.charm_points;
+    const avail = Number(availRaw);
+    charmPoints = Math.floor(spent + (Number.isFinite(avail) && avail >= 0 ? avail : 0));
+    paths.charm = `${path}.spentCharmPoints+availableCharmPoints`;
+  });
+
   walkJson(payload, (node, path) => {
     if (node && typeof node === 'object' && !Array.isArray(node)) {
       if (charmPoints === null) {
@@ -434,6 +452,20 @@ function collectHistoryExtras(payload) {
           if (CHARM_KEY_HINTS.test(key) && Number.isFinite(num) && num >= 0) {
             charmPoints = Math.floor(num);
             paths.charm = `${path}.${key}`;
+            break;
+          }
+        }
+      }
+      // CAMPO REAL: `general.hirelingCount` (número). Sem esta leitura, a
+      // varredura de listas abaixo acabava contando `hirelingSkills` (lista
+      // de SKILLS liberadas, não de hirelings) — campo errado no payload real.
+      if (hirelingCount === null) {
+        for (const [key, value] of Object.entries(node)) {
+          if (!/^(hirelingCount|hireling_count|totalHirelings|total_hirelings)$/i.test(key)) continue;
+          const num = Number(value);
+          if (Number.isFinite(num) && num >= 0) {
+            hirelingCount = Math.floor(num);
+            paths.hirelings = `${path}.${key}`;
             break;
           }
         }
@@ -452,7 +484,12 @@ function collectHistoryExtras(payload) {
         auraCount = node.length;
         paths.auras = path;
       }
-      if (hirelingCount === null && HIRELING_PATH_HINTS.test(path)) {
+      // Fallback por lista: EXCLUI as listas auxiliares reais do payload
+      // (hirelingSkills/hirelingWardrobe/hirelingJobs/hirelingOutfits), que
+      // descrevem skills/roupas/empregos liberados — não a quantidade de
+      // hirelings. A contagem real vem de `general.hirelingCount` (acima).
+      if (hirelingCount === null && HIRELING_PATH_HINTS.test(path)
+        && !/hireling_?(skills|wardrobe|jobs|outfits)/i.test(path)) {
         hirelingCount = node.length;
         paths.hirelings = path;
       }

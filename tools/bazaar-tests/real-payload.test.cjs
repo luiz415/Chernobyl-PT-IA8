@@ -1,0 +1,114 @@
+/**
+ * Testes de regressão contra o PAYLOAD REAL da API do RubinOT
+ * (amostras/Exemplo1.json — resposta de /api/bazaar/{id}, leilão 292172,
+ * personagem "Dios Zeus", EK 1356, Lunarian; capturada pelo usuário).
+ *
+ * Objetivo: garantir que os extratores dos métodos Bosstiary (Personagens),
+ * Itens e Histórico leem EXATAMENTE os campos que existem na resposta real
+ * — e que o modo Quests permanece honesto (inconclusivo) enquanto o payload
+ * não traz dados de quests.
+ *
+ * Fatos do payload real usados como oráculo (conferidos contra a própria
+ * página pública do leilão):
+ *   - general.balance = "2867149" (STRING) — Gold exibido no site;
+ *   - general.skills usa a chave `dist` (não "distance") e magLevel fica
+ *     FORA de skills;
+ *   - general.charmPoints = 15 = availableCharmPoints (NÃO USADO);
+ *     "Total Charm Points" do site = spentCharmPoints + availableCharmPoints;
+ *   - general.hirelingCount = 0; hirelingSkills/Wardrobe são listas de
+ *     skills/roupas, nunca contagem de hirelings;
+ *   - auras é lista na RAIZ;
+ *   - bosstiaries lista 100 bosses mas bosstiariosTotal = 115 (lista pode
+ *     vir truncada); Megalomania e Bakragore PRESENTES → SW/SG concluídas;
+ *   - NÃO existe chave de quests no payload (modo Quests → inconclusivo).
+ *
+ * Execução: node tools/bazaar-tests/real-payload.test.cjs
+ * (sem dependências externas; pula com aviso se a amostra não existir)
+ */
+'use strict';
+
+const fs = require('fs');
+const path = require('path');
+
+const SAMPLE = path.join(__dirname, '..', '..', 'amostras', 'Exemplo1.json');
+if (!fs.existsSync(SAMPLE)) {
+  console.log('SKIP: amostras/Exemplo1.json ausente — testes de payload real pulados.');
+  process.exit(0);
+}
+
+const payload = JSON.parse(fs.readFileSync(SAMPLE, 'utf8'));
+const nm = require(path.join(__dirname, '..', '..', 'electron-bazaar-new.cjs'));
+const im = require(path.join(__dirname, '..', '..', 'electron-bazaar-items.cjs'));
+const hm = require(path.join(__dirname, '..', '..', 'electron-bazaar-history.cjs'));
+
+let passed = 0;
+let failed = 0;
+function check(name, cond, extra) {
+  if (cond) { passed += 1; console.log(`PASS  ${name}`); }
+  else { failed += 1; console.log(`FAIL  ${name}${extra ? ` — ${extra}` : ''}`); }
+}
+
+// ---------------------------------------------------------------------------
+// 1) PERSONAGENS (método Bosstiary, passada JSON) — deriveQuestsFromApiPayload
+// ---------------------------------------------------------------------------
+const b = nm.deriveQuestsFromApiPayload(payload);
+check('bosstiary: payload real resolve', b.resolved === true, `reason=${b.reason}`);
+check('bosstiary: SW concluída (Megalomania presente)', b.soulwarCompleted === true);
+check('bosstiary: SG concluída (Bakragore presente)', b.sanguineCompleted === true);
+check('bosstiary: contagens SW/SG do payload real', b.soulWarBossCount === 5 && b.sanguineBossCount === 4,
+  `sw=${b.soulWarBossCount} sg=${b.sanguineBossCount}`);
+
+// ---------------------------------------------------------------------------
+// 2) MODO QUESTS — payload real NÃO traz quests → inconclusivo honesto
+// ---------------------------------------------------------------------------
+const q = nm.deriveQuestsFromQuestEntries(payload);
+check('quests: payload real é inconclusivo (sem presumir)', q.resolved === false, `reason=${q.reason}`);
+check('quests: nenhum estado inventado', q.soulwarCompleted === null && q.sanguineCompleted === null);
+
+// ---------------------------------------------------------------------------
+// 3) ITENS — collectItemMatches + collectGoldAndSkills
+// ---------------------------------------------------------------------------
+const watch = new Set(
+  ['sanguine bludgeon', 'spiritthorn helmet', 'dragon backpack', 'item inexistente xyz']
+    .map(im.normalizeItemName)
+);
+const matches = im.collectItemMatches(payload, watch);
+const byBase = new Map(matches.map(m => [m.baseKey, m]));
+check('itens: encontra 3 itens reais e ignora inexistente', matches.length === 3,
+  `encontrados=${matches.map(m => m.foundName).join(',')}`);
+check('itens: tier real preservado (sanguine bludgeon T1)', byBase.get('sanguine bludgeon')?.tier === 1);
+check('itens: quantidade real (dragon backpack ×3)', byBase.get('dragon backpack')?.amount === 3);
+
+const gs = im.collectGoldAndSkills(payload);
+check('itens: ouro lido de general.balance (string → número)', gs.gold === 2867149,
+  `gold=${gs.gold} path=${gs.paths?.gold}`);
+check('itens: skills reais (dist→distance, magLevel→magic)',
+  gs.skills.magic === 14 && gs.skills.distance === 36 && gs.skills.axe === 130
+  && gs.skills.club === 131 && gs.skills.sword === 95 && gs.skills.shielding === 127
+  && gs.skills.fist === 46,
+  JSON.stringify(gs.skills));
+
+// ---------------------------------------------------------------------------
+// 4) HISTÓRICO — collectHistoryExtras (charm/auras/hirelings/deluxe)
+// ---------------------------------------------------------------------------
+const ex = hm.collectHistoryExtras(payload);
+check('histórico: charm TOTAL = spent+available (10560+15)', ex.charmPoints === 10575,
+  `charm=${ex.charmPoints} path=${ex.paths?.charm}`);
+check('histórico: charm NÃO usa general.charmPoints isolado (campo "não usado")',
+  ex.paths?.charm !== 'general.charmPoints');
+check('histórico: hirelings de general.hirelingCount', ex.hirelingCount === 0
+  && ex.paths?.hirelings === 'general.hirelingCount', `path=${ex.paths?.hirelings}`);
+check('histórico: auras pela lista da raiz', ex.auraCount === 0 && ex.paths?.auras === '(raiz)');
+check('histórico: deluxe sem campo no payload → null honesto', ex.deluxePassCount === null);
+
+// ---------------------------------------------------------------------------
+// 5) COMPATIBILIDADE — formatos antigos continuam aceitos (fallbacks)
+// ---------------------------------------------------------------------------
+const legacy = hm.collectHistoryExtras({ general: { charmPoints: 123 }, hirelings: [{}, {}], auras: [1] });
+check('fallback: charmPoints simples quando spent/available ausentes', legacy.charmPoints === 123);
+check('fallback: lista hirelings genérica continua contando', legacy.hirelingCount === 2);
+const skillsOnly = hm.collectHistoryExtras({ hirelingSkills: [1, 2, 3] });
+check('proteção: hirelingSkills NUNCA vira contagem de hirelings', skillsOnly.hirelingCount === null);
+
+console.log(`\n${passed} PASS / ${failed} FAIL`);
+process.exit(failed === 0 ? 0 : 1);
