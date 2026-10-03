@@ -2180,7 +2180,12 @@ export default function App() {
         });
 
         // Incrementar contadores (cria o doc se não existir)
-        const dayKey = new Date(pt.archivedAt || (pt as any).updatedAt || Date.now()).toISOString().slice(0, 10);
+        // PARIDADE COM O BACKEND (statsDayKey em partyStatsCore.ts): o bucket
+        // diário usa o instante de CONCLUSÃO da Quest (questFinalizedAt).
+        // Antes usava archivedAt/updatedAt/agora — um cliente que processasse
+        // a PT dias depois jogava a contagem num bucket de dia errado,
+        // divergindo do período real da conclusão.
+        const dayKey = new Date(toFirestoreMillis(pt.questFinalizedAt) || pt.archivedAt || (pt as any).updatedAt || Date.now()).toISOString().slice(0, 10);
 
         const payload: Record<string, any> = {
           totalPtsConcluidas: increment(1),
@@ -5514,7 +5519,7 @@ export default function App() {
               {demoData ? (
                 <StatsPanel characters={[...demoData.characters, ...demoData.soldCharacters]} parties={demoData.parties} userName={displayUserName} userStats={demoData.userStats} userNames={demoData.userNames} services={demoData.sharedServices} characterAcquisitions={demoData.acquisitions} characterAcquisitionBuyerDetails={demoData.acquisitionBuyerDetails} currentUserUid={currentUser?.uid || ""} />
               ) : (
-                <StatsPanel characters={data.characters} parties={cloudParties} userName={displayUserName} userStats={userStatsDoc} userNames={statsUserNames} services={statsUserServices} characterAcquisitions={characterAcquisitions} characterAcquisitionBuyerDetails={characterAcquisitionBuyerDetails} currentUserUid={currentUser?.uid || ""} />
+                <StatsPanel characters={data.characters} parties={cloudParties} partyHistory={personalPartyHistory} userName={displayUserName} userStats={userStatsDoc} userNames={statsUserNames} services={statsUserServices} characterAcquisitions={characterAcquisitions} characterAcquisitionBuyerDetails={characterAcquisitionBuyerDetails} currentUserUid={currentUser?.uid || ""} />
               )}
             </div>
           </div>

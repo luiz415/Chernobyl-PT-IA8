@@ -45,6 +45,7 @@ import {
   effectiveTotalKk,
   getServerWatchedItems,
   hasManualTotalKk,
+  loadItemsCoinRate,
   loadItemsLastQuery,
   loadWatchedItemsByServer,
   saveItemsLastQuery,
@@ -54,7 +55,7 @@ import {
   type RawItemMatch,
   type WatchedItem,
 } from "../utils/bazaarWatchedItems";
-import { formatKkValue as formatKkValueBase } from "../utils/itemSale";
+import { computeItemRC, formatKkValue as formatKkValueBase } from "../utils/itemSale";
 
 /**
  * Formatação de kk da coluna "Valor Itens (kk)" — MESMA regra da guia Itens:
@@ -99,6 +100,55 @@ interface QuestsItemsDetailView {
   calculatedKk: number;
   isManual: boolean;
   goldKk: number;
+  /** Chave do leilão (mesma getAuctionKey da tabela) — indexa a personalização LOCAL do modal. */
+  auctionKey?: string;
+}
+
+// ── MODAL "VER" — PERSONALIZAÇÃO LOCAL DE VALORES ───────────────────────────
+// O usuário pode ajustar, SOMENTE para si: o valor do Coin usado na conversão
+// para RC, o valor considerado de cada item e o valor do Ouro. NADA disso é
+// gravado no Firestore nem afeta outros usuários: vive no localStorage deste
+// dispositivo (chave por usuário) e é DESCARTADO automaticamente quando o
+// personagem deixa de existir na lista atual (poda contra os leilões
+// presentes — nunca acumula personagens removidos indefinidamente).
+// A conversão kk → RC usa a MESMA função canônica do aplicativo
+// (computeItemRC: floor(kk ÷ cotação × 1000); cotação = quantos k equivalem
+// a 1000 RC — idêntica à guia Itens).
+interface QuestsViewOverride {
+  /** Cotação do coin usada na conversão (k por 1000 RC). */
+  coinRateKk?: number;
+  /** Valor do Ouro (kk) personalizado. */
+  goldKk?: number;
+  /** Valor (kk) personalizado por item — chave `${índice}:${nome}`. */
+  items?: Record<string, number>;
+}
+type QuestsViewOverridesMap = Record<string, QuestsViewOverride>;
+const BAZAR_QUESTS_VIEW_OVERRIDES_KEY_PREFIX = "rubinot_bazaar_quests_view_overrides_";
+function questsViewOverridesKey(uid?: string): string {
+  return `${BAZAR_QUESTS_VIEW_OVERRIDES_KEY_PREFIX}${uid || "anon"}`;
+}
+function readQuestsViewOverrides(uid?: string): QuestsViewOverridesMap {
+  const raw = loadUIState<QuestsViewOverridesMap | null>(questsViewOverridesKey(uid), null);
+  return raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
+}
+function questsViewItemKey(index: number, foundName: string): string {
+  return `${index}:${foundName}`;
+}
+/** "2,5" | "12.3" | "125" → número ≥ 0; vazio/inválido = null (campo volta ao automático). */
+function parseQuestsViewNumber(text: string): number | null {
+  const trimmed = String(text || "").trim();
+  if (!trimmed) return null;
+  const value = Number(trimmed.replace(",", "."));
+  return Number.isFinite(value) && value >= 0 ? value : null;
+}
+/** kk com até 1 casa decimal no formato de digitação ("1,5"). */
+function questsViewInputText(value: number): string {
+  return String(Math.round((Number(value) || 0) * 10) / 10).replace(".", ",");
+}
+/** RC inteiro formatado ("4.533 RC") ou "—" sem cotação. */
+function questsViewRcText(coinRate: number, kk: number): string {
+  if (!(coinRate > 0)) return "—";
+  return `${computeItemRC(coinRate, kk).toLocaleString("pt-BR")} RC`;
 }
 
 /** Constrói a view a partir do resultado LOCAL da guia Itens (Boss). */
@@ -1653,6 +1703,76 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
   // EMBUTIDOS na lista oficial (demais usuários) — os dois têm exatamente o
   // que o modal exibe (Item encontrado | Tier | QTD | Total).
   const [questsItemsDetailResult, setQuestsItemsDetailResult] = useState<QuestsItemsDetailView | null>(null);
+  // ── Personalização LOCAL do "Ver" (Coin/itens/Ouro → RC) ─────────────────
+  // Overrides por usuário/dispositivo (localStorage) — ver comentário do tipo
+  // QuestsViewOverride. Nenhuma gravação no Firestore, nenhuma consulta nova.
+  const [questsViewOverrides, setQuestsViewOverrides] = useState<QuestsViewOverridesMap>(() => readQuestsViewOverrides(currentUser?.uid));
+  useEffect(() => { setQuestsViewOverrides(readQuestsViewOverrides(currentUser?.uid)); }, [currentUser?.uid]);
+  // Textos em edição dos campos do modal (permitem digitação parcial "2,").
+  const [questsViewInputs, setQuestsViewInputs] = useState<{ coin: string; gold: string; items: Record<string, string> }>({ coin: "", gold: "", items: {} });
+  // Cotação padrão = a mesma da guia Itens (recarregada a cada abertura do modal).
+  const questsViewDefaultCoinRate = useMemo(() => loadItemsCoinRate(), [questsItemsDetailResult]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const persistQuestsViewOverrides = (next: QuestsViewOverridesMap) => {
+    setQuestsViewOverrides(next);
+    // DEMO: nada persiste (os leilões fictícios não podem sujar nem podar as
+    // personalizações reais) — o estado vive só na sessão do tutorial.
+    if (!demoMode) saveUIState(questsViewOverridesKey(currentUser?.uid), next);
+  };
+
+  /** Aplica um patch à personalização de um personagem, removendo campos devolvidos ao automático. */
+  const updateQuestsViewOverride = (auctionKey: string, updater: (prev: QuestsViewOverride) => QuestsViewOverride) => {
+    if (!auctionKey) return;
+    const nextEntry = updater(questsViewOverrides[auctionKey] || {});
+    const cleaned: QuestsViewOverride = {};
+    if (typeof nextEntry.coinRateKk === "number" && nextEntry.coinRateKk > 0) cleaned.coinRateKk = nextEntry.coinRateKk;
+    if (typeof nextEntry.goldKk === "number" && nextEntry.goldKk >= 0) cleaned.goldKk = nextEntry.goldKk;
+    const items = nextEntry.items && Object.keys(nextEntry.items).length > 0 ? nextEntry.items : undefined;
+    if (items) cleaned.items = items;
+    const next = { ...questsViewOverrides };
+    if (Object.keys(cleaned).length === 0) delete next[auctionKey];
+    else next[auctionKey] = cleaned;
+    persistQuestsViewOverrides(next);
+  };
+
+  // DESCARTE AUTOMÁTICO: a personalização permanece enquanto o personagem
+  // continuar na lista atual. Com uma lista carregada, qualquer chave sem
+  // leilão correspondente é removida — nunca mantém configurações de
+  // personagens que já saíram. Lista vazia/não hidratada não poda nada.
+  useEffect(() => {
+    if (demoMode) return;
+    const auctions = result?.auctions || [];
+    if (auctions.length === 0) return;
+    const liveKeys = new Set(auctions.map(a => getAuctionKey(a)));
+    const staleKeys = Object.keys(questsViewOverrides).filter(key => !liveKeys.has(key));
+    if (staleKeys.length === 0) return;
+    const next = { ...questsViewOverrides };
+    staleKeys.forEach(key => { delete next[key]; });
+    persistQuestsViewOverrides(next);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [result?.auctions, demoMode, questsViewOverrides]);
+
+  // Abertura do modal: inicializa os textos de edição a partir da
+  // personalização salva (ou dos valores automáticos da consulta).
+  useEffect(() => {
+    const view = questsItemsDetailResult;
+    if (!view) return;
+    const ovr = (view.auctionKey && questsViewOverrides[view.auctionKey]) || {};
+    const items: Record<string, string> = {};
+    view.matches.forEach((match, index) => {
+      const key = questsViewItemKey(index, match.foundName);
+      const overridden = ovr.items?.[key];
+      items[key] = questsViewInputText(overridden !== undefined ? overridden : match.totalKk);
+    });
+    setQuestsViewInputs({
+      coin: ovr.coinRateKk !== undefined
+        ? questsViewInputText(ovr.coinRateKk)
+        : (questsViewDefaultCoinRate > 0 ? questsViewInputText(questsViewDefaultCoinRate) : ""),
+      gold: questsViewInputText(ovr.goldKk !== undefined ? ovr.goldKk : view.goldKk),
+      items,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [questsItemsDetailResult]);
   // "Tanto Faz (consultar)" (`all`): TODA consulta apura as DUAS quests —
   // o filtro decide apenas quem é critério de inclusão/exclusão, nunca o que
   // é consultado. Por isso as colunas SW/SG sempre exibem o estado apurado
@@ -4751,8 +4871,8 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
                               </span>
                               <button
                                 type="button"
-                                onClick={() => setQuestsItemsDetailResult(itemsView)}
-                                title="Ver os itens encontrados para este personagem (somente leitura — Item encontrado | Tier | QTD | Total)"
+                                onClick={() => setQuestsItemsDetailResult({ ...itemsView, auctionKey })}
+                                title="Ver os itens e o Ouro encontrados para este personagem — com conversão para RC e personalização LOCAL de valores (nada é gravado no Firestore)"
                                 className="inline-flex items-center gap-1 rounded border border-fuchsia-500/30 bg-fuchsia-500/10 px-1.5 py-0.5 text-[9px] font-black text-fuchsia-300 hover:bg-fuchsia-500/20 transition-colors cursor-pointer"
                               >
                                 Ver
@@ -5101,14 +5221,54 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
         filters={officialMetadata?.filters || null}
       />
 
-      {/* ── Modal "Ver" da coluna "Valor Itens (kk)" — SOMENTE INFORMATIVO ──
-          Reutiliza o DESENHO do modal Detalhes da guia Itens em modo leitura:
-          NENHUMA ação de modificação (sem editar valor, sem valor base, sem
-          atualizar item, sem atualizar global) e SOMENTE as colunas
-          "Item encontrado | Tier | QTD | Total". Os dados vêm da última
-          consulta da guia Itens (local no Boss; embutidos na lista oficial
-          para os demais usuários) — nenhuma consulta nova por personagem. */}
-      {questsItemsDetailResult && (
+      {/* ── MODAL "VER" (coluna "Valor Itens (kk)") ─────────────────────────
+          MESMA estrutura de exibição/cálculo (Item encontrado | Tier | QTD |
+          Total — dados da última consulta da guia Itens, local no Boss ou
+          embutida na lista oficial; NENHUMA consulta nova por personagem),
+          agora com conversão para RC e PERSONALIZAÇÃO LOCAL de valores:
+          Valor do Coin da conversão, valor de cada item e valor do Ouro.
+          Conversão kk → RC pela função canônica do app (computeItemRC, a
+          mesma da guia Itens: floor(kk ÷ cotação × 1000); cotação = quantos
+          k equivalem a 1000 RC). As personalizações são exclusivamente
+          locais (localStorage por usuário): nada é gravado no Firestore nem
+          muda a visualização de outros usuários; são mantidas enquanto o
+          personagem continuar na lista atual e descartadas quando ele sai. */}
+      {questsItemsDetailResult && (() => {
+        const view = questsItemsDetailResult;
+        const viewKey = view.auctionKey || "";
+        const coinParsed = parseQuestsViewNumber(questsViewInputs.coin);
+        const viewCoinRate = coinParsed !== null && coinParsed > 0 ? coinParsed : 0;
+        const autoGoldKk = Number(view.goldKk || 0);
+        const effItemKk = (index: number, match: { foundName: string; totalKk: number }): number => {
+          const parsed = parseQuestsViewNumber(questsViewInputs.items[questsViewItemKey(index, match.foundName)] ?? "");
+          return parsed !== null ? parsed : Number(match.totalKk || 0);
+        };
+        const goldParsed = parseQuestsViewNumber(questsViewInputs.gold);
+        const effGoldKk = goldParsed !== null ? goldParsed : autoGoldKk;
+        const hasValueOverride =
+          view.matches.some((m, i) => Math.abs(effItemKk(i, m) - Number(m.totalKk || 0)) > 0.0001)
+          || Math.abs(effGoldKk - autoGoldKk) > 0.0001;
+        const itemsSumKk = view.matches.reduce((acc, m, i) => acc + effItemKk(i, m), 0);
+        // Com qualquer valor personalizado o total é RECALCULADO (itens +
+        // Ouro); sem personalização, mantém o efetivo original (inclusive a
+        // correção manual da guia Itens, quando houver).
+        const effTotalKk = hasValueOverride ? Math.round((itemsSumKk + effGoldKk) * 10) / 10 : view.effectiveKk;
+        const showGoldRow = autoGoldKk > 0 || goldParsed !== null;
+        const hasStoredCustomization = !!viewKey && !!questsViewOverrides[viewKey];
+        const setItemValue = (index: number, match: { foundName: string; totalKk: number }, text: string) => {
+          const key = questsViewItemKey(index, match.foundName);
+          setQuestsViewInputs(prev => ({ ...prev, items: { ...prev.items, [key]: text } }));
+          if (!viewKey) return;
+          const parsed = parseQuestsViewNumber(text);
+          const differs = parsed !== null && Math.abs(parsed - Number(match.totalKk || 0)) > 0.0001;
+          updateQuestsViewOverride(viewKey, prev => {
+            const items = { ...(prev.items || {}) };
+            if (differs) items[key] = parsed as number;
+            else delete items[key];
+            return { ...prev, items };
+          });
+        };
+        return (
         <div
           className="app-modal-overlay fixed inset-0 z-[1200] flex items-center justify-center bg-black/70 backdrop-blur-sm"
           onMouseDown={event => { if (event.target === event.currentTarget) setQuestsItemsDetailResult(null); }}
@@ -5117,14 +5277,14 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
             <div className="flex-shrink-0 flex items-center justify-between gap-2 px-4 py-3 border-b border-[var(--th-line)]/40">
               <div className="flex items-center gap-2 min-w-0">
                 <Package size={16} className="text-fuchsia-400 flex-shrink-0" />
-                <span className="text-sm font-bold text-fuchsia-300 truncate">{questsItemsDetailResult.name || "Personagem"}</span>
-                {questsItemsDetailResult.server && (
+                <span className="text-sm font-bold text-fuchsia-300 truncate">{view.name || "Personagem"}</span>
+                {view.server && (
                   <span className="inline-flex items-center gap-1 rounded border border-fuchsia-500/30 bg-fuchsia-500/10 px-1.5 py-0.5 text-[9px] font-black uppercase tracking-wide text-fuchsia-300 flex-shrink-0" title="Os valores vêm da Lista de Itens deste servidor (última consulta da guia Itens)">
-                    {questsItemsDetailResult.server}
+                    {view.server}
                   </span>
                 )}
-                <span className="inline-flex items-center rounded border border-white/15 bg-white/5 px-1.5 py-0.5 text-[9px] font-bold text-slate-400 flex-shrink-0" title="Exibição somente leitura — para editar valores, use o Detalhes da guia Itens (somente Boss)">
-                  Somente leitura
+                <span className="inline-flex items-center rounded border border-white/15 bg-white/5 px-1.5 py-0.5 text-[9px] font-bold text-slate-400 flex-shrink-0" title="Os ajustes feitos aqui (Coin, itens e Ouro) valem só para você, neste dispositivo — nada é gravado no Firestore nem muda a visualização de outros usuários. São descartados quando o personagem sai da lista atual.">
+                  Edição local
                 </span>
               </div>
               <button type="button" onClick={() => setQuestsItemsDetailResult(null)} className="p-1 rounded text-slate-400 hover:text-white hover:bg-white/10 transition-colors cursor-pointer flex-shrink-0" title="Fechar">
@@ -5133,30 +5293,90 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
             </div>
 
             <div className="flex-1 min-h-0 overflow-auto custom-scrollbar px-4 py-3 space-y-2">
+              {/* ── VALOR DO COIN — define a conversão kk → RC de TODO o modal.
+                  Pré-preenchido com a cotação da guia Itens; o valor digitado
+                  aqui é uma personalização local deste personagem. */}
+              <div className="rounded-lg border border-[var(--th-line)]/50 bg-black/25 px-3 py-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px]">
+                <label className="inline-flex items-center gap-1.5" title="Cotação do Rubini Coin no Market: quantos k equivalem a 1000 RC. Mesma regra de conversão usada no restante do aplicativo — floor(kk ÷ cotação × 1000).">
+                  <span className="font-bold text-slate-300">Valor do Coin:</span>
+                  <input
+                    value={questsViewInputs.coin}
+                    onChange={event => {
+                      const text = event.target.value;
+                      setQuestsViewInputs(prev => ({ ...prev, coin: text }));
+                      if (!viewKey) return;
+                      const parsed = parseQuestsViewNumber(text);
+                      updateQuestsViewOverride(viewKey, prev => ({
+                        ...prev,
+                        coinRateKk: parsed !== null && parsed > 0 && Math.abs(parsed - questsViewDefaultCoinRate) > 0.0001 ? parsed : undefined,
+                      }));
+                    }}
+                    placeholder="ex: 2,5"
+                    inputMode="decimal"
+                    className="w-16 rounded border border-[var(--th-line)]/60 bg-black/40 px-1.5 py-0.5 text-[10px] font-mono text-amber-200 outline-none focus:border-fuchsia-500/50"
+                  />
+                  <span className="text-slate-500">k = 1000 RC</span>
+                </label>
+                {viewCoinRate > 0 ? (
+                  <span className="text-slate-400" title="Valor efetivamente utilizado na conversão de TODOS os valores em RC deste modal.">
+                    Conversão usando <span className="font-mono font-bold text-amber-200">{questsViewInputText(viewCoinRate)}k</span> por 1000 RC
+                  </span>
+                ) : (
+                  <span className="text-amber-300 font-bold">Informe o Valor do Coin para converter em RC</span>
+                )}
+                {hasStoredCustomization && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (viewKey) {
+                        const next = { ...questsViewOverrides };
+                        delete next[viewKey];
+                        persistQuestsViewOverrides(next);
+                      }
+                      const items: Record<string, string> = {};
+                      view.matches.forEach((match, index) => { items[questsViewItemKey(index, match.foundName)] = questsViewInputText(Number(match.totalKk || 0)); });
+                      setQuestsViewInputs({
+                        coin: questsViewDefaultCoinRate > 0 ? questsViewInputText(questsViewDefaultCoinRate) : "",
+                        gold: questsViewInputText(autoGoldKk),
+                        items,
+                      });
+                    }}
+                    className="ml-auto inline-flex items-center gap-1 rounded border border-white/15 bg-white/5 px-1.5 py-0.5 text-[9px] font-bold text-slate-300 hover:bg-white/10 transition-colors cursor-pointer"
+                    title="Remove TODAS as personalizações locais deste personagem (Coin, itens e Ouro) e volta aos valores automáticos da consulta."
+                  >
+                    <RotateCcw size={10} /> Restaurar automáticos
+                  </button>
+                )}
+              </div>
+
               <table className="w-full text-[10px]">
                 <thead>
                   <tr className="text-[8px] uppercase tracking-wider text-slate-400 border-b border-[var(--th-line)]/40">
-                    {/* ÚNICAS colunas do requisito: Item encontrado | Tier |
-                        QTD | Total. Nada de edição/atualização/última
-                        atualização. */}
+                    {/* Mesmas colunas de antes + RC (conversão pelo Valor do
+                        Coin acima). O Total (kk) é EDITÁVEL localmente. */}
                     <th className="px-1.5 py-1.5 text-left">Item encontrado</th>
                     <th className="px-1.5 py-1.5 text-center">Tier</th>
                     <th className="px-1.5 py-1.5 text-center">QTD</th>
-                    <th className="px-1.5 py-1.5 text-right">Total</th>
+                    <th className="px-1.5 py-1.5 text-right">Total (kk)</th>
+                    <th className="px-1.5 py-1.5 text-right">RC</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {questsItemsDetailResult.matches.length === 0 && (
+                  {view.matches.length === 0 && (
                     <tr>
                       {/* Personagem só com Ouro relevante (> 1kk): sem itens
                           monitorados — o total vem exclusivamente do Ouro,
-                          detalhado logo abaixo ("Inclui Ouro"). */}
-                      <td colSpan={4} className="px-1.5 py-2.5 text-center italic text-slate-500">
+                          detalhado logo abaixo. */}
+                      <td colSpan={5} className="px-1.5 py-2.5 text-center italic text-slate-500">
                         Nenhum item monitorado encontrado — o valor deste personagem vem apenas do Ouro.
                       </td>
                     </tr>
                   )}
-                  {questsItemsDetailResult.matches.map((match, index) => (
+                  {view.matches.map((match, index) => {
+                    const key = questsViewItemKey(index, match.foundName);
+                    const itemKk = effItemKk(index, match);
+                    const overridden = Math.abs(itemKk - Number(match.totalKk || 0)) > 0.0001;
+                    return (
                     <tr key={`${match.foundName}-${index}`} className="border-b border-[var(--th-line)]/25">
                       <td className="px-1.5 py-1.5 text-left font-bold text-slate-100">{match.foundName}</td>
                       <td className="px-1.5 py-1.5 text-center font-mono">
@@ -5165,34 +5385,79 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
                           : <span className="text-slate-600">—</span>}
                       </td>
                       <td className="px-1.5 py-1.5 text-center font-mono text-slate-200">{match.amount}</td>
-                      <td className="px-1.5 py-1.5 text-right font-mono font-bold text-amber-200" title="Total do item já com Tier e quantidade aplicados — mesma regra de cálculo da guia Itens">{formatItemsKk(match.totalKk)}</td>
+                      <td className="px-1.5 py-1.5 text-right">
+                        <span className="inline-flex items-center gap-1 justify-end">
+                          {overridden && <span className="rounded border border-fuchsia-500/40 bg-fuchsia-500/15 px-1 py-px text-[7px] font-black uppercase tracking-wide text-fuchsia-300" title={`Valor personalizado localmente (calculado pela consulta: ${formatItemsKk(Number(match.totalKk || 0))})`}>local</span>}
+                          <input
+                            value={questsViewInputs.items[key] ?? ""}
+                            onChange={event => setItemValue(index, match, event.target.value)}
+                            inputMode="decimal"
+                            title="Valor considerado para este item (kk) — personalização local: apague para voltar ao automático da consulta."
+                            className="w-16 rounded border border-[var(--th-line)]/60 bg-black/40 px-1.5 py-0.5 text-right text-[10px] font-mono font-bold text-amber-200 outline-none focus:border-fuchsia-500/50"
+                          />
+                        </span>
+                      </td>
+                      <td className="px-1.5 py-1.5 text-right font-mono font-bold text-emerald-300" title="Conversão do Total (kk) deste item pelo Valor do Coin informado acima.">{questsViewRcText(viewCoinRate, itemKk)}</td>
                     </tr>
-                  ))}
+                    );
+                  })}
+                  {showGoldRow && (
+                    <tr className="border-b border-[var(--th-line)]/25">
+                      <td className="px-1.5 py-1.5 text-left font-bold text-yellow-300" title="Ouro lido na página do leilão, convertido para kk (1.000.000 gold = 1kk) e somado ao total — uma única vez.">Ouro</td>
+                      <td className="px-1.5 py-1.5 text-center font-mono"><span className="text-slate-600">—</span></td>
+                      <td className="px-1.5 py-1.5 text-center font-mono"><span className="text-slate-600">—</span></td>
+                      <td className="px-1.5 py-1.5 text-right">
+                        <span className="inline-flex items-center gap-1 justify-end">
+                          {Math.abs(effGoldKk - autoGoldKk) > 0.0001 && <span className="rounded border border-fuchsia-500/40 bg-fuchsia-500/15 px-1 py-px text-[7px] font-black uppercase tracking-wide text-fuchsia-300" title={`Valor personalizado localmente (lido na consulta: ${formatItemsKk(autoGoldKk)})`}>local</span>}
+                          <input
+                            value={questsViewInputs.gold}
+                            onChange={event => {
+                              const text = event.target.value;
+                              setQuestsViewInputs(prev => ({ ...prev, gold: text }));
+                              if (!viewKey) return;
+                              const parsed = parseQuestsViewNumber(text);
+                              updateQuestsViewOverride(viewKey, prev => ({
+                                ...prev,
+                                goldKk: parsed !== null && Math.abs(parsed - autoGoldKk) > 0.0001 ? parsed : undefined,
+                              }));
+                            }}
+                            inputMode="decimal"
+                            title="Valor do Ouro (kk) considerado — personalização local: apague para voltar ao automático da consulta."
+                            className="w-16 rounded border border-[var(--th-line)]/60 bg-black/40 px-1.5 py-0.5 text-right text-[10px] font-mono font-bold text-yellow-300 outline-none focus:border-fuchsia-500/50"
+                          />
+                        </span>
+                      </td>
+                      <td className="px-1.5 py-1.5 text-right font-mono font-bold text-emerald-300" title="Conversão do Ouro (kk) pelo Valor do Coin informado acima.">{questsViewRcText(viewCoinRate, effGoldKk)}</td>
+                    </tr>
+                  )}
                 </tbody>
               </table>
 
               <div className="rounded-lg border border-fuchsia-500/25 bg-fuchsia-500/5 px-3 py-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px]">
                 <span className="text-slate-300">
-                  Total do personagem: <span className="font-mono font-bold text-amber-200">{formatItemsKk(questsItemsDetailResult.effectiveKk)}</span>
-                  {questsItemsDetailResult.isManual && (
-                    <span className="ml-1 rounded border border-fuchsia-500/40 bg-fuchsia-500/15 px-1 py-px text-[7px] font-black uppercase tracking-wide text-fuchsia-300" title={`Correção manual feita na guia Itens (calculado: ${formatItemsKk(questsItemsDetailResult.calculatedKk)})`}>
+                  Total do personagem: <span className="font-mono font-bold text-amber-200">{formatItemsKk(effTotalKk)}</span>
+                  {hasValueOverride ? (
+                    <span className="ml-1 rounded border border-fuchsia-500/40 bg-fuchsia-500/15 px-1 py-px text-[7px] font-black uppercase tracking-wide text-fuchsia-300" title={`Total recalculado com os seus valores locais (automático da consulta: ${formatItemsKk(view.effectiveKk)})`}>
+                      local
+                    </span>
+                  ) : view.isManual && (
+                    <span className="ml-1 rounded border border-fuchsia-500/40 bg-fuchsia-500/15 px-1 py-px text-[7px] font-black uppercase tracking-wide text-fuchsia-300" title={`Correção manual feita na guia Itens (calculado: ${formatItemsKk(view.calculatedKk)})`}>
                       manual
                     </span>
                   )}
                 </span>
-                {questsItemsDetailResult.goldKk > 0 && (
-                  <span className="text-slate-300" title="Ouro lido na página do leilão, convertido para kk (1.000.000 gold = 1kk) e já somado ao total — uma única vez.">
-                    Inclui Ouro: <span className="font-mono font-bold text-yellow-300">{formatItemsKk(questsItemsDetailResult.goldKk)}</span>
-                  </span>
-                )}
+                <span className="text-slate-300" title="Total do personagem convertido para RC pelo Valor do Coin informado acima — mesma função de conversão do restante do aplicativo.">
+                  Total em RC: <span className="font-mono font-bold text-emerald-300">{questsViewRcText(viewCoinRate, effTotalKk)}</span>
+                </span>
                 <span className="text-[9px] text-slate-500 basis-full">
-                  Dados da última consulta da guia Itens — nenhuma nova consulta. Tier: valor base × (1 + 0,3 × Tier) × quantidade.
+                  Dados da última consulta da guia Itens — nenhuma nova consulta. Tier: valor base × (1 + 0,3 × Tier) × quantidade. Conversão RC: floor(kk ÷ cotação × 1000). Personalizações: apenas locais, descartadas quando o personagem sai da lista.
                 </span>
               </div>
             </div>
           </div>
         </div>
-      )}
+        );
+      })()}
 
       {/* Confirmação do "Concluir agora". Cancelar não faz NADA: a consulta
           segue rodando exatamente como estava, sem nenhum efeito colateral —

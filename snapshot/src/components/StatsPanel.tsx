@@ -22,7 +22,7 @@ import {
   ChevronUp,
   HelpCircle,
 } from "lucide-react";
-import type { Character, CharacterAcquisition, CharacterAcquisitionBuyerDetails, NegotiationTimestamp, PartyTab, PtType, SharedService } from "../types";
+import type { Character, CharacterAcquisition, CharacterAcquisitionBuyerDetails, NegotiationTimestamp, PartyTab, PersonalPartyHistory, PtType, SharedService } from "../types";
 import { serverLabel } from "../constants/servers";
 import { formatRC, VOCATIONS } from "../types";
 import { FilterMulti } from "./FilterTypes";
@@ -56,6 +56,12 @@ import { toFirestoreMillis } from "../utils/firestoreTimestamp";
 interface Props {
   characters: Character[];
   parties?: PartyTab[];
+  /**
+   * Projeção privada users/{uid}/partyHistory — a MESMA fonte de "Meu
+   * Histórico de PTs", já assinada via onSnapshot no App (zero leituras
+   * extras). Alimenta os contadores exatos de PTs concluídas do Relatório.
+   */
+  partyHistory?: PersonalPartyHistory[];
   userName?: string;
   // Estatísticas persistentes (userStats/{uid} no Firestore) — migração
   // parcial: apenas as métricas ainda presentes neste documento usam esta
@@ -385,7 +391,7 @@ function daysBetween(a: Date, b: Date): number {
   return Math.max(1, Math.round((b.getTime() - a.getTime()) / (1000 * 60 * 60 * 24)));
 }
 
-export default function StatsPanel({ characters, parties = [], userName = "", userStats = null, userNames = {}, services = [], characterAcquisitions = [], characterAcquisitionBuyerDetails = [], currentUserUid = "" }: Props) {
+export default function StatsPanel({ characters, parties = [], partyHistory = [], userName = "", userStats = null, userNames = {}, services = [], characterAcquisitions = [], characterAcquisitionBuyerDetails = [], currentUserUid = "" }: Props) {
   const [totalVisible, setTotalVisible] = usePersistedState("stats_totalVisible", true);
   const [valueFilterStored, setValueFilter] = usePersistedState<ValueFilter>("stats_value_filter", DEFAULT_VALUE_FILTER);
   // BLINDAGEM do estado salvo: filtros gravados ANTES da Crypt não têm
@@ -640,6 +646,57 @@ export default function StatsPanel({ characters, parties = [], userName = "", us
     [partyBase],
   );
 
+  // ── FONTE EXATA DAS PTs CONCLUÍDAS (Relatório de PTs) ─────────────────────
+  // CAUSA REAL da divergência com "Meu Histórico de PTs": a finalização APAGA
+  // o doc da PT de `parties`, então o cálculo derivado só enxergava as ainda
+  // ativas; e os buckets diários persistidos (dailyStats, particionados por
+  // dia UTC) não casam com os limites LOCAIS dos filtros de período —
+  // omissões sistemáticas nas bordas dos dias (ex.: filtro de um dia
+  // específico não contava PTs concluídas naquele dia local).
+  //
+  // A fonte correta já está EM MEMÓRIA, sem nenhuma leitura extra: a mesma
+  // projeção privada users/{uid}/partyHistory que alimenta "Meu Histórico de
+  // PTs" (assinada via onSnapshot no App + cache local). União dedup por
+  // partyId:
+  //   • entradas do histórico com status != "failed" (concluídas), datadas
+  //     pelo instante de CONCLUSÃO da Quest (questFinalizedAt) e filtradas
+  //     em hora local — exatamente como o restante dos Filtros da Análise;
+  //   • + PTs concluídas AINDA presentes em `parties` (completedParties, já
+  //     período/servidor-filtradas), que podem ainda não ter projeção de
+  //     histórico — o dedup garante que nenhuma PT conta duas vezes.
+  // Resultado: o Relatório bate com o Histórico por construção, para
+  // qualquer período/servidor, incluindo PTs com participantes de outros
+  // usuários (cada participante tem sua própria projeção de histórico).
+  const concludedExact = useMemo(() => {
+    const byId = new Map<string, { questType: string; concludedAt: number }>();
+    (partyHistory || []).forEach((entry) => {
+      if (!entry || entry.status === "failed") return;
+      const id = entry.partyId || entry.id;
+      if (!id || byId.has(id)) return;
+      const concludedAt = toFirestoreMillis(entry.party?.questFinalizedAt)
+        || toFirestoreMillis(entry.party?.finalizedAt)
+        || toFirestoreMillis(entry.createdAt);
+      if (periodRange && (!concludedAt || concludedAt < periodRange.start || concludedAt > periodRange.end)) return;
+      if (adv.servers.length > 0) {
+        const srv = serverLabel(entry.party?.server || "");
+        if (!srv || !adv.servers.includes(srv)) return;
+      }
+      byId.set(id, { questType: entry.party?.questType || "", concludedAt });
+    });
+    completedParties.forEach((p) => {
+      if (byId.has(p.id)) return;
+      const concludedAt = toFirestoreMillis(p.questFinalizedAt) || p.archivedAt || p.ptStartedAt || p.createdAt || 0;
+      byId.set(p.id, { questType: p.ptType || "", concludedAt });
+    });
+    const list = Array.from(byId.values());
+    return {
+      concluidas: list.length,
+      soulwar: list.filter((e) => e.questType === "soulwar").length,
+      sanguine: list.filter((e) => e.questType === "sanguine").length,
+      timestamps: list.map((e) => e.concludedAt).filter((ts) => ts > 0),
+    };
+  }, [partyHistory, completedParties, periodRange, adv.servers]);
+
   const partyStats = useMemo(() => {
     const concluidas = completedParties.length;
     let freqPorDia = 0;
@@ -697,62 +754,55 @@ export default function StatsPanel({ characters, parties = [], userName = "", us
     return sumServiceProfit(scoped);
   }, [services, periodRange, adv.servers, adv.vocations]);
 
-  // ── MIGRAÇÃO PARCIAL — userStats (estatísticas persistentes no Firestore) ─
-  // Quando o documento userStats/{uid} existe, PT's concluídas / Soulwar /
-  // Sanguine usam os valores PERSISTIDOS; caso contrário, recalcula das PTs.
-  //
-  // POR QUE A FONTE PERSISTIDA É OBRIGATÓRIA AQUI: a finalização apaga o doc
-  // da PT (`finalizePartyHistory` → transaction.delete) — o cálculo derivado
-  // das PTs em memória só enxerga as AINDA ATIVAS e subconta tudo. O backend
-  // (`commitPartyUserStats`/`resolveParticipantStats`) credita userStats por
-  // JOGADOR RESOLVIDO (playerUid) de cada slot, o que já cobre corretamente a
-  // perspectiva de negociação (slot aceito tem o adquirente como JOGADOR; o
-  // DONO original não é creditado). A condição antiga que desligava a fonte
-  // persistida para QUALQUER usuário envolvido em QUALQUER negociação forçava
-  // o caminho derivado e era a CAUSA REAL dos contadores zerados/baixos.
-  //
-  // Com filtro de SERVIDOR ativo os contadores PERSISTIDOS (sem partição
-  // servidor×dia) deixariam de refletir o conjunto filtrado — nesse caso a
-  // tela volta ao cálculo derivado das PTs locais (que respeita o filtro).
+  // ── userStats (estatísticas persistentes no Firestore) ───────────────────
+  // Hoje este portão alimenta APENAS a seção de PARCEIROS persistidos (mapa
+  // partners por UID, sem partição por período/servidor — por isso exige
+  // "Tudo" sem filtro de servidor). Os contadores de PTs concluídas do
+  // Relatório passaram a usar o conjunto exato `concludedExact` (histórico
+  // pessoal + PTs em memória), com o vitalício persistido como piso no
+  // "Tudo" — ver bloco "CONTADORES DO RELATÓRIO DE PTs" abaixo.
   const hasPersistedStats = !!userStats && typeof userStats.totalPtsConcluidas === "number" && adv.servers.length === 0;
 
-  // PT's concluídas PERÍODO-CIENTES via userStats.dailyStats (doc já assinado
-  // via onSnapshot — ZERO leituras extras de Firestore):
-  //   • Período "Tudo" (sem periodRange): usa o contador vitalício (bate com a
-  //     soma acumulada).
-  //   • Período selecionado: agrega os buckets diários cujo dia cai no intervalo
-  //     (considera qualquer quest — Soulwar e Sanguine juntos).
-  //   • Sem dailyStats (simulação/pré-migração): cai no cálculo derivado das PTs.
-  const periodDailyStats = useMemo(() => {
-    const daily = userStats?.dailyStats;
-    if (!hasPersistedStats || !daily || !periodRange) return null;
-    const acc = { totalPtsConcluidas: 0, totalPtsSoulwar: 0, totalPtsSanguine: 0 };
-    Object.entries(daily).forEach(([dayKey, bucket]) => {
-      const dayTs = Date.parse(`${dayKey}T00:00:00Z`);
-      if (Number.isNaN(dayTs)) return;
-      if (dayTs < periodRange.start || dayTs > periodRange.end) return;
-      acc.totalPtsConcluidas += bucket?.totalPtsConcluidas || 0;
-      acc.totalPtsSoulwar += bucket?.totalPtsSoulwar || 0;
-      acc.totalPtsSanguine += bucket?.totalPtsSanguine || 0;
-    });
-    return acc;
-  }, [hasPersistedStats, userStats?.dailyStats, periodRange]);
+  // ── CONTADORES DO RELATÓRIO DE PTs ────────────────────────────────────────
+  // COM filtro de período e/ou servidor ativo: usa EXCLUSIVAMENTE o conjunto
+  // exato `concludedExact` (histórico pessoal + PTs concluídas em memória,
+  // dedup por partyId) — filtragem precisa em hora local pelo instante de
+  // CONCLUSÃO da Quest. Os buckets dailyStats (particionados por dia UTC)
+  // deixaram de alimentar estes contadores: a comparação dia-UTC × limites
+  // locais omitia PTs nas bordas dos dias (a divergência reportada em
+  // relação a "Meu Histórico de PTs").
+  //
+  // SEM filtros ("Tudo"): o contador vitalício persistido (userStats) segue
+  // sendo a fonte — ele cobre PTs antigas, anteriores à projeção de
+  // histórico — com o conjunto exato como PISO (max): se alguma PT visível
+  // no histórico ainda não foi creditada em userStats (ex.: falha transitória
+  // do commit), o Relatório nunca mostra menos do que o Histórico. max()
+  // nunca duplica: escolhe a maior das duas contagens, não as soma.
+  const exactFiltersActive = !!periodRange || adv.servers.length > 0;
+  const persistedConcluidas = !!userStats && typeof userStats.totalPtsConcluidas === "number" ? (userStats.totalPtsConcluidas || 0) : 0;
+  const persistedSoulwar = !!userStats && typeof userStats.totalPtsSoulwar === "number" ? (userStats.totalPtsSoulwar || 0) : 0;
+  const persistedSanguine = !!userStats && typeof userStats.totalPtsSanguine === "number" ? (userStats.totalPtsSanguine || 0) : 0;
 
-  const statConcluidas = !hasPersistedStats
-    ? partyStats.concluidas
-    : (periodRange
-        ? (periodDailyStats?.totalPtsConcluidas ?? partyStats.concluidas)
-        : (userStats!.totalPtsConcluidas || 0));
-  const statSoulwar = !hasPersistedStats
-    ? partyStats.soulwar
-    : (periodRange
-        ? (periodDailyStats?.totalPtsSoulwar ?? partyStats.soulwar)
-        : (userStats!.totalPtsSoulwar || 0));
-  const statSanguine = !hasPersistedStats
-    ? partyStats.sanguine
-    : (periodRange
-        ? (periodDailyStats?.totalPtsSanguine ?? partyStats.sanguine)
-        : (userStats!.totalPtsSanguine || 0));
+  const statConcluidas = exactFiltersActive
+    ? concludedExact.concluidas
+    : Math.max(concludedExact.concluidas, persistedConcluidas);
+  const statSoulwar = exactFiltersActive
+    ? concludedExact.soulwar
+    : Math.max(concludedExact.soulwar, persistedSoulwar);
+  const statSanguine = exactFiltersActive
+    ? concludedExact.sanguine
+    : Math.max(concludedExact.sanguine, persistedSanguine);
+
+  // Frequência/dia COERENTE com o conjunto contado acima: da primeira
+  // conclusão do conjunto até o FIM do período selecionado (ou agora, no
+  // "Tudo") — um período antigo nunca é diluído até a data atual.
+  const statFreqPorDia = useMemo(() => {
+    if (concludedExact.timestamps.length === 0) return 0;
+    const first = Math.min(...concludedExact.timestamps);
+    const endAnchor = Math.min(Date.now(), periodRange?.end ?? Date.now());
+    const days = Math.max(1, daysBetween(new Date(first), new Date(endAnchor)));
+    return concludedExact.concluidas / days;
+  }, [concludedExact, periodRange]);
 
   // ── Média de compra por dia ─────────────────────────────────────────────
   // Média de personagens comprados/adicionados à lista "Meus Personagens" por
@@ -1182,8 +1232,8 @@ export default function StatsPanel({ characters, parties = [], userName = "", us
               <MiniStat label="Em aberto" value={partyStats.ativas} color="text-amber-400" title={tt.aberto} />
             </div>
             <div className="flex flex-col gap-1.5 justify-center">
-              <PartyTypeBar label="Soulwar" count={statSoulwar} total={hasPersistedStats ? statConcluidas : partyStats.total} color="bg-slate-500" title={tt.volSoulwar} />
-              <PartyTypeBar label="Sanguine" count={statSanguine} total={hasPersistedStats ? statConcluidas : partyStats.total} color="bg-rose-600" title={tt.volSanguine} />
+              <PartyTypeBar label="Soulwar" count={statSoulwar} total={statConcluidas || partyStats.total} color="bg-slate-500" title={tt.volSoulwar} />
+              <PartyTypeBar label="Sanguine" count={statSanguine} total={statConcluidas || partyStats.total} color="bg-rose-600" title={tt.volSanguine} />
               <div className={`flex items-center justify-between rounded-md bg-black/20 border ${GOLD_BORDER} ${GOLD_BORDER_HOVER} px-2 py-1 transition-colors`} title={tt.compraDia}>
                 <span className="text-[8px] uppercase text-slate-500 font-bold flex items-center gap-1"><Users size={10} /> Média de compra/dia</span>
                 <span className="text-[10px] text-slate-200 font-bold tabular-nums">{avgPurchasePerDay.toFixed(2)}</span>
@@ -1198,7 +1248,7 @@ export default function StatsPanel({ characters, parties = [], userName = "", us
               </div>
               <div className={`flex items-center justify-between rounded-md bg-black/20 border ${GOLD_BORDER} ${GOLD_BORDER_HOVER} px-2 py-1 transition-colors`} title={tt.ptsDia}>
                 <span className="text-[8px] uppercase text-slate-500 font-bold flex items-center gap-1"><Activity size={10} /> PT's/Dia</span>
-                <span className="text-[10px] text-slate-200 font-bold tabular-nums">{partyStats.freqPorDia.toFixed(2)}</span>
+                <span className="text-[10px] text-slate-200 font-bold tabular-nums">{statFreqPorDia.toFixed(2)}</span>
               </div>
             </div>
           </div>
