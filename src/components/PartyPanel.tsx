@@ -1439,7 +1439,7 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
   }
 
   function sendDropValueSavedNotifications(updatedParty: PartyTab) {
-    const questLabel = updatedParty.ptType === "sanguine" ? "SANGUINE" : updatedParty.ptType === "crypt" ? "GB" : "SOULWAR";
+    const questLabel = updatedParty.ptType === "sanguine" ? "SANGUINE" : updatedParty.ptType === "crypt" ? "GRAVEBORN" : "SOULWAR";
     const memberUids = new Set<string>();
     if (currentUser?.uid) memberUids.add(currentUser.uid);
     (updatedParty.members || []).forEach(uid => { if (uid) memberUids.add(uid); });
@@ -1677,7 +1677,7 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
       p.selectedIds.forEach(id => {
         const info: OtherPartyInfo = {
           name: String(p.name || "").trim() || "PT sem nome",
-          questLabel: p.ptType === "sanguine" ? "Sanguine" : p.ptType === "soulwar" ? "Soul War" : p.ptType === "crypt" ? "GB" : "Quest não definida",
+          questLabel: p.ptType === "sanguine" ? "Sanguine" : p.ptType === "soulwar" ? "Soul War" : p.ptType === "crypt" ? "Graveborn" : "Quest não definida",
           // PT arquivada (histórico) continua acionando o ⚠ como hoje; a nota
           // só esclarece o estado, para o nome não parecer uma PT ativa.
           statusNote: p.archived ? (p.questFalha ? "falhou" : "finalizada") : undefined,
@@ -2049,7 +2049,7 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
     let questIssue = "";
     const ptType = party.ptType;
     if (ptType === "soulwar" || ptType === "sanguine" || ptType === "crypt") {
-      const questLabel = ptType === "soulwar" ? "Soul War" : ptType === "sanguine" ? "Sanguine" : "GB";
+      const questLabel = ptType === "soulwar" ? "Soul War" : ptType === "sanguine" ? "Sanguine" : "Graveborn";
       // GB: Services são só SW/SG (service.quest nunca é "crypt" → aviso);
       // personagem legado sem o campo (`crypt !== false`) conta como disponível.
       const hasQuest = service
@@ -2951,7 +2951,7 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
   const ptTypeBadge = party.ptType === "sanguine"
     ? <span className="px-2 py-0.5 rounded text-[10px] font-bold border border-rose-500/50 bg-rose-500/20 text-rose-300">SANGUINE</span>
     : party.ptType === "crypt"
-      ? <span className="px-2 py-0.5 rounded text-[10px] font-bold border border-emerald-500/50 bg-emerald-500/20 text-emerald-300" title="The Roost of the Graveborn">GB</span>
+      ? <span className="px-2 py-0.5 rounded text-[10px] font-bold border border-emerald-500/50 bg-emerald-500/20 text-emerald-300" title="The Roost of the Graveborn">GRAVEBORN</span>
     : party.ptType === "soulwar"
       ? <span className="px-2 py-0.5 rounded text-[10px] font-bold border border-slate-400/50 bg-slate-500/20 text-slate-200">SOULWAR</span>
       : null;

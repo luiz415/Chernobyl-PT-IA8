@@ -50,7 +50,7 @@ export default function PausePartyModal({ open, ptType, onConfirm, onCancel }: P
   if (!open) return null;
 
   const bosses = getQuestBosses(ptType);
-  const questLabel = ptType === "sanguine" ? "Sanguine" : ptType === "soulwar" ? "Soul War" : ptType === "crypt" ? "GB" : "";
+  const questLabel = ptType === "sanguine" ? "Sanguine" : ptType === "soulwar" ? "Soul War" : ptType === "crypt" ? "Graveborn" : "";
 
   return createPortal(
     <div

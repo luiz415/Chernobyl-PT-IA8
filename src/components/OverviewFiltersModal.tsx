@@ -221,10 +221,10 @@ export default function OverviewFiltersModal({
                   : questFilter === "soulwar"
                     ? "Editando os levels mínimos da Soul War — as configurações das demais quests permanecem guardadas."
                     : questFilter === "crypt"
-                      ? "Editando os levels mínimos da GB — as configurações das demais quests permanecem guardadas."
+                      ? "Editando os levels mínimos da Graveborn — as configurações das demais quests permanecem guardadas."
                       : "Com Quest Alvo \"Todas\", a análise usa os levels de Soul War (edite SW/SG/GB selecionando a quest acima)."}
               >
-                {questFilter === "sanguine" ? "Sanguine" : questFilter === "crypt" ? "GB" : "Soul War"}
+                {questFilter === "sanguine" ? "Sanguine" : questFilter === "crypt" ? "Graveborn" : "Soul War"}
               </span>
             </label>
             <div className="flex items-center justify-between gap-1.5">

@@ -197,7 +197,7 @@ export default function BazaarSearchFiltersModal({
               </label>
 
               <label className="space-y-1">
-                <span className="text-[10px] text-slate-500 uppercase tracking-wide" title="The Roost of the Graveborn">GB</span>
+                <span className="text-[10px] text-slate-500 uppercase tracking-wide" title="The Roost of the Graveborn">Graveborn</span>
                 {/* Crypt = "The Roost of the Graveborn" no site. MESMO padrão
                     de SW/SG, avaliada de forma INDEPENDENTE: em "Tanto Faz
                     (consultar)" o estado é apurado e exibido, mas nunca

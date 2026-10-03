@@ -1558,7 +1558,7 @@ export default function SuggestPartyModal({
                   title={effectivePtType === "sanguine"
                     ? "Editando os levels mínimos da Sanguine — as configurações das demais quests permanecem guardadas."
                     : effectivePtType === "crypt"
-                      ? "Editando os levels mínimos da GB — as configurações das demais quests permanecem guardadas."
+                      ? "Editando os levels mínimos da Graveborn — as configurações das demais quests permanecem guardadas."
                       : "Editando os levels mínimos da Soul War — as configurações das demais quests permanecem guardadas."}
                 >
                   {effectivePtType === "sanguine" ? "SG" : effectivePtType === "crypt" ? "GB" : "SW"}
@@ -1662,7 +1662,7 @@ export default function SuggestPartyModal({
                         <button type="button" onClick={() => setInternalPtType("sanguine")}
                           className={`px-2 py-1 rounded text-[9px] font-bold transition-all cursor-pointer ${internalPtType === "sanguine" ? "bg-rose-700 text-white" : "text-slate-400 hover:text-slate-300"}`}>SG</button>
                       </CursorTooltip>
-                      <CursorTooltip text="Quest GB (The Roost of the Graveborn).">
+                      <CursorTooltip text="Quest Graveborn (The Roost of the Graveborn).">
                         <button type="button" onClick={() => setInternalPtType("crypt")}
                           className={`px-2 py-1 rounded text-[9px] font-bold transition-all cursor-pointer ${internalPtType === "crypt" ? "bg-emerald-700 text-white" : "text-slate-400 hover:text-slate-300"}`}>GB</button>
                       </CursorTooltip>

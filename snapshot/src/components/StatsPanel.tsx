@@ -961,7 +961,7 @@ export default function StatsPanel({ characters, parties = [], userName = "", us
     ptsDia: `FREQUÊNCIA DE PT's\n\nMédia diária de PT's CONCLUÍDAS (sucesso).`,
     medDropSW: `MÉDIA DE DROP SOULWAR\n\nLucro médio (RC) em Soulwar por personagem que dropou.`,
     medDropSG: `MÉDIA DE DROP SANGUINE\n\nLucro médio (RC) em Sanguine por personagem que dropou.`,
-    medDropCrypt: `MÉDIA DE DROP GB\n\nLucro médio (RC) na GB por personagem que dropou.`,
+    medDropCrypt: `MÉDIA DE DROP GRAVEBORN\n\nLucro médio (RC) na Graveborn por personagem que dropou.`,
     custoUnit: `CUSTO UNITÁRIO MÉDIO\n\nPreço médio pago pelos personagens da base filtrada.`,
     vendaUnit: `VENDA UNITÁRIA MÉDIA\n\nValor médio de revenda dos personagens vendidos.`,
     resultadoMedio: `RESULTADO MÉDIO\n\nLucro líquido médio por personagem.`,

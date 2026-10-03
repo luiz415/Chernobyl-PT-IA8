@@ -499,7 +499,7 @@ export default function PartyManager({ parties, characters, waitingList, userNam
       if (!p.selectedIds.includes(characterId)) return;
       infos.push({
         name: String(p.name || "").trim() || "PT sem nome",
-        questLabel: p.ptType === "sanguine" ? "Sanguine" : p.ptType === "soulwar" ? "Soul War" : p.ptType === "crypt" ? "GB" : "Quest não definida",
+        questLabel: p.ptType === "sanguine" ? "Sanguine" : p.ptType === "soulwar" ? "Soul War" : p.ptType === "crypt" ? "Graveborn" : "Quest não definida",
         statusNote: p.archived ? (p.questFalha ? "falhou" : "finalizada") : undefined,
       });
     });
@@ -1270,14 +1270,14 @@ export default function PartyManager({ parties, characters, waitingList, userNam
                     <button
                       type="button"
                       onClick={() => setNewPtType("crypt")}
-                      title="GB — The Roost of the Graveborn"
+                      title="Graveborn — The Roost of the Graveborn"
                       className={`flex-1 py-2 rounded-lg text-xs font-bold border transition-colors ${
                         newPtType === "crypt"
                           ? "border-emerald-500/50 bg-emerald-500/20 text-emerald-300"
                           : "border-red-900/30 bg-black/20 text-emerald-500/70 hover:text-emerald-300"
                       }`}
                     >
-                      GB
+                      GRAVEBORN
                     </button>
                   </div>
                 </div>

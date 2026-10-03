@@ -429,7 +429,7 @@ function PersonalPartyHistoryCard({ entry, overrides, canEdit, userName, onOverr
     : party.questType === "soulwar"
       ? { label: "Soul War", className: "border-slate-300/60 bg-slate-300/15 text-slate-100 shadow-[0_0_12px_-2px_rgba(226,232,240,0.45)]", accent: "#cbd5e1" }
       : party.questType === "crypt"
-        ? { label: "GB", className: "border-emerald-400/70 bg-emerald-500/20 text-emerald-200 shadow-[0_0_12px_-2px_rgba(16,185,129,0.55)]", accent: "#34d399" }
+        ? { label: "Graveborn", className: "border-emerald-400/70 bg-emerald-500/20 text-emerald-200 shadow-[0_0_12px_-2px_rgba(16,185,129,0.55)]", accent: "#34d399" }
         : { label: "Quest", className: "border-slate-500/60 bg-slate-500/15 text-slate-300", accent: "var(--th-line)" };
 
   // ── Distribuição 3+2: coluna esquerda recebe ceil(n/2) personagens ───────

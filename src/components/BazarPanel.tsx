@@ -557,7 +557,7 @@ type QuestField = "soulwarCompleted" | "sanguineCompleted" | "cryptCompleted";
 const QUEST_FIELD_META: Record<QuestField, { label: string; countKey: "soulWarBossCount" | "sanguineBossCount" | "cryptBossCount"; totalKey: "soulWarBossTotal" | "sanguineBossTotal" | "cryptBossTotal"; defaultTotal: number; minSuspicious: number }> = {
   soulwarCompleted: { label: "Soul War", countKey: "soulWarBossCount", totalKey: "soulWarBossTotal", defaultTotal: 6, minSuspicious: 3 },
   sanguineCompleted: { label: "Sanguine", countKey: "sanguineBossCount", totalKey: "sanguineBossTotal", defaultTotal: 5, minSuspicious: 2 },
-  cryptCompleted: { label: "GB", countKey: "cryptBossCount", totalKey: "cryptBossTotal", defaultTotal: 5, minSuspicious: 2 },
+  cryptCompleted: { label: "Graveborn", countKey: "cryptBossCount", totalKey: "cryptBossTotal", defaultTotal: 5, minSuspicious: 2 },
 };
 
 /**
@@ -3499,7 +3499,7 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
         {/* ── NAVEGAÇÃO DO PAINEL — o título "Painel Bazaar" foi REMOVIDO;
             no lugar dele, TRÊS BOTÕES GRANDES de navegação entre as telas
             (textos exatos exigidos pela funcionalidade):
-              • "Personagens para SW/SG/Crypt" — a tela atual de quests (intacta);
+              • "Personagens para SW/SG/GB" — a tela atual de quests (intacta);
               • "Personagens com Itens" — exclusiva do Boss (gate real:
                 `showItemsMode` embute a permissão e o useEffect derruba o
                 modo se ela cair);
@@ -5330,7 +5330,7 @@ function BazarVipAccessPanel() {
   const benefits = [
     "Busca automática dos melhores personagens do Character Bazaar",
     "Filtros avançados por servidor, level, vocação, quests, valor e encerramento",
-    "Consulta automática de Soul War, Sanguine e GB via Bosstiary",
+    "Consulta automática de Soul War, Sanguine e Graveborn via Bosstiary",
     "Resumo inteligente dos servidores e recomendação de compras",
     "Lista oficial compartilhada, interesses e alertas de encerramento",
   ];

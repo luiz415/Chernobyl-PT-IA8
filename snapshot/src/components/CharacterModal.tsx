@@ -436,7 +436,7 @@ export default function CharacterModal({ open, initial, accounts, servers, onSav
 
             <div>
               <label className="block text-[10px] font-bold uppercase tracking-wider text-red-400/80 mb-1.5">
-                GB Disponível?
+                Graveborn Disponível?
               </label>
               <div className="grid grid-cols-2 gap-1 h-[38px]">
                 <button

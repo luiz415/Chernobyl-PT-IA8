@@ -14,7 +14,7 @@ import { useAuth } from "../context/AuthContext";
 export interface OtherPartyInfo {
   /** Nome da PT. */
   name: string;
-  /** Quest da PT: "Soul War", "Sanguine" ou "Quest não definida". */
+  /** Quest da PT: "Soul War", "Sanguine", "Graveborn" ou "Quest não definida". */
   questLabel: string;
   /** Nota de status para PTs arquivadas: "finalizada" / "falhou". */
   statusNote?: string;
@@ -187,7 +187,7 @@ export default function AvailableCharacter({
               <th className={`${thCls} text-center whitespace-nowrap`} onClick={() => toggleSort("level")}><div className={`${hdr} justify-center`}>Level <SI col="level" /></div></th>
               <th className={`${thCls} text-center whitespace-nowrap`}><div className={`${hdr} justify-center`}>SW</div></th>
               <th className={`${thCls} text-center whitespace-nowrap`}><div className={`${hdr} justify-center`}>SG</div></th>
-              <th className={`${thCls} text-center whitespace-nowrap`} title="GB — The Roost of the Graveborn"><div className={`${hdr} justify-center`}>GB</div></th>
+              <th className={`${thCls} text-center whitespace-nowrap`} title="Graveborn — The Roost of the Graveborn"><div className={`${hdr} justify-center`}>GB</div></th>
               <th className={`${thCls} text-center whitespace-nowrap`}><div className={`${hdr} justify-center`}>Dono</div></th>
             </tr>
             <tr>
@@ -392,7 +392,7 @@ export default function AvailableCharacter({
                       versão antiga) a informação é INCONCLUSIVA => "?". O
                       personagem segue elegível para PT GB até alguém marcar
                       indisponível (crypt === false). */}
-                  <td className="px-2 py-1.5 text-center whitespace-nowrap">{c.crypt === true ? <span className="text-emerald-400 font-bold text-[10px]">✓</span> : c.crypt === false ? <span className="text-rose-500 font-bold text-[10px]">✕</span> : <span className="text-slate-400 font-bold text-[10px]" title="Sem informação gravada de GB para este personagem">?</span>}</td>
+                  <td className="px-2 py-1.5 text-center whitespace-nowrap">{c.crypt === true ? <span className="text-emerald-400 font-bold text-[10px]">✓</span> : c.crypt === false ? <span className="text-rose-500 font-bold text-[10px]">✕</span> : <span className="text-slate-400 font-bold text-[10px]" title="Sem informação gravada de Graveborn para este personagem">?</span>}</td>
                   <td className="px-2 py-1.5 text-center text-sky-300 whitespace-nowrap">{getCharOwner(c)}</td>
                 </tr>
               );

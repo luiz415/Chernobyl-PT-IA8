@@ -509,7 +509,7 @@ export default function CharTable({ characters, activeParties = [], readOnly, sh
     // Crypt é opcional no tipo (legado sem o campo): `!== false` trata o
     // personagem antigo como DISPONÍVEL — o mesmo padrão inicial de SW/SG.
     const value = quest === "soulwar" ? c.soulwar : quest === "sanguine" ? c.sanguine : c.crypt !== false;
-    const questLabel = quest === "soulwar" ? "Soulwar" : quest === "sanguine" ? "Sanguine" : "GB";
+    const questLabel = quest === "soulwar" ? "Soulwar" : quest === "sanguine" ? "Sanguine" : "Graveborn";
     const showWarning = probableMarkers[c.id]?.[quest] === true && value;
     const warningTitle = `Esse personagem provavelmente já fez ${questLabel} e precisa ser atualizado.`;
     const locked = lockedQuestFinancialIds.has(c.id);

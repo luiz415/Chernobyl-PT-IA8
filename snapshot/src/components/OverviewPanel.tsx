@@ -161,7 +161,7 @@ export default function OverviewPanel({ characters, waitingList, activeParties }
     } else {
       parts.push("👥 Todos");
     }
-    parts.push(questFilter === "all" ? "Todas quests" : questFilter === "soulwar" ? "Soulwar" : questFilter === "crypt" ? "GB" : "Sanguine");
+    parts.push(questFilter === "all" ? "Todas quests" : questFilter === "soulwar" ? "Soulwar" : questFilter === "crypt" ? "Graveborn" : "Sanguine");
     const templateLabel = templateType === "inteligente" ? "Auto" : templateType === "ideal" ? "Ideal" : templateType === "custom" ? "Custom" : "Muito Boa";
     parts.push(templateLabel);
     if (!useCharacters || !useWaitingList) {

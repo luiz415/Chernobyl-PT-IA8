@@ -3095,7 +3095,7 @@ async function collectRubinotBosstiaryBosses(page, id, quests = { soulwar: true,
   // quests estão disponíveis. A checagem vem depois de limpar a busca, para
   // não confundir com "Nenhum boss encontrado com ..." de uma pesquisa ativa.
   if (await detectRubinotBosstiaryNoProgress(page)) {
-    rubinotDiag('details', 'Bosstiary sem nenhum progresso; Soul War, Sanguine e GB disponíveis.', { id });
+    rubinotDiag('details', 'Bosstiary sem nenhum progresso; Soul War, Sanguine e Graveborn disponíveis.', { id });
     return { bosses: [], strategy: 'empty-no-progress', pageCount: 0, searchSummaries: [], noProgress: true };
   }
 

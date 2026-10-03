@@ -326,7 +326,7 @@ export default function ArchivedPartyList({ parties, userName, highlightedId, on
     const valorIndividual = splitCount > 0 ? Math.round(splitItemVendido / splitCount) : 0;
 
     // Tipo da Quest
-    const questLabel = p.ptType === "sanguine" ? "SANGUINE" : p.ptType === "soulwar" ? "SOULWAR" : p.ptType === "crypt" ? "GB" : "QUEST";
+    const questLabel = p.ptType === "sanguine" ? "SANGUINE" : p.ptType === "soulwar" ? "SOULWAR" : p.ptType === "crypt" ? "GRAVEBORN" : "QUEST";
     const questColor = p.ptType === "sanguine" ? "rose" : p.ptType === "crypt" ? "emerald" : "slate";
 
     const isHighlighted = flashingId === p.id;
