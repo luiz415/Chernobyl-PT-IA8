@@ -395,6 +395,32 @@ service cloud.firestore {
         || resource.data.userId == request.auth.uid
       );
     }
+    // ── Notificações personalizadas do Boss (pedidos de envio) ─────────────
+    // O documento é apenas o PEDIDO: o fan-out real para `notifications` é
+    // feito pela Cloud Function `customNotify` (Admin SDK), que REVALIDA no
+    // backend que o criador é Boss aprovado. Criação restrita a Boss aprovado
+    // com os limites exatos da funcionalidade (título ≤ 30, descrição ≤ 120)
+    // e status inicial "pending". Nenhum cliente atualiza/apaga — o status
+    // ("sent"/"rejected") pertence ao backend.
+    match /customNotificationRequests/{requestId} {
+      allow read: if isBoss() && isApproved();
+      allow create: if isBoss() && isApproved()
+        && request.resource.data.createdBy == request.auth.uid
+        && request.resource.data.status == 'pending'
+        && request.resource.data.title is string
+        && request.resource.data.title.size() >= 1
+        && request.resource.data.title.size() <= 30
+        && request.resource.data.body is string
+        && request.resource.data.body.size() >= 1
+        && request.resource.data.body.size() <= 120
+        && request.resource.data.target in ['all', 'user']
+        && (
+          request.resource.data.target == 'all'
+          || (request.resource.data.targetUid is string && request.resource.data.targetUid.size() > 0)
+        )
+        && request.resource.data.createdAt is number;
+      allow update, delete: if false;
+    }
     // ── Push (Web Push/FCM): tokens de dispositivos por usuário ────────────
     // O usuário só lê/escreve os PRÓPRIOS tokens — nunca os de outro. O envio
     // é feito pelas Cloud Functions (Admin SDK, que não passa por rules).

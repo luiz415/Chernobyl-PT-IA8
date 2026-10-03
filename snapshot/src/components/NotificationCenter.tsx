@@ -662,6 +662,9 @@ export function NotificationCenter({
       case "service_waiting": return <Clock size={size} className="text-cyan-300" />;
       case "party_finalized": return <CheckCircle2 size={size} className="text-emerald-300" />;
       case "acquisition_pre_approved": return <Handshake size={size} className="text-violet-300" />;
+      // Mensagem informativa personalizada: ícone neutro, tema default (sem
+      // selo, badge ou qualquer indicação de origem administrativa).
+      case "custom_message": return <Info size={size} className="text-slate-300" />;
     }
   }
 

@@ -54,3 +54,8 @@ export { cleanupRemovedSlotPreApprovals } from "./acquisitionCleanup.js";
 // trigger deve rodar na região da instância RTDB; RTDB não existe em
 // southamerica-east1).
 export { presenceSync } from "./presenceSync.js";
+// Notificações personalizadas do Boss: o painel grava apenas o PEDIDO em
+// `customNotificationRequests` (Rules restringem a criação a Boss aprovado);
+// o trigger revalida o papel no backend e faz o fan-out em lotes para a
+// coleção `notifications` com ids determinísticos (sem duplicação em retry).
+export { customNotify } from "./customNotify.js";

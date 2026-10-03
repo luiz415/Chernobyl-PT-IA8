@@ -22,6 +22,7 @@ import {
   Crown,
   Star,
   MessageCircle,
+  Send,
 } from "lucide-react";
 import { openExternalUrl } from "../utils/openExternal";
 import type { Donation } from "../types/donations";
@@ -248,6 +249,97 @@ export default function BossAdminPanel({ open, onClose, minAverage = 10, globalS
   const [hoursThreshold, setHoursThreshold] = useState(72);
   const [cleaningNotifications, setCleaningNotifications] = useState(false);
   const [cleanResult, setCleanResult] = useState<{ success: boolean; message: string } | null>(null);
+
+  // ── ENVIO DE NOTIFICAÇÃO PERSONALIZADA (aba Notificações) ────────────────
+  // A interface grava apenas o PEDIDO em `customNotificationRequests` (Rules
+  // restringem a criação a Boss aprovado; a Cloud Function `customNotify`
+  // revalida o papel no backend e faz o fan-out em lotes para `notifications`
+  // — o mesmo pipeline de entrega/push das notificações existentes).
+  const CUSTOM_NOTIF_TITLE_MAX = 30;
+  const CUSTOM_NOTIF_BODY_MAX = 120;
+  const [customNotifTarget, setCustomNotifTarget] = useState("all"); // "all" | uid
+  const [customNotifTitle, setCustomNotifTitle] = useState("");
+  const [customNotifBody, setCustomNotifBody] = useState("");
+  const [customNotifConfirming, setCustomNotifConfirming] = useState(false);
+  const [customNotifSending, setCustomNotifSending] = useState(false);
+  const [customNotifResult, setCustomNotifResult] = useState<{ type: "success" | "error" | "info"; text: string } | null>(null);
+  const customNotifUnsubRef = useRef<(() => void) | null>(null);
+  const customNotifTimeoutRef = useRef<number | null>(null);
+
+  const stopCustomNotifWatch = () => {
+    if (customNotifUnsubRef.current) { try { customNotifUnsubRef.current(); } catch {} customNotifUnsubRef.current = null; }
+    if (customNotifTimeoutRef.current !== null) { window.clearTimeout(customNotifTimeoutRef.current); customNotifTimeoutRef.current = null; }
+  };
+
+  // Encerra o acompanhamento do pedido ao fechar o painel/desmontar.
+  useEffect(() => {
+    if (!open) stopCustomNotifWatch();
+    return () => stopCustomNotifWatch();
+  }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const customNotifTitleTrimmed = customNotifTitle.trim();
+  const customNotifBodyTrimmed = customNotifBody.trim();
+  const customNotifValid =
+    customNotifTitleTrimmed.length >= 1 && customNotifTitleTrimmed.length <= CUSTOM_NOTIF_TITLE_MAX &&
+    customNotifBodyTrimmed.length >= 1 && customNotifBodyTrimmed.length <= CUSTOM_NOTIF_BODY_MAX;
+
+  const customNotifTargetLabel = customNotifTarget === "all"
+    ? "Todos os usuários"
+    : (allUsers.find(u => u.uid === customNotifTarget)?.nome || "usuário selecionado");
+
+  const sendCustomNotification = async () => {
+    setCustomNotifConfirming(false);
+    if (!db || !currentUser || !customNotifValid || customNotifSending) return;
+    if (isSimulationMode) {
+      setCustomNotifResult({ type: "error", text: "Envio real indisponível no modo de simulação." });
+      return;
+    }
+    setCustomNotifSending(true);
+    setCustomNotifResult({ type: "info", text: "Registrando pedido de envio..." });
+    try {
+      const requestId = `cnreq_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      const payload: Record<string, unknown> = {
+        id: requestId,
+        createdBy: currentUser.uid,
+        target: customNotifTarget === "all" ? "all" : "user",
+        title: customNotifTitleTrimmed,
+        body: customNotifBodyTrimmed,
+        status: "pending",
+        createdAt: Date.now(),
+      };
+      if (customNotifTarget !== "all") payload.targetUid = customNotifTarget;
+      await setDoc(doc(db, "customNotificationRequests", requestId), payload);
+
+      // Feedback em tempo real: o backend atualiza o status do pedido.
+      stopCustomNotifWatch();
+      setCustomNotifResult({ type: "info", text: "Pedido registrado — o backend está processando o envio..." });
+      customNotifUnsubRef.current = onSnapshot(doc(db, "customNotificationRequests", requestId), (snap: any) => {
+        const data = snap?.data?.();
+        if (!data) return;
+        if (data.status === "sent") {
+          stopCustomNotifWatch();
+          setCustomNotifSending(false);
+          setCustomNotifResult({ type: "success", text: `Notificação enviada a ${data.sentCount ?? 0} usuário(s).` });
+          setCustomNotifTitle("");
+          setCustomNotifBody("");
+        } else if (data.status === "rejected") {
+          stopCustomNotifWatch();
+          setCustomNotifSending(false);
+          setCustomNotifResult({ type: "error", text: `Envio rejeitado pelo backend: ${data.error || "motivo não informado."}` });
+        }
+      });
+      // Salvaguarda: sem resposta do backend em 30s, libera o formulário
+      // (o pedido continua válido e será processado quando a Function rodar).
+      customNotifTimeoutRef.current = window.setTimeout(() => {
+        stopCustomNotifWatch();
+        setCustomNotifSending(false);
+        setCustomNotifResult({ type: "info", text: "Pedido registrado, mas o backend ainda não confirmou o processamento. Verifique se a Cloud Function `customNotify` está deployada." });
+      }, 30000);
+    } catch {
+      setCustomNotifSending(false);
+      setCustomNotifResult({ type: "error", text: "Falha ao registrar o pedido de envio. Verifique a conexão e tente novamente." });
+    }
+  };
 
   // Listener lazy: solicitações de crédito VIP (pendentes + histórico)
   // Ativo somente enquanto a aba VIP está aberta.
@@ -1694,6 +1786,107 @@ export default function BossAdminPanel({ open, onClose, minAverage = 10, globalS
           )}
           {activeTab === "notifications" && (
             <div className="flex flex-col gap-3 h-full">
+              {/* ── ENVIAR NOTIFICAÇÃO PERSONALIZADA ──────────────────────
+                  Pedido gravado em `customNotificationRequests`; o fan-out é
+                  da Cloud Function `customNotify` (valida Boss no backend).
+                  A notificação entregue é informativa e NÃO identifica o
+                  remetente nem a origem administrativa. */}
+              <div className="bg-[var(--th-n-panel)] border border-white/5 rounded-xl p-4 flex-shrink-0 space-y-3">
+                <div className="flex items-center gap-2 text-xs font-bold text-sky-200">
+                  <Send size={14} className="text-sky-400" />
+                  <span>Enviar Notificação Personalizada</span>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <label className="space-y-1">
+                    <span className="text-[10px] uppercase tracking-wider text-slate-500 font-bold">Destinatário</span>
+                    <select
+                      value={customNotifTarget}
+                      onChange={(e) => { setCustomNotifTarget(e.target.value); setCustomNotifConfirming(false); }}
+                      disabled={customNotifSending}
+                      className="w-full bg-black/30 border border-white/10 rounded-lg px-3 py-2 text-xs text-white outline-none focus:border-sky-500/50 disabled:opacity-50 cursor-pointer"
+                    >
+                      <option value="all">Todos os usuários</option>
+                      {allUsers
+                        .filter(u => u.status === "aprovado")
+                        .slice()
+                        .sort((a, b) => (a.nome || "").localeCompare(b.nome || "", "pt-BR"))
+                        .map(u => (
+                          <option key={u.uid} value={u.uid}>{u.nome || u.email || u.uid}</option>
+                        ))}
+                    </select>
+                  </label>
+                  <label className="space-y-1">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] uppercase tracking-wider text-slate-500 font-bold">Título (obrigatório)</span>
+                      <span className={`text-[9px] font-mono tabular-nums ${customNotifTitle.trim().length > CUSTOM_NOTIF_TITLE_MAX ? "text-rose-400 font-bold" : customNotifTitle.length >= CUSTOM_NOTIF_TITLE_MAX ? "text-amber-300" : "text-slate-500"}`}>
+                        {customNotifTitle.length}/{CUSTOM_NOTIF_TITLE_MAX}
+                      </span>
+                    </div>
+                    <input
+                      value={customNotifTitle}
+                      maxLength={CUSTOM_NOTIF_TITLE_MAX}
+                      onChange={(e) => { setCustomNotifTitle(e.target.value); setCustomNotifConfirming(false); }}
+                      disabled={customNotifSending}
+                      placeholder="Título da notificação"
+                      className="w-full bg-black/30 border border-white/10 rounded-lg px-3 py-2 text-xs text-white outline-none focus:border-sky-500/50 disabled:opacity-50"
+                    />
+                  </label>
+                </div>
+                <label className="space-y-1 block">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] uppercase tracking-wider text-slate-500 font-bold">Descrição (obrigatória)</span>
+                    <span className={`text-[9px] font-mono tabular-nums ${customNotifBody.trim().length > CUSTOM_NOTIF_BODY_MAX ? "text-rose-400 font-bold" : customNotifBody.length >= CUSTOM_NOTIF_BODY_MAX ? "text-amber-300" : "text-slate-500"}`}>
+                      {customNotifBody.length}/{CUSTOM_NOTIF_BODY_MAX}
+                    </span>
+                  </div>
+                  <textarea
+                    value={customNotifBody}
+                    maxLength={CUSTOM_NOTIF_BODY_MAX}
+                    onChange={(e) => { setCustomNotifBody(e.target.value); setCustomNotifConfirming(false); }}
+                    disabled={customNotifSending}
+                    placeholder="Texto da notificação (informativa, sem botões ou ações extras)"
+                    rows={2}
+                    className="w-full bg-black/30 border border-white/10 rounded-lg px-3 py-2 text-xs text-white outline-none focus:border-sky-500/50 resize-none disabled:opacity-50"
+                  />
+                </label>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="min-w-0 flex-1">
+                    {customNotifResult && (
+                      <div className={`text-[10px] leading-snug ${customNotifResult.type === "success" ? "text-emerald-300" : customNotifResult.type === "error" ? "text-rose-300" : "text-sky-300"}`}>
+                        {customNotifResult.text}
+                      </div>
+                    )}
+                  </div>
+                  {!customNotifConfirming ? (
+                    <button
+                      type="button"
+                      onClick={() => { setCustomNotifResult(null); setCustomNotifConfirming(true); }}
+                      disabled={!customNotifValid || customNotifSending}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-sky-500/15 border border-sky-500/40 text-sky-300 hover:bg-sky-500/25 text-xs font-bold transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed flex-shrink-0"
+                    >
+                      <Send size={12} /> {customNotifSending ? "Enviando..." : "Enviar Notificação"}
+                    </button>
+                  ) : (
+                    <div className="flex items-center gap-2 flex-shrink-0 bg-amber-500/10 border border-amber-500/30 rounded-lg px-3 py-1.5">
+                      <span className="text-[10px] text-amber-200 font-bold">Enviar para {customNotifTargetLabel}?</span>
+                      <button
+                        type="button"
+                        onClick={sendCustomNotification}
+                        className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-emerald-500/15 border border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/25 text-[10px] font-bold transition-colors cursor-pointer"
+                      >
+                        <Check size={11} /> Confirmar Envio
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setCustomNotifConfirming(false)}
+                        className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-white/5 border border-white/10 text-slate-300 hover:bg-rose-500/20 hover:border-rose-500/30 hover:text-rose-300 text-[10px] font-bold transition-colors cursor-pointer"
+                      >
+                        <X size={11} /> Cancelar
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
               <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 pb-2 flex-shrink-0">
                 <div className="flex items-center gap-2 text-xs font-bold text-violet-200">
                   <ShieldAlert size={14} className="text-violet-400" />

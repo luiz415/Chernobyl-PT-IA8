@@ -1,6 +1,6 @@
 export interface Notification {
   id: string
-  type: "pt_added" | "pt_reminder" | "update_available" | "payment_received" | "schedule_changed" | "quest_completed_donation" | "request_entry" | "rate_limit_block" | "pt_updated" | "vip_approved" | "bazaar_interest_ending" | "bazaar_daily_available" | "service_request" | "service_waiting" | "party_finalized" | "acquisition_pre_approved"
+  type: "pt_added" | "pt_reminder" | "update_available" | "payment_received" | "schedule_changed" | "quest_completed_donation" | "request_entry" | "rate_limit_block" | "pt_updated" | "vip_approved" | "bazaar_interest_ending" | "bazaar_daily_available" | "service_request" | "service_waiting" | "party_finalized" | "acquisition_pre_approved" | "custom_message"
   title: string
   body: string
   status: "pending" | "done"
