@@ -42,7 +42,7 @@ interface Props {
   // O 7º parâmetro `suggestedIds` é opcional. Quando presente, indica que a PT
   // está sendo criada a partir de uma sugestão e os personagens devem ser
   // pré-inseridos automaticamente. Quando ausente, criação manual padrão.
-  onCreate: (name: string, ptType?: "soulwar" | "sanguine", horarioTimestamp?: number, visibility?: "public" | "private", invitedUsers?: string[], servidor?: string, suggestedIds?: string[]) => void;
+  onCreate: (name: string, ptType?: "soulwar" | "sanguine" | "crypt", horarioTimestamp?: number, visibility?: "public" | "private", invitedUsers?: string[], servidor?: string, suggestedIds?: string[]) => void;
   onSaveParty?: (party: PartyTab) => void;
   activePt: string | null;
   setActivePt: (id: string | null) => void;
@@ -247,7 +247,7 @@ export default function PartyManager({ parties, characters, waitingList, userNam
       }
     }
   }
-  const [newPtType, setNewPtType] = useState<"soulwar" | "sanguine">("soulwar");
+  const [newPtType, setNewPtType] = useState<"soulwar" | "sanguine" | "crypt">("soulwar");
   const [newHorario, setNewHorario] = useState("");
   const [newDate, setNewDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [newVisibility, setNewVisibility] = useState<"public" | "private">("public");
@@ -258,7 +258,7 @@ export default function PartyManager({ parties, characters, waitingList, userNam
   const pendingManualCreateRef = useRef<{
     existingIds: string[];
     servidor: string;
-    ptType: "soulwar" | "sanguine";
+    ptType: "soulwar" | "sanguine" | "crypt";
     visibility: "public" | "private";
     horarioTimestamp?: number;
   } | null>(null);
@@ -460,6 +460,7 @@ export default function PartyManager({ parties, characters, waitingList, userNam
   const [standaloneFilterLevelOp, setStandaloneFilterLevelOp] = usePersistedState<"gte" | "lte">(`pt_allchars_f_lvlop_${standaloneFilterKey}`, "gte");
   const [standaloneFilterSW, setStandaloneFilterSW] = usePersistedState<ToggleState>(`pt_allchars_f_sw_${standaloneFilterKey}`, "off");
   const [standaloneFilterSG, setStandaloneFilterSG] = usePersistedState<ToggleState>(`pt_allchars_f_sg_${standaloneFilterKey}`, "off");
+  const [standaloneFilterGB, setStandaloneFilterGB] = usePersistedState<ToggleState>(`pt_allchars_f_gb_${standaloneFilterKey}`, "off");
   const [standaloneFilterDonos, setStandaloneFilterDonos] = usePersistedState<string[]>(`pt_allchars_f_donos_${standaloneFilterKey}`, []);
   const [standaloneSmartAccountFilter, setStandaloneSmartAccountFilter] = usePersistedState(`pt_allchars_f_smart_${standaloneFilterKey}`, false);
   const [standaloneWlFilters, setStandaloneWlFilters] = usePersistedState<Record<string, string>>(`pt_allchars_f_wl_${standaloneFilterKey}`, {});
@@ -498,7 +499,7 @@ export default function PartyManager({ parties, characters, waitingList, userNam
       if (!p.selectedIds.includes(characterId)) return;
       infos.push({
         name: String(p.name || "").trim() || "PT sem nome",
-        questLabel: p.ptType === "sanguine" ? "Sanguine" : p.ptType === "soulwar" ? "Soul War" : "Quest não definida",
+        questLabel: p.ptType === "sanguine" ? "Sanguine" : p.ptType === "soulwar" ? "Soul War" : p.ptType === "crypt" ? "GB" : "Quest não definida",
         statusNote: p.archived ? (p.questFalha ? "falhou" : "finalizada") : undefined,
       });
     });
@@ -510,7 +511,7 @@ export default function PartyManager({ parties, characters, waitingList, userNam
   const standaloneAvailable = useMemo(() => {
     return characters.filter(c => {
       if (c.shared === false) return false;
-      if (!c.soulwar && !c.sanguine) return false;
+      if (!c.soulwar && !c.sanguine && c.crypt === false) return false;
       if (standaloneFilterPersonagem && !c.personagem.toLowerCase().includes(standaloneFilterPersonagem.toLowerCase())) return false;
       if (standaloneFilterServer && !isSameServer(c.servidor, standaloneFilterServer)) return false;
       if (standaloneFilterVoc && c.voc !== standaloneFilterVoc) return false;
@@ -518,11 +519,15 @@ export default function PartyManager({ parties, characters, waitingList, userNam
       if (standaloneFilterSW === "no" && c.soulwar) return false;
       if (standaloneFilterSG === "yes" && !c.sanguine) return false;
       if (standaloneFilterSG === "no" && c.sanguine) return false;
+      // GB: "yes" exige disponível (legado sem o campo conta como disponível);
+      // "no" exige indisponível EXPLÍCITO (`crypt === false`).
+      if (standaloneFilterGB === "yes" && c.crypt === false) return false;
+      if (standaloneFilterGB === "no" && c.crypt !== false) return false;
       if (standaloneFilterLevel) { const t = parseInt(standaloneFilterLevel, 10); if (Number.isFinite(t)) { if (standaloneFilterLevelOp === "gte" && c.level < t) return false; if (standaloneFilterLevelOp === "lte" && c.level > t) return false; } }
       if (standaloneFilterDonos.length > 0 && !standaloneFilterDonos.includes(standaloneGetCharOwner(c))) return false;
       return true;
     });
-  }, [characters, standaloneFilterPersonagem, standaloneFilterServer, standaloneFilterVoc, standaloneFilterSW, standaloneFilterSG, standaloneFilterLevel, standaloneFilterLevelOp, standaloneFilterDonos, userName]);
+  }, [characters, standaloneFilterPersonagem, standaloneFilterServer, standaloneFilterVoc, standaloneFilterSW, standaloneFilterSG, standaloneFilterGB, standaloneFilterLevel, standaloneFilterLevelOp, standaloneFilterDonos, userName]);
   const standaloneSortedAvailable = useMemo(() => {
     if (!standaloneSortKey || !standaloneSortDir) return standaloneAvailable;
     const arr = [...standaloneAvailable].sort((a, b) => {
@@ -533,6 +538,7 @@ export default function PartyManager({ parties, characters, waitingList, userNam
       else if (standaloneSortKey === "level") { av = a.level; bv = b.level; }
       else if (standaloneSortKey === "soulwar") { av = a.soulwar ? 1 : 0; bv = b.soulwar ? 1 : 0; }
       else if (standaloneSortKey === "sanguine") { av = a.sanguine ? 1 : 0; bv = b.sanguine ? 1 : 0; }
+      else if (standaloneSortKey === "crypt") { av = a.crypt !== false ? 1 : 0; bv = b.crypt !== false ? 1 : 0; }
       else return 0;
       if (typeof av === "number" && typeof bv === "number") return av - bv;
       return String(av).localeCompare(String(bv), "pt-BR", { sensitivity: "base" });
@@ -570,6 +576,7 @@ export default function PartyManager({ parties, characters, waitingList, userNam
     setStandaloneFilterLevelOp("gte");
     setStandaloneFilterSW("off");
     setStandaloneFilterSG("off");
+    setStandaloneFilterGB("off");
     setStandaloneSmartAccountFilter(false);
     setStandaloneFilterDonos([]);
   }
@@ -831,7 +838,7 @@ export default function PartyManager({ parties, characters, waitingList, userNam
       if (existingIds.has(p.id)) return false;
       if (currentUser?.uid && p.leaderUid !== currentUser.uid) return false;
       if ((p.servidor || "") !== pending.servidor) return false;
-      if ((p.ptType === "sanguine" ? "sanguine" : "soulwar") !== pending.ptType) return false;
+      if ((p.ptType === "sanguine" ? "sanguine" : p.ptType === "crypt" ? "crypt" : "soulwar") !== pending.ptType) return false;
       if ((p.visibility || "public") !== pending.visibility) return false;
       if ((p.selectedIds || []).length > 0) return false;
       return true;
@@ -945,6 +952,8 @@ export default function PartyManager({ parties, characters, waitingList, userNam
                     <span className="text-[8px] font-bold px-1 py-px rounded border border-rose-500/30 bg-rose-500/10 text-rose-400 flex-shrink-0">SG</span>
                   ) : p.ptType === "soulwar" ? (
                     <span className="text-[8px] font-bold px-1 py-px rounded border border-slate-500/30 bg-slate-500/10 text-slate-400 flex-shrink-0">SW</span>
+                  ) : p.ptType === "crypt" ? (
+                    <span className="text-[8px] font-bold px-1 py-px rounded border border-emerald-500/30 bg-emerald-500/10 text-emerald-400 flex-shrink-0">GB</span>
                   ) : null}
                   {/* Contador de slots: apenas em "Com Vagas" — nos demais
                       estágios a lotação já é implícita pela categoria. */}
@@ -1258,6 +1267,18 @@ export default function PartyManager({ parties, characters, waitingList, userNam
                     >
                       SANGUINE
                     </button>
+                    <button
+                      type="button"
+                      onClick={() => setNewPtType("crypt")}
+                      title="GB — The Roost of the Graveborn"
+                      className={`flex-1 py-2 rounded-lg text-xs font-bold border transition-colors ${
+                        newPtType === "crypt"
+                          ? "border-emerald-500/50 bg-emerald-500/20 text-emerald-300"
+                          : "border-red-900/30 bg-black/20 text-emerald-500/70 hover:text-emerald-300"
+                      }`}
+                    >
+                      GB
+                    </button>
                   </div>
                 </div>
 
@@ -1526,6 +1547,8 @@ export default function PartyManager({ parties, characters, waitingList, userNam
                         setFilterSW={setStandaloneFilterSW}
                         filterSG={standaloneFilterSG}
                         setFilterSG={setStandaloneFilterSG}
+                        filterGB={standaloneFilterGB}
+                        setFilterGB={setStandaloneFilterGB}
                         donoOptions={standaloneDonoOptions}
                         filterDonos={standaloneFilterDonos}
                         setFilterDonos={setStandaloneFilterDonos}
@@ -1666,6 +1689,8 @@ export default function PartyManager({ parties, characters, waitingList, userNam
                                   <span className="text-[8px] font-bold px-1 py-px rounded border border-rose-500/30 bg-rose-500/10 text-rose-400 flex-shrink-0">SG</span>
                                 ) : p.ptType === "soulwar" ? (
                                   <span className="text-[8px] font-bold px-1 py-px rounded border border-slate-500/30 bg-slate-500/10 text-slate-400 flex-shrink-0">SW</span>
+                                ) : p.ptType === "crypt" ? (
+                                  <span className="text-[8px] font-bold px-1 py-px rounded border border-emerald-500/30 bg-emerald-500/10 text-emerald-400 flex-shrink-0">GB</span>
                                 ) : null}
                                 <span className="ml-auto inline-flex items-center gap-1 text-[9px] font-bold text-slate-400 flex-shrink-0">
                                   <Globe size={9} className="text-slate-500" />

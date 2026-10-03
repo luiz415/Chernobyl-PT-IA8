@@ -39,7 +39,7 @@ export interface CustomComposition {
 }
 
 export interface SuggestionOptions {
-  questType: "soulwar" | "sanguine";
+  questType: "soulwar" | "sanguine" | "crypt";
   userMode: "any" | "filter";
   selectedUsers: string[]; // list of owner names when userMode === "filter"
   /**
@@ -243,7 +243,7 @@ export interface ServerAnalysis {
 export function analyzeServerPotential(
   candidates: PartyCandidate[],
   serverName: string,
-  options: SuggestionOptions & { questFilter?: "soulwar" | "sanguine" | "all" }
+  options: SuggestionOptions & { questFilter?: "soulwar" | "sanguine" | "crypt" | "all" }
 ): ServerAnalysis {
   // Filtrar candidatos pelo servidor e pelas regras configuradas de filtros
   // Comparação pelo nome COMPLETO e canônico: "Grimoria I" nunca casa com
@@ -456,6 +456,8 @@ function collectEligibleCandidates(
       // Filtrar pela Quest da PT
       if (options.questType === "soulwar" && !c.soulwar) return;
       if (options.questType === "sanguine" && !c.sanguine) return;
+      // GB (`crypt`): legado sem o campo = disponível (mesma convenção do app).
+      if (options.questType === "crypt" && c.crypt === false) return;
 
       // Filtrar por nível mínimo da vocação
       if (options.minLevels) {

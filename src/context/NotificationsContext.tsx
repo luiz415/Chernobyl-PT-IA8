@@ -24,7 +24,7 @@ interface Notification {
   createdAt: number;
   partyId?: string;
   partyName?: string;
-  questType?: "soulwar" | "sanguine";
+  questType?: "soulwar" | "sanguine" | "crypt";
   scheduledTime?: number;
   addedBy?: string;
   paidBy?: string;

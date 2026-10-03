@@ -3,7 +3,7 @@ import { Archive, Check, Clock, Coins, Copy, Crown, ExternalLink, Lock, Pencil, 
 import type { PersonalPartyHistory, PersonalPartyHistorySlot } from "../types";
 import { customAlert, formatRC } from "../types";
 import { toFirestoreMillis } from "../utils/firestoreTimestamp";
-import { ItemSelect, ITEM_COLORS, SANGUINE_ITEMS, SOULWAR_ITEMS } from "./CharTable";
+import { CRYPT_ITEMS, ItemSelect, ITEM_COLORS, SANGUINE_ITEMS, SOULWAR_ITEMS } from "./CharTable";
 import { FilterInline, FilterSelect } from "./FilterTypes";
 import { savePartyHistoryOverrides, subscribePartyHistoryOverrides } from "../services/partyHistoryService";
 import { classifyDroppedItems } from "../utils/profitClassification";
@@ -181,7 +181,7 @@ function buildWhatsAppSummary(entry: PersonalPartyHistory, slots: PersonalPartyH
   const linhas: string[] = [];
 
   // 1) Cabeçalho — Nome da PT (SW/SG)
-  const questSigla = party.questType === "sanguine" ? "SG" : "SW";
+  const questSigla = party.questType === "sanguine" ? "SG" : party.questType === "crypt" ? "GB" : "SW";
   linhas.push(`📋 *Resumo da PT: ${party.name}* (${questSigla})`);
 
   // 2) Servidor da PT (omitido quando não gravado)
@@ -419,14 +419,18 @@ function PersonalPartyHistoryCard({ entry, overrides, canEdit, userName, onOverr
     ? SOULWAR_ITEMS
     : party.questType === "sanguine"
       ? SANGUINE_ITEMS
-      : [...SOULWAR_ITEMS, ...SANGUINE_ITEMS];
+      : party.questType === "crypt"
+        ? CRYPT_ITEMS
+        : [...SOULWAR_ITEMS, ...SANGUINE_ITEMS, ...CRYPT_ITEMS];
 
   // ── Seção 1: número no topo; Quest com destaque evidente (padrão do app) ─
   const questBadge = party.questType === "sanguine"
     ? { label: "Sanguine", className: "border-rose-400/70 bg-rose-500/20 text-rose-200 shadow-[0_0_12px_-2px_rgba(244,63,94,0.55)]", accent: "#fb7185" }
     : party.questType === "soulwar"
       ? { label: "Soul War", className: "border-slate-300/60 bg-slate-300/15 text-slate-100 shadow-[0_0_12px_-2px_rgba(226,232,240,0.45)]", accent: "#cbd5e1" }
-      : { label: "Quest", className: "border-slate-500/60 bg-slate-500/15 text-slate-300", accent: "var(--th-line)" };
+      : party.questType === "crypt"
+        ? { label: "GB", className: "border-emerald-400/70 bg-emerald-500/20 text-emerald-200 shadow-[0_0_12px_-2px_rgba(16,185,129,0.55)]", accent: "#34d399" }
+        : { label: "Quest", className: "border-slate-500/60 bg-slate-500/15 text-slate-300", accent: "var(--th-line)" };
 
   // ── Distribuição 3+2: coluna esquerda recebe ceil(n/2) personagens ───────
   // (5 → 3+2, 4 → 2+2, 3 → 2+1, 6 → 3+3). Em containers estreitos as duas

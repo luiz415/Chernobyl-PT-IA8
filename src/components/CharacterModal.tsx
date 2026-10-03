@@ -436,7 +436,7 @@ export default function CharacterModal({ open, initial, accounts, servers, onSav
 
             <div>
               <label className="block text-[10px] font-bold uppercase tracking-wider text-red-400/80 mb-1.5">
-                Crypt Disponível?
+                GB Disponível?
               </label>
               <div className="grid grid-cols-2 gap-1 h-[38px]">
                 <button
@@ -525,7 +525,7 @@ export default function CharacterModal({ open, initial, accounts, servers, onSav
 
             <div>
               <label className="mb-1.5 flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider text-red-400/80" title={lockedQuestFinancialFields ? questFinancialLockTitle : undefined}>
-                Drop Crypt (RC) {lockedQuestFinancialFields && <Lock size={10} className="text-violet-300" />}
+                Drop GB (RC) {lockedQuestFinancialFields && <Lock size={10} className="text-violet-300" />}
               </label>
               <input
                 type="text"

@@ -7,7 +7,7 @@
  * sem depender de Emulator ou credenciais.
  */
 
-export type QuestType = "soulwar" | "sanguine";
+export type QuestType = "soulwar" | "sanguine" | "crypt";
 export type AcquisitionStatus = "pre_approved" | "payment_confirmed" | "quest_completed" | "for_sale" | "sold" | "created";
 export type QuestValueSource = "pt" | "buyer";
 
@@ -95,7 +95,9 @@ function normalizeMoney(value: unknown): number {
 }
 
 function normalizeQuestType(value: unknown): QuestType | undefined {
-  return value === "soulwar" || value === "sanguine" ? value : undefined;
+  // GB ("crypt"): aquisições concluem Quest GB com o MESMO tratamento de
+  // SW/SG (exige firestore.rules com 'crypt' em questType — deploy manual).
+  return value === "soulwar" || value === "sanguine" || value === "crypt" ? value : undefined;
 }
 
 function normalizeStatus(value: unknown): AcquisitionStatus | undefined {

@@ -509,7 +509,7 @@ export default function CharTable({ characters, activeParties = [], readOnly, sh
     // Crypt é opcional no tipo (legado sem o campo): `!== false` trata o
     // personagem antigo como DISPONÍVEL — o mesmo padrão inicial de SW/SG.
     const value = quest === "soulwar" ? c.soulwar : quest === "sanguine" ? c.sanguine : c.crypt !== false;
-    const questLabel = quest === "soulwar" ? "Soulwar" : quest === "sanguine" ? "Sanguine" : "Crypt";
+    const questLabel = quest === "soulwar" ? "Soulwar" : quest === "sanguine" ? "Sanguine" : "GB";
     const showWarning = probableMarkers[c.id]?.[quest] === true && value;
     const warningTitle = `Esse personagem provavelmente já fez ${questLabel} e precisa ser atualizado.`;
     const locked = lockedQuestFinancialIds.has(c.id);
@@ -651,7 +651,7 @@ export default function CharTable({ characters, activeParties = [], readOnly, sh
       render: (c) => renderQuestAvailabilityCell(c, "sanguine"),
     },
     {
-      key: "crypt", label: "Crypt", align: "center",
+      key: "crypt", label: "GB", align: "center",
       // Legado sem o campo = disponível (mesma regra da célula inline).
       get: (c) => (c.crypt !== false ? "Sim" : "Não"),
       render: (c) => renderQuestAvailabilityCell(c, "crypt"),
@@ -705,7 +705,7 @@ export default function CharTable({ characters, activeParties = [], readOnly, sh
       },
     },
     {
-      key: "itemDropadoCrypt", label: "DROP CRYPT", align: "center",
+      key: "itemDropadoCrypt", label: "DROP GB", align: "center",
       get: (c) => c.itemDropadoCrypt || "",
       render: (c) => {
         const locked = lockedQuestFinancialIds.has(c.id);
@@ -715,7 +715,7 @@ export default function CharTable({ characters, activeParties = [], readOnly, sh
             onChange={(val) => onCharacterInlineChange?.({ ...c, itemDropadoCrypt: val })}
             itemList={CRYPT_ITEMS}
             disabled={locked}
-            disabledReason="Bloqueado: o Drop Crypt desta Quest pertence ao comprador da negociação"
+            disabledReason="Bloqueado: o Drop GB desta Quest pertence ao comprador da negociação"
           />
         );
       },
@@ -795,7 +795,7 @@ export default function CharTable({ characters, activeParties = [], readOnly, sh
       },
     },
     {
-      key: "dropCrypt", label: "LUCRO CRYPT", align: "center",
+      key: "dropCrypt", label: "LUCRO GB", align: "center",
       get: (c) => c.dropCrypt || 0,
       render: (c) => {
         const locked = lockedQuestFinancialIds.has(c.id);
@@ -805,14 +805,14 @@ export default function CharTable({ characters, activeParties = [], readOnly, sh
         const hasSale = !!c.itemSaleCrypt && (c.itemSaleCrypt.resultRC || 0) > 0;
         const canSell = !locked && !readOnly && hasDrop && !!onCharacterInlineChange;
         return (
-          <span className={`inline-flex items-center gap-1 tabular-nums text-[11px] ${locked ? "text-slate-500" : "text-slate-300"}`} title={locked ? "Bloqueado: o Lucro Crypt desta Quest pertence ao comprador da negociação" : undefined}>
+          <span className={`inline-flex items-center gap-1 tabular-nums text-[11px] ${locked ? "text-slate-500" : "text-slate-300"}`} title={locked ? "Bloqueado: o Lucro GB desta Quest pertence ao comprador da negociação" : undefined}>
             {locked && <Lock size={10} className="text-violet-300" />}
             {onCharacterInlineChange && !locked && !readOnly && (
               <button
                 type="button"
                 disabled={!canSell}
                 onClick={(e) => { e.stopPropagation(); if (canSell) setItemSaleTarget({ characterId: c.id, quest: "crypt" }); }}
-                title={!hasDrop ? "Selecione um item em DROP CRYPT para habilitar a venda" : hasSale ? "Venda registrada — clique para revisar" : "Registrar a venda do item (valor, cotação do RC e Taxa Market)"}
+                title={!hasDrop ? "Selecione um item em DROP GB para habilitar a venda" : hasSale ? "Venda registrada — clique para revisar" : "Registrar a venda do item (valor, cotação do RC e Taxa Market)"}
                 className={`inline-flex items-center gap-0.5 px-1 py-0.5 rounded border text-[9px] font-bold transition-colors ${
                   hasSale
                     ? "border-emerald-500/50 bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30 cursor-pointer"
@@ -1179,11 +1179,11 @@ export default function CharTable({ characters, activeParties = [], readOnly, sh
       return (
         <div className="flex justify-center">
           <FilterMulti
-            label="Drop Crypt"
+            label="Drop GB"
             options={CRYPT_ITEMS}
             selected={multiChoiceFilters.itemDropadoCrypt || []}
             onApply={(values) => setMultiChoiceFilters((f) => ({ ...f, itemDropadoCrypt: values }))}
-            placeholder="Drop Crypt"
+            placeholder="Drop GB"
             searchable
           />
         </div>
@@ -1636,7 +1636,7 @@ export default function CharTable({ characters, activeParties = [], readOnly, sh
         const quest = itemSaleTarget.quest;
         const itemName = (quest === "soulwar" ? target.itemDropadoSW : quest === "sanguine" ? target.itemDropadoSG : target.itemDropadoCrypt) || "Item";
         const existing = (quest === "soulwar" ? target.itemSaleSW : quest === "sanguine" ? target.itemSaleSG : target.itemSaleCrypt) || null;
-        const contextName = quest === "soulwar" ? "Lucro SW" : quest === "sanguine" ? "Lucro SG" : "Lucro Crypt";
+        const contextName = quest === "soulwar" ? "Lucro SW" : quest === "sanguine" ? "Lucro SG" : "Lucro GB";
         return (
           <ItemSoldModal
             itemName={itemName}

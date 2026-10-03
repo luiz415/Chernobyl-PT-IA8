@@ -175,7 +175,7 @@ export function collectSaleGroups(
     groups.push({
       partyId: party.id,
       partyName: party.name,
-      questSigla: party.ptType === "sanguine" ? "SG" : party.ptType === "soulwar" ? "SW" : "",
+      questSigla: party.ptType === "sanguine" ? "SG" : party.ptType === "soulwar" ? "SW" : party.ptType === "crypt" ? "GB" : "",
       serverName: serverLabel(party.servidor) || "",
       splitParticipants,
       items,
@@ -498,7 +498,9 @@ export default function ItemsForSaleModal({ parties, characters, waitingList, on
                       <span className={`text-[9px] font-bold px-1.5 py-px rounded-md border flex-shrink-0 ${
                         g.questSigla === "SG"
                           ? "border-rose-500/40 bg-rose-500/15 text-rose-300"
-                          : "border-slate-400/30 bg-slate-500/15 text-slate-300"
+                          : g.questSigla === "GB"
+                            ? "border-emerald-500/40 bg-emerald-500/15 text-emerald-300"
+                            : "border-slate-400/30 bg-slate-500/15 text-slate-300"
                       }`}>
                         {g.questSigla}
                       </span>

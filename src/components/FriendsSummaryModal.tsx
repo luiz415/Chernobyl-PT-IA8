@@ -8,7 +8,7 @@ import { RECOMMENDABLE_VOCATIONS, VOCATION_ORDER, computeServerPriorityVocations
 import { characterQuestEligible, serviceQuestEligible, collectBusyIdsForQuest } from "../utils/questEligibility";
 
 export interface FriendsSummaryFilters {
-  questFilter: "soulwar" | "sanguine" | "all";
+  questFilter: "soulwar" | "sanguine" | "crypt" | "all";
   templateType: any;
   minLevels: Record<string, number>;
   userMode: "any" | "filter";

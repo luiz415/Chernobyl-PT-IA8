@@ -13,24 +13,29 @@ import type { Character, WaitingService, PartyTab, PtType } from "../types";
 // Garante que os três quadros usem EXATAMENTE a mesma regra, sem divergência.
 // ============================================================================
 
-export type QuestFilter = "soulwar" | "sanguine" | "all";
+export type QuestFilter = "soulwar" | "sanguine" | "crypt" | "all";
 
 /**
  * Um personagem (`Character`) só é contabilizado se atender à Quest Alvo.
  *
  *   • "soulwar"  → Soul War disponível.
  *   • "sanguine" → Sanguine disponível.
- *   • "all"      → AMBAS disponíveis (Soul War E Sanguine).
+ *   • "crypt"    → GB disponível (`crypt !== false`: personagens legados sem
+ *                  o campo são tratados como disponíveis, mesma convenção do
+ *                  Meus Personagens).
+ *   • "all"      → TODAS disponíveis (Soul War E Sanguine E GB).
  *
- * O campo `soulwar`/`sanguine` é o marcador de "disponível" usado em todo o
- * app (probableMarkers já o forçam a `false` quando a quest provavelmente foi
- * concluída em `availableCharactersForParty`).
+ * O campo `soulwar`/`sanguine`/`crypt` é o marcador de "disponível" usado em
+ * todo o app (probableMarkers já o forçam a `false` quando a quest
+ * provavelmente foi concluída em `availableCharactersForParty`).
  */
 export function characterQuestEligible(character: Character, questFilter: QuestFilter): boolean {
   if (questFilter === "soulwar") return !!character.soulwar;
   if (questFilter === "sanguine") return !!character.sanguine;
-  // "all": exige as duas disponíveis.
-  return !!character.soulwar && !!character.sanguine;
+  if (questFilter === "crypt") return character.crypt !== false;
+  // "all": exige todas disponíveis (GB legado sem o campo conta como
+  // disponível — contagens antigas não mudam).
+  return !!character.soulwar && !!character.sanguine && character.crypt !== false;
 }
 
 /**
@@ -38,11 +43,13 @@ export function characterQuestEligible(character: Character, questFilter: QuestF
  *
  *   • "soulwar"  → só services de Soul War.
  *   • "sanguine" → só services de Sanguine.
- *   • "all"      → qualquer service conta (cada um atende a uma das duas quests).
+ *   • "crypt"    → GB NÃO possui Services — nenhum service conta.
+ *   • "all"      → qualquer service conta (cada um atende a uma das quests).
  */
 export function serviceQuestEligible(service: WaitingService, questFilter: QuestFilter): boolean {
   if (questFilter === "soulwar") return service.quest === "soulwar";
   if (questFilter === "sanguine") return service.quest === "sanguine";
+  if (questFilter === "crypt") return false;
   return true;
 }
 // ============================================================================
@@ -74,7 +81,7 @@ export function serviceQuestEligible(service: WaitingService, questFilter: Quest
 export function partyBlocksQuest(party: PartyTab, targetQuest: PtType | "all"): boolean {
   if (party.archived) return false;
   const partyQuest = party.ptType;
-  if (partyQuest !== "soulwar" && partyQuest !== "sanguine") return true;
+  if (partyQuest !== "soulwar" && partyQuest !== "sanguine" && partyQuest !== "crypt") return true;
   if (targetQuest === "all") return true;
   return partyQuest === targetQuest;
 }

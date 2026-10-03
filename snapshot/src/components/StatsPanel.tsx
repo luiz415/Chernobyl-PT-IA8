@@ -465,6 +465,7 @@ export default function StatsPanel({ characters, parties = [], userName = "", us
     let questProfit = 0;
     let questProfitSW = 0;
     let questProfitSG = 0;
+    let questProfitCrypt = 0;
     let saleRevenue = 0;
     let visibleCount = 0;
     let buyerActiveCount = 0;
@@ -473,6 +474,7 @@ export default function StatsPanel({ characters, parties = [], userName = "", us
     const saleValueValues: number[] = [];
     const questProfitSWValues: number[] = [];
     const questProfitSGValues: number[] = [];
+    const questProfitCryptValues: number[] = [];
     const netEntries: number[] = [];
     const buyerEntries: BuyerEntry[] = [];
 
@@ -500,11 +502,11 @@ export default function StatsPanel({ characters, parties = [], userName = "", us
 
       const buyerDetails = buyerDetailsByAcquisition.get(record.id);
       const questType = buyerDetails?.questType || record.questType;
-      const normalizedQuestType: PtType | undefined = questType === "soulwar" || questType === "sanguine" ? questType : undefined;
+      const normalizedQuestType: PtType | undefined = questType === "soulwar" || questType === "sanguine" || questType === "crypt" ? questType : undefined;
       const hasQuestInRange = !!buyerDetails && inRange(buyerDetails.questCompletedAt || buyerDetails.updatedAt);
       const privateQuestProfit = hasQuestInRange ? (buyerDetails?.questProfit || 0) : 0;
       const saleValue = record.saleValue !== undefined && inRange(record.soldAt || record.updatedAt) ? (record.saleValue || 0) : 0;
-      const questIsIncluded = normalizedQuestType === "soulwar" ? valueFilter.dropSW : normalizedQuestType === "sanguine" ? valueFilter.dropBakra : false;
+      const questIsIncluded = normalizedQuestType === "soulwar" ? valueFilter.dropSW : normalizedQuestType === "sanguine" ? valueFilter.dropBakra : normalizedQuestType === "crypt" ? valueFilter.dropCrypt : false;
       const buyerNet = (valueFilter.valorPago ? -(record.finalPaid || 0) : 0)
         + (questIsIncluded ? privateQuestProfit : 0)
         + (valueFilter.valorVenda ? saleValue : 0);
@@ -519,6 +521,9 @@ export default function StatsPanel({ characters, parties = [], userName = "", us
         } else if (normalizedQuestType === "sanguine") {
           questProfitSG += privateQuestProfit;
           questProfitSGValues.push(privateQuestProfit);
+        } else if (normalizedQuestType === "crypt") {
+          questProfitCrypt += privateQuestProfit;
+          questProfitCryptValues.push(privateQuestProfit);
         }
       }
       if (saleValue > 0) {
@@ -543,8 +548,10 @@ export default function StatsPanel({ characters, parties = [], userName = "", us
       questProfit,
       questProfitSW,
       questProfitSG,
+      questProfitCrypt,
       questProfitSWValues,
       questProfitSGValues,
+      questProfitCryptValues,
       saleRevenue,
       saleValueValues,
       netEntries,
@@ -559,14 +566,15 @@ export default function StatsPanel({ characters, parties = [], userName = "", us
     const vendidos = baseFiltered.filter((c) => c.vendido);
     const dropSWAvg = avgNonZero([...baseFiltered.map((c) => c.dropSW), ...acquisitionFinance.questProfitSWValues]);
     const dropBakraAvg = avgNonZero([...baseFiltered.map((c) => c.dropBakra), ...acquisitionFinance.questProfitSGValues]);
-    // Crypt não tem negociações entre usuários (sem Service): só personagens.
-    const dropCryptAvg = avgNonZero(baseFiltered.map((c) => c.dropCrypt || 0));
+    // GB entra nas negociações como SW/SG: personagens negociados que
+    // concluem Quest GB somam o lucro privado do comprador aqui também.
+    const dropCryptAvg = avgNonZero([...baseFiltered.map((c) => c.dropCrypt || 0), ...acquisitionFinance.questProfitCryptValues]);
     const valorPagoAvg = avgNonZero([...baseFiltered.map((c) => c.valorPago), ...acquisitionFinance.acquisitionCostValues]);
     const valorVendaAvg = avgNonZero([...vendidos.map((c) => c.valorVenda), ...acquisitionFinance.saleValueValues]);
     const totalInvestido = sum(baseFiltered.map((c) => c.valorPago)) + acquisitionFinance.acquisitionCost;
     const totalDropSW = sum(baseFiltered.map((c) => c.dropSW)) + acquisitionFinance.questProfitSW;
     const totalDropBakra = sum(baseFiltered.map((c) => c.dropBakra)) + acquisitionFinance.questProfitSG;
-    const totalDropCrypt = sum(baseFiltered.map((c) => c.dropCrypt || 0));
+    const totalDropCrypt = sum(baseFiltered.map((c) => c.dropCrypt || 0)) + acquisitionFinance.questProfitCrypt;
     const totalVendas = sum(vendidos.map((c) => c.valorVenda)) + acquisitionFinance.saleRevenue;
 
     const filteredResults = baseFiltered.map((c) => calcResult(c, valueFilter));
@@ -953,7 +961,7 @@ export default function StatsPanel({ characters, parties = [], userName = "", us
     ptsDia: `FREQUÊNCIA DE PT's\n\nMédia diária de PT's CONCLUÍDAS (sucesso).`,
     medDropSW: `MÉDIA DE DROP SOULWAR\n\nLucro médio (RC) em Soulwar por personagem que dropou.`,
     medDropSG: `MÉDIA DE DROP SANGUINE\n\nLucro médio (RC) em Sanguine por personagem que dropou.`,
-    medDropCrypt: `MÉDIA DE DROP CRYPT\n\nLucro médio (RC) na Crypt por personagem que dropou.`,
+    medDropCrypt: `MÉDIA DE DROP GB\n\nLucro médio (RC) na GB por personagem que dropou.`,
     custoUnit: `CUSTO UNITÁRIO MÉDIO\n\nPreço médio pago pelos personagens da base filtrada.`,
     vendaUnit: `VENDA UNITÁRIA MÉDIA\n\nValor médio de revenda dos personagens vendidos.`,
     resultadoMedio: `RESULTADO MÉDIO\n\nLucro líquido médio por personagem.`,
@@ -1117,7 +1125,7 @@ export default function StatsPanel({ characters, parties = [], userName = "", us
                 <button onClick={() => setValueFilter((f) => ({ ...f, valorPago: !f.valorPago }))} className={`px-2 py-0.5 rounded-md text-[9px] font-bold border transition-all ${valueFilter.valorPago ? "border-rose-500/60 bg-rose-500/20 text-rose-300" : `${pillIdle} opacity-50`}`} title="Custo (subtrai)">Custo</button>
                 <button onClick={() => setValueFilter((f) => ({ ...f, dropSW: !f.dropSW }))} className={`px-2 py-0.5 rounded-md text-[9px] font-bold border transition-all ${valueFilter.dropSW ? "border-purple-500/60 bg-purple-500/20 text-purple-300" : `${pillIdle} opacity-50`}`} title="Drop SW (soma)">Drop SW</button>
                 <button onClick={() => setValueFilter((f) => ({ ...f, dropBakra: !f.dropBakra }))} className={`px-2 py-0.5 rounded-md text-[9px] font-bold border transition-all ${valueFilter.dropBakra ? "border-orange-500/60 bg-orange-500/20 text-orange-300" : `${pillIdle} opacity-50`}`} title="Drop SG (soma)">Drop SG</button>
-                <button onClick={() => setValueFilter((f) => ({ ...f, dropCrypt: !(f.dropCrypt ?? true) }))} className={`px-2 py-0.5 rounded-md text-[9px] font-bold border transition-all ${valueFilter.dropCrypt ? "border-cyan-500/60 bg-cyan-500/20 text-cyan-300" : `${pillIdle} opacity-50`}`} title="Drop Crypt (soma)">Drop Crypt</button>
+                <button onClick={() => setValueFilter((f) => ({ ...f, dropCrypt: !(f.dropCrypt ?? true) }))} className={`px-2 py-0.5 rounded-md text-[9px] font-bold border transition-all ${valueFilter.dropCrypt ? "border-cyan-500/60 bg-cyan-500/20 text-cyan-300" : `${pillIdle} opacity-50`}`} title="Drop GB (soma)">Drop GB</button>
                 <button onClick={() => setValueFilter((f) => ({ ...f, valorVenda: !f.valorVenda }))} className={`px-2 py-0.5 rounded-md text-[9px] font-bold border transition-all ${valueFilter.valorVenda ? "border-emerald-500/60 bg-emerald-500/20 text-emerald-300" : `${pillIdle} opacity-50`}`} title="Venda (soma)">Venda</button>
               </div>
             </StatsFilterBox>
@@ -1157,7 +1165,7 @@ export default function StatsPanel({ characters, parties = [], userName = "", us
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
             <StatRow label="Lucro Médio SW" value={moneyAvg(stats.dropSWAvg.avg)} title={tt.medDropSW} />
             <StatRow label="Lucro Médio SG" value={moneyAvg(stats.dropBakraAvg.avg)} title={tt.medDropSG} />
-            <StatRow label="Lucro Médio Crypt" value={moneyAvg(stats.dropCryptAvg.avg)} title={tt.medDropCrypt} />
+            <StatRow label="Lucro Médio GB" value={moneyAvg(stats.dropCryptAvg.avg)} title={tt.medDropCrypt} />
             <StatRow label="Custo Médio / Personagem" value={moneyAvg(stats.valorPagoAvg.avg)} title={tt.custoUnit} />
             <StatRow label="Venda Média / Personagem" value={moneyAvg(stats.valorVendaAvg.avg)} title={tt.vendaUnit} />
             <StatRow label="Resultado Médio / Personagem" value={moneyAvg(stats.lucroMedio.avg)} valueColor={stats.lucroMedio.avg >= 0 ? "text-emerald-400" : "text-rose-400"} title={tt.resultadoMedio} />
@@ -1236,7 +1244,7 @@ export default function StatsPanel({ characters, parties = [], userName = "", us
       <div className="grid grid-cols-1 lg:grid-cols-4 gap-2 items-stretch">
         <ItemSection title="Drop Soulwar" list={itemStats.swList} masterList={SOULWAR_ITEMS} total={itemStats.totalSW} type="sw" />
         <ItemSection title="Drop Sanguine" list={itemStats.sgList} masterList={SANGUINE_ITEMS} total={itemStats.totalSG} type="sg" />
-        <ItemSection title="Drop Crypt" list={itemStats.cryptList} masterList={CRYPT_ITEMS} total={itemStats.totalCrypt} type="crypt" />
+        <ItemSection title="Drop GB" list={itemStats.cryptList} masterList={CRYPT_ITEMS} total={itemStats.totalCrypt} type="crypt" />
         <PartnerSection title="Parceiros de Quest (Top 5)" partners={displayPartners} />
       </div>
 

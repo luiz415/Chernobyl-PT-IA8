@@ -557,7 +557,7 @@ type QuestField = "soulwarCompleted" | "sanguineCompleted" | "cryptCompleted";
 const QUEST_FIELD_META: Record<QuestField, { label: string; countKey: "soulWarBossCount" | "sanguineBossCount" | "cryptBossCount"; totalKey: "soulWarBossTotal" | "sanguineBossTotal" | "cryptBossTotal"; defaultTotal: number; minSuspicious: number }> = {
   soulwarCompleted: { label: "Soul War", countKey: "soulWarBossCount", totalKey: "soulWarBossTotal", defaultTotal: 6, minSuspicious: 3 },
   sanguineCompleted: { label: "Sanguine", countKey: "sanguineBossCount", totalKey: "sanguineBossTotal", defaultTotal: 5, minSuspicious: 2 },
-  cryptCompleted: { label: "Crypt", countKey: "cryptBossCount", totalKey: "cryptBossTotal", defaultTotal: 5, minSuspicious: 2 },
+  cryptCompleted: { label: "GB", countKey: "cryptBossCount", totalKey: "cryptBossTotal", defaultTotal: 5, minSuspicious: 2 },
 };
 
 /**
@@ -3520,9 +3520,9 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
                 ? "bg-amber-500/20 border border-amber-400/50 text-amber-100 shadow-[0_0_14px_color-mix(in_oklab,var(--color-amber-500)_22%,transparent)]"
                 : "border border-transparent text-slate-400 hover:text-amber-300 hover:bg-amber-500/10"
             }`}
-            title="Personagens do Bazaar para as quests Soul War / Sanguine / Crypt"
+            title="Personagens do Bazaar para as quests Soul War / Sanguine / GB (The Roost of the Graveborn)"
           >
-            <ShoppingBag size={15} /> Personagens para SW/SG/Crypt
+            <ShoppingBag size={15} /> Personagens para SW/SG/GB
           </button>
           {isBossUser && !demoMode && (
             <button
@@ -4477,7 +4477,7 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
                   <th className={`${STICKY_HEAD_CELL_CLASS} h-10 px-1 py-2 text-center align-middle leading-none`} title="Valor total dos itens monitorados encontrados para este personagem na última consulta da guia Itens (mesmos valores e regras de cálculo/Tier da guia Itens — nenhuma consulta extra). '—' = personagem sem itens na última consulta da guia Itens.">Valor Itens (kk)</th>
                   <th className={`${STICKY_HEAD_CELL_CLASS} h-10 px-1 py-2 text-center align-middle leading-none`}>SW</th>
                   <th className={`${STICKY_HEAD_CELL_CLASS} h-10 px-1 py-2 text-center align-middle leading-none`}>SG</th>
-                  <th className={`${STICKY_HEAD_CELL_CLASS} h-10 px-1 py-2 text-center align-middle leading-none`} title="The Roost of the Graveborn">Crypt</th>
+                  <th className={`${STICKY_HEAD_CELL_CLASS} h-10 px-1 py-2 text-center align-middle leading-none`} title="The Roost of the Graveborn">GB</th>
                   <th className={`${STICKY_HEAD_CELL_CLASS} h-10 px-1 py-2 text-center align-middle leading-none`}>Interessados</th>
                   <th className={`${STICKY_HEAD_CELL_CLASS} h-10 px-1 py-2 text-center align-middle leading-none`}>Link</th>
                 </tr>
@@ -4513,7 +4513,7 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
                       exibido na coluna — Disponível / Concluída / "?". */}
                   <th className={`${STICKY_FILTER_CELL_CLASS} h-10 px-1 py-1.5 align-middle`}><div className="flex w-full items-center justify-center [&>button]:w-full [&>button]:max-w-[64px]"><FilterMulti label="SW" options={QUEST_STATE_FILTER_OPTIONS} selected={tableFilters.swStates} onApply={values => updateTableFilters({ swStates: values })} placeholder="SW" /></div></th>
                   <th className={`${STICKY_FILTER_CELL_CLASS} h-10 px-1 py-1.5 align-middle`}><div className="flex w-full items-center justify-center [&>button]:w-full [&>button]:max-w-[64px]"><FilterMulti label="SG" options={QUEST_STATE_FILTER_OPTIONS} selected={tableFilters.sgStates} onApply={values => updateTableFilters({ sgStates: values })} placeholder="SG" /></div></th>
-                  <th className={`${STICKY_FILTER_CELL_CLASS} h-10 px-1 py-1.5 align-middle`}><div className="flex w-full items-center justify-center [&>button]:w-full [&>button]:max-w-[64px]"><FilterMulti label="Crypt" options={QUEST_STATE_FILTER_OPTIONS} selected={tableFilters.cryptStates} onApply={values => updateTableFilters({ cryptStates: values })} placeholder="Crypt" /></div></th>
+                  <th className={`${STICKY_FILTER_CELL_CLASS} h-10 px-1 py-1.5 align-middle`}><div className="flex w-full items-center justify-center [&>button]:w-full [&>button]:max-w-[64px]"><FilterMulti label="GB" options={QUEST_STATE_FILTER_OPTIONS} selected={tableFilters.cryptStates} onApply={values => updateTableFilters({ cryptStates: values })} placeholder="GB" /></div></th>
                   <th className={`${STICKY_FILTER_CELL_CLASS} h-10 px-1 py-1.5 text-center align-middle`}>
                     <button
                       type="button"
@@ -5330,7 +5330,7 @@ function BazarVipAccessPanel() {
   const benefits = [
     "Busca automática dos melhores personagens do Character Bazaar",
     "Filtros avançados por servidor, level, vocação, quests, valor e encerramento",
-    "Consulta automática de Soul War, Sanguine e Crypt via Bosstiary",
+    "Consulta automática de Soul War, Sanguine e GB via Bosstiary",
     "Resumo inteligente dos servidores e recomendação de compras",
     "Lista oficial compartilhada, interesses e alertas de encerramento",
   ];

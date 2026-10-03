@@ -31,7 +31,7 @@ interface Props {
   onUpdateCharacters?: (params: {
     notificationId: string;
     partyId: string;
-    questType: "soulwar" | "sanguine";
+    questType: "soulwar" | "sanguine" | "crypt";
   }) => Promise<boolean> | boolean;
   // Auto-Att: estado e toggle
   autoCharUpdate?: boolean;
@@ -141,6 +141,7 @@ function getRelativeTime(timestamp: number): string {
 function getQuestLabel(questType?: Notification["questType"]): string | null {
   if (questType === "soulwar") return "SW";
   if (questType === "sanguine") return "SG";
+  if (questType === "crypt") return "GB";
   return null;
 }
 

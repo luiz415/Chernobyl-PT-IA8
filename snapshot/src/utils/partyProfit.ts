@@ -114,8 +114,11 @@ export function getSplitValuePerMember(party: PartyTab): number {
 
 /** Uma entrada de lucro a ser transportada via `sharedCharacters`. */
 export interface PartyProfitEntry {
-  /** Quest da PT — define se o lucro vai para `dropSW` (Lucro SW) ou `dropBakra` (Lucro SG). */
-  questType: "soulwar" | "sanguine";
+  /**
+   * Quest da PT — define se o lucro vai para `dropSW` (Lucro SW), `dropBakra`
+   * (Lucro SG) ou `dropCrypt` (Lucro GB; identificador interno `crypt`).
+   */
+  questType: "soulwar" | "sanguine" | "crypt";
   /** Valor final do lucro para aquele personagem (já resolvido divisão/cheio). */
   lucro: number;
 }
@@ -138,7 +141,7 @@ export function computePartyProfitMap(party: PartyTab): Record<string, PartyProf
     const profit = computeCharacterProfit(party, id);
     if (profit.lucro <= 0) return;
     map[id] = {
-      questType: party.ptType === "sanguine" ? "sanguine" : "soulwar",
+      questType: party.ptType === "sanguine" ? "sanguine" : party.ptType === "crypt" ? "crypt" : "soulwar",
       lucro: profit.lucro,
     };
   });
@@ -214,11 +217,12 @@ export function computeCharacterProfit(
 
 /** Campos de Meus Personagens escritos por este cálculo, por tipo de Quest. */
 export interface ProfitTargetFields {
-  itemField: "itemDropadoSW" | "itemDropadoSG";
-  valueField: "dropSW" | "dropBakra";
+  itemField: "itemDropadoSW" | "itemDropadoSG" | "itemDropadoCrypt";
+  valueField: "dropSW" | "dropBakra" | "dropCrypt";
 }
 
-export function getProfitFieldsForQuest(questType: "soulwar" | "sanguine"): ProfitTargetFields {
+export function getProfitFieldsForQuest(questType: "soulwar" | "sanguine" | "crypt"): ProfitTargetFields {
+  if (questType === "crypt") return { itemField: "itemDropadoCrypt", valueField: "dropCrypt" };
   return questType === "soulwar"
     ? { itemField: "itemDropadoSW", valueField: "dropSW" }
     : { itemField: "itemDropadoSG", valueField: "dropBakra" };
@@ -228,8 +232,10 @@ export function getProfitFieldsForQuest(questType: "soulwar" | "sanguine"): Prof
 export type CharacterProfitPatch = Partial<{
   itemDropadoSW: string;
   itemDropadoSG: string;
+  itemDropadoCrypt: string;
   dropSW: number;
   dropBakra: number;
+  dropCrypt: number;
 }>;
 
 /**
@@ -249,8 +255,8 @@ export type CharacterProfitPatch = Partial<{
  */
 export function buildCharacterProfitPatch(
   party: PartyTab,
-  character: { id: string; itemDropadoSW?: string; itemDropadoSG?: string; dropSW: number; dropBakra: number },
-  questType: "soulwar" | "sanguine",
+  character: { id: string; itemDropadoSW?: string; itemDropadoSG?: string; itemDropadoCrypt?: string; dropSW: number; dropBakra: number; dropCrypt?: number },
+  questType: "soulwar" | "sanguine" | "crypt",
 ): CharacterProfitPatch {
   const { itemField, valueField } = getProfitFieldsForQuest(questType);
   const profit = computeCharacterProfit(party, character.id);
@@ -285,11 +291,11 @@ export function isPartyValuesLocked(party: PartyTab): boolean {
  * fora (não existem em Meus Personagens).
  */
 export function applyPartyProfitToCharacters<
-  T extends { id: string; itemDropadoSW?: string; itemDropadoSG?: string; dropSW: number; dropBakra: number },
+  T extends { id: string; itemDropadoSW?: string; itemDropadoSG?: string; itemDropadoCrypt?: string; dropSW: number; dropBakra: number; dropCrypt?: number },
 >(
   party: PartyTab,
   characters: T[],
-  questType: "soulwar" | "sanguine",
+  questType: "soulwar" | "sanguine" | "crypt",
 ): { characters: T[]; changed: boolean; updatedIds: string[] } {
   if (isPartyValuesLocked(party)) {
     return { characters, changed: false, updatedIds: [] };

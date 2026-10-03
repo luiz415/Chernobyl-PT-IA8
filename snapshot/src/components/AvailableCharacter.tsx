@@ -54,8 +54,11 @@ interface Props {
   setFilterSW: (v: ToggleState) => void;
   filterSG: ToggleState;
   setFilterSG: (v: ToggleState) => void;
+  filterGB: ToggleState;
+  setFilterGB: (v: ToggleState) => void;
   swLocked?: boolean;
   sgLocked?: boolean;
+  gbLocked?: boolean;
   donoOptions: string[];
   filterDonos: string[];
   setFilterDonos: (v: string[]) => void;
@@ -111,8 +114,11 @@ export default function AvailableCharacter({
   setFilterSW,
   filterSG,
   setFilterSG,
+  filterGB,
+  setFilterGB,
   swLocked = false,
   sgLocked = false,
+  gbLocked = false,
   donoOptions,
   filterDonos,
   setFilterDonos,
@@ -169,7 +175,7 @@ export default function AvailableCharacter({
       <div className="flex-1 min-h-0 overflow-y-auto" onWheel={e => e.stopPropagation()}>
         <table className="border-collapse w-full select-none text-xs" style={{ tableLayout: "auto" }}>
           <colgroup>
-            <col className="w-[28px]" /><col /><col /><col /><col /><col /><col /><col /><col />
+            <col className="w-[28px]" /><col /><col /><col /><col /><col /><col /><col /><col /><col />
           </colgroup>
           <thead className="sticky top-0 z-10">
             <tr>
@@ -181,6 +187,7 @@ export default function AvailableCharacter({
               <th className={`${thCls} text-center whitespace-nowrap`} onClick={() => toggleSort("level")}><div className={`${hdr} justify-center`}>Level <SI col="level" /></div></th>
               <th className={`${thCls} text-center whitespace-nowrap`}><div className={`${hdr} justify-center`}>SW</div></th>
               <th className={`${thCls} text-center whitespace-nowrap`}><div className={`${hdr} justify-center`}>SG</div></th>
+              <th className={`${thCls} text-center whitespace-nowrap`} title="GB — The Roost of the Graveborn"><div className={`${hdr} justify-center`}>GB</div></th>
               <th className={`${thCls} text-center whitespace-nowrap`}><div className={`${hdr} justify-center`}>Dono</div></th>
             </tr>
             <tr>
@@ -269,6 +276,16 @@ export default function AvailableCharacter({
                     state={filterSG}
                     onToggle={setFilterSG}
                     disabled={sgLocked}
+                  />
+                </div>
+              </th>
+              <th className="bg-[var(--th-bg-base)] px-1 py-1 border-b border-[var(--th-line)]/80 text-center">
+                <div className="flex justify-center">
+                  <FilterToggle
+                    label="GB"
+                    state={filterGB}
+                    onToggle={setFilterGB}
+                    disabled={gbLocked}
                   />
                 </div>
               </th>
@@ -371,6 +388,11 @@ export default function AvailableCharacter({
                   <td className="px-2 py-1.5 text-center tabular-nums whitespace-nowrap">{c.level}</td>
                   <td className="px-2 py-1.5 text-center whitespace-nowrap">{c.soulwar ? <span className="text-emerald-400 font-bold text-[10px]">✓</span> : <span className="text-rose-500 font-bold text-[10px]">✕</span>}</td>
                   <td className="px-2 py-1.5 text-center whitespace-nowrap">{c.sanguine ? <span className="text-emerald-400 font-bold text-[10px]">✓</span> : <span className="text-rose-500 font-bold text-[10px]">✕</span>}</td>
+                  {/* GB: ✓/✕ só com valor gravado; sem o campo (legado/dono em
+                      versão antiga) a informação é INCONCLUSIVA => "?". O
+                      personagem segue elegível para PT GB até alguém marcar
+                      indisponível (crypt === false). */}
+                  <td className="px-2 py-1.5 text-center whitespace-nowrap">{c.crypt === true ? <span className="text-emerald-400 font-bold text-[10px]">✓</span> : c.crypt === false ? <span className="text-rose-500 font-bold text-[10px]">✕</span> : <span className="text-slate-400 font-bold text-[10px]" title="Sem informação gravada de GB para este personagem">?</span>}</td>
                   <td className="px-2 py-1.5 text-center text-sky-300 whitespace-nowrap">{getCharOwner(c)}</td>
                 </tr>
               );

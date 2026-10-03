@@ -129,7 +129,7 @@ interface Props {
   onCreateFromSuggestion: (
     suggestedIds: string[],
     suggestedServidor: string,
-    suggestedPtType: "soulwar" | "sanguine",
+    suggestedPtType: "soulwar" | "sanguine" | "crypt",
     visibility: "public" | "private",
     horarioTimestamp?: number,
   ) => void;
@@ -325,10 +325,10 @@ export default function SuggestPartyModal({
   const { byQuest: minLevelsByQuest, setForQuest: setMinLevelsForQuest } = useQuestMinLevels("suggest");
 
   // Quest e Visibilidade — persistidas
-  const [internalPtType, setInternalPtType] = useState<"soulwar" | "sanguine">(() =>
-    loadUIState(`${PERSIST_KEY}.ptType`, "soulwar" as "soulwar" | "sanguine"));
-  const effectivePtType: "soulwar" | "sanguine" = party
-    ? (party.ptType === "sanguine" ? "sanguine" : "soulwar")
+  const [internalPtType, setInternalPtType] = useState<"soulwar" | "sanguine" | "crypt">(() =>
+    loadUIState(`${PERSIST_KEY}.ptType`, "soulwar" as "soulwar" | "sanguine" | "crypt"));
+  const effectivePtType: "soulwar" | "sanguine" | "crypt" = party
+    ? (party.ptType === "sanguine" ? "sanguine" : party.ptType === "crypt" ? "crypt" : "soulwar")
     : internalPtType;
   const effectivePartyId = party?.id || "__suggest_standalone__";
 
@@ -439,7 +439,7 @@ export default function SuggestPartyModal({
     existingIds: string[];
     suggestedIds: string[];
     servidor: string;
-    ptType: "soulwar" | "sanguine";
+    ptType: "soulwar" | "sanguine" | "crypt";
     visibility: "public" | "private";
     horarioTimestamp?: number;
   } | null>(null);
@@ -749,6 +749,8 @@ export default function SuggestPartyModal({
         if (!isOfficialServer(c.servidor)) return;
         if (effectivePtType === "soulwar" && !c.soulwar) return;
         if (effectivePtType === "sanguine" && !c.sanguine) return;
+        // GB (`crypt`): legado sem o campo = disponível (mesma convenção do app).
+        if (effectivePtType === "crypt" && c.crypt === false) return;
 
         // Filtros adicionais (apenas quando withFilters está ativo)
         if (withFilters) {
@@ -851,6 +853,8 @@ export default function SuggestPartyModal({
         if (!isOfficialServer(srv)) return;
         if (effectivePtType === "soulwar" && !c.soulwar) return;
         if (effectivePtType === "sanguine" && !c.sanguine) return;
+        // GB (`crypt`): legado sem o campo = disponível (mesma convenção do app).
+        if (effectivePtType === "crypt" && c.crypt === false) return;
 
         if (c.shared === false) return;
         if (busyIds.has(c.id)) return;
@@ -937,7 +941,7 @@ export default function SuggestPartyModal({
       if (existingIds.has(p.id)) return false;
       if (currentUser?.uid && p.leaderUid !== currentUser.uid) return false;
       if ((p.servidor || "") !== pending.servidor) return false;
-      if ((p.ptType === "sanguine" ? "sanguine" : "soulwar") !== pending.ptType) return false;
+      if ((p.ptType === "sanguine" ? "sanguine" : p.ptType === "crypt" ? "crypt" : "soulwar") !== pending.ptType) return false;
       if ((p.visibility || "public") !== pending.visibility) return false;
       if ((p.selectedIds || []).length !== pending.suggestedIds.length) return false;
       return pending.suggestedIds.every((id) => (p.selectedIds || []).includes(id));
@@ -1547,13 +1551,17 @@ export default function SuggestPartyModal({
                   className={`inline-flex items-center rounded border px-1.5 py-px text-[8px] font-black uppercase tracking-wide ${
                     effectivePtType === "sanguine"
                       ? "border-rose-500/40 bg-rose-500/10 text-rose-300"
-                      : "border-slate-400/40 bg-slate-400/10 text-slate-300"
+                      : effectivePtType === "crypt"
+                        ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300"
+                        : "border-slate-400/40 bg-slate-400/10 text-slate-300"
                   }`}
                   title={effectivePtType === "sanguine"
-                    ? "Editando os levels mínimos da Sanguine — a configuração de Soul War permanece guardada."
-                    : "Editando os levels mínimos da Soul War — a configuração de Sanguine permanece guardada."}
+                    ? "Editando os levels mínimos da Sanguine — as configurações das demais quests permanecem guardadas."
+                    : effectivePtType === "crypt"
+                      ? "Editando os levels mínimos da GB — as configurações das demais quests permanecem guardadas."
+                      : "Editando os levels mínimos da Soul War — as configurações das demais quests permanecem guardadas."}
                 >
-                  {effectivePtType === "sanguine" ? "SG" : "SW"}
+                  {effectivePtType === "sanguine" ? "SG" : effectivePtType === "crypt" ? "GB" : "SW"}
                 </span>
               </div>
               <div className="flex items-center gap-1.5">
@@ -1653,6 +1661,10 @@ export default function SuggestPartyModal({
                       <CursorTooltip text="Quest Sanguine.">
                         <button type="button" onClick={() => setInternalPtType("sanguine")}
                           className={`px-2 py-1 rounded text-[9px] font-bold transition-all cursor-pointer ${internalPtType === "sanguine" ? "bg-rose-700 text-white" : "text-slate-400 hover:text-slate-300"}`}>SG</button>
+                      </CursorTooltip>
+                      <CursorTooltip text="Quest GB (The Roost of the Graveborn).">
+                        <button type="button" onClick={() => setInternalPtType("crypt")}
+                          className={`px-2 py-1 rounded text-[9px] font-bold transition-all cursor-pointer ${internalPtType === "crypt" ? "bg-emerald-700 text-white" : "text-slate-400 hover:text-slate-300"}`}>GB</button>
                       </CursorTooltip>
                     </div>
                   </div>

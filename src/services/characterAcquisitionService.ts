@@ -393,7 +393,7 @@ export async function updateCharacterAcquisitionLifecycle(id: string, patch: Acq
 
   const safePatch: AcquisitionLifecycleUpdate = {};
   if (patch.status) safePatch.status = patch.status;
-  if (patch.questType === "soulwar" || patch.questType === "sanguine") safePatch.questType = patch.questType;
+  if (patch.questType === "soulwar" || patch.questType === "sanguine" || patch.questType === "crypt") safePatch.questType = patch.questType;
   if (patch.saleValue !== undefined) {
     const value = normalizeMoney(patch.saleValue);
     if (value === null) return { ok: false, error: "Valor da venda inválido." };
@@ -644,7 +644,7 @@ export function calculateAcquiredQuestProfit(party: PartyTab, characterId: strin
     : 0;
   if (Number.isFinite(calculated) && calculated > 0) return Math.floor(calculated);
 
-  const questType: PtType = party.ptType === "sanguine" ? "sanguine" : "soulwar";
+  const questType: PtType = party.ptType === "sanguine" ? "sanguine" : party.ptType === "crypt" ? "crypt" : "soulwar";
   const { valueField } = getProfitFieldsForQuest(questType);
   const importedValue = Number(party.memberSnapshots?.[characterId]?.[valueField] || 0);
   return Number.isFinite(importedValue) && importedValue > 0 ? Math.floor(importedValue) : 0;
@@ -659,7 +659,7 @@ export function calculateAcquiredQuestDrops(party: PartyTab, characterId: string
   const slotItem = normalizeText(party.slotData?.[characterId]?.itemDropado, 120);
   if (slotItem) return [slotItem];
 
-  const questType: PtType = party.ptType === "sanguine" ? "sanguine" : "soulwar";
+  const questType: PtType = party.ptType === "sanguine" ? "sanguine" : party.ptType === "crypt" ? "crypt" : "soulwar";
   const { itemField } = getProfitFieldsForQuest(questType);
   const importedItem = normalizeText(party.memberSnapshots?.[characterId]?.[itemField], 120);
   return importedItem ? [importedItem] : [];

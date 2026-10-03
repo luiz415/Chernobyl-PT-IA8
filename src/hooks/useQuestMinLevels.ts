@@ -33,7 +33,7 @@ import { loadUIState, saveUIState } from "../storage";
 //   • Caso contrário -> padrões novos por quest (abaixo).
 // ============================================================================
 
-export type QuestLevelQuest = "soulwar" | "sanguine";
+export type QuestLevelQuest = "soulwar" | "sanguine" | "crypt";
 export type QuestLevelFeature = "suggest" | "overview";
 export type MinLevelsRecord = Record<string, number>;
 export type MinLevelsByQuest = Record<QuestLevelQuest, MinLevelsRecord>;
@@ -45,6 +45,9 @@ export const QUEST_LEVEL_VOCS = ["EK", "ED", "MS", "RP", "MK"] as const;
 export const QUEST_MIN_LEVEL_DEFAULTS: MinLevelsByQuest = {
   soulwar: { EK: 500, ED: 380, MS: 380, RP: 500, MK: 500 },
   sanguine: { EK: 700, ED: 500, MS: 600, RP: 700, MK: 700 },
+  // GB ("crypt"): padrão definido pelo usuário = MESMOS níveis do Sanguine.
+  // Vale apenas para quem não tem configuração salva — editável por quest.
+  crypt: { EK: 700, ED: 500, MS: 600, RP: 700, MK: 700 },
 };
 
 /**
@@ -87,6 +90,9 @@ function normalizeByQuest(raw: unknown): MinLevelsByQuest {
   return {
     soulwar: sanitizeRecord(source.soulwar, QUEST_MIN_LEVEL_DEFAULTS.soulwar),
     sanguine: sanitizeRecord(source.sanguine, QUEST_MIN_LEVEL_DEFAULTS.sanguine),
+    // GB: configurações salvas ANTES da quest existir não têm a chave —
+    // caem no padrão sem tocar nos conjuntos de SW/SG do usuário.
+    crypt: sanitizeRecord(source.crypt, QUEST_MIN_LEVEL_DEFAULTS.crypt),
   };
 }
 
@@ -94,6 +100,7 @@ function defaultByQuest(): MinLevelsByQuest {
   return {
     soulwar: { ...QUEST_MIN_LEVEL_DEFAULTS.soulwar },
     sanguine: { ...QUEST_MIN_LEVEL_DEFAULTS.sanguine },
+    crypt: { ...QUEST_MIN_LEVEL_DEFAULTS.crypt },
   };
 }
 
@@ -106,6 +113,8 @@ function migrateLegacy(feature: QuestLevelFeature): MinLevelsByQuest {
     return {
       soulwar: sanitizeRecord(legacy, QUEST_MIN_LEVEL_DEFAULTS.soulwar),
       sanguine: sanitizeRecord(legacy, QUEST_MIN_LEVEL_DEFAULTS.sanguine),
+      // GB não existia no conjunto único legado: recebe o padrão novo.
+      crypt: { ...QUEST_MIN_LEVEL_DEFAULTS.crypt },
     };
   }
   return defaultByQuest();
@@ -176,7 +185,7 @@ function scheduleCloudSave() {
 
 function samePrefs(a: QuestMinLevelsPrefs, b: QuestMinLevelsPrefs): boolean {
   return (["suggest", "overview"] as const).every(feature =>
-    (["soulwar", "sanguine"] as const).every(quest => sameRecord(a[feature][quest], b[feature][quest])));
+    (["soulwar", "sanguine", "crypt"] as const).every(quest => sameRecord(a[feature][quest], b[feature][quest])));
 }
 
 /**

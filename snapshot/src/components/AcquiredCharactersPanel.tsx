@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { BriefcaseBusiness, Check, Clock3, Copy, Handshake, Pencil, RotateCcw, Send, UserRound } from "lucide-react";
 import type { Character, CharacterAcquisition, CharacterAcquisitionBuyerDetails, NegotiationTimestamp, PtType } from "../types";
 import { formatRC } from "../types";
-import { ItemSelect, SANGUINE_ITEMS, SOULWAR_ITEMS } from "./CharTable";
+import { CRYPT_ITEMS, ItemSelect, SANGUINE_ITEMS, SOULWAR_ITEMS } from "./CharTable";
 import { FilterInline, FilterNumber, FilterSelect } from "./FilterTypes";
 import { computeDeferredSettlement, getCharacterAcquisitionSellerReceived, isDeferredPaymentPending, isPaymentConfirmed } from "../services/characterAcquisitionService";
 import { formatFirestoreLocalDateTime, toFirestoreMillis } from "../utils/firestoreTimestamp";
@@ -36,7 +36,7 @@ function personalFee(record: CharacterAcquisition): number {
 
 function resolveQuestType(record: CharacterAcquisition, detail?: CharacterAcquisitionBuyerDetails): PtType | undefined {
   const questType = detail?.questType || record.questType;
-  return questType === "soulwar" || questType === "sanguine" ? questType : undefined;
+  return questType === "soulwar" || questType === "sanguine" || questType === "crypt" ? questType : undefined;
 }
 
 function resolveOfficialSaleValue(record: CharacterAcquisition, currentUserUid: string, originalCharactersById: Map<string, Character>): number | undefined {
@@ -162,7 +162,7 @@ function QuestDropCell({
     return <span className="text-[9px] italic text-slate-500">Aguardando Quest</span>;
   }
 
-  const itemList = questType === "soulwar" ? SOULWAR_ITEMS : SANGUINE_ITEMS;
+  const itemList = questType === "soulwar" ? SOULWAR_ITEMS : questType === "crypt" ? CRYPT_ITEMS : SANGUINE_ITEMS;
   const selectedDrop = detail.questDrops?.[0] || "";
   return (
     <div className="mx-auto max-w-[165px]">

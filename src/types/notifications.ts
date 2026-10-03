@@ -9,7 +9,7 @@ export interface Notification {
   partyName?: string
   /** Id do documento da Lista de Espera (notificações de service "Qualquer um"). */
   serviceId?: string
-  questType?: "soulwar" | "sanguine"
+  questType?: "soulwar" | "sanguine" | "crypt"
   scheduledTime?: number
   addedBy?: string
   paidBy?: string

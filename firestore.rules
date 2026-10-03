@@ -891,7 +891,7 @@ service cloud.firestore {
           )
         ))
         && request.resource.data.updatedAt is timestamp
-        && (!request.resource.data.keys().hasAll(['questType']) || request.resource.data.questType in ['soulwar', 'sanguine'])
+        && (!request.resource.data.keys().hasAll(['questType']) || request.resource.data.questType in ['soulwar', 'sanguine', 'crypt'])
         && (!request.resource.data.keys().hasAll(['saleValue']) || (request.resource.data.saleValue is number && request.resource.data.saleValue >= 0))
         && (!request.resource.data.keys().hasAll(['questCompletedAt']) || (request.resource.data.questCompletedAt is timestamp || request.resource.data.questCompletedAt is number))
         && (!request.resource.data.keys().hasAll(['listedAt']) || (request.resource.data.listedAt is timestamp || request.resource.data.listedAt is number))
@@ -925,7 +925,7 @@ service cloud.firestore {
         ])
         && request.resource.data.id == acquisitionId
         && request.resource.data.acquisitionId == acquisitionId
-        && request.resource.data.questType in ['soulwar', 'sanguine']
+        && request.resource.data.questType in ['soulwar', 'sanguine', 'crypt']
         && request.resource.data.questDrops is list
         && request.resource.data.questDrops.size() <= 20
         && request.resource.data.questDropsSource in ['pt', 'buyer']
@@ -943,7 +943,7 @@ service cloud.firestore {
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
           'questType', 'questDrops', 'questDropsSource', 'questProfit', 'questProfitSource', 'questCompletedAt', 'updatedAt'
         ])
-        && request.resource.data.questType in ['soulwar', 'sanguine']
+        && request.resource.data.questType in ['soulwar', 'sanguine', 'crypt']
         && request.resource.data.questDrops is list
         && request.resource.data.questDrops.size() <= 20
         && request.resource.data.questDropsSource in ['pt', 'buyer']

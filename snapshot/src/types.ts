@@ -21,9 +21,9 @@ export interface ProbableMarker {
   soulwar?: boolean;
   sanguine?: boolean;
   /**
-   * Crypt: campo previsto para a etapa futura do Gerenciador de PT's.
-   * Nenhum fluxo grava este marcador hoje — ele existe para o CharTable
-   * tratar as três quests com o MESMO código de exibição do aviso ⚠.
+   * GB ("The Roost of the Graveborn" — exibida como GB; identificador
+   * interno `crypt` preservado por compatibilidade de persistência).
+   * Gravado pelos MESMOS fluxos de SW/SG na conclusão de PTs de GB.
    */
   crypt?: boolean;
 }
@@ -251,6 +251,12 @@ export interface PartyCustomMember {
   level: number;
   soulwar: boolean;
   sanguine: boolean;
+  /**
+   * GB (identificador interno `crypt`). OPCIONAL por retrocompatibilidade:
+   * membros externos antigos não possuem o campo (`crypt !== false` =
+   * disponível, mesma convenção do Character).
+   */
+  crypt?: boolean;
 }
 
 export interface PartySlotData {
@@ -293,7 +299,7 @@ export interface PartySlotData {
   splitBeneficiaryUid?: string;
 }
 
-export type PtType = "soulwar" | "sanguine";
+export type PtType = "soulwar" | "sanguine" | "crypt";
 
 export interface PartyTab {
   id: string;

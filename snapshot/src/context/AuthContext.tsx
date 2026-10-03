@@ -61,8 +61,8 @@ export interface UserProfile {
    * garantindo a persistência entre sessões e dispositivos.
    */
   questMinLevels?: {
-    suggest?: Partial<Record<"soulwar" | "sanguine", Record<string, number>>>;
-    overview?: Partial<Record<"soulwar" | "sanguine", Record<string, number>>>;
+    suggest?: Partial<Record<"soulwar" | "sanguine" | "crypt", Record<string, number>>>;
+    overview?: Partial<Record<"soulwar" | "sanguine" | "crypt", Record<string, number>>>;
   };
 }
 export interface AuthNotification {

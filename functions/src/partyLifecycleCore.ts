@@ -8,7 +8,7 @@
 
 export type PartyHistoryStatus = "quest_finalized" | "finalized" | "failed";
 export type FinalizationReason = "payment" | "quest_failed";
-export type QuestType = "soulwar" | "sanguine";
+export type QuestType = "soulwar" | "sanguine" | "crypt";
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -234,7 +234,9 @@ function millis(value: unknown): number {
 }
 
 function normalizeQuestType(value: unknown): QuestType | null {
-  return value === "soulwar" || value === "sanguine" ? value : null;
+  // GB ("crypt") entra no ciclo de vida das PTs com o MESMO tratamento de
+  // SW/SG (settlement, histórico pessoal, stats/ranking).
+  return value === "soulwar" || value === "sanguine" || value === "crypt" ? value : null;
 }
 
 function normalizeTarget(value: unknown): "owner" | "player" {

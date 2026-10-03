@@ -225,7 +225,7 @@ function csvEscape(v: unknown): string {
 export function exportCSV(data: AppData): void {
   const headers = [
     "Account", "Personagem", "Servidor", "Voc", "Level",
-    "SoulWar", "Sanguine", "Crypt", "Valor pago", "Drop SW", "Drop Bakra", "Drop Crypt",
+    "SoulWar", "Sanguine", "GB", "Valor pago", "Drop SW", "Drop Bakra", "Drop GB",
     "Valor de venda", "Total", "Data de compra", "Vendido", "Data de venda"
   ];
   const rows = (data.characters || []).map((c: Character) => {

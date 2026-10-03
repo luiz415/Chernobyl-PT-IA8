@@ -14,8 +14,8 @@ interface Props {
    */
   zIndexClassName?: string;
   // Filtros atuais
-  questFilter: "soulwar" | "sanguine" | "all";
-  setQuestFilter: (v: "soulwar" | "sanguine" | "all") => void;
+  questFilter: "soulwar" | "sanguine" | "crypt" | "all";
+  setQuestFilter: (v: "soulwar" | "sanguine" | "crypt" | "all") => void;
   templateType: PartyTemplateType;
   setTemplateType: (v: PartyTemplateType) => void;
   minLevels: Record<string, number>;
@@ -100,18 +100,18 @@ export default function OverviewFiltersModal({
             <div>
               <label className="block text-[9px] text-red-400/80 uppercase font-black tracking-wider mb-2">Quest Alvo</label>
               <div className="flex gap-1 bg-black/40 p-0.5 rounded-lg border border-red-900/30">
-                {(["all", "soulwar", "sanguine"] as const).map(q => (
+                {(["all", "soulwar", "sanguine", "crypt"] as const).map(q => (
                   <button
                     key={q}
                     type="button"
                     onClick={() => setQuestFilter(q)}
                     className={`flex-1 py-1 rounded text-[9px] font-bold transition-all cursor-pointer ${
                       questFilter === q
-                        ? q === "sanguine" ? "bg-rose-700 text-white" : q === "soulwar" ? "bg-slate-600 text-white" : "bg-red-800 text-white"
+                        ? q === "sanguine" ? "bg-rose-700 text-white" : q === "soulwar" ? "bg-slate-600 text-white" : q === "crypt" ? "bg-emerald-700 text-white" : "bg-red-800 text-white"
                         : "text-slate-400 hover:text-slate-200"
                     }`}
                   >
-                    {q === "all" ? "Todas" : q === "soulwar" ? "SW" : "SG"}
+                    {q === "all" ? "Todas" : q === "soulwar" ? "SW" : q === "sanguine" ? "SG" : "GB"}
                   </button>
                 ))}
               </div>
@@ -212,15 +212,19 @@ export default function OverviewFiltersModal({
                 className={`inline-flex items-center rounded border px-1.5 py-px text-[8px] font-black uppercase tracking-wide ${
                   questFilter === "sanguine"
                     ? "border-rose-500/40 bg-rose-500/10 text-rose-300"
-                    : "border-slate-400/40 bg-slate-400/10 text-slate-300"
+                    : questFilter === "crypt"
+                      ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300"
+                      : "border-slate-400/40 bg-slate-400/10 text-slate-300"
                 }`}
                 title={questFilter === "sanguine"
-                  ? "Editando os levels mínimos da Sanguine — a configuração de Soul War permanece guardada."
+                  ? "Editando os levels mínimos da Sanguine — as configurações das demais quests permanecem guardadas."
                   : questFilter === "soulwar"
-                    ? "Editando os levels mínimos da Soul War — a configuração de Sanguine permanece guardada."
-                    : "Com Quest Alvo \"Todas\", a análise usa os levels de Soul War (edite SW/SG selecionando a quest acima)."}
+                    ? "Editando os levels mínimos da Soul War — as configurações das demais quests permanecem guardadas."
+                    : questFilter === "crypt"
+                      ? "Editando os levels mínimos da GB — as configurações das demais quests permanecem guardadas."
+                      : "Com Quest Alvo \"Todas\", a análise usa os levels de Soul War (edite SW/SG/GB selecionando a quest acima)."}
               >
-                {questFilter === "sanguine" ? "Sanguine" : "Soul War"}
+                {questFilter === "sanguine" ? "Sanguine" : questFilter === "crypt" ? "GB" : "Soul War"}
               </span>
             </label>
             <div className="flex items-center justify-between gap-1.5">

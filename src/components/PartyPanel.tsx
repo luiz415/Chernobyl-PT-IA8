@@ -411,8 +411,8 @@ export function buildPartyWhatsAppSummaryText(
     if (ci >= 0 && ci < customs.length) entries.push({ id: customs[ci].id, kind: "custom", name: customs[ci].label });
   }
 
-  // 1) Cabeçalho — Nome da PT (SW/SG)
-  const questSigla = party.ptType === "sanguine" ? "SG" : "SW";
+  // 1) Cabeçalho — Nome da PT (SW/SG/GB)
+  const questSigla = party.ptType === "sanguine" ? "SG" : party.ptType === "crypt" ? "GB" : "SW";
   linhas.push(`📋 *Resumo da PT: ${party.name}* (${questSigla})`);
 
   // 2) Servidor da PT — `serverLabel` resolve o nome canônico pós-merge;
@@ -525,6 +525,13 @@ const SANGUINE_ITEMS = [
   "Sanguine Crossbow", "Sanguine Battleaxe", "Sanguine Hatchet", "Sanguine Cudgel",
 ];
 
+// GB ("The Roost of the Graveborn") — mesma lista/ordem do Meus Personagens
+// (CharTable.CRYPT_ITEMS): melhor→pior drop.
+const CRYPT_ITEMS = [
+  "Necromantic Crypt Rune", "Icy Crypt Rune", "Deathly Crypt Rune",
+  "Fiery Crypt Rune", "Ancient Crypt Rune",
+];
+
 const ITEM_COLORS: Record<string, string> = {
   "Soulbleeder": "#22c55e", "Soulkamas": "#22c55e", "Soulshredder": "#22c55e",
   "Pair of Soulwalkers": "#4ade80", "Soulshell": "#4ade80",
@@ -556,15 +563,19 @@ const ITEM_COLORS: Record<string, string> = {
   "Sanguine Battleaxe": "#ef4444",
   "Sanguine Hatchet": "#dc2626",
   "Sanguine Cudgel": "#dc2626",
+  // GB — mesmas cores do CharTable/StatsPanel (melhor→pior).
+  "Necromantic Crypt Rune": "#22c55e", "Icy Crypt Rune": "#4ade80",
+  "Deathly Crypt Rune": "#eab308", "Fiery Crypt Rune": "#f97316",
+  "Ancient Crypt Rune": "#ef4444",
 };
 
-function ItemSelect({ value, onChange, ptType, disabled = false }: { value: string; onChange: (v: string) => void; ptType?: "soulwar" | "sanguine"; disabled?: boolean }) {
+function ItemSelect({ value, onChange, ptType, disabled = false }: { value: string; onChange: (v: string) => void; ptType?: "soulwar" | "sanguine" | "crypt"; disabled?: boolean }) {
   const [open, setOpen] = useState(false);
   const [menuPos, setMenuPos] = useState({ top: 0, left: 0, maxHeight: 200 });
   const wrapRef = useRef<HTMLDivElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
 
-  const items = ptType === "sanguine" ? SANGUINE_ITEMS : SOULWAR_ITEMS;
+  const items = ptType === "sanguine" ? SANGUINE_ITEMS : ptType === "crypt" ? CRYPT_ITEMS : SOULWAR_ITEMS;
 
   function updateMenuPosition() {
     if (!wrapRef.current) return;
@@ -698,7 +709,7 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
   const [showEditHorario, setShowEditHorario] = useState(false);
   const [editDataValue, setEditDataValue] = useState<string>("");
   const [editHoraValue, setEditHoraValue] = useState<string>("");
-  const [customForm, setCustomForm] = useState<Omit<PartyCustomMember, "id">>({ label: "", ownerName: "", servidor: "", voc: "EK", level: 0, soulwar: true, sanguine: true });
+  const [customForm, setCustomForm] = useState<Omit<PartyCustomMember, "id">>({ label: "", ownerName: "", servidor: "", voc: "EK", level: 0, soulwar: true, sanguine: true, crypt: true });
   const [isFinalizationRequested, setIsFinalizationRequested] = useState(false);
   // ── OBSERVAÇÃO DO COMANDO DE FINALIZAÇÃO ────────────────────────────────
   // Listener + timer do documento `partyFinalizationRequests/{requestId}`
@@ -1056,6 +1067,8 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
         level: wt.level,
         soulwar: wt.quest === "soulwar",
         sanguine: wt.quest === "sanguine",
+        // Services são SOMENTE SW/SG — GB indisponível explícito.
+        crypt: false,
         ownerUid: (wt as any).ownerUid || wt.createdBy,
         ownerName: wt.ownerName,
         // Service não tem conta real: identidade única por Service.
@@ -1109,6 +1122,8 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
           level: wt.level,
           soulwar: wt.quest === "soulwar",
           sanguine: wt.quest === "sanguine",
+          // Services são SOMENTE SW/SG — GB indisponível explícito.
+          crypt: false,
           ownerUid: (wt as any).ownerUid || wt.createdBy,
           ownerName: wt.ownerName,
           valorPago: 0,
@@ -1139,6 +1154,7 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
           level: 0,
           soulwar: sourceParty.ptType === "soulwar",
           sanguine: sourceParty.ptType === "sanguine",
+          crypt: sourceParty.ptType === "crypt",
           ownerUid: slot?.ownerUid,
           ownerName: slot?.owner || "",
           valorPago: 0,
@@ -1423,7 +1439,7 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
   }
 
   function sendDropValueSavedNotifications(updatedParty: PartyTab) {
-    const questLabel = updatedParty.ptType === "sanguine" ? "SANGUINE" : "SOULWAR";
+    const questLabel = updatedParty.ptType === "sanguine" ? "SANGUINE" : updatedParty.ptType === "crypt" ? "GB" : "SOULWAR";
     const memberUids = new Set<string>();
     if (currentUser?.uid) memberUids.add(currentUser.uid);
     (updatedParty.members || []).forEach(uid => { if (uid) memberUids.add(uid); });
@@ -1445,7 +1461,7 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
           body: `${userName} salvou permanentemente os dados dos itens vendidos e services na PT '${updatedParty.name}' (${questLabel}).`,
           partyId: updatedParty.id,
           partyName: updatedParty.name,
-          questType: updatedParty.ptType === "sanguine" ? "sanguine" : "soulwar",
+          questType: updatedParty.ptType === "sanguine" ? "sanguine" : updatedParty.ptType === "crypt" ? "crypt" : "soulwar",
           status: "pending",
           read: false,
           createdAt: Date.now()
@@ -1661,7 +1677,7 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
       p.selectedIds.forEach(id => {
         const info: OtherPartyInfo = {
           name: String(p.name || "").trim() || "PT sem nome",
-          questLabel: p.ptType === "sanguine" ? "Sanguine" : p.ptType === "soulwar" ? "Soul War" : "Quest não definida",
+          questLabel: p.ptType === "sanguine" ? "Sanguine" : p.ptType === "soulwar" ? "Soul War" : p.ptType === "crypt" ? "GB" : "Quest não definida",
           // PT arquivada (histórico) continua acionando o ⚠ como hoje; a nota
           // só esclarece o estado, para o nome não parecer uma PT ativa.
           statusNote: p.archived ? (p.questFalha ? "falhou" : "finalizada") : undefined,
@@ -1722,8 +1738,10 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
   const [filterPersonagem, setFilterPersonagem] = usePersistedState(`pt_personagem_${party.id}`, "");
   const [filterSW, setFilterSW] = usePersistedState<ToggleState>(`pt_sw_${party.id}`, "yes");
   const [filterSG, setFilterSG] = usePersistedState<ToggleState>(`pt_sg_${party.id}`, "off");
+  const [filterGB, setFilterGB] = usePersistedState<ToggleState>(`pt_gb_${party.id}`, "off");
   const swLocked = party.ptType === "soulwar";
   const sgLocked = party.ptType === "sanguine";
+  const gbLocked = party.ptType === "crypt";
   // O seletor de servidor NÃO é mais travado quando a PT tem servidor
   // definido: o usuário precisa poder comparar a PT com outros servidores.
   // O servidor da PT segue destacado no ServerGraphic (prop `partyServer`).
@@ -1736,6 +1754,7 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
     if (party.ptType === "soulwar") {
       if (filterSW !== "yes") setFilterSW("yes");
       if (filterSG !== "off") setFilterSG("off");
+      if (filterGB !== "off") setFilterGB("off");
       setWlFilters(prev => {
         const next = { ...prev, quest: "soulwar" };
         return next;
@@ -1743,12 +1762,24 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
     } else if (party.ptType === "sanguine") {
       if (filterSG !== "yes") setFilterSG("yes");
       if (filterSW !== "off") setFilterSW("off");
+      if (filterGB !== "off") setFilterGB("off");
       setWlFilters(prev => {
         const next = { ...prev, quest: "sanguine" };
         return next;
       });
+    } else if (party.ptType === "crypt") {
+      // PT de GB: trava o filtro GB em "yes" e zera SW/SG. A Lista de Espera
+      // (Services) é SOMENTE SW/SG — o filtro "crypt" a esvazia de propósito:
+      // nenhum Service é elegível para PT de GB.
+      if (filterGB !== "yes") setFilterGB("yes");
+      if (filterSW !== "off") setFilterSW("off");
+      if (filterSG !== "off") setFilterSG("off");
+      setWlFilters(prev => {
+        const next = { ...prev, quest: "crypt" };
+        return next;
+      });
     }
-  }, [party.ptType, filterSW, filterSG, setFilterSW, setFilterSG]);
+  }, [party.ptType, filterSW, filterSG, filterGB, setFilterSW, setFilterSG, setFilterGB]);
 
   // SEED (uma vez por servidor da PT) — NÃO é sincronização contínua.
   //
@@ -2017,11 +2048,13 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
     // Sem `ptType` definido não há o que comparar.
     let questIssue = "";
     const ptType = party.ptType;
-    if (ptType === "soulwar" || ptType === "sanguine") {
-      const questLabel = ptType === "soulwar" ? "Soul War" : "Sanguine";
+    if (ptType === "soulwar" || ptType === "sanguine" || ptType === "crypt") {
+      const questLabel = ptType === "soulwar" ? "Soul War" : ptType === "sanguine" ? "Sanguine" : "GB";
+      // GB: Services são só SW/SG (service.quest nunca é "crypt" → aviso);
+      // personagem legado sem o campo (`crypt !== false`) conta como disponível.
       const hasQuest = service
-        ? service.quest === ptType
-        : ptType === "soulwar" ? !!character?.soulwar : !!character?.sanguine;
+        ? service.quest === (ptType as string)
+        : ptType === "soulwar" ? !!character?.soulwar : ptType === "sanguine" ? !!character?.sanguine : character?.crypt !== false;
       if (!hasQuest) {
         questIssue = `não possui ${questLabel} disponível`;
       }
@@ -2154,7 +2187,7 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
     // Gravar notificação no Firestore se o destinatário não for o próprio remetente
     if (ownerUidVal && currentUser?.uid && ownerUidVal !== currentUser.uid) {
       const notifId = "notif_" + Date.now() + Math.random().toString(36).slice(2);
-      const sigla = latestParty.ptType === "sanguine" ? "SG" : "SW";
+      const sigla = latestParty.ptType === "sanguine" ? "SG" : latestParty.ptType === "crypt" ? "GB" : "SW";
       const horarioStr = latestParty.horarioTimestamp ? new Date(latestParty.horarioTimestamp).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit", timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone }) : "horário a combinar";
       setDoc(doc(db, "notifications", notifId), {
         id: notifId,
@@ -2165,7 +2198,7 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
         body: `${userName} te adicionou na PT "${latestParty.name}" para ${sigla}, ${horarioStr}`,
         partyId: latestParty.id,
         partyName: latestParty.name,
-        questType: latestParty.ptType === "sanguine" ? "sanguine" : "soulwar",
+        questType: latestParty.ptType === "sanguine" ? "sanguine" : latestParty.ptType === "crypt" ? "crypt" : "soulwar",
         scheduledTime: latestParty.horarioTimestamp ?? null,
         status: "pending",
         read: false,
@@ -2227,7 +2260,7 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
     // válido, conforme analyzePartyForStats no App).
     const newSd = { ...sd, [id]: { ...defaultSlotData(), owner: ownerName, player: "", isService: true } };
     onUpdate({ ...party, customMembers: [...customs, { ...customForm, id, label, ownerName }], slotData: newSd });
-    setCustomForm({ label: "", ownerName: "", servidor: "", voc: "EK", level: 0, soulwar: false, sanguine: false });
+    setCustomForm({ label: "", ownerName: "", servidor: "", voc: "EK", level: 0, soulwar: false, sanguine: false, crypt: false });
     setShowAddCustom(false);
   }
 
@@ -2463,7 +2496,7 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
     // Enviar notificação "Você foi adicionado a uma PT!"
     if (uid && currentUser?.uid && uid !== currentUser.uid) {
       const notifId = "notif_" + Date.now() + "_" + Math.random().toString(36).slice(2);
-      const sigla = latestParty.ptType === "sanguine" ? "SG" : "SW";
+      const sigla = latestParty.ptType === "sanguine" ? "SG" : latestParty.ptType === "crypt" ? "GB" : "SW";
       const horarioStr = latestParty.horarioTimestamp
         ? new Date(latestParty.horarioTimestamp).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit", timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone })
         : "horário a combinar";
@@ -2476,7 +2509,7 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
         body: `${userName} te adicionou na PT "${latestParty.name}" para ${sigla}, ${horarioStr}`,
         partyId: latestParty.id,
         partyName: latestParty.name,
-        questType: latestParty.ptType === "sanguine" ? "sanguine" : "soulwar",
+        questType: latestParty.ptType === "sanguine" ? "sanguine" : latestParty.ptType === "crypt" ? "crypt" : "soulwar",
         scheduledTime: latestParty.horarioTimestamp ?? null,
         status: "pending",
         read: false,
@@ -2575,7 +2608,7 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
       // aparecendo normalmente na composição (ver `slotMembers`).
       if (!isOwnedBySelfOrFriend(c.ownerUid)) return false;
       if (c.shared === false) return false;
-      if (!c.soulwar && !c.sanguine) return false;
+      if (!c.soulwar && !c.sanguine && c.crypt === false) return false;
       if (selectedSet.has(c.id)) return false;
       // A mesma conta continua visível; `unavailableSameAccountIds` informa a
       // lista para desenhá-la em vermelho e bloquear apenas a sua adição.
@@ -2587,11 +2620,13 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
       if (filterSW === "no" && c.soulwar) return false;
       if (filterSG === "yes" && !c.sanguine) return false;
       if (filterSG === "no" && c.sanguine) return false;
+      if (filterGB === "yes" && c.crypt === false) return false;
+      if (filterGB === "no" && c.crypt !== false) return false;
       if (filterLevel) { const t = parseInt(filterLevel, 10); if (Number.isFinite(t)) { if (filterLevelOp === "gte" && c.level < t) return false; if (filterLevelOp === "lte" && c.level > t) return false; } }
       if (filterDonos.length > 0 && !filterDonos.includes(getCharOwner(c))) return false;
       return true;
     });
-    }, [characters, selectedSet, filterServer, filterVoc, filterAccount, filterSW, filterSG, filterLevel, filterLevelOp, accountMap, filterDonos, userName, filterPersonagem, isOwnedBySelfOrFriend]);
+    }, [characters, selectedSet, filterServer, filterVoc, filterAccount, filterSW, filterSG, filterGB, filterLevel, filterLevelOp, accountMap, filterDonos, userName, filterPersonagem, isOwnedBySelfOrFriend]);
 
   // Persistido como os demais filtros da PT (`pt_*_${party.id}`): sair da
   // lista/guia e voltar mantém os filtros exatamente como estavam.
@@ -2623,7 +2658,7 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
   const serverChartAvailable = useMemo(() => {
     return characters.filter(c => {
       if (c.shared === false) return false;
-      if (!c.soulwar && !c.sanguine) return false;
+      if (!c.soulwar && !c.sanguine && c.crypt === false) return false;
       if (selectedSet.has(c.id)) return false;
       // O gráfico representa apenas candidatos adicionáveis; conflitos de
       // conta permanecem fora dele mesmo aparecendo em vermelho na lista.
@@ -2636,11 +2671,13 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
       if (filterSW === "no" && c.soulwar) return false;
       if (filterSG === "yes" && !c.sanguine) return false;
       if (filterSG === "no" && c.sanguine) return false;
+      if (filterGB === "yes" && c.crypt === false) return false;
+      if (filterGB === "no" && c.crypt !== false) return false;
       if (filterLevel) { const t = parseInt(filterLevel, 10); if (Number.isFinite(t)) { if (filterLevelOp === "gte" && c.level < t) return false; if (filterLevelOp === "lte" && c.level > t) return false; } }
       if (filterDonos.length > 0 && !filterDonos.includes(getCharOwner(c))) return false;
       return true;
     });
-  }, [characters, selectedSet, currentPartyAccountSet, filterVoc, filterAccount, filterSW, filterSG, filterLevel, filterLevelOp, accountMap, filterDonos, userName, filterPersonagem]);
+  }, [characters, selectedSet, currentPartyAccountSet, filterVoc, filterAccount, filterSW, filterSG, filterGB, filterLevel, filterLevelOp, accountMap, filterDonos, userName, filterPersonagem]);
 
   const serverChartWaitingList = useMemo(() => {
     return waitingList.filter(i => {
@@ -2690,6 +2727,7 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
       else if (sortKey === "level") { av = a.level; bv = b.level; }
       else if (sortKey === "soulwar") { av = a.soulwar ? 1 : 0; bv = b.soulwar ? 1 : 0; }
       else if (sortKey === "sanguine") { av = a.sanguine ? 1 : 0; bv = b.sanguine ? 1 : 0; }
+      else if (sortKey === "crypt") { av = a.crypt !== false ? 1 : 0; bv = b.crypt !== false ? 1 : 0; }
       else return 0;
       if (typeof av === "number" && typeof bv === "number") return av - bv;
       return String(av).localeCompare(String(bv), "pt-BR", { sensitivity: "base" });
@@ -2708,6 +2746,7 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
     setFilterLevelOp("gte");
     setFilterSW("off");
     setFilterSG("off");
+    setFilterGB("off");
     setFilterDonos([]);
   }
 
@@ -2792,7 +2831,7 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
         // sem nunca depender dela para o participante existir. O `account`
         // do snapshot (já mascarado) é preservado, para não vazar a conta.
         const merged = (!isFinished && live)
-          ? { ...snap, personagem: live.personagem, servidor: live.servidor, voc: live.voc, level: live.level, soulwar: live.soulwar, sanguine: live.sanguine }
+          ? { ...snap, personagem: live.personagem, servidor: live.servidor, voc: live.voc, level: live.level, soulwar: live.soulwar, sanguine: live.sanguine, crypt: live.crypt }
           : snap;
         slotMembers.push({ type: "char", char: merged, id: cid });
         continue;
@@ -2911,6 +2950,8 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
   const totalSlotCols = slotCols.length;
   const ptTypeBadge = party.ptType === "sanguine"
     ? <span className="px-2 py-0.5 rounded text-[10px] font-bold border border-rose-500/50 bg-rose-500/20 text-rose-300">SANGUINE</span>
+    : party.ptType === "crypt"
+      ? <span className="px-2 py-0.5 rounded text-[10px] font-bold border border-emerald-500/50 bg-emerald-500/20 text-emerald-300" title="The Roost of the Graveborn">GB</span>
     : party.ptType === "soulwar"
       ? <span className="px-2 py-0.5 rounded text-[10px] font-bold border border-slate-400/50 bg-slate-500/20 text-slate-200">SOULWAR</span>
       : null;
@@ -4667,8 +4708,11 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
             setFilterSW={setFilterSW}
             filterSG={filterSG}
             setFilterSG={setFilterSG}
+            filterGB={filterGB}
+            setFilterGB={setFilterGB}
             swLocked={swLocked}
             sgLocked={sgLocked}
+            gbLocked={gbLocked}
             donoOptions={donoOptions}
             filterDonos={filterDonos}
             setFilterDonos={setFilterDonos}

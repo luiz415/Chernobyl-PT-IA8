@@ -21,7 +21,7 @@ import { useQuestMinLevels } from "./useQuestMinLevels";
 // ============================================================================
 
 export interface OverviewFiltersState {
-  questFilter: "soulwar" | "sanguine" | "all";
+  questFilter: "soulwar" | "sanguine" | "crypt" | "all";
   templateType: PartyTemplateType;
   minLevels: Record<string, number>;
   userMode: "any" | "filter";
@@ -75,7 +75,7 @@ function normalize(raw: Partial<OverviewFiltersState> | null | undefined): Overv
     if (Number.isFinite(parsed)) minLevels[voc] = parsed;
   });
   return {
-    questFilter: (["all", "soulwar", "sanguine"] as const).includes(source.questFilter as any)
+    questFilter: (["all", "soulwar", "sanguine", "crypt"] as const).includes(source.questFilter as any)
       ? source.questFilter as OverviewFiltersState["questFilter"]
       : DEFAULT_OVERVIEW_FILTERS.questFilter,
     templateType: (source.templateType || DEFAULT_OVERVIEW_FILTERS.templateType) as PartyTemplateType,
@@ -146,7 +146,7 @@ export function resetOverviewFilters() {
 export function useOverviewFilters() {
   const base = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
   const { byQuest, setForQuest, resetFeature } = useQuestMinLevels("overview");
-  const activeQuest = base.questFilter === "sanguine" ? "sanguine" : "soulwar";
+  const activeQuest = base.questFilter === "sanguine" ? "sanguine" : base.questFilter === "crypt" ? "crypt" : "soulwar";
   const minLevels = byQuest[activeQuest];
   const filters = useMemo<OverviewFiltersState>(() => ({ ...base, minLevels }), [base, minLevels]);
 

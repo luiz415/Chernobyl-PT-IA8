@@ -67,7 +67,7 @@ export default function BazaarUsedFiltersModal({ isOpen, onClose, filters }: Baz
                 <div><span className="text-slate-500">Sanguine:</span> <span className="text-slate-200">{formatQuest(filters.sanguineFilter)}</span></div>
                 {/* Crypt: listas antigas (geradas antes da Crypt existir) não
                     têm o campo — exibe "—" em vez de inventar um critério. */}
-                <div><span className="text-slate-500">Crypt:</span> <span className="text-slate-200">{filters.cryptFilter ? formatQuest(filters.cryptFilter) : "—"}</span></div>
+                <div><span className="text-slate-500">GB:</span> <span className="text-slate-200">{filters.cryptFilter ? formatQuest(filters.cryptFilter) : "—"}</span></div>
                 <div><span className="text-slate-500">Fuso:</span> <span className="text-slate-200 font-mono">UTC{Number(filters.timezoneOffsetMinutes || 0) >= 0 ? "+" : ""}{Number(filters.timezoneOffsetMinutes || 0) / 60}</span></div>
               </section>
             </>

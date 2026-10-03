@@ -1317,6 +1317,12 @@ export default function App() {
             changed = true;
             return { ...char, dropBakra: lucro };
           }
+          // GB (`crypt`): lucro vai para `dropCrypt` (Lucro GB).
+          if (questType === "crypt") {
+            if ((char.dropCrypt || 0) === lucro) return char;
+            changed = true;
+            return { ...char, dropCrypt: lucro };
+          }
           if ((char.dropSW || 0) === lucro) return char;
           changed = true;
           return { ...char, dropSW: lucro };
@@ -1437,10 +1443,11 @@ export default function App() {
           Object.entries(data.probableMarkers).forEach(([charId, markerData]) => {
             if (markerData && typeof markerData === "object") {
               const m = markerData as Record<string, boolean>;
-              if (m.soulwar || m.sanguine) {
+              if (m.soulwar || m.sanguine || m.crypt) {
                 markers[charId] = {
                   soulwar: m.soulwar === true ? true : undefined,
                   sanguine: m.sanguine === true ? true : undefined,
+                  crypt: m.crypt === true ? true : undefined,
                 };
               }
             }
@@ -1802,7 +1809,7 @@ export default function App() {
       return;
     }
 
-    const changes: Array<{ charId: string; field: "soulwar" | "sanguine" }> = [];
+    const changes: Array<{ charId: string; field: "soulwar" | "sanguine" | "crypt" }> = [];
 
     data.characters.forEach(c => {
       const prev = prevChars.find(pc => pc.id === c.id);
@@ -1816,6 +1823,11 @@ export default function App() {
       if (prev.sanguine && !c.sanguine) {
         changes.push({ charId: c.id, field: "sanguine" });
       }
+      // crypt (GB): disponível → indisponível. Legado sem o campo
+      // (`crypt !== false`) conta como disponível — mesma convenção do app.
+      if (prev.crypt !== false && c.crypt === false) {
+        changes.push({ charId: c.id, field: "crypt" });
+      }
     });
 
     if (changes.length > 0) {
@@ -1826,7 +1838,7 @@ export default function App() {
           if (next[charId]) {
             const marker = { ...next[charId] };
             delete (marker as any)[field];
-            if (!marker.soulwar && !marker.sanguine) {
+            if (!marker.soulwar && !marker.sanguine && !marker.crypt) {
               delete next[charId];
             } else {
               next[charId] = marker;
@@ -2538,8 +2550,8 @@ export default function App() {
             if (sharedData?.probableMarkers && typeof sharedData.probableMarkers === "object" && !Array.isArray(sharedData.probableMarkers)) {
               const markers: ProbableMarkersMap = {};
               Object.entries(sharedData.probableMarkers as Record<string, any>).forEach(([charId, m]) => {
-                if (m && typeof m === "object" && (m.soulwar || m.sanguine)) {
-                  markers[charId] = { soulwar: m.soulwar === true ? true : undefined, sanguine: m.sanguine === true ? true : undefined };
+                if (m && typeof m === "object" && (m.soulwar || m.sanguine || m.crypt)) {
+                  markers[charId] = { soulwar: m.soulwar === true ? true : undefined, sanguine: m.sanguine === true ? true : undefined, crypt: m.crypt === true ? true : undefined };
                 }
               });
               // Mesclar com os marcadores já carregados (de outros usuários)
@@ -2981,7 +2993,7 @@ export default function App() {
   // FIRESTORE WRITE OPERATIONS - PT's
   // ============================================================================
 
-  async function createParty(_name: string, ptType?: "soulwar" | "sanguine", horarioTimestamp?: number, visibility?: "public" | "private", invitedUsers?: string[], servidor?: string, suggestedIds?: string[]) {
+  async function createParty(_name: string, ptType?: "soulwar" | "sanguine" | "crypt", horarioTimestamp?: number, visibility?: "public" | "private", invitedUsers?: string[], servidor?: string, suggestedIds?: string[]) {
     if (!currentUser) return;
     if (globalSettings.publicPartiesEnabled === false && (visibility || "public") === "public") {
       customAlert("A criação de PTs públicas está temporariamente pausada pelo administrador.", "PT Pública pausada");
@@ -3145,7 +3157,7 @@ export default function App() {
       // comportamento no destinatário (in-app + desktop).
       // ========================================================================
       if (suggestedIds && suggestedIds.length > 0) {
-        const sigla = ptType === "sanguine" ? "SG" : "SW";
+        const sigla = ptType === "sanguine" ? "SG" : ptType === "crypt" ? "GB" : "SW";
         const horarioStr = horarioTimestamp
           ? new Date(horarioTimestamp).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit", timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone })
           : "horário a combinar";
@@ -3167,7 +3179,7 @@ export default function App() {
             body: `${displayUserName} te adicionou na PT "${generatedName}" (${sigla}), ${horarioStr}`,
             partyId: id,
             partyName: generatedName,
-            questType: ptType === "sanguine" ? "sanguine" : "soulwar",
+            questType: ptType === "sanguine" ? "sanguine" : ptType === "crypt" ? "crypt" : "soulwar",
             scheduledTime: horarioTimestamp ?? null,
             status: "pending",
             read: false,
@@ -3214,7 +3226,7 @@ export default function App() {
 
   async function persistQuestCompletedNotifications(party: PartyTab) {
     if (!db) return;
-    const sigla = party.ptType === "sanguine" ? "SG" : "SW";
+    const sigla = party.ptType === "sanguine" ? "SG" : party.ptType === "crypt" ? "GB" : "SW";
     await Promise.all(getPartyNotificationTargetUids(party).map(async uid => {
       const notifId = `quest_completed_${party.id}_${uid}`;
       try {
@@ -3238,7 +3250,7 @@ export default function App() {
 
   async function persistScheduleChangedNotifications(party: PartyTab) {
     if (!db || !party.horarioChangedAt || !party.horarioChangedBy) return;
-    const sigla = party.ptType === "sanguine" ? "SG" : "SW";
+    const sigla = party.ptType === "sanguine" ? "SG" : party.ptType === "crypt" ? "GB" : "SW";
     const newHorario = party.horarioTimestamp
       ? new Date(party.horarioTimestamp).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit", timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone })
       : "Sem hora marcada";
@@ -3256,7 +3268,7 @@ export default function App() {
           body: `${party.horarioChangedBy} alterou o horário da PT "${party.name}" (${sigla}) para ${newHorario}.`,
           partyId: party.id,
           partyName: party.name,
-          questType: party.ptType === "sanguine" ? "sanguine" : "soulwar",
+          questType: party.ptType === "sanguine" ? "sanguine" : party.ptType === "crypt" ? "crypt" : "soulwar",
           scheduledTime: party.horarioTimestamp,
           changedBy: party.horarioChangedBy,
           status: "pending",
@@ -3392,7 +3404,7 @@ export default function App() {
       if (!userProfile?.autoCharUpdate) return;
       if (!currentUser?.uid) return;
       const ptType = party.ptType;
-      if (ptType !== "soulwar" && ptType !== "sanguine") return;
+      if (ptType !== "soulwar" && ptType !== "sanguine" && ptType !== "crypt") return;
       // Só faz sentido espelhar o que já foi concluído: uma PT em andamento
       // ainda não tem resultado, e valores intermediários poluiriam o
       // histórico do personagem.
@@ -3506,7 +3518,7 @@ export default function App() {
     if (!currentUser?.uid) return;
 
     cloudParties.forEach(pt => {
-      if (pt.ptType !== "soulwar" && pt.ptType !== "sanguine") return;
+      if (pt.ptType !== "soulwar" && pt.ptType !== "sanguine" && pt.ptType !== "crypt") return;
       // Finalizada = pagamento marcado, OU arquivada com Quest concluída.
       const finalized = !!pt.pagamentoFeito || (!!pt.archived && !!pt.questConcluida);
       if (!finalized) return;
@@ -3633,7 +3645,7 @@ export default function App() {
     const ptType = party.ptType;
     if (!ptType) return;
 
-    const questField = ptType === "soulwar" ? "soulwar" as const : "sanguine" as const;
+    const questField = ptType === "soulwar" ? "soulwar" as const : ptType === "crypt" ? "crypt" as const : "sanguine" as const;
 
     // 1. Atualizar PT no Firestore
     const original = cloudParties.find((cloudParty) => cloudParty.id === party.id);
@@ -3701,7 +3713,7 @@ export default function App() {
   async function handleUpdateCharactersFromNotification(params: {
     notificationId: string;
     partyId: string;
-    questType: "soulwar" | "sanguine";
+    questType: "soulwar" | "sanguine" | "crypt";
   }): Promise<boolean> {
     if (!currentUser || !db) return false;
     const { partyId, questType } = params;
@@ -3739,7 +3751,7 @@ export default function App() {
       }
 
       // 2. Extrair dados atuais da PT para o patch
-      const questField = questType === "soulwar" ? "soulwar" as const : "sanguine" as const;
+      const questField = questType === "soulwar" ? "soulwar" as const : questType === "crypt" ? "crypt" as const : "sanguine" as const;
 
       // Identifica quais personagens do usuário logado participaram desta PT
       const myCharIds = (ptDoc.selectedIds || []).filter(id => data.characters.some(c => c.id === id));
@@ -4196,7 +4208,7 @@ export default function App() {
    * Quest. Apenas o adquirente grava drops/lucro no documento privado dele.
    */
   async function synchronizeCharacterAcquisitionsForQuest(party: PartyTab) {
-    if (!currentUser?.uid || !party.questConcluida || party.questFalha || (party.ptType !== "soulwar" && party.ptType !== "sanguine")) return;
+    if (!currentUser?.uid || !party.questConcluida || party.questFalha || (party.ptType !== "soulwar" && party.ptType !== "sanguine" && party.ptType !== "crypt")) return;
     const completedQuestType = party.ptType as PtType;
     // Inclui vendas históricas para que o comprador que abriu o app depois da
     // Quest ainda importe seu Drop/Lucro privado da PT, sem listeners extras.
@@ -4274,7 +4286,7 @@ export default function App() {
     }
     const currentDetails = characterAcquisitionBuyerDetails.find(item => item.acquisitionId === input.acquisitionId);
     const questType = currentDetails?.questType || record.questType;
-    if (questType !== "soulwar" && questType !== "sanguine") {
+    if (questType !== "soulwar" && questType !== "sanguine" && questType !== "crypt") {
       return { ok: false, error: "A Quest deste personagem ainda não foi identificada." };
     }
     const legacyBuyerProfit = currentDetails?.questProfitSource === undefined && (currentDetails?.questProfit || 0) > 0;
@@ -4310,7 +4322,7 @@ export default function App() {
     }
     const currentDetails = characterAcquisitionBuyerDetails.find(item => item.acquisitionId === input.acquisitionId);
     const questType = currentDetails?.questType || record.questType;
-    if (questType !== "soulwar" && questType !== "sanguine") {
+    if (questType !== "soulwar" && questType !== "sanguine" && questType !== "crypt") {
       return { ok: false, error: "A Quest deste personagem ainda não foi identificada." };
     }
     const legacyBuyerDrop = currentDetails?.questDropsSource === undefined && !!currentDetails?.questDrops?.length;
@@ -4397,7 +4409,7 @@ export default function App() {
         if (
           acquisitionParty?.questConcluida
           && !acquisitionParty.questFalha
-          && (acquisitionParty.ptType === "soulwar" || acquisitionParty.ptType === "sanguine")
+          && (acquisitionParty.ptType === "soulwar" || acquisitionParty.ptType === "sanguine" || acquisitionParty.ptType === "crypt")
         ) {
           const promotion = await updateCharacterAcquisitionLifecycle(acquisition.id, {
             status: "quest_completed",
@@ -4781,6 +4793,7 @@ export default function App() {
       const overridden = { ...c };
       if (markers.soulwar) overridden.soulwar = false;
       if (markers.sanguine) overridden.sanguine = false;
+      if (markers.crypt) overridden.crypt = false;
       return overridden;
     });
   }, [ativos, sharedCharacters, currentUser, displayUserName, acceptedFriendSet, exceptionEntityIds, probableMarkers]);

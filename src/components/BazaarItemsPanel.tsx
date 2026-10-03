@@ -2248,7 +2248,7 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                     consulta extra, nenhuma segunda implementação. */}
                 <th className={`${STICKY_HEAD_CELL_CLASS} h-10 px-1 py-2 text-center align-middle leading-none`} title="Quest Soul War — mesma verificação da guia Quests, derivada do payload desta própria consulta (sem consulta extra). Concl. = já feita (indisponível para o comprador); Disp. = disponível; ? = sem dado conclusivo (o app nunca presume).">SW</th>
                 <th className={`${STICKY_HEAD_CELL_CLASS} h-10 px-1 py-2 text-center align-middle leading-none`} title="Quest Sanguine — mesma verificação da guia Quests, derivada do payload desta própria consulta (sem consulta extra). Concl. = já feita (indisponível para o comprador); Disp. = disponível; ? = sem dado conclusivo (o app nunca presume).">SG</th>
-                <th className={`${STICKY_HEAD_CELL_CLASS} h-10 px-1 py-2 text-center align-middle leading-none`} title="Quest Crypt (The Roost of the Graveborn) — mesma verificação da guia Quests, derivada do payload desta própria consulta (sem consulta extra). INFORMATIVA, nunca critério de resultado válido. Consulta antiga sem o dado mostra —.">Crypt</th>
+                <th className={`${STICKY_HEAD_CELL_CLASS} h-10 px-1 py-2 text-center align-middle leading-none`} title="Quest GB (The Roost of the Graveborn) — mesma verificação da guia Quests, derivada do payload desta própria consulta (sem consulta extra). INFORMATIVA, nunca critério de resultado válido. Consulta antiga sem o dado mostra —.">GB</th>
                 <th className={`${STICKY_HEAD_CELL_CLASS} h-10 px-1 py-2 text-center align-middle leading-none`}>Detalhes</th>
                 <th className={`${STICKY_HEAD_CELL_CLASS} h-10 px-1 py-2 text-center align-middle leading-none`}>Tenho Interesse</th>
                 <th className={`${STICKY_HEAD_CELL_CLASS} h-10 px-1 py-2 text-center align-middle leading-none`}>Link</th>
@@ -2571,7 +2571,7 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                     const questDetail = questDetailFromItemsResult(result);
                     const isSuspiciousQuest = isQuestSuspicious(questDetail, questField);
                     const questValue = questDetail?.[questField];
-                    const questLabel = questField === "soulwarCompleted" ? "Soul War" : questField === "sanguineCompleted" ? "Sanguine" : "Crypt";
+                    const questLabel = questField === "soulwarCompleted" ? "Soul War" : questField === "sanguineCompleted" ? "Sanguine" : "GB";
                     return (
                       <td
                         key={questField}
