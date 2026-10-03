@@ -440,6 +440,49 @@ export const finalizePartyHistory = onDocumentCreated(
         // somente porque o slot foi alterado no cliente. Revalidamos contra o
         // documento canônico da aquisição dentro da própria transação final.
         if (reason === "payment") {
+          // PRÉ-VENDA PENDENTE BLOQUEIA A FINALIZAÇÃO — validação autoritativa.
+          // Uma pré-aprovação ainda não resolvida (`status: "pre_approved"`)
+          // significa que o comprador não aceitou a compra e o dono não a
+          // cancelou: finalizar agora materializaria o histórico financeiro
+          // com a negociação em aberto. A consulta roda DENTRO da transação
+          // (leitura antes de qualquer escrita), direto na coleção canônica —
+          // nenhum estado do cliente é confiado. Importante: a pré-aprovação
+          // NÃO grava `characterAcquisitionId` no slot (isso só acontece no
+          // aceite), então a checagem de slots adquiridos logo abaixo jamais
+          // enxergaria esses registros — a query por partyId+status é a única
+          // fonte correta. Filtramos pelos slots ainda presentes na PT:
+          // pré-aprovações de personagens já removidos são canceladas pelos
+          // fluxos existentes (cliente dono/Boss + cleanupRemovedSlotPreApprovals)
+          // e não devem travar a finalização para sempre. Apenas o motivo
+          // "payment" é bloqueado: a falha da Quest ("quest_failed") encerra a
+          // PT sem liquidação financeira e não pode ficar refém de uma
+          // pré-venda que só o DONO (terceiro) teria permissão de cancelar.
+          const pendingPreApprovalsSnap = await transaction.get(
+            firestore.collection(ACQUISITIONS_COLLECTION)
+              .where("partyId", "==", partyId)
+              .where("status", "==", "pre_approved"),
+          );
+          const partySlotIds = new Set(effectiveParty.slots.map(slot => slot.id));
+          const pendingCharacterNames = pendingPreApprovalsSnap.docs
+            .map(docSnap => record(docSnap.data()))
+            .filter(acquisition => partySlotIds.has(String(acquisition.characterId || "").trim()))
+            .map(acquisition => String(acquisition.characterName || "").trim() || "(personagem sem nome)");
+          if (pendingCharacterNames.length > 0) {
+            validationError = `acquisition_pending_pre_approval:${pendingCharacterNames.join(", ")}`;
+            transaction.set(jobRef, {
+              partyId,
+              state: "failed",
+              lastError: validationError,
+              updatedAt: FieldValue.serverTimestamp(),
+            }, { merge: true });
+            transaction.set(requestRef, {
+              state: "failed",
+              lastError: validationError,
+              processedAt: FieldValue.serverTimestamp(),
+            }, { merge: true });
+            return;
+          }
+
           const acquiredSlots = effectiveParty.slots.filter(slot => !!slot.characterAcquisitionId);
           const acquisitionSnapshots = await Promise.all(acquiredSlots.map(slot =>
             transaction.get(firestore.collection(ACQUISITIONS_COLLECTION).doc(slot.characterAcquisitionId)),

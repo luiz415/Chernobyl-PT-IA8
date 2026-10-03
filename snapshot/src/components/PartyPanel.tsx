@@ -172,6 +172,12 @@ function describeFinalizationError(rawError: string): string {
       return "Somente o Líder da PT ou um Boss pode solicitar a finalização.";
     case "financial_rights_record_mismatch":
       return "A negociação de um personagem desta PT diverge do registro original. Verifique a negociação vinculada ao slot antes de finalizar.";
+    case "acquisition_pending_pre_approval": {
+      // O backend envia os nomes dos personagens pendentes após o ":".
+      const separatorIndex = rawError.indexOf(":");
+      const characterNames = separatorIndex >= 0 ? rawError.slice(separatorIndex + 1).trim() : "";
+      return `Existe venda pré-aprovada aguardando decisão do comprador${characterNames ? ` para: ${characterNames}` : ""}. O comprador precisa confirmar a compra ou o dono original cancelar a pré-aprovação antes de finalizar a PT.`;
+    }
     case "party_not_found":
       return "A PT não foi encontrada no servidor — ela pode já ter sido finalizada por outro dispositivo.";
     case "quest_not_completed":
@@ -1154,6 +1160,21 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
       customAlert("A finalização segura por backend ainda não está disponível neste ambiente.", "Finalização indisponível");
       return;
     }
+    // PRÉ-VENDA PENDENTE BLOQUEIA A FINALIZAÇÃO POR PAGAMENTO. Guard aplicado
+    // aqui (e não só no botão) para cobrir qualquer caminho da UI que dispare
+    // o motivo "payment". A validação definitiva é a da Cloud Function
+    // `finalizePartyHistory` (dentro da transação); este aviso apenas evita a
+    // ida-e-volta ao backend e já nomeia os personagens a resolver. A falha
+    // da Quest ("quest_failed") NÃO é bloqueada: ela encerra a PT sem
+    // liquidação financeira e não pode depender do dono cancelar a pré-venda.
+    if (reason === "payment" && pendingPreApprovalSales.length > 0) {
+      const names = pendingPreApprovalSales.map(acquisition => acquisition.characterName).join(", ");
+      customAlert(
+        `Existe venda pré-aprovada aguardando decisão do comprador para: ${names}. O comprador precisa confirmar a compra ou o dono original cancelar a pré-aprovação antes de finalizar a PT.`,
+        "Pré-venda pendente",
+      );
+      return;
+    }
     if (isFinalizationRequested) return;
     setIsFinalizationRequested(true);
     let accepted = false;
@@ -1768,6 +1789,18 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
       ? "in_progress"
       : "pre_start";
   const canOrganizeParty = questState === "pre_start";
+  // ── PRÉ-VENDAS PENDENTES DESTA PT ─────────────────────────────────────────
+  // Negociações `pre_approved` ainda não resolvidas (comprador não confirmou a
+  // compra e o dono não cancelou) de personagens que AINDA ocupam um slot da
+  // PT. Mesma fonte (`characterAcquisitions`, que inclui as pendentes) e mesmo
+  // critério de vínculo (partyId + status + slot presente) usados em
+  // removeFromParty e na Cloud Function `finalizePartyHistory` — a UI apenas
+  // antecipa, com os nomes, o bloqueio que o backend aplica de forma
+  // autoritativa dentro da transação de finalização.
+  const pendingPreApprovalSales = characterAcquisitions.filter(acquisition =>
+    acquisition.partyId === party.id
+    && acquisition.status === "pre_approved"
+    && (selectedSet.has(acquisition.characterId) || !!sd[acquisition.characterId]));
   // ============================================================================
   // "COMPRAR PERSONAGEM" VIA NOTIFICAÇÃO — abre o modal de aceite da compra
   // ============================================================================
@@ -4555,6 +4588,16 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
                         const splitBlock = splitCount > 0 && !allSplitPaid;
                         if (splitBlock) {
                           customAlert("Realize o pagamento de todos os membros com DIVIDIR marcado antes de finalizar");
+                          return;
+                        }
+                        // PRÉ-VENDA PENDENTE: mesma regra validada pelo backend
+                        // na transação de finalização — aqui o aviso chega antes
+                        // da confirmação e já NOMEIA os personagens pendentes.
+                        if (pendingPreApprovalSales.length > 0) {
+                          customAlert(
+                            `Existe venda pré-aprovada aguardando decisão do comprador para: ${pendingPreApprovalSales.map(acquisition => acquisition.characterName).join(", ")}. O comprador precisa confirmar a compra ou o dono original cancelar a pré-aprovação antes de finalizar a PT.`,
+                            "Pré-venda pendente",
+                          );
                           return;
                         }
                         customConfirm("Marcar o Pagamento como Realizado? O backend validará a última versão, criará os históricos privados e finalizará a PT.", () => {
