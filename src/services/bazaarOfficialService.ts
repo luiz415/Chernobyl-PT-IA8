@@ -42,6 +42,13 @@ export interface OfficialBazaarCharacter {
   sanguineBossCount?: number;
   soulWarBossTotal?: number;
   sanguineBossTotal?: number;
+  /**
+   * Identificação usada na apuração das quests desta publicação:
+   * ausente/"bosstiary" = derivada da Bosstiary (contador "X/Y" aplicável);
+   * "quests" = lida da guia Quests da página oficial (sem contador de
+   * bosses). Um único campo curto — o resumo continua mínimo.
+   */
+  questSource?: "bosstiary" | "quests";
   // ── VALOR ITENS (KK) EMBUTIDO — mesmo padrão das quests acima ────────────
   // Gravado por publishBazaarItemsValues quando a consulta da guia Itens do
   // Boss termina: o valor viaja DENTRO do personagem da lista oficial, então

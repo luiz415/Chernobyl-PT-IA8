@@ -5,10 +5,11 @@ import BazaarItemsPanel from "./BazaarItemsPanel";
 import BazaarStatsPanel from "./BazaarStatsPanel";
 import BazaarSearchFiltersModal from "./BazaarSearchFiltersModal";
 import BazaarUsedFiltersModal from "./BazaarUsedFiltersModal";
-import BazaarBrowserModal, { BAZAAR_BROWSER_KEY, BAZAAR_BROWSER_ORDER_KEY, BAZAAR_METHOD_KEY, BAZAAR_RETRY_BROWSERS_KEY, BAZAAR_RETRY_COUNTS_KEY, BAZAAR_SPEED_MODE_KEY, DEFAULT_BAZAAR_METHOD, DEFAULT_BROWSER_ORDER, normalizeBazaarMethod, normalizeRetryCounts } from "./BazaarBrowserModal";
+import BazaarBrowserModal, { BAZAAR_BROWSER_KEY, BAZAAR_BROWSER_ORDER_KEY, BAZAAR_METHOD_KEY, BAZAAR_QUEST_SOURCE_KEY, BAZAAR_RETRY_BROWSERS_KEY, BAZAAR_RETRY_COUNTS_KEY, BAZAAR_SPEED_MODE_KEY, DEFAULT_BAZAAR_METHOD, DEFAULT_BAZAAR_QUEST_SOURCE, DEFAULT_BROWSER_ORDER, normalizeBazaarMethod, normalizeBazaarQuestSource, normalizeRetryCounts } from "./BazaarBrowserModal";
 import type { BazaarRetryCounts } from "./BazaarBrowserModal";
 import type { BazaarSpeedMode } from "./BazaarBrowserModal";
 import type { BazaarMethod } from "./BazaarBrowserModal";
+import type { BazaarQuestSource } from "./BazaarBrowserModal";
 import ConfirmModal from "./ConfirmModal";
 import FriendsSummaryModal, { buildServerSummaries, buildVocationCountsByServer } from "./FriendsSummaryModal";
 import AutoBidModal from "./AutoBidModal";
@@ -219,6 +220,13 @@ interface BazaarAuction {
   sanguineBossCount?: number;
   soulWarBossTotal?: number;
   sanguineBossTotal?: number;
+  /**
+   * Identificação usada na apuração das quests ("bosstiary" ausente/padrão;
+   * "quests" = guia Quests da página oficial). Um único campo curto no
+   * resumo mínimo: mantém o contador "X/Y" honesto (não se aplica ao método
+   * Quests) também após recarga/importação da lista oficial.
+   */
+  questSource?: "bosstiary" | "quests";
   // ── VALOR ITENS (KK) EMBUTIDO NA LISTA OFICIAL ───────────────────────────
   // Gravados pela publicação da consulta da guia Itens do Boss
   // (publishBazaarItemsValues) DENTRO de cada personagem de `bazaar/current`
@@ -246,6 +254,15 @@ export interface BazaarQuestStatusDetail {
   sanguineBossCount?: number;
   soulWarBossTotal?: number;
   sanguineBossTotal?: number;
+  /**
+   * Como a situação foi identificada no método API JSON:
+   *   • ausente/"bosstiary" = derivada da Bosstiary (contador "X/Y" faz
+   *     sentido e aparece normalmente);
+   *   • "quests" = lida da guia Quests da página oficial — resultado direto
+   *     do site, SEM contagem de bosses (o contador não se aplica).
+   * Campo apenas do cache local da consulta; não é publicado na lista oficial.
+   */
+  questSource?: "bosstiary" | "quests";
 }
 
 interface BazaarDetails extends BazaarQuestStatusDetail {
@@ -1055,6 +1072,7 @@ function getAuctionEmbeddedDetails(auction: BazaarAuction): BazaarDetails | unde
     sanguineBossCount: auction.sanguineBossCount ?? 0,
     soulWarBossTotal: auction.soulWarBossTotal ?? 6,
     sanguineBossTotal: auction.sanguineBossTotal ?? 5,
+    ...(auction.questSource ? { questSource: auction.questSource } : {}),
     fetchedAt: Date.now(),
   };
 }
@@ -1078,6 +1096,7 @@ function mergeAuctionWithQuestDetails(auction: BazaarAuction, detail: BazaarDeta
     sanguineBossCount: detail.sanguineBossCount ?? 0,
     soulWarBossTotal: detail.soulWarBossTotal ?? 6,
     sanguineBossTotal: detail.sanguineBossTotal ?? 5,
+    ...(detail.questSource ? { questSource: detail.questSource } : {}),
   };
 }
 
@@ -1150,6 +1169,19 @@ function getQuestBossCountClass(detail: BazaarQuestStatusDetail | undefined, fie
 
 export function QuestBossCounter({ detail, field }: { detail: BazaarQuestStatusDetail | undefined; field: "soulwarCompleted" | "sanguineCompleted" }) {
   if (!detail) return <div className="font-mono text-[9px] text-slate-500">—</div>;
+  // Identificação pela guia QUESTS: o resultado vem direto do site (círculo
+  // marcado/desmarcado) e NÃO existe contagem de bosses — exibir "0/6" aqui
+  // seria inventar um dado. O status (Concl./Disp.) continua na coluna.
+  if (detail.questSource === "quests") {
+    return (
+      <div
+        className="font-mono text-[9px] text-slate-500"
+        title="Identificação pela guia Quests da página do personagem — o contador de bosses não se aplica a este método."
+      >
+        —
+      </div>
+    );
+  }
   const { current } = getQuestBossCount(detail, field);
   const hasBosses = current > 0;
   const suspicious = isQuestSuspicious(detail, field);
@@ -2430,7 +2462,7 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
     }
   }
 
-  async function handleFetchBazaar(options?: { filtersOverride?: Partial<BazarConsultationFilters>; browserKey?: string; browserOrder?: string[]; cleanProfile?: boolean; retryBrowsers?: string[]; retryCounts?: BazaarRetryCounts; speedMode?: BazaarSpeedMode; method?: BazaarMethod; autoRun?: boolean }) {
+  async function handleFetchBazaar(options?: { filtersOverride?: Partial<BazarConsultationFilters>; browserKey?: string; browserOrder?: string[]; cleanProfile?: boolean; retryBrowsers?: string[]; retryCounts?: BazaarRetryCounts; speedMode?: BazaarSpeedMode; method?: BazaarMethod; questSource?: BazaarQuestSource; autoRun?: boolean }) {
     if (!isBossUser) {
       setError("Apenas usuários Boss podem iniciar uma nova consulta do Bazaar.");
       return;
@@ -2468,6 +2500,13 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
       options?.method || loadUIState<BazaarMethod>(BAZAAR_METHOD_KEY, DEFAULT_BAZAAR_METHOD),
     );
     const detailsChannel = activeMethod === "novo" ? "rubinot-bazaar-details-v2" : "rubinot-bazaar-details";
+    // ── IDENTIFICAÇÃO DAS QUESTS (só no método API JSON) ──────────────────
+    // "bosstiary" (padrão) = comportamento atual do método novo, intacto.
+    // "quests" = NOVO: identifica Soul War/Rotten Blood pela guia Quests da
+    // página oficial do personagem. O método Paginação ignora esta opção.
+    const activeQuestSource: BazaarQuestSource = normalizeBazaarQuestSource(
+      options?.questSource || loadUIState<BazaarQuestSource>(BAZAAR_QUEST_SOURCE_KEY, DEFAULT_BAZAAR_QUEST_SOURCE),
+    );
 
     const startedAt = Date.now();
     setIsLoading(true);
@@ -2606,6 +2645,10 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
         // `all` tem o estado apurado exibido/publicado, mas nunca descarta.
         const detailsResponse = await ipcRenderer.invoke(detailsChannel, apiFilteredAuctions, {
           quests: { soulwar: true, sanguine: true },
+          // Identificação das quests — consumida apenas pelo canal v2 (API
+          // JSON): "bosstiary" mantém a derivação atual; "quests" usa a guia
+          // Quests da página do personagem. O canal antigo ignora o campo.
+          questSource: activeQuestSource,
           // Ordem de preferência que decide a sequência do retry.
           browserOrder: options?.browserOrder || loadUIState<string[]>(BAZAAR_BROWSER_ORDER_KEY, DEFAULT_BROWSER_ORDER),
           // Navegadores marcados para a cadeia de retries. Vazio = retry único.
@@ -5052,9 +5095,9 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
       <BazaarBrowserModal
         open={isBrowserModalOpen}
         onCancel={() => setIsBrowserModalOpen(false)}
-        onConfirm={(browserKey, browserOrder, cleanProfile, retryBrowsers, speedMode, retryCounts, method) => {
+        onConfirm={(browserKey, browserOrder, cleanProfile, retryBrowsers, speedMode, retryCounts, method, questSource) => {
           setIsBrowserModalOpen(false);
-          void handleFetchBazaar({ browserKey, browserOrder, cleanProfile, retryBrowsers, speedMode, retryCounts, method });
+          void handleFetchBazaar({ browserKey, browserOrder, cleanProfile, retryBrowsers, speedMode, retryCounts, method, questSource });
         }}
       />
 

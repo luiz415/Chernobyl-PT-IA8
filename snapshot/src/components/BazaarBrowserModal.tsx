@@ -75,7 +75,12 @@ export const BAZAAR_SPEED_MODE_KEY = "rubinot_bazaar_speed_mode";
 export type BazaarSpeedMode = "agressivo" | "moderado";
 
 /**
- * MÉTODO DE CONSULTA — "antigo" (atual) ou "novo" (API JSON).
+ * MÉTODO DE CONSULTA — "antigo" (Paginação) ou "novo" (API JSON).
+ *
+ * Os VALORES persistidos ("antigo"/"novo") são imutáveis por compatibilidade
+ * com preferências já salvas; apenas os RÓTULOS exibidos mudaram:
+ *   • "antigo" → exibido como "Paginação" (abre a página de cada personagem).
+ *   • "novo"   → exibido como "API JSON" (consulta por JSON, sem renderizar).
  *
  * Padrão `"antigo"`: quem não mexer em nada continua exatamente no fluxo de
  * hoje. O método novo troca APENAS a fase de detalhes (página individual
@@ -88,6 +93,27 @@ export const DEFAULT_BAZAAR_METHOD: BazaarMethod = "antigo";
 /** Normaliza o valor persistido: qualquer coisa inesperada vira "antigo". */
 export function normalizeBazaarMethod(raw: unknown): BazaarMethod {
   return raw === "novo" ? "novo" : "antigo";
+}
+
+/**
+ * IDENTIFICAÇÃO DAS QUESTS — sub-opção exclusiva do método API JSON.
+ *
+ *   • "bosstiary": comportamento ATUAL do método API JSON (deriva Soul War /
+ *     Sanguine dos bosses presentes na Bosstiary do payload). Intacto.
+ *   • "quests": NOVO — lê a lista da guia "Quests" da página oficial do
+ *     personagem (círculo marcado = concluída/indisponível; desmarcado =
+ *     disponível). Soul War → SW; Rotten Blood → SG.
+ *
+ * A escolha muda SOMENTE como a situação das quests é identificada; todas as
+ * demais etapas da consulta (listagem, filtros, resultado) são as mesmas.
+ */
+export const BAZAAR_QUEST_SOURCE_KEY = "rubinot_bazaar_quest_source";
+export type BazaarQuestSource = "bosstiary" | "quests";
+export const DEFAULT_BAZAAR_QUEST_SOURCE: BazaarQuestSource = "bosstiary";
+
+/** Normaliza o valor persistido: qualquer coisa inesperada vira "bosstiary". */
+export function normalizeBazaarQuestSource(raw: unknown): BazaarQuestSource {
+  return raw === "quests" ? "quests" : "bosstiary";
 }
 
 export interface BazaarBrowserOption {
@@ -108,6 +134,7 @@ interface Props {
     speedMode: BazaarSpeedMode,
     retryCounts: BazaarRetryCounts,
     method: BazaarMethod,
+    questSource: BazaarQuestSource,
   ) => void;
   onCancel: () => void;
   /**
@@ -167,6 +194,10 @@ export default function BazaarBrowserModal({ open, onConfirm, onCancel, forcedMe
   // Método de consulta, persistido entre consultas. Padrão: "antigo".
   const [method, setMethod] = useState<BazaarMethod>(
     () => normalizeBazaarMethod(loadUIState<BazaarMethod>(BAZAAR_METHOD_KEY, DEFAULT_BAZAAR_METHOD)),
+  );
+  // Identificação das quests (só no método API JSON). Padrão: "bosstiary".
+  const [questSource, setQuestSource] = useState<BazaarQuestSource>(
+    () => normalizeBazaarQuestSource(loadUIState<BazaarQuestSource>(BAZAAR_QUEST_SOURCE_KEY, DEFAULT_BAZAAR_QUEST_SOURCE)),
   );
   const [isLoading, setIsLoading] = useState(false);
   const [loadError, setLoadError] = useState("");
@@ -264,8 +295,15 @@ export default function BazaarBrowserModal({ open, onConfirm, onCancel, forcedMe
     saveUIState(BAZAAR_SPEED_MODE_KEY, speedMode);
     // Método travado (consulta de itens): NÃO grava a preferência — ela
     // pertence à consulta de quests e não pode ser alterada por tabela.
-    if (!forcedMethod) saveUIState(BAZAAR_METHOD_KEY, method);
-    onConfirm(selected, order, cleanProfile, retryBrowsers, speedMode, retryCounts, forcedMethod || method);
+    if (!forcedMethod) {
+      saveUIState(BAZAAR_METHOD_KEY, method);
+      // A identificação das quests só é alterada quando o seletor está
+      // visível (método livre). Com `forcedMethod` (itens/histórico), a
+      // preferência persistida das quests NÃO é tocada — mesma regra do
+      // método de consulta.
+      saveUIState(BAZAAR_QUEST_SOURCE_KEY, questSource);
+    }
+    onConfirm(selected, order, cleanProfile, retryBrowsers, speedMode, retryCounts, forcedMethod || method, questSource);
   }
 
   /** Soma `delta` ao contador de um navegador, respeitando 0..MAX. */
@@ -345,10 +383,10 @@ export default function BazaarBrowserModal({ open, onConfirm, onCancel, forcedMe
             flex não encolhe abaixo do conteúdo e a rolagem nunca aparece. */}
         <div className="app-modal-body custom-scrollbar px-4 py-3 space-y-3">
           {/* ── MÉTODO DE CONSULTA ──────────────────────────────────────
-              Escolha entre o fluxo atual e o novo (API JSON). O padrão é
-              "Antigo": quem não mexer aqui continua exatamente como hoje.
-              Com `forcedMethod` (consulta de itens) o seletor NÃO aparece:
-              o método é fixo e não há escolha a fazer. */}
+              Escolha entre "Paginação" (fluxo atual, página a página) e
+              "API JSON". O padrão é Paginação: quem não mexer aqui continua
+              exatamente como hoje. Com `forcedMethod` (consulta de itens) o
+              seletor NÃO aparece: o método é fixo e não há escolha a fazer. */}
           {!forcedMethod && (
           <div className="rounded-lg border border-[var(--th-line)]/50 bg-black/20 p-2.5 space-y-2">
             <div className="flex items-center gap-1.5">
@@ -362,15 +400,15 @@ export default function BazaarBrowserModal({ open, onConfirm, onCancel, forcedMe
               {([
                 {
                   key: "antigo" as BazaarMethod,
-                  title: "Antigo",
+                  title: "Paginação",
                   subtitle: "Atual",
-                  note: "Abre a página de cada personagem e lê a Bosstiary. Comportamento validado.",
+                  note: "Abre a página de cada personagem (página a página) e lê a Bosstiary. Comportamento validado.",
                 },
                 {
                   key: "novo" as BazaarMethod,
-                  title: "Novo",
+                  title: "API JSON",
                   subtitle: "Experimental",
-                  note: "Consulta as quests por JSON, sem abrir a página. Cai no método antigo quando o dado não vier.",
+                  note: "Consulta as quests por JSON, sem abrir a página. Permite escolher a identificação por Bosstiary ou pela guia Quests.",
                 },
               ]).map(option => {
                 const isSelected = method === option.key;
@@ -404,16 +442,75 @@ export default function BazaarBrowserModal({ open, onConfirm, onCancel, forcedMe
 
             <p className="text-[10px] leading-relaxed text-slate-400">
               {method === "novo"
-                ? "O método novo consulta as quests diretamente por JSON, sem renderizar a página de cada personagem — é onde surge a mensagem \"Falha ao carregar leilão\". Os filtros e as colunas são exatamente os mesmos. Quem o JSON não resolver é analisado pelo método antigo automaticamente."
-                : "Fluxo atual, sem nenhuma alteração: abre a página de cada personagem, clica em Bosstiary e lê a tabela, com retry entre navegadores."}
+                ? "O método API JSON consulta as quests diretamente por JSON, sem renderizar a página de cada personagem — é onde surge a mensagem \"Falha ao carregar leilão\". Os filtros e as colunas são exatamente os mesmos."
+                : "Fluxo atual, sem nenhuma alteração: abre a página de cada personagem (paginação), clica em Bosstiary e lê a tabela, com retry entre navegadores."}
             </p>
+
+            {/* ── IDENTIFICAÇÃO DAS QUESTS — exclusiva do método API JSON ──
+                Decide COMO a situação de Soul War / Sanguine é identificada;
+                nenhuma outra etapa da consulta muda. */}
+            {method === "novo" && (
+              <div className="rounded-md border border-[var(--th-line)]/40 bg-black/20 p-2 space-y-1.5">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-300">
+                  Identificação das Quests
+                </span>
+                <div className="grid grid-cols-2 gap-1.5">
+                  {([
+                    {
+                      key: "bosstiary" as BazaarQuestSource,
+                      title: "Bosstiary",
+                      subtitle: "Atual",
+                      note: "Deriva Soul War/Sanguine dos bosses presentes na Bosstiary (6 Goshnar's ou Megalomania; 5 bosses ou Bakragore). Quem o JSON não resolver cai no método Paginação automaticamente.",
+                    },
+                    {
+                      key: "quests" as BazaarQuestSource,
+                      title: "Quests",
+                      subtitle: "Novo",
+                      note: "Lê a guia Quests da página oficial do personagem: círculo marcado = concluída (indisponível); desmarcado = disponível. Soul War → SW; Rotten Blood → SG.",
+                    },
+                  ]).map(option => {
+                    const isSelected = questSource === option.key;
+                    return (
+                      <button
+                        key={option.key}
+                        type="button"
+                        onClick={() => setQuestSource(option.key)}
+                        className={`text-left rounded-lg border px-2.5 py-2 transition-colors cursor-pointer ${
+                          isSelected
+                            ? "border-[var(--th-accent)]/70 bg-[var(--th-accent)]/10"
+                            : "border-[var(--th-line)]/50 bg-black/20 hover:border-[var(--th-line)]"
+                        }`}
+                        title={option.note}
+                      >
+                        <div className="flex items-center gap-1.5">
+                          <span
+                            className={`w-3 h-3 rounded-full border-2 flex-shrink-0 ${
+                              isSelected ? "border-[var(--th-accent)] bg-[var(--th-accent)]" : "border-slate-500"
+                            }`}
+                          />
+                          <span className={`text-[11px] font-bold ${isSelected ? "text-[var(--th-accent)]" : "text-slate-300"}`}>
+                            {option.title}
+                          </span>
+                          <span className="text-[9px] uppercase tracking-wider text-slate-500">{option.subtitle}</span>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+                <p className="text-[10px] leading-relaxed text-slate-400">
+                  {questSource === "quests"
+                    ? "Novo: identifica a situação pela lista da guia Quests do personagem (Soul War e Rotten Blood, cada uma independente). Quem o JSON não trouxer é lido diretamente na guia Quests da página. Sem conclusão confiável, o personagem é reportado como falha — nunca um resultado inventado."
+                    : "Atual: deriva a situação das quests pela Bosstiary do payload JSON, exatamente como hoje. Quem o JSON não resolver é analisado pelo método Paginação automaticamente."}
+                </p>
+              </div>
+            )}
           </div>
           )}
 
           {/* Aviso do método travado — consulta de itens usa sempre a API JSON. */}
           {forcedMethod === "novo" && (
             <div className="rounded-lg border border-fuchsia-500/30 bg-fuchsia-500/10 px-2.5 py-2 text-[10px] leading-relaxed text-fuchsia-200">
-              A consulta de <strong className="font-bold">itens</strong> usa sempre o <strong className="font-bold">método novo (API JSON)</strong>: os personagens são analisados por JSON, sem abrir a página de cada um. Não há método alternativo para itens.
+              A consulta de <strong className="font-bold">itens</strong> usa sempre o método <strong className="font-bold">API JSON</strong>: os personagens são analisados por JSON, sem abrir a página de cada um. Não há método alternativo para itens.
             </div>
           )}
 
