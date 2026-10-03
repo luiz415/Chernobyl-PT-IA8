@@ -214,7 +214,21 @@ function normalizeAdvanced(raw: unknown): AdvancedFilters {
   };
 }
 
-type PeriodKey = "week" | "month" | "lastmonth" | "3m" | "6m" | "year" | "all";
+type PeriodKey = "week" | "month" | "lastmonth" | "3m" | "6m" | "year" | "all" | "custom";
+
+/** Intervalo PERSONALIZADO (dia/mês/ano) — datas locais "YYYY-MM-DD"; vazio = lado aberto. */
+type CustomPeriod = { start: string; end: string };
+
+const DEFAULT_CUSTOM_PERIOD: CustomPeriod = { start: "", end: "" };
+
+/** Blindagem do intervalo persistido (localStorage pode ter formato inválido). */
+function normalizeCustomPeriod(raw: unknown): CustomPeriod {
+  if (!raw || typeof raw !== "object") return { ...DEFAULT_CUSTOM_PERIOD };
+  const source = raw as Partial<CustomPeriod>;
+  const norm = (value: unknown): string =>
+    typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : "";
+  return { start: norm(source.start), end: norm(source.end) };
+}
 
 const DEFAULT_VALUE_FILTER: ValueFilter = {
   valorPago: true,
@@ -236,6 +250,7 @@ const PERIODS: { key: PeriodKey; label: string }[] = [
   { key: "6m", label: "Últimos 6 meses" },
   { key: "year", label: "Esse Ano" },
   { key: "all", label: "Tudo" },
+  { key: "custom", label: "Personalizado" },
 ];
 
 function usePersistedState<T>(key: string, initial: T) {
@@ -250,7 +265,28 @@ function usePersistedState<T>(key: string, initial: T) {
 
 // ── Período (calendário) ────────────────────────────────────────────────────
 // Retorna { start, end } em epoch ms, ou null para "Tudo". Inclusivo em ambos.
-function getPeriodRange(period: PeriodKey, now = Date.now()): { start: number; end: number } | null {
+// "custom" usa o intervalo PERSONALIZADO (dia/mês/ano locais): início às
+// 00:00:00.000 e fim às 23:59:59.999 do dia escolhido; um lado vazio fica em
+// aberto (início → desde sempre; fim → até agora); os dois vazios = "Tudo";
+// datas invertidas são trocadas (nunca um intervalo impossível silencioso).
+function getPeriodRange(period: PeriodKey, custom: CustomPeriod = DEFAULT_CUSTOM_PERIOD, now = Date.now()): { start: number; end: number } | null {
+  if (period === "custom") {
+    const parseDay = (value: string, endOfDay: boolean): number | null => {
+      if (!value) return null;
+      const t = new Date(`${value}T${endOfDay ? "23:59:59.999" : "00:00:00.000"}`).getTime();
+      return Number.isNaN(t) ? null : t;
+    };
+    let start = parseDay(custom.start, false);
+    let end = parseDay(custom.end, true);
+    if (start === null && end === null) return null; // nada preenchido = Tudo
+    if (start !== null && end !== null && start > end) {
+      // Intervalo invertido: troca os lados preservando 00:00/23:59 corretos.
+      const swappedStart = parseDay(custom.end, false)!;
+      const swappedEnd = parseDay(custom.start, true)!;
+      start = swappedStart; end = swappedEnd;
+    }
+    return { start: start ?? 0, end: end ?? now };
+  }
   const d = new Date(now);
   const dayStart = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 0, 0, 0);
   switch (period) {
@@ -347,9 +383,12 @@ export default function StatsPanel({ characters, parties = [], userName = "", us
   const updateAdvanced = (patch: Partial<AdvancedFilters>) => setAdvRaw((prev) => ({ ...normalizeAdvanced(prev), ...patch }));
   // Quadro de filtros recolhível (preferência local persistida; padrão aberto).
   const [filtersOpen, setFiltersOpen] = usePersistedState<boolean>("stats_filters_open", true);
+  // Intervalo PERSONALIZADO (dia/mês/ano) — persistido como os demais filtros.
+  const [customPeriodRaw, setCustomPeriodRaw] = usePersistedState<CustomPeriod>("stats_period_custom_v1", DEFAULT_CUSTOM_PERIOD);
+  const customPeriod = useMemo(() => normalizeCustomPeriod(customPeriodRaw), [customPeriodRaw]);
 
   // ── Período resolvido (null = "Tudo") ────────────────────────────────────
-  const periodRange = useMemo(() => getPeriodRange(period), [period]);
+  const periodRange = useMemo(() => getPeriodRange(period, customPeriod), [period, customPeriod]);
 
   // O Character do dono original continua existindo tecnicamente, mas seus
   // drops, venda e participação financeira pertencem à negociação após o
@@ -544,7 +583,12 @@ export default function StatsPanel({ characters, parties = [], userName = "", us
     });
     return userParties.filter((p) => {
       if (periodRange) {
-        const ts = p.archivedAt || p.ptStartedAt || p.createdAt || 0;
+        // DATA CORRETA POR ESTADO: PT concluída entra pelo instante da
+        // CONCLUSÃO da Quest (questFinalizedAt — mesma referência dos buckets
+        // diários do backend); sem ele, mantém a cadeia antiga
+        // arquivamento → início → criação (nunca mistura venda/criação).
+        const concludedAt = p.questConcluida ? toFirestoreMillis(p.questFinalizedAt) : 0;
+        const ts = concludedAt || p.archivedAt || p.ptStartedAt || p.createdAt || 0;
         if (!ts || ts < periodRange.start || ts > periodRange.end) return false;
       }
       // Filtro de SERVIDOR também delimita o relatório de PT's (resolução
@@ -591,10 +635,22 @@ export default function StatsPanel({ characters, parties = [], userName = "", us
   // Quando há um período selecionado, filtra pelos services concluídos no
   // período (completedAt) para respeitar os filtros da Stats.
   const serviceProfit = useMemo(() => {
+    // DATA CORRETA do Service realizado: conclusão (completedAt) → data do
+    // próprio Service (dataService, o dia em que foi feito) → última
+    // atualização como derradeiro fallback. Antes, um Service sem completedAt
+    // caía direto em updatedAt (qualquer edição mudava o período dele).
+    const serviceDateMs = (s: SharedService): number => {
+      if (s.completedAt) return s.completedAt;
+      if (s.dataService) {
+        const t = new Date(`${s.dataService}T00:00:00`).getTime();
+        if (!Number.isNaN(t)) return t;
+      }
+      return s.updatedAt || 0;
+    };
     const periodScoped = periodRange
       ? services.filter((s) => s.status === "realizado"
-          && (s.completedAt || s.updatedAt || 0) >= periodRange.start
-          && (s.completedAt || s.updatedAt || 0) <= periodRange.end)
+          && serviceDateMs(s) >= periodRange.start
+          && serviceDateMs(s) <= periodRange.end)
       : services;
     // Services têm servidor e vocação próprios — os filtros avançados também
     // delimitam este indicador (faixas de Level/Custo/Venda não se aplicam a
@@ -610,16 +666,21 @@ export default function StatsPanel({ characters, parties = [], userName = "", us
   // ── MIGRAÇÃO PARCIAL — userStats (estatísticas persistentes no Firestore) ─
   // Quando o documento userStats/{uid} existe, PT's concluídas / Soulwar /
   // Sanguine usam os valores PERSISTIDOS; caso contrário, recalcula das PTs.
-  const hasNegotiatedParticipation = characterAcquisitions.some(record =>
-    record.originalOwnerUid === currentUserUid || record.acquirerUid === currentUserUid,
-  );
-  // Os buckets históricos não guardam a perspectiva financeira do slot. Quando
-  // há negociação, derivamos as PTs atuais para reconhecer o JOGADOR/adquirente
-  // e excluir corretamente o DONO original.
-  // Com filtro de SERVIDOR ativo os contadores PERSISTIDOS (que não guardam
-  // servidor) deixariam de refletir o conjunto filtrado — nesse caso a tela
-  // volta ao cálculo derivado das PTs locais (que respeita o filtro).
-  const hasPersistedStats = !!userStats && typeof userStats.totalPtsConcluidas === "number" && !hasNegotiatedParticipation && adv.servers.length === 0;
+  //
+  // POR QUE A FONTE PERSISTIDA É OBRIGATÓRIA AQUI: a finalização apaga o doc
+  // da PT (`finalizePartyHistory` → transaction.delete) — o cálculo derivado
+  // das PTs em memória só enxerga as AINDA ATIVAS e subconta tudo. O backend
+  // (`commitPartyUserStats`/`resolveParticipantStats`) credita userStats por
+  // JOGADOR RESOLVIDO (playerUid) de cada slot, o que já cobre corretamente a
+  // perspectiva de negociação (slot aceito tem o adquirente como JOGADOR; o
+  // DONO original não é creditado). A condição antiga que desligava a fonte
+  // persistida para QUALQUER usuário envolvido em QUALQUER negociação forçava
+  // o caminho derivado e era a CAUSA REAL dos contadores zerados/baixos.
+  //
+  // Com filtro de SERVIDOR ativo os contadores PERSISTIDOS (sem partição
+  // servidor×dia) deixariam de refletir o conjunto filtrado — nesse caso a
+  // tela volta ao cálculo derivado das PTs locais (que respeita o filtro).
+  const hasPersistedStats = !!userStats && typeof userStats.totalPtsConcluidas === "number" && adv.servers.length === 0;
 
   // PT's concluídas PERÍODO-CIENTES via userStats.dailyStats (doc já assinado
   // via onSnapshot — ZERO leituras extras de Firestore):
@@ -762,24 +823,13 @@ export default function StatsPanel({ characters, parties = [], userName = "", us
   }, [acquisitionFinance.buyerEntries, baseFiltered]);
 
   // ── Parceiros de Quest (persistidos por UID, senão recalculados) ────────
+  // O recálculo local parte de `completedParties` — as PTs concluídas JÁ
+  // delimitadas pelos filtros de período/servidor da análise (antes a lista
+  // era rederivada sem período, ignorando o filtro selecionado).
   const partnerStats = useMemo(() => {
     const userCharIds = new Set(characters.filter((c) => !negotiatedOriginalCharacterIds.has(c.id)).map((c) => c.id));
-    const userParties = parties.filter((p) => {
-      if (userName && p.createdByName === userName) return true;
-      if (p.selectedIds.some((id) => userCharIds.has(id))) return true;
-      if (userName) {
-        const sd = p.slotData || {};
-        return Object.values(sd).some((slot) =>
-          (slot.isService === true || !!slot.characterAcquisitionId)
-          && (slot.player || "") === userName
-        );
-      }
-      return false;
-    });
-    const completedPartiesLocal = userParties.filter((p) => p.questConcluida && !p.questFalha);
-
     const partners: Record<string, number> = {};
-    completedPartiesLocal.forEach((p) => {
+    completedParties.forEach((p) => {
       const sd = p.slotData || {};
       p.selectedIds.forEach((id) => {
         if (!userCharIds.has(id)) {
@@ -795,23 +845,28 @@ export default function StatsPanel({ characters, parties = [], userName = "", us
     return Object.entries(partners)
       .sort((a, b) => b[1] - a[1])
       .slice(0, 5);
-  }, [parties, characters, negotiatedOriginalCharacterIds, userName]);
+  }, [completedParties, characters, negotiatedOriginalCharacterIds]);
 
   const displayPartners = useMemo<[string, number][]>(() => {
+    // Persistido = contagem VITALÍCIA por UID (sem partição por dia): só vale
+    // sem período selecionado. Com período ativo, usa o recálculo local já
+    // delimitado pelos filtros — nenhum indicador fica com resultado de
+    // critérios diferentes dos escolhidos.
     const persisted = userStats?.partners;
-    if (hasPersistedStats && persisted && Object.keys(persisted).length > 0) {
+    if (hasPersistedStats && !periodRange && persisted && Object.keys(persisted).length > 0) {
       return Object.entries(persisted)
         .map(([uid, count]) => [userNames[uid] || `Usuário ${uid.slice(0, 6)}…`, count] as [string, number])
         .sort((a, b) => b[1] - a[1])
         .slice(0, 5);
     }
     return partnerStats;
-  }, [hasPersistedStats, userStats?.partners, userNames, partnerStats]);
+  }, [hasPersistedStats, periodRange, userStats?.partners, userNames, partnerStats]);
 
   const resetAllFilters = () => {
     setValueFilter(DEFAULT_VALUE_FILTER);
     setStatusFilter(DEFAULT_STATUS);
     setPeriod("all");
+    setCustomPeriodRaw({ ...DEFAULT_CUSTOM_PERIOD });
     setOnlyComplete(false);
     setAdvRaw(defaultAdvancedFilters());
   };
@@ -842,7 +897,8 @@ export default function StatsPanel({ characters, parties = [], userName = "", us
   // ── Selo "N filtro(s) ativo(s)" — qualquer desvio do padrão conta ───────
   const activeFilterCount = useMemo(() => {
     let n = 0;
-    if (period !== "all") n += 1;
+    // "Personalizado" sem nenhuma data preenchida equivale a "Tudo" — não conta.
+    if (period !== "all" && (period !== "custom" || periodRange !== null)) n += 1;
     if (!statusFilter.ativos || !statusFilter.historico) n += 1;
     if (onlyComplete) n += 1;
     if (!valueFilter.valorPago || !valueFilter.dropSW || !valueFilter.dropBakra || !valueFilter.valorVenda) n += 1;
@@ -850,7 +906,7 @@ export default function StatsPanel({ characters, parties = [], userName = "", us
     if (adv.vocations.length > 0) n += 1;
     for (const range of [adv.level, adv.cost, adv.sale]) if (rangeOn(range)) n += 1;
     return n;
-  }, [period, statusFilter, onlyComplete, valueFilter, adv]);
+  }, [period, periodRange, statusFilter, onlyComplete, valueFilter, adv]);
 
   // Universo total comparável ao contador do quadro: personagens próprios
   // (sem os cedidos em negociação) + negociações em que sou o adquirente.
@@ -956,7 +1012,7 @@ export default function StatsPanel({ characters, parties = [], userName = "", us
 
           <div className="flex flex-wrap gap-1.5">
             {/* ── PERÍODO ─────────────────────────────────────────────── */}
-            <StatsFilterBox title="Período" hint="Janela de tempo da análise: personagens pela Data de Compra/Venda, PT's pela data de arquivamento/início, negociações pelos registros da própria negociação e Services pela conclusão.">
+            <StatsFilterBox title="Período" hint="Janela de tempo da análise: personagens pela Data de Compra/Venda, PT's concluídas pela data de CONCLUSÃO da Quest, negociações pelos registros da própria negociação e Services pela conclusão (ou data do Service). 'Personalizado' permite escolher dia/mês/ano de início e fim.">
               <div className="flex flex-wrap gap-1">
                 {PERIODS.map((p) => (
                   <button key={p.key} onClick={() => setPeriod(p.key)} className={`px-1.5 py-0.5 rounded-md text-[9px] font-bold border transition-all ${period === p.key ? pillActive : pillIdle}`}>
@@ -964,6 +1020,33 @@ export default function StatsPanel({ characters, parties = [], userName = "", us
                   </button>
                 ))}
               </div>
+              {period === "custom" && (
+                <div className="flex flex-wrap items-end gap-x-3 gap-y-1.5 pt-0.5">
+                  {([["Início", "start"], ["Fim", "end"]] as const).map(([label, side]) => (
+                    <div key={side} className="flex flex-col gap-0.5" title={side === "start"
+                      ? "Primeiro dia incluído na análise (00:00). Vazio = desde o primeiro registro."
+                      : "Último dia incluído na análise (23:59). Vazio = até hoje."}>
+                      <span className={`text-[9px] font-black uppercase tracking-wide ${customPeriod[side] ? "text-amber-300" : "text-slate-400"}`}>{label}</span>
+                      <input
+                        type="date"
+                        value={customPeriod[side]}
+                        onChange={(e) => setCustomPeriodRaw({ ...customPeriod, [side]: e.target.value })}
+                        className={`h-7 rounded-md border bg-black/30 px-1.5 text-[10px] outline-none focus:border-amber-400/60 transition-colors [color-scheme:dark] ${customPeriod[side] ? "border-amber-400/50 text-amber-200 font-bold" : "border-[var(--th-line)]/60 text-slate-200"}`}
+                      />
+                    </div>
+                  ))}
+                  {(customPeriod.start || customPeriod.end) && (
+                    <button
+                      type="button"
+                      onClick={() => setCustomPeriodRaw({ ...DEFAULT_CUSTOM_PERIOD })}
+                      className="h-7 px-2 rounded-md border border-[var(--th-line)]/50 bg-black/25 text-[9px] font-bold text-slate-400 hover:text-slate-200 hover:border-rose-400/40 transition-colors"
+                      title="Limpa apenas as datas do intervalo personalizado."
+                    >
+                      Limpar datas
+                    </button>
+                  )}
+                </div>
+              )}
             </StatsFilterBox>
 
             {/* ── PERSONAGEM ──────────────────────────────────────────── */}
@@ -1052,7 +1135,6 @@ export default function StatsPanel({ characters, parties = [], userName = "", us
             <StatRow label="Venda Média / Personagem" value={moneyAvg(stats.valorVendaAvg.avg)} title={tt.vendaUnit} />
             <StatRow label="Resultado Médio / Personagem" value={moneyAvg(stats.lucroMedio.avg)} valueColor={stats.lucroMedio.avg >= 0 ? "text-emerald-400" : "text-rose-400"} title={tt.resultadoMedio} />
             <StatRow label="Desvalorização (Bazar)" value={`${stats.desvalorizacaoMedia.toFixed(1)}%`} valueColor={stats.desvalorizacaoMedia >= 0 ? "text-emerald-400" : "text-rose-400"} title={tt.desvalorizacao} />
-            <StatRow label="Negociações adquiridas" value={money(stats.acquisitionFinance.net)} valueColor={stats.acquisitionFinance.net >= 0 ? "text-violet-300" : "text-rose-400"} title="Saldo da perspectiva do adquirente: custo de aquisição, lucro privado da Quest e venda posterior." />
           </div>
         </Section>
 
