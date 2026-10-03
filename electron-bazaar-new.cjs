@@ -426,19 +426,94 @@ function collectQuestEntries(payload) {
 }
 
 /**
+ * REGRAS OFICIAIS da guia "Quests" do site — extraídas do PRÓPRIO frontend
+ * do RubinOT (amostras/1ys-zgp1x3uhc.js, obtido pelo usuário via busca
+ * global no DevTools). O chunk define o array QUEST_REWARDS e o predicado:
+ *
+ *   toStoragesMap(storages) { const m = new Map();
+ *     for (const [id, valor] of storages || []) try { m.set(id, BigInt(valor)) } catch {}
+ *     return m; }
+ *   isQuestCompleted(map, q) { const v = map.get(q.storageId);
+ *     return v !== undefined && v >= BigInt(q.requiredValue); }
+ *
+ * Ou seja: a guia Quests é computada NO FRONTEND a partir de
+ * `payload.storages` (pares [storageId, valor]) — o MESMO payload que já
+ * baixamos. Nada é presumido: storageIds e requiredValues abaixo são os
+ * valores literais do QUEST_REWARDS do site.
+ */
+const QUEST_STORAGE_RULES = {
+  soulwar: { name: 'Soul War', storageId: 21216, requiredValue: 1n },
+  sanguine: { name: 'Rotten Blood', storageId: 10301, requiredValue: 4n },
+};
+
+/** Réplica fiel do toStoragesMap do site (chaves normalizadas p/ Number). */
+function toStoragesMap(storages) {
+  const map = new Map();
+  for (const pair of Array.isArray(storages) ? storages : []) {
+    if (!Array.isArray(pair) || pair.length < 2) continue;
+    const id = Number(pair[0]);
+    if (!Number.isFinite(id)) continue;
+    try { map.set(id, BigInt(pair[1])); } catch { /* valor não numérico: ignora, como o site */ }
+  }
+  return map;
+}
+
+/**
+ * Decide Soul War / Rotten Blood pelos STORAGES do payload, usando o
+ * predicado oficial do site. Com a lista de storages presente e válida, o
+ * estado é CONCLUSIVO nos dois sentidos (é exatamente assim que a guia
+ * Quests do site marca/desmarca cada quest):
+ *   • valor >= requiredValue  => concluída (indisponível);
+ *   • ausente ou valor menor  => NÃO concluída (disponível).
+ * Payload sem lista de storages utilizável => inconclusivo (nunca presume).
+ */
+function deriveQuestsFromStorages(payload) {
+  const raw = Array.isArray(payload?.storages) ? payload.storages
+    : (Array.isArray(payload?.data?.storages) ? payload.data.storages : null);
+  const map = toStoragesMap(raw);
+  // Lista ausente/vazia/inválida: sem base para afirmar nada — "?" honesto.
+  // (Qualquer personagem real tem centenas de storages; vazio = anômalo.)
+  if (!raw || raw.length === 0 || map.size === 0) {
+    return { usable: false, soulwar: { value: null, status: 'SEM_STORAGES' }, sanguine: { value: null, status: 'SEM_STORAGES' }, evidence: { present: !!raw, pares: raw ? raw.length : 0 } };
+  }
+  const decide = (questKey) => {
+    const rule = QUEST_STORAGE_RULES[questKey];
+    const value = map.get(rule.storageId);
+    return { value: value !== undefined && value >= rule.requiredValue, status: 'OK' };
+  };
+  return {
+    usable: true,
+    soulwar: decide('soulwar'),
+    sanguine: decide('sanguine'),
+    evidence: {
+      present: true,
+      pares: raw.length,
+      soulwarStorage: map.has(QUEST_STORAGE_RULES.soulwar.storageId) ? String(map.get(QUEST_STORAGE_RULES.soulwar.storageId)) : null,
+      sanguineStorage: map.has(QUEST_STORAGE_RULES.sanguine.storageId) ? String(map.get(QUEST_STORAGE_RULES.sanguine.storageId)) : null,
+    },
+  };
+}
+
+/**
  * Conclui Soul War / Sanguine pelo modo QUESTS a partir do payload JSON.
  *
+ * FONTE PRIMÁRIA (oficial): `payload.storages` + predicado do próprio site
+ * (deriveQuestsFromStorages acima) — é como a guia Quests é renderizada.
+ * FALLBACK: entradas textuais com flag claro (collectQuestEntries), mantido
+ * para formatos futuros em que a API embuta a lista de quests diretamente.
+ *
  * Regras (cada quest é INDEPENDENTE, exatamente como na guia do site):
- *   • entrada com flag true  => quest CONCLUÍDA (indisponível);
- *   • entrada com flag false => quest DISPONÍVEL;
- *   • nenhuma entrada com flag claro, ou entradas CONTRADITÓRIAS => aquela
- *     quest fica inconclusiva e o personagem segue para a leitura DOM.
+ *   • concluída  => indisponível;  não concluída => DISPONÍVEL;
+ *   • sem storages utilizáveis E sem entrada textual com flag claro (ou
+ *     entradas CONTRADITÓRIAS) => aquela quest fica inconclusiva e o
+ *     personagem segue para a leitura DOM (se houver retries).
  *   • quest fora do escopo => null ("Não verificado"), nunca false.
  */
 function deriveQuestsFromQuestEntries(payload, quests = { soulwar: true, sanguine: true }) {
+  const storages = deriveQuestsFromStorages(payload);
   const entries = collectQuestEntries(payload);
 
-  const decide = (questKey) => {
+  const decideByEntries = (questKey) => {
     const flagged = entries.filter(entry => entry.quest === questKey && entry.completed !== null);
     if (flagged.length === 0) return { value: null, status: 'SEM_FLAG_CLARO' };
     const hasTrue = flagged.some(entry => entry.completed === true);
@@ -446,6 +521,12 @@ function deriveQuestsFromQuestEntries(payload, quests = { soulwar: true, sanguin
     if (hasTrue && hasFalse) return { value: null, status: 'CONFLITO' };
     return { value: hasTrue, status: 'OK' };
   };
+
+  // Storages (fonte oficial) decide primeiro; entradas textuais só entram
+  // quando não há storages utilizáveis.
+  const decide = (questKey) => (
+    storages[questKey].status === 'OK' ? storages[questKey] : decideByEntries(questKey)
+  );
 
   const soulwar = decide('soulwar');
   const sanguine = decide('sanguine');
@@ -461,7 +542,8 @@ function deriveQuestsFromQuestEntries(payload, quests = { soulwar: true, sanguin
     questStatuses: { soulwar: soulwar.status, sanguine: sanguine.status },
     // `questEntries` no diagnóstico: é o log de DESCOBERTA que revela, na
     // primeira execução real, se/como o payload traz a lista de quests.
-    evidence: { shape: summarizeJsonShape(payload), questEntries: entries.slice(0, 20) },
+    // `storages` registra a fonte oficial usada (pares e valores lidos).
+    evidence: { shape: summarizeJsonShape(payload), questEntries: entries.slice(0, 20), storages: storages.evidence },
   };
 }
 
@@ -1350,6 +1432,10 @@ module.exports = {
   interpretQuestCompletionFlag,
   collectQuestEntries,
   deriveQuestsFromQuestEntries,
+  // Fonte oficial: storages + predicado do frontend do site.
+  QUEST_STORAGE_RULES,
+  toStoragesMap,
+  deriveQuestsFromStorages,
   extractQuestRowsInPage,
   decideQuestsFromDomRows,
   mergeQuestOutcomes,

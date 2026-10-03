@@ -20,7 +20,11 @@
  *   - auras é lista na RAIZ;
  *   - bosstiaries lista 100 bosses mas bosstiariosTotal = 115 (lista pode
  *     vir truncada); Megalomania e Bakragore PRESENTES → SW/SG concluídas;
- *   - NÃO existe chave de quests no payload (modo Quests → inconclusivo).
+ *   - NÃO existe chave de quests no payload: a guia Quests do site é
+ *     computada no FRONTEND a partir de `storages` (regras oficiais em
+ *     amostras/1ys-zgp1x3uhc.js: Soul War = storage 21216 >= 1;
+ *     Rotten Blood = storage 10301 >= 4) — modo Quests deriva dos storages
+ *     do MESMO payload, sem requisição extra.
  *
  * Execução: node tools/bazaar-tests/real-payload.test.cjs
  * (sem dependências externas; pula com aviso se a amostra não existir)
@@ -59,11 +63,34 @@ check('bosstiary: contagens SW/SG do payload real', b.soulWarBossCount === 5 && 
   `sw=${b.soulWarBossCount} sg=${b.sanguineBossCount}`);
 
 // ---------------------------------------------------------------------------
-// 2) MODO QUESTS — payload real NÃO traz quests → inconclusivo honesto
+// 2) MODO QUESTS — derivação OFICIAL por storages (regras do frontend do
+//    site, amostras/1ys-zgp1x3uhc.js: SW storage 21216 >= 1; SG 10301 >= 4)
 // ---------------------------------------------------------------------------
 const q = nm.deriveQuestsFromQuestEntries(payload);
-check('quests: payload real é inconclusivo (sem presumir)', q.resolved === false, `reason=${q.reason}`);
-check('quests: nenhum estado inventado', q.soulwarCompleted === null && q.sanguineCompleted === null);
+check('quests: payload real CONCLUSIVO via storages', q.resolved === true, `reason=${q.reason}`);
+check('quests: SW concluída (storage 21216 = 2 >= 1)', q.soulwarCompleted === true);
+check('quests: SG concluída (storage 10301 = 4 >= 4)', q.sanguineCompleted === true);
+check('quests: coincide com a derivação Bosstiary (validação cruzada)',
+  q.soulwarCompleted === b.soulwarCompleted && q.sanguineCompleted === b.sanguineCompleted);
+check('quests: evidência registra os storages lidos',
+  q.evidence?.storages?.soulwarStorage === '2' && q.evidence?.storages?.sanguineStorage === '4',
+  JSON.stringify(q.evidence?.storages));
+
+// Predicado oficial isolado + fronteiras (sintético)
+const qa = nm.deriveQuestsFromQuestEntries({ storages: [[999, '1'], [10301, '3']] });
+check('quests: ausente/abaixo do requerido => DISPONÍVEL (conclusivo, como no site)',
+  qa.resolved === true && qa.soulwarCompleted === false && qa.sanguineCompleted === false);
+const qb = nm.deriveQuestsFromQuestEntries({ storages: [[21216, '1'], [10301, '4']] });
+check('quests: valores exatamente no limite => concluídas',
+  qb.soulwarCompleted === true && qb.sanguineCompleted === true);
+const qc = nm.deriveQuestsFromQuestEntries({ general: {} });
+check('quests: payload SEM storages => inconclusivo honesto ("?")',
+  qc.resolved === false && qc.soulwarCompleted === null && qc.sanguineCompleted === null);
+const qd = nm.deriveQuestsFromQuestEntries({ storages: [] });
+check('quests: storages VAZIO => inconclusivo (nunca presume)', qd.resolved === false);
+const qe = nm.deriveQuestsFromQuestEntries({ quests: [{ name: 'Soul War', completed: true }, { name: 'Rotten Blood', completed: false }] });
+check('quests: fallback textual preservado quando não há storages',
+  qe.resolved === true && qe.soulwarCompleted === true && qe.sanguineCompleted === false);
 
 // ---------------------------------------------------------------------------
 // 3) ITENS — collectItemMatches + collectGoldAndSkills
@@ -99,7 +126,15 @@ check('histórico: charm NÃO usa general.charmPoints isolado (campo "não usado
 check('histórico: hirelings de general.hirelingCount', ex.hirelingCount === 0
   && ex.paths?.hirelings === 'general.hirelingCount', `path=${ex.paths?.hirelings}`);
 check('histórico: auras pela lista da raiz', ex.auraCount === 0 && ex.paths?.auras === '(raiz)');
-check('histórico: deluxe sem campo no payload → null honesto', ex.deluxePassCount === null);
+// Deluxe: battlepassSeasons[].active — confirmado pelo usuário na aba
+// Battlepass do site (temporada 3 única com Deluxe = "sim" = única active:1).
+check('histórico: deluxe = temporadas com active afirmativo (1)',
+  ex.deluxePassCount === 1 && ex.paths?.deluxe === 'battlepassSeasons[].active',
+  `deluxe=${ex.deluxePassCount} path=${ex.paths?.deluxe}`);
+const noDeluxe = hm.collectHistoryExtras({ battlepassSeasons: [{ season: 1, active: 0 }, { season: 2, active: 0 }] });
+check('histórico: temporadas sem Deluxe → 0 (coluna encontrada), não null', noDeluxe.deluxePassCount === 0);
+const unknownDeluxe = hm.collectHistoryExtras({ general: {} });
+check('histórico: sem battlepass e sem campo deluxe → null honesto', unknownDeluxe.deluxePassCount === null);
 
 // ---------------------------------------------------------------------------
 // 5) COMPATIBILIDADE — formatos antigos continuam aceitos (fallbacks)

@@ -390,7 +390,28 @@ function collectBattlepassDeluxe(payload) {
     }
   });
 
-  return found ? { count, found: true, path: where } : { count: null, found: false, path: '' };
+  if (found) return { count, found: true, path: where };
+
+  // 4) CAMPO REAL do payload /api/bazaar/{id}: `battlepassSeasons[].active`.
+  //    Confirmado pelo usuário contra a aba Battlepass do site (leilão
+  //    292172): a única temporada com Deluxe = "sim" é exatamente a única
+  //    com active = 1 no payload — ou seja, `active` É o flag do passe
+  //    Deluxe por temporada. Contamos as temporadas com active afirmativo;
+  //    lista presente sem nenhum active => 0 (coluna encontrada), não null.
+  let seasonCount = null;
+  let seasonPath = '';
+  walkJson(payload, (node, path) => {
+    if (seasonCount !== null) return;
+    if (!Array.isArray(node) || !BATTLEPASS_PATH_HINTS.test(path)) return;
+    const seasons = node.filter(item => item && typeof item === 'object' && !Array.isArray(item)
+      && ('season' in item) && ('active' in item));
+    if (seasons.length === 0) return;
+    seasonCount = seasons.filter(item => isAffirmative(item.active)).length;
+    seasonPath = `${path}[].active`;
+  });
+  if (seasonCount !== null) return { count: seasonCount, found: true, path: seasonPath };
+
+  return { count: null, found: false, path: '' };
 }
 
 /** Chaves de contagem direta (ex.: `auraCount`, `hirelings: 3`). */
