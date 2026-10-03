@@ -5006,6 +5006,10 @@ require('./electron-bazaar-new.cjs').registerBazaarNewMethod({
   sendProgress: sendRubinotProgress,
   buildProgress: buildRubinotProgress,
   fetchDetailsWithPlaywright: fetchRubinotDetailsWithPlaywright,
+  // Plano de retries (navegador × tentativas) — a MESMA função usada pelo
+  // método Paginação; o modo Quests do canal v2 a usa para executar retries
+  // SOMENTE dos personagens pendentes, respeitando a seleção do modal.
+  buildRetryPlan: buildRubinotRetryPlan,
   getSelectedBrowser: () => rubinotSelectedBrowser,
   getUseCleanProfile: () => rubinotUseCleanProfile,
   apiBase: RUBINOT_BAZAAR_API,

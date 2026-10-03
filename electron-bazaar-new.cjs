@@ -593,6 +593,12 @@ function registerBazaarNewMethod(deps) {
     sendProgress,
     buildProgress,
     fetchDetailsWithPlaywright,
+    // Plano de retries (navegador × tentativas, na ordem de preferência) —
+    // a MESMA função do método Paginação (buildRubinotRetryPlan), injetada
+    // para o modo Quests respeitar os "Retries por navegador" do modal sem
+    // duplicar a lógica. Opcional: sem ela, o modo Quests simplesmente não
+    // executa retries pelo navegador.
+    buildRetryPlan,
     getSelectedBrowser,
     getUseCleanProfile,
     apiBase,
@@ -700,6 +706,24 @@ function registerBazaarNewMethod(deps) {
     'ABA_QUESTS_NAO_ENCONTRADA',
     'ABA_QUESTS_NAO_CLICAVEL',
     'LISTA_DE_QUESTS_NAO_MONTOU',
+  ]);
+
+  /**
+   * Motivos de TRANSPORTE da passada JSON: a consulta individual nem chegou a
+   * entregar uma resposta JSON legível (rota/permissão/limite/servidor).
+   * Diferem de QUESTS_INCONCLUSIVAS_NO_JSON (resposta veio, mas as quests não
+   * estavam interpretáveis): transporte falho SEM nenhum retry que leia a
+   * página e SEM nada conclusivo é FALHA real (`error`); resposta legível
+   * porém inconclusiva é resultado honesto "?" (sem `error`).
+   */
+  const QUESTS_JSON_TRANSPORT_REASONS = new Set([
+    'ID_AUSENTE',
+    'ROTA_INEXISTENTE',
+    'ACESSO_NEGADO',
+    'NAO_AUTENTICADO',
+    'ERRO_DO_SERVIDOR',
+    'RESPOSTA_NAO_JSON',
+    'LIMITE_DE_TAXA_429',
   ]);
 
   async function readQuestsTabViaDom(page, auction, quests) {
@@ -978,11 +1002,13 @@ function registerBazaarNewMethod(deps) {
             failureSamples[outcome.reason] = outcome.preview;
           }
           // Modo QUESTS: guarda o que o JSON CONCLUIU (pode ser só uma das
-          // quests) para a mesclagem por quest após a passada DOM.
+          // quests) e o MOTIVO da inconclusão — base da mesclagem por quest
+          // e da classificação final (inconclusivo honesto × falha real).
           if (questSource === 'quests') {
             jsonPartialByKey[key] = {
               soulwarCompleted: outcome.soulwarCompleted === true || outcome.soulwarCompleted === false ? outcome.soulwarCompleted : null,
               sanguineCompleted: outcome.sanguineCompleted === true || outcome.sanguineCompleted === false ? outcome.sanguineCompleted : null,
+              reason: outcome.reason || 'QUESTS_INCONCLUSIVAS_NO_JSON',
             };
           }
           unresolved.push(auction);
@@ -1014,127 +1040,217 @@ function registerBazaarNewMethod(deps) {
       //     EXATAMENTE como hoje pelo método Paginação (Bosstiary renderizada),
       //     incluindo o retry multi-navegador.
       //
-      //   • "quests" (NOVO): quem o JSON não resolveu é lido DIRETO na guia
-      //     Quests da página oficial (mesma sessão/página). O resultado final
-      //     é mesclado POR QUEST com o parcial do JSON (um dado conclusivo
-      //     nunca é descartado). Quest sem dado confiável fica `null` → "?"
-      //     no renderer, SEM presumir disponível/indisponível. `error` só
-      //     quando a leitura falhou ESTRUTURALMENTE e nenhuma quest ficou
-      //     conclusiva — NUNCA cai no critério Bosstiary, que o usuário
-      //     explicitamente não escolheu, e nunca recebe resultado inventado.
+      //   • "quests": a consulta é JSON-PRIMEIRO e o navegador SÓ entra como
+      //     RETRY EXPLÍCITO. Sem NENHUM "Retries por navegador" selecionado no
+      //     modal, a consulta TERMINA nos resultados do JSON — nenhuma página
+      //     de personagem é aberta e o que ficou sem dado vira "?" honesto.
+      //     Com retries selecionados, SOMENTE os personagens inconclusivos ou
+      //     falhos são lidos na guia Quests da página oficial, seguindo o
+      //     MESMO plano de navegadores/quantidades do método Paginação
+      //     (`buildRetryPlan` injetado do processo principal — fonte única).
+      //     Resultados conclusivos do JSON são PRESERVADOS e nunca
+      //     reconsultados; a mesclagem é POR QUEST (SW/SG independentes).
+      //     NUNCA cai no critério Bosstiary, que o usuário não escolheu, e
+      //     nunca recebe resultado inventado.
       let fallbackResult = null;
       let domResolvedCount = 0;
       let domInconclusiveCount = 0;
       let partialPreservedCount = 0;
       const domFailureReasons = {};
-      if (unresolved.length > 0 && !stoppedManually) {
-        if (questSource === 'quests') {
-          diag('details-v2', 'Modo QUESTS: lendo a guia Quests da página dos personagens que o JSON não resolveu.', {
-            quantidade: unresolved.length,
+      const questsRetryStats = [];
+      const questsRetryBrowsers = [];
+      if (questSource === 'quests') {
+        // Pendentes da passada JSON, com o parcial acumulado por quest e o
+        // motivo da inconclusão (classificação final honesta).
+        const pendingByKey = new Map();
+        for (const auction of unresolved) {
+          const key = auction?.id || auction?.name || auction?.url;
+          if (!key || details[key]) continue;
+          const partial = jsonPartialByKey[key] || { soulwarCompleted: null, sanguineCompleted: null, reason: 'QUESTS_INCONCLUSIVAS_NO_JSON' };
+          pendingByKey.set(key, {
+            auction,
+            partial: { soulwarCompleted: partial.soulwarCompleted, sanguineCompleted: partial.sanguineCompleted },
+            hadJsonData: partial.soulwarCompleted !== null || partial.sanguineCompleted !== null,
+            jsonReason: partial.reason || 'QUESTS_INCONCLUSIVAS_NO_JSON',
+            domReadable: false,
+            lastReason: partial.reason || 'QUESTS_INCONCLUSIVAS_NO_JSON',
           });
-          sendProgress(event.sender, buildProgress('details', 'Lendo a guia Quests dos personagens restantes...', 0, unresolved.length, {
-            methodLabel,
-          }));
-          for (let index = 0; index < unresolved.length; index++) {
-            if (isManualStopRequested()) {
-              stoppedManually = true;
-              diag('details-v2', 'Encerramento manual durante a leitura da guia Quests.', { analisados: index, restantes: unresolved.length - index });
-              break;
-            }
-            const auction = unresolved[index];
-            const key = auction?.id || auction?.name || auction?.url;
-            if (!key) continue;
+        }
 
-            const outcome = await readQuestsTabViaDom(page, auction, quests);
-            // Mesclagem POR QUEST: guia Quests (quando conclusiva) > parcial
-            // do JSON > `null` ("?"). SW e SG independentes — requisito.
-            const mergedQuests = mergeQuestOutcomes(jsonPartialByKey[key], outcome);
-            const hasAnyConclusive = mergedQuests.soulwarCompleted !== null || mergedQuests.sanguineCompleted !== null;
-            const structuralFailure = !outcome.resolved && QUESTS_DOM_STRUCTURAL_REASONS.has(outcome.reason);
-            const jsonPartial = jsonPartialByKey[key];
-            if (jsonPartial && (jsonPartial.soulwarCompleted !== null || jsonPartial.sanguineCompleted !== null)) {
-              partialPreservedCount += 1;
-            }
+        // Plano de retries: o MESMO formato do método Paginação (navegador ×
+        // quantidade, na ordem de preferência do usuário). REQUISITO: sem
+        // seleção explícita de retries o plano é VAZIO — o "retry único"
+        // legado do método antigo NÃO se aplica ao modo Quests.
+        const wantsRetries = (Array.isArray(merged.retryBrowsers) && merged.retryBrowsers.length > 0)
+          || (merged.retryCounts && typeof merged.retryCounts === 'object' && !Array.isArray(merged.retryCounts)
+            && Object.values(merged.retryCounts).some(value => Number(value) > 0));
+        const retryPlan = (wantsRetries && typeof buildRetryPlan === 'function')
+          ? (buildRetryPlan(browserKey, merged.retryBrowsers, merged.retryCounts, merged.browserOrder) || [])
+          : [];
+        diag('details-v2', 'Modo QUESTS: pendências da passada JSON e plano de retries pelo navegador.', {
+          pendentes: pendingByKey.size,
+          retriesSelecionados: wantsRetries,
+          passadas: retryPlan.map(step => `${step.browser} ${step.attempt}/${step.attempts}`),
+        });
 
-            if (outcome.resolved) {
-              domResolvedCount += 1;
-              details[key] = {
-                id: key,
-                method: 'quests_tab_dom_v1',
-                questSource: 'quests',
-                soulwarCompleted: mergedQuests.soulwarCompleted,
-                sanguineCompleted: mergedQuests.sanguineCompleted,
-                fetchedAt: Date.now(),
-              };
-            } else if (!structuralFailure || hasAnyConclusive) {
-              // INCONCLUSIVO HONESTO (sem `error`): ou a guia Quests FOI lida
-              // e a quest simplesmente não está listada/é conflitante, ou a
-              // leitura estrutural falhou mas o JSON já tinha concluído ao
-              // menos uma quest (que é PRESERVADA). O que não tem dado fica
-              // `null` → "?" no renderer; nada é presumido e o personagem
-              // NÃO entra na lista de falhas — o resultado existe e é honesto.
-              domInconclusiveCount += 1;
-              domFailureReasons[outcome.reason] = (domFailureReasons[outcome.reason] || 0) + 1;
-              details[key] = {
-                id: key,
-                method: 'quests_tab_dom_v1',
-                questSource: 'quests',
-                soulwarCompleted: mergedQuests.soulwarCompleted,
-                sanguineCompleted: mergedQuests.sanguineCompleted,
-                fetchedAt: Date.now(),
-                // Diagnóstico (NÃO é falha): por que restou "?" neste
-                // personagem. O renderer ignora o campo.
-                inconclusiveReason: outcome.reason,
-              };
-              if (outcome.evidence?.rowsSample && !failureSamples[`DOM_${outcome.reason}`]) {
-                failureSamples[`DOM_${outcome.reason}`] = outcome.evidence.rowsSample
-                  .slice(0, 10)
-                  .map(row => `${row.checked ? '[x]' : '[ ]'} ${row.text}`)
-                  .join(' | ')
-                  .slice(0, 400);
+        if (pendingByKey.size > 0 && retryPlan.length > 0 && !stoppedManually) {
+          let retryPage = page;
+          let currentRetryBrowser = browserKey;
+          let stopAll = false;
+          for (const step of retryPlan) {
+            if (stopAll || pendingByKey.size === 0) break;
+            if (isManualStopRequested()) { stoppedManually = true; break; }
+
+            // Troca de motor quando a passada pede outro navegador — mesma
+            // mecânica do método Paginação (getContext fecha o anterior na
+            // troca). Sessão indisponível no motor => passada é PULADA, sem
+            // derrubar a consulta nem descartar o que já foi apurado.
+            if (step.browser !== currentRetryBrowser) {
+              try {
+                const retryContext = await getContext(step.browser, merged.cleanProfile);
+                const retrySession = await ensureSessionReady(retryContext, null, `details-v2-retry-${step.browser}`);
+                if (!retrySession.ok) {
+                  diag('details-v2', 'Retry PULADO: sessão indisponível neste navegador.', {
+                    navegador: step.browser, tentativa: `${step.attempt}/${step.attempts}`, motivo: retrySession.message || '',
+                  });
+                  continue;
+                }
+                retryPage = retrySession.page || await getSessionPage(retryContext);
+                currentRetryBrowser = step.browser;
+              } catch (error) {
+                diag('details-v2', 'Retry PULADO: falha ao abrir o navegador da passada.', {
+                  navegador: step.browser, error: String(error?.message || error),
+                });
+                continue;
               }
-            } else {
-              domFailureReasons[outcome.reason] = (domFailureReasons[outcome.reason] || 0) + 1;
-              // FALHA ESTRUTURAL sem NENHUM dado conclusivo: MESMO caminho de
-              // falha do método antigo (`error` + `failureReason`) — o
-              // personagem entra em failedCharacterList e no contador de
-              // falhas. As quests ficam `null` ("?"), nunca presumidas.
-              details[key] = {
-                id: key,
-                method: 'quests_tab_dom_v1',
-                questSource: 'quests',
-                soulwarCompleted: null,
-                sanguineCompleted: null,
-                fetchedAt: Date.now(),
-                failureReason: outcome.reason,
-                error: QUESTS_DOM_REASON_TEXT[outcome.reason] || 'Não foi possível ler a guia Quests deste personagem.',
-              };
             }
 
-            sendProgress(event.sender, buildProgress('details', 'Lendo a guia Quests dos personagens restantes...', index + 1, unresolved.length, {
-              methodLabel,
-              apiResolved: resolvedCount,
-              domResolved: domResolvedCount,
-            }));
+            if (!questsRetryBrowsers.includes(step.browser)) questsRetryBrowsers.push(step.browser);
+            const stat = { browser: step.browser, attempted: pendingByKey.size, recovered: 0, attempt: step.attempt, attempts: step.attempts };
+            questsRetryStats.push(stat);
+            diag('details-v2', 'Retry pelo navegador: lendo a guia Quests SOMENTE dos pendentes.', {
+              navegador: step.browser, tentativa: `${step.attempt}/${step.attempts}`, pendentes: pendingByKey.size,
+            });
 
-            if (index < unresolved.length - 1) await page.waitForTimeout(QUESTS_DOM_GAP_MS);
+            const stepTargets = Array.from(pendingByKey.entries());
+            for (let index = 0; index < stepTargets.length; index++) {
+              if (isManualStopRequested()) {
+                stoppedManually = true;
+                stopAll = true;
+                diag('details-v2', 'Encerramento manual durante o retry da guia Quests.', { analisados: index, restantes: stepTargets.length - index });
+                break;
+              }
+              const [key, entry] = stepTargets[index];
+              sendProgress(event.sender, buildProgress('details', `Retry ${step.browser} ${step.attempt}/${step.attempts}: lendo a guia Quests dos pendentes...`, index, stepTargets.length, {
+                methodLabel,
+                apiResolved: resolvedCount,
+                domResolved: domResolvedCount,
+              }));
+
+              const outcome = await readQuestsTabViaDom(retryPage, entry.auction, quests);
+              // Mesclagem POR QUEST: guia Quests (quando conclusiva) >
+              // parcial já acumulado > `null` ("?"). SW/SG independentes.
+              entry.partial = mergeQuestOutcomes(entry.partial, outcome);
+              const structuralFailure = !outcome.resolved && QUESTS_DOM_STRUCTURAL_REASONS.has(outcome.reason);
+              if (!structuralFailure) entry.domReadable = true;
+              if (outcome.reason && outcome.reason !== 'OK') entry.lastReason = outcome.reason;
+
+              const needSoulwar = quests.soulwar !== false;
+              const needSanguine = quests.sanguine !== false;
+              const complete = (!needSoulwar || entry.partial.soulwarCompleted !== null)
+                && (!needSanguine || entry.partial.sanguineCompleted !== null);
+              if (complete) {
+                domResolvedCount += 1;
+                stat.recovered += 1;
+                if (entry.hadJsonData) partialPreservedCount += 1;
+                details[key] = {
+                  id: key,
+                  method: 'quests_tab_dom_v1',
+                  questSource: 'quests',
+                  soulwarCompleted: entry.partial.soulwarCompleted,
+                  sanguineCompleted: entry.partial.sanguineCompleted,
+                  fetchedAt: Date.now(),
+                };
+                pendingByKey.delete(key);
+              } else {
+                domFailureReasons[outcome.reason] = (domFailureReasons[outcome.reason] || 0) + 1;
+                // Amostra das linhas lidas, uma vez por motivo — diagnóstico
+                // de seletor/estrutura sem poluir o log.
+                if (outcome.evidence?.rowsSample && !failureSamples[`DOM_${outcome.reason}`]) {
+                  failureSamples[`DOM_${outcome.reason}`] = outcome.evidence.rowsSample
+                    .slice(0, 10)
+                    .map(row => `${row.checked ? '[x]' : '[ ]'} ${row.text}`)
+                    .join(' | ')
+                    .slice(0, 400);
+                }
+              }
+
+              if (index < stepTargets.length - 1) await retryPage.waitForTimeout(QUESTS_DOM_GAP_MS);
+            }
           }
-          diag('details-v2', 'Leitura da guia Quests concluída.', {
-            total: unresolved.length,
-            resolvidosPelaGuia: domResolvedCount,
-            inconclusivosHonestos: domInconclusiveCount,
-            parciaisDoJsonPreservados: partialPreservedCount,
-            falhas: Math.max(0, unresolved.length - domResolvedCount - domInconclusiveCount),
+          diag('details-v2', 'Retries da guia Quests concluídos.', {
+            recuperados: domResolvedCount,
+            aindaPendentes: pendingByKey.size,
+            passadas: questsRetryStats.map(item => `${item.browser} ${item.attempt}/${item.attempts}: +${item.recovered}/${item.attempted}`),
             motivos: domFailureReasons,
           });
-        } else {
-          diag('details-v2', 'Delegando ao método PAGINAÇÃO os personagens que a API não resolveu.', {
-            quantidade: unresolved.length,
-          });
-          fallbackResult = await fetchDetailsWithPlaywright(unresolved, merged, event.sender, browserKey);
-          if (fallbackResult?.details) Object.assign(details, fallbackResult.details);
-          if (fallbackResult?.stoppedManually) stoppedManually = true;
         }
+
+        // ── FECHO do modo QUESTS: quem restou pendente vira resultado HONESTO ─
+        // Classificação (requisito "manter ?"):
+        //   • qualquer dado conclusivo preservado, OU resposta JSON legível
+        //     (quests apenas inconclusivas), OU guia Quests lida em algum
+        //     retry → detail SEM `error`; o que faltou fica `null` → "?";
+        //   • transporte JSON falhou E nenhum retry leu a página E nada
+        //     conclusivo → FALHA real (`error` + `failureReason`), quests
+        //     `null` ("?"), nunca presumidas.
+        for (const [key, entry] of pendingByKey) {
+          const hasAnyConclusive = entry.partial.soulwarCompleted !== null || entry.partial.sanguineCompleted !== null;
+          const jsonReadable = !QUESTS_JSON_TRANSPORT_REASONS.has(entry.jsonReason);
+          const attemptedDom = questsRetryStats.length > 0;
+          if (hasAnyConclusive || jsonReadable || entry.domReadable) {
+            domInconclusiveCount += 1;
+            if (entry.hadJsonData) partialPreservedCount += 1;
+            details[key] = {
+              id: key,
+              method: attemptedDom ? 'quests_tab_dom_v1' : 'api_json_quests_v1',
+              questSource: 'quests',
+              soulwarCompleted: entry.partial.soulwarCompleted,
+              sanguineCompleted: entry.partial.sanguineCompleted,
+              fetchedAt: Date.now(),
+              // Diagnóstico (NÃO é falha): por que restou "?" neste
+              // personagem. O renderer ignora o campo.
+              inconclusiveReason: entry.lastReason,
+            };
+          } else {
+            details[key] = {
+              id: key,
+              method: attemptedDom ? 'quests_tab_dom_v1' : 'api_json_quests_v1',
+              questSource: 'quests',
+              soulwarCompleted: null,
+              sanguineCompleted: null,
+              fetchedAt: Date.now(),
+              failureReason: entry.lastReason,
+              error: QUESTS_DOM_REASON_TEXT[entry.lastReason]
+                || `A consulta JSON deste personagem falhou (${entry.lastReason}) e nenhum retry pelo navegador leu a guia Quests.`,
+            };
+          }
+        }
+        diag('details-v2', 'Modo QUESTS consolidado.', {
+          total: list.length,
+          resolvidosPelaApi: resolvedCount,
+          recuperadosPorRetry: domResolvedCount,
+          inconclusivosHonestos: domInconclusiveCount,
+          parciaisDoJsonPreservados: partialPreservedCount,
+          motivosDom: domFailureReasons,
+        });
+      } else if (unresolved.length > 0 && !stoppedManually) {
+        diag('details-v2', 'Delegando ao método PAGINAÇÃO os personagens que a API não resolveu.', {
+          quantidade: unresolved.length,
+        });
+        fallbackResult = await fetchDetailsWithPlaywright(unresolved, merged, event.sender, browserKey);
+        if (fallbackResult?.details) Object.assign(details, fallbackResult.details);
+        if (fallbackResult?.stoppedManually) stoppedManually = true;
       }
 
       // ── Consolidação no MESMO contrato do handler antigo ───────────────────
@@ -1163,7 +1279,12 @@ function registerBazaarNewMethod(deps) {
         identificacao: questSource,
         resolvidosPelaApi: resolvedCount,
         resolvidosPelaGuiaQuests: domResolvedCount,
-        resolvidosPeloFallback: Math.max(0, analyzedCount - resolvedCount - domResolvedCount),
+        // Inconclusivos honestos ("?") NÃO são "resolvidos pelo fallback" —
+        // ficam fora da conta para o resumo não inflar números.
+        inconclusivosHonestos: domInconclusiveCount,
+        resolvidosPeloFallback: questSource === 'quests'
+          ? 0
+          : Math.max(0, analyzedCount - resolvedCount - domResolvedCount),
         falhas: failedCount,
         taxaSucesso: `${successRate}%`,
         tempoTotalMs: Date.now() - startedAt,
@@ -1174,13 +1295,15 @@ function registerBazaarNewMethod(deps) {
         details,
         // Campos do contrato antigo, preenchidos a partir do fallback quando
         // ele rodou — o renderer exibe "Última Consulta" sem saber a origem.
+        // No modo QUESTS, as passadas de retry da guia Quests alimentam os
+        // MESMOS campos (browser × tentados × recuperados) do método antigo.
         primaryBrowser: browserKey,
-        retryBrowser: fallbackResult?.retryBrowser || '',
-        retryStats: fallbackResult?.retryStats || [],
-        retryBrowsers: fallbackResult?.retryBrowsers || [],
+        retryBrowser: fallbackResult?.retryBrowser || questsRetryBrowsers[0] || '',
+        retryStats: questsRetryStats.length > 0 ? questsRetryStats : (fallbackResult?.retryStats || []),
+        retryBrowsers: questsRetryBrowsers.length > 0 ? questsRetryBrowsers : (fallbackResult?.retryBrowsers || []),
         totalRequested: list.length,
         analyzedCount,
-        recoveredCount: fallbackResult?.recoveredCount || 0,
+        recoveredCount: questSource === 'quests' ? domResolvedCount : (fallbackResult?.recoveredCount || 0),
         failedCount,
         failedCharacterList,
         sessionExpired: fallbackResult?.sessionExpired === true,
