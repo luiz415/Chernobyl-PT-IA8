@@ -17,7 +17,7 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { AlertTriangle, ArrowDown, ArrowDownUp, ArrowUp, Calculator, Check, Coins, Copy, Crown, Download, ExternalLink, Eye, FlagTriangleRight, Globe, ListChecks, Package, Pencil, Plus, RefreshCw, RotateCcw, Search, Sparkles, Square, Star, Trash2, Upload, X } from "lucide-react";
-import BazaarBrowserModal, { BAZAAR_BROWSER_KEY, BAZAAR_BROWSER_ORDER_KEY, BAZAAR_RETRY_BROWSERS_KEY, BAZAAR_RETRY_COUNTS_KEY, BAZAAR_SPEED_MODE_KEY, DEFAULT_BROWSER_ORDER, normalizeRetryCounts } from "./BazaarBrowserModal";
+import BazaarBrowserModal, { BAZAAR_BROWSER_KEY, BAZAAR_BROWSER_ORDER_KEY, BAZAAR_QUEST_SOURCE_KEY, BAZAAR_RETRY_BROWSERS_KEY, BAZAAR_RETRY_COUNTS_KEY, BAZAAR_SPEED_MODE_KEY, DEFAULT_BAZAAR_QUEST_SOURCE, DEFAULT_BROWSER_ORDER, normalizeBazaarQuestSource, normalizeRetryCounts } from "./BazaarBrowserModal";
 // Mesmos componentes de filtro da tabela de QUESTS (FilterTypes é a fonte
 // única — nenhuma implementação paralela) e as MESMAS classes de célula
 // sticky do cabeçalho exportadas pelo BazarPanel (fonte única de estilo).
@@ -28,7 +28,7 @@ import { FilterDateMax, FilterInline, FilterMulti, FilterNumber } from "./Filter
 // as quests já derivadas pela consulta de itens (mesmo payload, mesma função
 // do Electron — zero consultas extras).
 import { STICKY_FILTER_CELL_CLASS, STICKY_HEAD_CELL_CLASS, closeRubinotBrowserFromRenderer, formatQuestStatus, isAuctionVisibleWithEndedGrace, isQuestSuspicious, QuestBossCounter, type BazaarQuestStatusDetail } from "./BazarPanel";
-import type { BazaarRetryCounts, BazaarSpeedMode } from "./BazaarBrowserModal";
+import type { BazaarQuestSource, BazaarRetryCounts, BazaarSpeedMode } from "./BazaarBrowserModal";
 import { loadUIState, loadNotifications } from "../storage";
 import { computeItemRC, formatKkValue as formatKkValueBase } from "../utils/itemSale";
 
@@ -139,6 +139,12 @@ interface ItemsDetailsResult {
     /** Quests REAIS do payload (deriveQuestsFromApiPayload): true = feita. */
     soulwarCompleted?: boolean | null;
     sanguineCompleted?: boolean | null;
+    /**
+     * Origem da identificação: "quests" = lista de quests do payload (modo
+     * novo; sem contador de bosses). Ausente = Bosstiary (comportamento
+     * original).
+     */
+    questSource?: "bosstiary" | "quests";
     /** Contadores de bosses ("X/Y") — mesma função, mesmo payload. */
     soulWarBossCount?: number;
     sanguineBossCount?: number;
@@ -365,6 +371,9 @@ function questDetailFromItemsResult(result: BazaarItemsCharacterResult): BazaarQ
     // próprio helper getQuestBossCount — fonte única.
     ...(typeof result.soulWarBossCount === "number" ? { soulWarBossCount: result.soulWarBossCount } : {}),
     ...(typeof result.sanguineBossCount === "number" ? { sanguineBossCount: result.sanguineBossCount } : {}),
+    // Origem "quests": o QuestBossCounter exibe "—" (contador de bosses não
+    // se aplica à identificação pela guia Quests) — mesmo padrão da guia Quests.
+    ...(result.questSource === "quests" ? { questSource: "quests" as const } : {}),
   };
 }
 
@@ -1109,6 +1118,12 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
     speedMode: BazaarSpeedMode;
     retryCounts: BazaarRetryCounts;
     /**
+     * Identificação das quests (Bosstiary × Quests) escolhida no modal.
+     * Encadeamentos sem modal (Auto-Bazaar) não informam — cai na preferência
+     * persistida (a MESMA chave compartilhada com a consulta de Quests).
+     */
+    questSource?: BazaarQuestSource;
+    /**
      * Filtro "Encerra até" calculado NO INSTANTE do disparo — usado pelo
      * encadeamento do Auto-Bazaar (Quests → Itens), que roda sem interação
      * e não pode depender do valor possivelmente antigo do input.
@@ -1192,7 +1207,14 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
       // na etapa 4 é sempre o da lista do servidor do personagem.
       setStatusText(`Analisando itens de ${eligible.length} personagem(ns) elegível(is)...`);
       const watchKeys = collectAllWatchKeys(watchedByServer);
-      const detailsResponse = await ipcRenderer.invoke("rubinot-bazaar-items-v2", eligible, { watchKeys }) as ItemsDetailsResult;
+      // Identificação das quests respeitada na consulta INTEIRA: a escolha do
+      // modal (ou, sem modal — Auto-Bazaar —, a preferência persistida
+      // compartilhada com a consulta de Quests). Só muda COMO SW/SG são
+      // derivadas do payload; a coleta de itens é idêntica.
+      const questSource = normalizeBazaarQuestSource(
+        options.questSource ?? loadUIState<BazaarQuestSource>(BAZAAR_QUEST_SOURCE_KEY, DEFAULT_BAZAAR_QUEST_SOURCE),
+      );
+      const detailsResponse = await ipcRenderer.invoke("rubinot-bazaar-items-v2", eligible, { watchKeys, questSource }) as ItemsDetailsResult;
 
       if (!detailsResponse?.ok) {
         setError(detailsResponse?.error || "Não foi possível analisar os itens dos personagens.");
@@ -1241,6 +1263,8 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
           // abre com o padrão (usuário confere).
           ...(detail.soulwarCompleted !== undefined ? { soulwarCompleted: detail.soulwarCompleted } : {}),
           ...(detail.sanguineCompleted !== undefined ? { sanguineCompleted: detail.sanguineCompleted } : {}),
+          // Origem da identificação (modo "quests" oculta o contador "X/Y").
+          ...(detail.questSource === "quests" ? { questSource: "quests" as const } : {}),
           // CONTADORES de bosses das quests — mesmos dados da MESMA função
           // (deriveQuestsFromApiPayload) sobre o MESMO payload; alimentam o
           // "X/Y" das colunas SW/SG desta guia (padrão da guia Quests).
@@ -2215,8 +2239,8 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                     exibida pelos MESMOS helpers/componente (formatQuestStatus
                     + QuestBossCounter importados do BazarPanel) — nenhuma
                     consulta extra, nenhuma segunda implementação. */}
-                <th className={`${STICKY_HEAD_CELL_CLASS} h-10 px-1 py-2 text-center align-middle leading-none`} title="Quest Soul War — mesma verificação da guia Quests, derivada do payload desta própria consulta (sem consulta extra). Concl. = já feita (indisponível para o comprador); Disp. = disponível.">SW</th>
-                <th className={`${STICKY_HEAD_CELL_CLASS} h-10 px-1 py-2 text-center align-middle leading-none`} title="Quest Sanguine — mesma verificação da guia Quests, derivada do payload desta própria consulta (sem consulta extra). Concl. = já feita (indisponível para o comprador); Disp. = disponível.">SG</th>
+                <th className={`${STICKY_HEAD_CELL_CLASS} h-10 px-1 py-2 text-center align-middle leading-none`} title="Quest Soul War — mesma verificação da guia Quests, derivada do payload desta própria consulta (sem consulta extra). Concl. = já feita (indisponível para o comprador); Disp. = disponível; ? = sem dado conclusivo (o app nunca presume).">SW</th>
+                <th className={`${STICKY_HEAD_CELL_CLASS} h-10 px-1 py-2 text-center align-middle leading-none`} title="Quest Sanguine — mesma verificação da guia Quests, derivada do payload desta própria consulta (sem consulta extra). Concl. = já feita (indisponível para o comprador); Disp. = disponível; ? = sem dado conclusivo (o app nunca presume).">SG</th>
                 <th className={`${STICKY_HEAD_CELL_CLASS} h-10 px-1 py-2 text-center align-middle leading-none`}>Detalhes</th>
                 <th className={`${STICKY_HEAD_CELL_CLASS} h-10 px-1 py-2 text-center align-middle leading-none`}>Tenho Interesse</th>
                 <th className={`${STICKY_HEAD_CELL_CLASS} h-10 px-1 py-2 text-center align-middle leading-none`}>Link</th>
@@ -3237,9 +3261,11 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
         open={isBrowserModalOpen}
         forcedMethod="novo"
         onCancel={() => setIsBrowserModalOpen(false)}
-        onConfirm={(browserKey, browserOrder, cleanProfile, retryBrowsers, speedMode, retryCounts) => {
+        onConfirm={(browserKey, browserOrder, cleanProfile, retryBrowsers, speedMode, retryCounts, _method, questSource) => {
           setIsBrowserModalOpen(false);
-          void executeItemsQuery({ browserKey, browserOrder, cleanProfile, retryBrowsers, speedMode, retryCounts });
+          // `questSource`: identificação das quests (Bosstiary × Quests)
+          // escolhida no modal — respeitada na consulta inteira.
+          void executeItemsQuery({ browserKey, browserOrder, cleanProfile, retryBrowsers, speedMode, retryCounts, questSource });
         }}
       />
     </div>

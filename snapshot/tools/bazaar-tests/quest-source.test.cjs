@@ -25,6 +25,7 @@ const {
   deriveQuestsFromApiPayload,
   extractQuestRowsInPage,
   decideQuestsFromDomRows,
+  mergeQuestOutcomes,
 } = require('../../electron-bazaar-new.cjs');
 
 let pass = 0;
@@ -263,6 +264,49 @@ check('Bosstiary preservada: payload sem estrutura → inconclusivo (fallback)',
   const out = deriveQuestsFromApiPayload({ foo: 'bar' });
   assert.equal(out.resolved, false);
   assert.equal(out.reason, 'SEM_ESTRUTURA_DE_BOSSTIARY');
+});
+
+// ── Mesclagem POR QUEST (requisito "?": parcial nunca é descartado) ────────
+check('merge: SW conclusiva no JSON + SG conclusiva no DOM → ambas preservadas', () => {
+  const out = mergeQuestOutcomes(
+    { soulwarCompleted: true, sanguineCompleted: null },
+    { soulwarCompleted: null, sanguineCompleted: false },
+  );
+  assert.equal(out.soulwarCompleted, true);
+  assert.equal(out.sanguineCompleted, false);
+});
+
+check('merge: uma conclusiva (JSON) + outra sem dado em lugar nenhum → preserva a conclusiva e "?" (null) só na outra', () => {
+  const out = mergeQuestOutcomes(
+    { soulwarCompleted: false, sanguineCompleted: null },
+    { soulwarCompleted: null, sanguineCompleted: null },
+  );
+  assert.equal(out.soulwarCompleted, false);
+  assert.strictEqual(out.sanguineCompleted, null);
+});
+
+check('merge: DOM conclusivo tem prioridade sobre o JSON na MESMA quest', () => {
+  const out = mergeQuestOutcomes(
+    { soulwarCompleted: false, sanguineCompleted: true },
+    { soulwarCompleted: true, sanguineCompleted: null },
+  );
+  assert.equal(out.soulwarCompleted, true); // guia Quests (indicador oficial) vence
+  assert.equal(out.sanguineCompleted, true); // JSON preservado onde o DOM não concluiu
+});
+
+check('merge: nada conclusivo → null/null (nunca um estado presumido)', () => {
+  const out = mergeQuestOutcomes(
+    { soulwarCompleted: null, sanguineCompleted: null },
+    { soulwarCompleted: null, sanguineCompleted: null },
+  );
+  assert.strictEqual(out.soulwarCompleted, null);
+  assert.strictEqual(out.sanguineCompleted, null);
+});
+
+check('merge: entradas ausentes (undefined) são tratadas como sem dado', () => {
+  const out = mergeQuestOutcomes(undefined, { soulwarCompleted: true, sanguineCompleted: undefined });
+  assert.equal(out.soulwarCompleted, true);
+  assert.strictEqual(out.sanguineCompleted, null);
 });
 
 console.log(`\n${pass} testes PASS${process.exitCode ? ' (com falhas acima)' : ''}`);

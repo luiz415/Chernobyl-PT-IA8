@@ -549,6 +549,28 @@ function decideQuestsFromDomRows(rows, quests = { soulwar: true, sanguine: true 
   };
 }
 
+/**
+ * Mescla, POR QUEST, o resultado parcial do JSON com o da guia Quests (DOM).
+ * PURA (exportada para testes). Regra do requisito "nunca presumir":
+ *   • para cada quest vale o primeiro dado CONCLUSIVO (true/false) — o da
+ *     guia Quests (indicador oficial renderizado) tem prioridade; na ausência
+ *     dele, preserva-se o que o JSON já tinha concluído;
+ *   • sem nenhum dado conclusivo, fica `null` (o renderer exibe "?");
+ *   • SW e SG são INDEPENDENTES: uma quest conclusiva NUNCA é descartada
+ *     porque a outra ficou sem dado.
+ */
+function mergeQuestOutcomes(jsonOutcome, domOutcome) {
+  const pick = (domValue, jsonValue) => {
+    if (domValue === true || domValue === false) return domValue;
+    if (jsonValue === true || jsonValue === false) return jsonValue;
+    return null;
+  };
+  return {
+    soulwarCompleted: pick(domOutcome?.soulwarCompleted, jsonOutcome?.soulwarCompleted),
+    sanguineCompleted: pick(domOutcome?.sanguineCompleted, jsonOutcome?.sanguineCompleted),
+  };
+}
+
 // ============================================================================
 // REGISTRO DO MÉTODO NOVO
 // ----------------------------------------------------------------------------
@@ -662,6 +684,23 @@ function registerBazaarNewMethod(deps) {
     CONFLITO: 'A guia Quests apresentou estados conflitantes para a mesma quest.',
     QUESTS_INCONCLUSIVAS_NO_JSON: 'O JSON não trouxe a situação das quests.',
   };
+
+  /**
+   * Motivos ESTRUTURAIS da leitura da guia Quests: a consulta em si falhou
+   * (página não abriu, aba ausente, lista não montou). Só eles podem marcar o
+   * personagem como FALHA (`error`) — e apenas quando NENHUMA quest ficou
+   * conclusiva nem pelo JSON. Já QUEST_NAO_LISTADA/CONFLITO significam que a
+   * leitura FUNCIONOU e o dado é que não existe/não é confiável: o resultado
+   * honesto é "?" (null), sem erro e sem presumir disponível/indisponível.
+   */
+  const QUESTS_DOM_STRUCTURAL_REASONS = new Set([
+    'URL_AUSENTE',
+    'NAVEGACAO_FALHOU',
+    'RUBINOT_ERRO_APP',
+    'ABA_QUESTS_NAO_ENCONTRADA',
+    'ABA_QUESTS_NAO_CLICAVEL',
+    'LISTA_DE_QUESTS_NAO_MONTOU',
+  ]);
 
   async function readQuestsTabViaDom(page, auction, quests) {
     const url = normalizeAuctionUrl(auction);
@@ -852,6 +891,11 @@ function registerBazaarNewMethod(deps) {
 
       // ── Passada JSON ──────────────────────────────────────────────────────
       const unresolved = [];
+      // Modo QUESTS: resultado PARCIAL do JSON por personagem (ex.: Soul War
+      // conclusiva e Sanguine sem flag). É preservado e mesclado POR QUEST com
+      // a leitura da guia Quests — um dado conclusivo NUNCA é descartado
+      // porque a outra quest ficou inconclusiva (requisito do "?").
+      const jsonPartialByKey = {};
       let resolvedCount = 0;
       let stoppedManually = false;
       // Retrato do primeiro payload recebido: é o que revela o schema real.
@@ -933,6 +977,14 @@ function registerBazaarNewMethod(deps) {
           if (outcome.preview && !failureSamples[outcome.reason]) {
             failureSamples[outcome.reason] = outcome.preview;
           }
+          // Modo QUESTS: guarda o que o JSON CONCLUIU (pode ser só uma das
+          // quests) para a mesclagem por quest após a passada DOM.
+          if (questSource === 'quests') {
+            jsonPartialByKey[key] = {
+              soulwarCompleted: outcome.soulwarCompleted === true || outcome.soulwarCompleted === false ? outcome.soulwarCompleted : null,
+              sanguineCompleted: outcome.sanguineCompleted === true || outcome.sanguineCompleted === false ? outcome.sanguineCompleted : null,
+            };
+          }
           unresolved.push(auction);
         }
 
@@ -963,12 +1015,17 @@ function registerBazaarNewMethod(deps) {
       //     incluindo o retry multi-navegador.
       //
       //   • "quests" (NOVO): quem o JSON não resolveu é lido DIRETO na guia
-      //     Quests da página oficial (mesma sessão/página). Sem conclusão
-      //     confiável, o personagem vira FALHA reportada — NUNCA cai no
-      //     critério Bosstiary, que o usuário explicitamente não escolheu, e
-      //     nunca recebe resultado inventado.
+      //     Quests da página oficial (mesma sessão/página). O resultado final
+      //     é mesclado POR QUEST com o parcial do JSON (um dado conclusivo
+      //     nunca é descartado). Quest sem dado confiável fica `null` → "?"
+      //     no renderer, SEM presumir disponível/indisponível. `error` só
+      //     quando a leitura falhou ESTRUTURALMENTE e nenhuma quest ficou
+      //     conclusiva — NUNCA cai no critério Bosstiary, que o usuário
+      //     explicitamente não escolheu, e nunca recebe resultado inventado.
       let fallbackResult = null;
       let domResolvedCount = 0;
+      let domInconclusiveCount = 0;
+      let partialPreservedCount = 0;
       const domFailureReasons = {};
       if (unresolved.length > 0 && !stoppedManually) {
         if (questSource === 'quests') {
@@ -989,21 +1046,59 @@ function registerBazaarNewMethod(deps) {
             if (!key) continue;
 
             const outcome = await readQuestsTabViaDom(page, auction, quests);
+            // Mesclagem POR QUEST: guia Quests (quando conclusiva) > parcial
+            // do JSON > `null` ("?"). SW e SG independentes — requisito.
+            const mergedQuests = mergeQuestOutcomes(jsonPartialByKey[key], outcome);
+            const hasAnyConclusive = mergedQuests.soulwarCompleted !== null || mergedQuests.sanguineCompleted !== null;
+            const structuralFailure = !outcome.resolved && QUESTS_DOM_STRUCTURAL_REASONS.has(outcome.reason);
+            const jsonPartial = jsonPartialByKey[key];
+            if (jsonPartial && (jsonPartial.soulwarCompleted !== null || jsonPartial.sanguineCompleted !== null)) {
+              partialPreservedCount += 1;
+            }
+
             if (outcome.resolved) {
               domResolvedCount += 1;
               details[key] = {
                 id: key,
                 method: 'quests_tab_dom_v1',
                 questSource: 'quests',
-                soulwarCompleted: outcome.soulwarCompleted,
-                sanguineCompleted: outcome.sanguineCompleted,
+                soulwarCompleted: mergedQuests.soulwarCompleted,
+                sanguineCompleted: mergedQuests.sanguineCompleted,
                 fetchedAt: Date.now(),
               };
+            } else if (!structuralFailure || hasAnyConclusive) {
+              // INCONCLUSIVO HONESTO (sem `error`): ou a guia Quests FOI lida
+              // e a quest simplesmente não está listada/é conflitante, ou a
+              // leitura estrutural falhou mas o JSON já tinha concluído ao
+              // menos uma quest (que é PRESERVADA). O que não tem dado fica
+              // `null` → "?" no renderer; nada é presumido e o personagem
+              // NÃO entra na lista de falhas — o resultado existe e é honesto.
+              domInconclusiveCount += 1;
+              domFailureReasons[outcome.reason] = (domFailureReasons[outcome.reason] || 0) + 1;
+              details[key] = {
+                id: key,
+                method: 'quests_tab_dom_v1',
+                questSource: 'quests',
+                soulwarCompleted: mergedQuests.soulwarCompleted,
+                sanguineCompleted: mergedQuests.sanguineCompleted,
+                fetchedAt: Date.now(),
+                // Diagnóstico (NÃO é falha): por que restou "?" neste
+                // personagem. O renderer ignora o campo.
+                inconclusiveReason: outcome.reason,
+              };
+              if (outcome.evidence?.rowsSample && !failureSamples[`DOM_${outcome.reason}`]) {
+                failureSamples[`DOM_${outcome.reason}`] = outcome.evidence.rowsSample
+                  .slice(0, 10)
+                  .map(row => `${row.checked ? '[x]' : '[ ]'} ${row.text}`)
+                  .join(' | ')
+                  .slice(0, 400);
+              }
             } else {
               domFailureReasons[outcome.reason] = (domFailureReasons[outcome.reason] || 0) + 1;
-              // MESMO caminho de falha do método antigo (`error` +
-              // `failureReason`): o personagem entra em failedCharacterList
-              // e no contador de falhas — nada de resultado silencioso.
+              // FALHA ESTRUTURAL sem NENHUM dado conclusivo: MESMO caminho de
+              // falha do método antigo (`error` + `failureReason`) — o
+              // personagem entra em failedCharacterList e no contador de
+              // falhas. As quests ficam `null` ("?"), nunca presumidas.
               details[key] = {
                 id: key,
                 method: 'quests_tab_dom_v1',
@@ -1014,15 +1109,6 @@ function registerBazaarNewMethod(deps) {
                 failureReason: outcome.reason,
                 error: QUESTS_DOM_REASON_TEXT[outcome.reason] || 'Não foi possível ler a guia Quests deste personagem.',
               };
-              // Amostra das linhas lidas, uma vez por motivo — diagnóstico
-              // de seletor/estrutura sem poluir o log.
-              if (outcome.evidence?.rowsSample && !failureSamples[`DOM_${outcome.reason}`]) {
-                failureSamples[`DOM_${outcome.reason}`] = outcome.evidence.rowsSample
-                  .slice(0, 10)
-                  .map(row => `${row.checked ? '[x]' : '[ ]'} ${row.text}`)
-                  .join(' | ')
-                  .slice(0, 400);
-              }
             }
 
             sendProgress(event.sender, buildProgress('details', 'Lendo a guia Quests dos personagens restantes...', index + 1, unresolved.length, {
@@ -1036,7 +1122,9 @@ function registerBazaarNewMethod(deps) {
           diag('details-v2', 'Leitura da guia Quests concluída.', {
             total: unresolved.length,
             resolvidosPelaGuia: domResolvedCount,
-            falhas: Math.max(0, unresolved.length - domResolvedCount),
+            inconclusivosHonestos: domInconclusiveCount,
+            parciaisDoJsonPreservados: partialPreservedCount,
+            falhas: Math.max(0, unresolved.length - domResolvedCount - domInconclusiveCount),
             motivos: domFailureReasons,
           });
         } else {
@@ -1109,6 +1197,8 @@ function registerBazaarNewMethod(deps) {
         apiFallbackCount: unresolved.length,
         apiFailureReasons: failureReasons,
         domResolvedCount,
+        domInconclusiveCount,
+        partialPreservedCount,
         domFailureReasons,
       };
     });
@@ -1139,6 +1229,7 @@ module.exports = {
   deriveQuestsFromQuestEntries,
   extractQuestRowsInPage,
   decideQuestsFromDomRows,
+  mergeQuestOutcomes,
   NEW_QUEST_NAME_SOULWAR,
   NEW_QUEST_NAME_SANGUINE,
 };

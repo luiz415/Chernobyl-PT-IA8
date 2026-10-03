@@ -26,7 +26,16 @@
 // aqui ela roda sobre o payload JÁ BAIXADO de cada leilão (zero fetch extra)
 // para o fluxo "Comprado" da guia Itens registrar as quests REAIS do
 // personagem — nunca assumidas como disponíveis.
-const { walkJson, deriveQuestsFromApiPayload } = require('./electron-bazaar-new.cjs');
+const {
+  walkJson,
+  deriveQuestsFromApiPayload,
+  // Identificação pela guia Quests (modo "quests"): derivação JSON-only — a
+  // consulta de ITENS NUNCA renderiza página individual (requisito
+  // permanente), então aqui NÃO existe passada DOM; quest sem dado conclusivo
+  // no payload fica `null` e o renderer exibe "?" (nunca presumida).
+  deriveQuestsFromQuestEntries,
+  resolveQuestSource,
+} = require('./electron-bazaar-new.cjs');
 
 /** Mesma normalização de `normalizeWatchedItemName` (src/utils/bazaarWatchedItems.ts). */
 function normalizeItemName(value) {
@@ -408,6 +417,10 @@ function registerBazaarItemsMethod(deps) {
     const progressMessage = progressScope === 'quests'
       ? 'Analisando itens dos personagens aprovados...'
       : 'Itens: consultando personagens via API...';
+    // Identificação das quests escolhida no modal ("bosstiary" padrão ou
+    // "quests"). Decide SOMENTE como SW/SG são derivadas do MESMO payload já
+    // baixado — a coleta de itens (processo principal) não muda em nada.
+    const questSource = resolveQuestSource(options);
 
     return runQueued('bazaar-items-v2', async () => {
       const startedAt = Date.now();
@@ -420,7 +433,7 @@ function registerBazaarItemsMethod(deps) {
       }
 
       diag('items-v2', 'ITENS: iniciando análise por API JSON (sem renderizar página individual).', {
-        total: list.length, itensMonitorados: watchSet.size, navegador: browserKey, endpoint: `${apiBase}/{ID}`,
+        total: list.length, itensMonitorados: watchSet.size, identificacaoQuests: questSource, navegador: browserKey, endpoint: `${apiBase}/{ID}`,
       });
 
       // ── Sessão — mesma validação/reuso do método novo das quests ──────────
@@ -474,10 +487,16 @@ function registerBazaarItemsMethod(deps) {
             // ADITIVO: ouro e skills lidos do MESMO payload já baixado —
             // nenhuma chamada extra, nenhum efeito no fluxo existente.
             const extra = collectGoldAndSkills(outcome.data);
-            // ADITIVO: quests derivadas do MESMO payload pela MESMA função da
-            // consulta de quests (bosstiary) — nenhuma chamada extra. true =
-            // quest JÁ FEITA; false = disponível; null = inconclusivo.
-            const quests = deriveQuestsFromApiPayload(outcome.data);
+            // ADITIVO: quests derivadas do MESMO payload pelas MESMAS funções
+            // da consulta de quests — nenhuma chamada extra. A identificação
+            // segue a escolha do modal: "bosstiary" (deriveQuestsFromApiPayload,
+            // comportamento original) ou "quests" (deriveQuestsFromQuestEntries,
+            // lista de quests do payload — JSON-only, SEM passada DOM: itens
+            // nunca renderiza página individual). true = quest JÁ FEITA;
+            // false = disponível; null = inconclusivo → "?" (nunca presumido).
+            const quests = questSource === 'quests'
+              ? deriveQuestsFromQuestEntries(outcome.data)
+              : deriveQuestsFromApiPayload(outcome.data);
             analyzedCount += 1;
             if (matches.length > 0) matchedCharacters += 1;
             details[key] = {
@@ -489,11 +508,15 @@ function registerBazaarItemsMethod(deps) {
               extraPaths: extra.paths,
               soulwarCompleted: quests.soulwarCompleted,
               sanguineCompleted: quests.sanguineCompleted,
+              // Origem da identificação: no modo "quests" o renderer oculta o
+              // contador de bosses ("X/Y"), que não se aplica à guia Quests.
+              ...(questSource === 'quests' ? { questSource: 'quests' } : {}),
               // ADITIVO: contadores de bosses das quests — a MESMA função
               // (deriveQuestsFromApiPayload) já os calcula do MESMO payload;
               // aqui apenas deixamos de descartá-los, para a guia Itens
               // exibir o padrão "X/Y" idêntico ao da guia Quests. Nenhuma
-              // chamada extra ao site. Inconclusivo => undefined (omitido).
+              // chamada extra ao site. Inconclusivo => undefined (omitido);
+              // no modo "quests" o contador NÃO existe (derivação sem bosses).
               soulWarBossCount: quests.soulWarBossCount,
               sanguineBossCount: quests.sanguineBossCount,
               fetchedAt: Date.now(),

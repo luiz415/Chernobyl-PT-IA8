@@ -293,17 +293,97 @@ export default function BazaarBrowserModal({ open, onConfirm, onCancel, forcedMe
     saveUIState(BAZAAR_RETRY_BROWSERS_KEY, retryBrowsers);
     saveUIState(BAZAAR_RETRY_COUNTS_KEY, retryCounts);
     saveUIState(BAZAAR_SPEED_MODE_KEY, speedMode);
-    // Método travado (consulta de itens): NÃO grava a preferência — ela
-    // pertence à consulta de quests e não pode ser alterada por tabela.
+    // Método travado (consulta de itens/histórico): NÃO grava a preferência
+    // de MÉTODO — ela pertence à consulta de quests e não pode ser alterada
+    // por tabela.
     if (!forcedMethod) {
       saveUIState(BAZAAR_METHOD_KEY, method);
-      // A identificação das quests só é alterada quando o seletor está
-      // visível (método livre). Com `forcedMethod` (itens/histórico), a
-      // preferência persistida das quests NÃO é tocada — mesma regra do
-      // método de consulta.
-      saveUIState(BAZAAR_QUEST_SOURCE_KEY, questSource);
     }
+    // A identificação das quests (Bosstiary × Quests) agora é visível em
+    // TODOS os fluxos que usam a API JSON (Quests com método novo, Itens e
+    // Histórico) e é uma preferência ÚNICA compartilhada — gravar sempre
+    // mantém as consultas consistentes entre si.
+    saveUIState(BAZAAR_QUEST_SOURCE_KEY, questSource);
     onConfirm(selected, order, cleanProfile, retryBrowsers, speedMode, retryCounts, forcedMethod || method, questSource);
+  }
+
+  /**
+   * Sub-opção "Identificação das Quests" (Bosstiary × Quests) — COMPARTILHADA
+   * entre o método livre (consulta de Quests com "API JSON") e os fluxos com
+   * método travado (Itens e Histórico, sempre API JSON). Mesmo seletor, mesma
+   * preferência persistida (BAZAAR_QUEST_SOURCE_KEY); apenas os textos
+   * explicativos mudam, porque o comportamento de complemento difere:
+   *   • "livre" (Quests): quem o JSON não resolver tem complemento (guia
+   *     Quests na página / método Paginação, conforme a identificação);
+   *   • "forcado" (Itens/Histórico): consulta EXCLUSIVAMENTE via JSON — sem
+   *     dado conclusivo a quest fica como "?" (nunca presumida). O Histórico
+   *     tem PROIBIÇÃO explícita de renderizar páginas de personagens.
+   */
+  function renderQuestSourceSelector(context: "livre" | "forcado") {
+    const options: { key: BazaarQuestSource; title: string; subtitle: string; note: string }[] = [
+      {
+        key: "bosstiary",
+        title: "Bosstiary",
+        subtitle: "Atual",
+        note: context === "livre"
+          ? "Deriva Soul War/Sanguine dos bosses presentes na Bosstiary (6 Goshnar's ou Megalomania; 5 bosses ou Bakragore). Quem o JSON não resolver cai no método Paginação automaticamente."
+          : "Deriva Soul War/Sanguine dos bosses presentes na Bosstiary do JSON do leilão. Sem dado conclusivo, a quest fica como \"?\" — nunca presumida.",
+      },
+      {
+        key: "quests",
+        title: "Quests",
+        subtitle: "Novo",
+        note: context === "livre"
+          ? "Lê a guia Quests da página oficial do personagem: círculo marcado = concluída (indisponível); desmarcado = disponível. Soul War → SW; Rotten Blood → SG."
+          : "Identifica Soul War/Rotten Blood pela lista de quests do próprio JSON do leilão (sem abrir página). Sem dado conclusivo, a quest fica como \"?\" — nunca presumida.",
+      },
+    ];
+    return (
+      <div className="rounded-md border border-[var(--th-line)]/40 bg-black/20 p-2 space-y-1.5">
+        <span className="text-[10px] font-bold uppercase tracking-wider text-slate-300">
+          Identificação das Quests
+        </span>
+        <div className="grid grid-cols-2 gap-1.5">
+          {options.map(option => {
+            const isSelected = questSource === option.key;
+            return (
+              <button
+                key={option.key}
+                type="button"
+                onClick={() => setQuestSource(option.key)}
+                className={`text-left rounded-lg border px-2.5 py-2 transition-colors cursor-pointer ${
+                  isSelected
+                    ? "border-[var(--th-accent)]/70 bg-[var(--th-accent)]/10"
+                    : "border-[var(--th-line)]/50 bg-black/20 hover:border-[var(--th-line)]"
+                }`}
+                title={option.note}
+              >
+                <div className="flex items-center gap-1.5">
+                  <span
+                    className={`w-3 h-3 rounded-full border-2 flex-shrink-0 ${
+                      isSelected ? "border-[var(--th-accent)] bg-[var(--th-accent)]" : "border-slate-500"
+                    }`}
+                  />
+                  <span className={`text-[11px] font-bold ${isSelected ? "text-[var(--th-accent)]" : "text-slate-300"}`}>
+                    {option.title}
+                  </span>
+                  <span className="text-[9px] uppercase tracking-wider text-slate-500">{option.subtitle}</span>
+                </div>
+              </button>
+            );
+          })}
+        </div>
+        <p className="text-[10px] leading-relaxed text-slate-400">
+          {context === "livre"
+            ? (questSource === "quests"
+              ? "Novo: identifica a situação pela lista da guia Quests do personagem (Soul War e Rotten Blood, cada uma independente). Quem o JSON não trouxer é lido diretamente na guia Quests da página. Quest sem dado confiável fica como \"?\" — nunca um resultado presumido."
+              : "Atual: deriva a situação das quests pela Bosstiary do payload JSON, exatamente como hoje. Quem o JSON não resolver é analisado pelo método Paginação automaticamente.")
+            : (questSource === "quests"
+              ? "Novo: identifica Soul War e Rotten Blood (cada uma independente) pela lista de quests do PRÓPRIO JSON de cada leilão. Esta consulta não abre a página dos personagens: sem dado conclusivo no JSON, a quest fica como \"?\" — nunca um resultado presumido."
+              : "Atual: deriva a situação das quests pela Bosstiary do JSON de cada leilão, exatamente como hoje. Sem dado conclusivo, a quest fica como \"?\".")}
+        </p>
+      </div>
+    );
   }
 
   /** Soma `delta` ao contador de um navegador, respeitando 0..MAX. */
@@ -449,69 +529,21 @@ export default function BazaarBrowserModal({ open, onConfirm, onCancel, forcedMe
             {/* ── IDENTIFICAÇÃO DAS QUESTS — exclusiva do método API JSON ──
                 Decide COMO a situação de Soul War / Sanguine é identificada;
                 nenhuma outra etapa da consulta muda. */}
-            {method === "novo" && (
-              <div className="rounded-md border border-[var(--th-line)]/40 bg-black/20 p-2 space-y-1.5">
-                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-300">
-                  Identificação das Quests
-                </span>
-                <div className="grid grid-cols-2 gap-1.5">
-                  {([
-                    {
-                      key: "bosstiary" as BazaarQuestSource,
-                      title: "Bosstiary",
-                      subtitle: "Atual",
-                      note: "Deriva Soul War/Sanguine dos bosses presentes na Bosstiary (6 Goshnar's ou Megalomania; 5 bosses ou Bakragore). Quem o JSON não resolver cai no método Paginação automaticamente.",
-                    },
-                    {
-                      key: "quests" as BazaarQuestSource,
-                      title: "Quests",
-                      subtitle: "Novo",
-                      note: "Lê a guia Quests da página oficial do personagem: círculo marcado = concluída (indisponível); desmarcado = disponível. Soul War → SW; Rotten Blood → SG.",
-                    },
-                  ]).map(option => {
-                    const isSelected = questSource === option.key;
-                    return (
-                      <button
-                        key={option.key}
-                        type="button"
-                        onClick={() => setQuestSource(option.key)}
-                        className={`text-left rounded-lg border px-2.5 py-2 transition-colors cursor-pointer ${
-                          isSelected
-                            ? "border-[var(--th-accent)]/70 bg-[var(--th-accent)]/10"
-                            : "border-[var(--th-line)]/50 bg-black/20 hover:border-[var(--th-line)]"
-                        }`}
-                        title={option.note}
-                      >
-                        <div className="flex items-center gap-1.5">
-                          <span
-                            className={`w-3 h-3 rounded-full border-2 flex-shrink-0 ${
-                              isSelected ? "border-[var(--th-accent)] bg-[var(--th-accent)]" : "border-slate-500"
-                            }`}
-                          />
-                          <span className={`text-[11px] font-bold ${isSelected ? "text-[var(--th-accent)]" : "text-slate-300"}`}>
-                            {option.title}
-                          </span>
-                          <span className="text-[9px] uppercase tracking-wider text-slate-500">{option.subtitle}</span>
-                        </div>
-                      </button>
-                    );
-                  })}
-                </div>
-                <p className="text-[10px] leading-relaxed text-slate-400">
-                  {questSource === "quests"
-                    ? "Novo: identifica a situação pela lista da guia Quests do personagem (Soul War e Rotten Blood, cada uma independente). Quem o JSON não trouxer é lido diretamente na guia Quests da página. Sem conclusão confiável, o personagem é reportado como falha — nunca um resultado inventado."
-                    : "Atual: deriva a situação das quests pela Bosstiary do payload JSON, exatamente como hoje. Quem o JSON não resolver é analisado pelo método Paginação automaticamente."}
-                </p>
-              </div>
-            )}
+            {method === "novo" && renderQuestSourceSelector("livre")}
           </div>
           )}
 
-          {/* Aviso do método travado — consulta de itens usa sempre a API JSON. */}
+          {/* Aviso do método travado — Itens e Histórico usam sempre a API
+              JSON. A sub-opção de identificação das quests TAMBÉM aparece
+              aqui: esses fluxos derivam SW/SG do mesmo payload e respeitam a
+              escolha Bosstiary × Quests (preferência única compartilhada). */}
           {forcedMethod === "novo" && (
-            <div className="rounded-lg border border-fuchsia-500/30 bg-fuchsia-500/10 px-2.5 py-2 text-[10px] leading-relaxed text-fuchsia-200">
-              A consulta de <strong className="font-bold">itens</strong> usa sempre o método <strong className="font-bold">API JSON</strong>: os personagens são analisados por JSON, sem abrir a página de cada um. Não há método alternativo para itens.
-            </div>
+            <>
+              <div className="rounded-lg border border-fuchsia-500/30 bg-fuchsia-500/10 px-2.5 py-2 text-[10px] leading-relaxed text-fuchsia-200">
+                Esta consulta usa sempre o método <strong className="font-bold">API JSON</strong>: os personagens são analisados por JSON, sem abrir a página de cada um. Não há método alternativo aqui.
+              </div>
+              {renderQuestSourceSelector("forcado")}
+            </>
           )}
 
           <p className="text-[11px] leading-relaxed text-slate-400">

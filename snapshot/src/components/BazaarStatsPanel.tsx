@@ -26,7 +26,8 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { AlertTriangle, BarChart3, Coins, Database, Eraser, HelpCircle, RefreshCw, SlidersHorizontal, Square } from "lucide-react";
 import { FilterMulti } from "./FilterTypes";
-import BazaarBrowserModal from "./BazaarBrowserModal";
+import BazaarBrowserModal, { DEFAULT_BAZAAR_QUEST_SOURCE, normalizeBazaarQuestSource } from "./BazaarBrowserModal";
+import type { BazaarQuestSource } from "./BazaarBrowserModal";
 import { MIN_DISPLAY_SKILL, SKILL_DISPLAY, skillDefsForVocation } from "./BazaarItemsPanel";
 import {
   buildCharacterMatches,
@@ -371,7 +372,7 @@ export default function BazaarStatsPanel({ isBossUser, isElectron, isOtherQueryR
   }
 
   /** 2º passo (onConfirm do modal): executa a consulta de fato. */
-  async function executeHistoryQuery(options: { browserKey: string; cleanProfile: boolean }) {
+  async function executeHistoryQuery(options: { browserKey: string; cleanProfile: boolean; questSource?: BazaarQuestSource }) {
     if (!isBossUser || !isElectron || isRunning || isSaving || isOtherQueryRunning) return;
     const startedAt = Date.now();
     setIsRunning(true);
@@ -397,6 +398,11 @@ export default function BazaarStatsPanel({ isBossUser, isElectron, isOtherQueryR
         // sem duplicar nada; a contagem vem do mapa por id).
         knownIds: fullReload ? [] : Object.keys(prevState?.recent || {}),
         fullReload,
+        // Identificação das quests (Bosstiary × Quests) escolhida no modal —
+        // decide só COMO SW/SG são derivadas do JSON de cada leilão. A coleta
+        // continua EXCLUSIVAMENTE via JSON (nenhuma página de personagem é
+        // renderizada); quest inconclusiva fica "sem dado" nas métricas.
+        questSource: normalizeBazaarQuestSource(options.questSource ?? DEFAULT_BAZAAR_QUEST_SOURCE),
         browser: options.browserKey,
         cleanProfile: options.cleanProfile,
       }) as BazaarHistoryQueryResponse;
@@ -1033,9 +1039,11 @@ export default function BazaarStatsPanel({ isBossUser, isElectron, isOtherQueryR
         open={isBrowserModalOpen}
         forcedMethod="novo"
         onCancel={() => setIsBrowserModalOpen(false)}
-        onConfirm={(browserKey, _browserOrder, cleanProfile) => {
+        onConfirm={(browserKey, _browserOrder, cleanProfile, _retryBrowsers, _speedMode, _retryCounts, _method, questSource) => {
           setIsBrowserModalOpen(false);
-          void executeHistoryQuery({ browserKey, cleanProfile });
+          // `questSource`: identificação das quests (Bosstiary × Quests)
+          // escolhida no modal — respeitada na consulta inteira do histórico.
+          void executeHistoryQuery({ browserKey, cleanProfile, questSource });
         }}
       />
     </div>

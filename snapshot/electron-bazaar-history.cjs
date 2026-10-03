@@ -50,7 +50,17 @@
 //   • walkJson / deriveQuestsFromApiPayload (método novo das quests);
 //   • collectItemMatches / collectGoldAndSkills / buildAuctionApiUrl /
 //     normalizeItemName (consulta de itens — regras de skills idênticas).
-const { walkJson, deriveQuestsFromApiPayload } = require('./electron-bazaar-new.cjs');
+const {
+  walkJson,
+  deriveQuestsFromApiPayload,
+  // Identificação pela guia Quests (modo "quests"): derivação JSON-only.
+  // REQUISITO EXPLÍCITO do Histórico: coleta EXCLUSIVAMENTE via JSON — é
+  // PROIBIDO renderizar páginas individuais de personagens. Por isso aqui
+  // NÃO existe passada DOM em nenhum modo; quest sem dado conclusivo no
+  // payload fica `null` ("sem dado" nas métricas/filtros, nunca presumida).
+  deriveQuestsFromQuestEntries,
+  resolveQuestSource,
+} = require('./electron-bazaar-new.cjs');
 const {
   collectItemMatches,
   collectGoldAndSkills,
@@ -647,6 +657,11 @@ function registerBazaarHistoryMethod(deps) {
       (Array.isArray(options?.knownIds) ? options.knownIds : []).map(id => String(id || '')).filter(Boolean),
     );
     const fullReload = options?.fullReload === true;
+    // Identificação das quests escolhida no modal ("bosstiary" padrão ou
+    // "quests"). Decide SOMENTE como SW/SG são derivadas do payload JSON de
+    // cada leilão — a coleta do histórico (processo principal) não muda e
+    // continua EXCLUSIVAMENTE via JSON, sem renderizar página de personagem.
+    const questSource = resolveQuestSource(options);
 
     return runQueued('bazaar-history-v1', async () => {
       const startedAt = Date.now();
@@ -675,6 +690,7 @@ function registerBazaarHistoryMethod(deps) {
         floorTs,
         idsConhecidos: knownIds.size,
         itensMonitorados: watchSet.size,
+        identificacaoQuests: questSource,
         navegador: browserKey,
       });
 
@@ -828,7 +844,15 @@ function registerBazaarHistoryMethod(deps) {
             analyzedCount += 1;
             const matches = watchSet.size > 0 ? collectItemMatches(outcome.data, watchSet) : [];
             const extra = collectGoldAndSkills(outcome.data);
-            const quests = deriveQuestsFromApiPayload(outcome.data);
+            // Identificação conforme a escolha do modal — SEMPRE do MESMO
+            // payload JSON já baixado (zero chamadas extras, zero DOM):
+            //   • "bosstiary": comportamento original (bosses do payload);
+            //   • "quests": lista de quests com flag claro de conclusão.
+            // Inconclusivo = null → tupla SEM o campo (w/g ausentes) →
+            // "sem dado" nas métricas e filtros, nunca um estado presumido.
+            const quests = questSource === 'quests'
+              ? deriveQuestsFromQuestEntries(outcome.data)
+              : deriveQuestsFromApiPayload(outcome.data);
             const extras = collectHistoryExtras(outcome.data);
             entries.push({
               ...target,

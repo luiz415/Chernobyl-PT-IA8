@@ -98,6 +98,12 @@ export interface BazaarItemsCharacterResult {
   soulwarCompleted?: boolean | null;
   sanguineCompleted?: boolean | null;
   /**
+   * Origem da identificação das quests nesta consulta: "quests" = lista de
+   * quests do payload (modo novo; SEM contador de bosses — a célula mostra
+   * "—"). Ausente/"bosstiary" = derivação pela Bosstiary (original).
+   */
+  questSource?: "bosstiary" | "quests";
+  /**
    * CONTADORES de bosses das quests ("X/Y" da guia Quests) — calculados pela
    * MESMA função (deriveQuestsFromApiPayload) a partir do MESMO payload da
    * consulta de itens. Ausentes em consultas antigas (persistidas antes do

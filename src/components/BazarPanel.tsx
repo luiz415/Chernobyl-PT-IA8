@@ -373,6 +373,8 @@ interface QuestsItemsStepResponse {
     /** Quests REAIS do payload (deriveQuestsFromApiPayload): true = feita. */
     soulwarCompleted?: boolean | null;
     sanguineCompleted?: boolean | null;
+    /** Origem da identificação ("quests" = lista de quests do payload). */
+    questSource?: "bosstiary" | "quests";
     /** Contadores de bosses ("X/Y") — mesma função, mesmo payload. */
     soulWarBossCount?: number;
     sanguineBossCount?: number;
@@ -1114,6 +1116,12 @@ function matchesQuestFilter(detail: BazaarDetails | undefined, filter: QuestFilt
  * `questRequired` permanece por compatibilidade (default `true`): listas
  * antigas, geradas quando "Todas" pulava a apuração, ainda podem chegar sem
  * o dado da quest, e chamadas externas podem exibir "Não verificado".
+ *
+ * INCONCLUSIVO = "?": quando a consulta não obteve um dado CONFIÁVEL para a
+ * quest (quest ausente da lista, ícone não identificado, resposta incompleta
+ * ou erro), o valor fica `null` e a coluna exibe "?" — NUNCA um estado
+ * presumido de disponível ("Disp.") ou indisponível ("Concl."). SW e SG são
+ * independentes: uma pode ser conclusiva e a outra "?".
  */
 export function formatQuestStatus(
   detail: BazaarQuestStatusDetail | undefined,
@@ -1125,7 +1133,7 @@ export function formatQuestStatus(
   if (!detail) return needsQuestDetails ? "..." : "—";
   if (detail[field] === true) return "Concl.";
   if (detail[field] === false) return "Disp.";
-  return "Indisp.";
+  return "?";
 }
 
 function getQuestBossCount(detail: BazaarQuestStatusDetail | undefined, field: "soulwarCompleted" | "sanguineCompleted") {
@@ -2794,6 +2802,11 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
             // Progresso pertence à GUIA QUESTS (etapa desta consulta) — a
             // guia Itens não exibe nada desta execução.
             progressScope: "quests",
+            // A etapa de itens HERDA a identificação das quests da consulta
+            // principal (Bosstiary × Quests) — a seleção vale para a
+            // consulta INTEIRA, incluindo os dados de SW/SG embutidos nos
+            // resultados de itens.
+            questSource: activeQuestSource,
           }) as QuestsItemsStepResponse;
           if (!itemsResponse?.ok) {
             itemsStepNotice = "Consulta de Quests concluída, mas a etapa de itens falhou: "
@@ -2848,6 +2861,7 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
                 ...(detail.skills && Object.keys(detail.skills).length > 0 ? { skills: detail.skills } : {}),
                 ...(detail.soulwarCompleted !== undefined ? { soulwarCompleted: detail.soulwarCompleted } : {}),
                 ...(detail.sanguineCompleted !== undefined ? { sanguineCompleted: detail.sanguineCompleted } : {}),
+                ...(detail.questSource === "quests" ? { questSource: "quests" as const } : {}),
                 ...(typeof detail.soulWarBossCount === "number" ? { soulWarBossCount: detail.soulWarBossCount } : {}),
                 ...(typeof detail.sanguineBossCount === "number" ? { sanguineBossCount: detail.sanguineBossCount } : {}),
                 bid: Number(auction.bid || 0),
@@ -4628,8 +4642,8 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
                           );
                         })()}
                       </td>
-                      <td className={`h-12 px-1 py-2 text-center align-middle text-[10px] ${isSuspiciousSoulWar ? "bg-rose-500/10 ring-1 ring-inset ring-rose-400/35" : ""} ${detail?.soulwarCompleted === true ? "text-rose-300" : detail?.soulwarCompleted === false ? "text-emerald-300" : "text-slate-500"}`} title={isSuspiciousSoulWar ? "Soul War suspeita: 3/6 bosses encontrados indica alta chance de quest indisponível." : undefined}><div className="font-bold">{formatQuestStatus(detail, "soulwarCompleted", needsQuestDetails)}</div><QuestBossCounter detail={detail} field="soulwarCompleted" /></td>
-                      <td className={`h-12 px-1 py-2 text-center align-middle text-[10px] ${isSuspiciousSanguine ? "bg-rose-500/10 ring-1 ring-inset ring-rose-400/35" : ""} ${detail?.sanguineCompleted === true ? "text-rose-300" : detail?.sanguineCompleted === false ? "text-emerald-300" : "text-slate-500"}`} title={isSuspiciousSanguine ? "Sanguine suspeita: 2/5 bosses encontrados indica alta chance de quest indisponível." : undefined}><div className="font-bold">{formatQuestStatus(detail, "sanguineCompleted", needsQuestDetails)}</div><QuestBossCounter detail={detail} field="sanguineCompleted" /></td>
+                      <td className={`h-12 px-1 py-2 text-center align-middle text-[10px] ${isSuspiciousSoulWar ? "bg-rose-500/10 ring-1 ring-inset ring-rose-400/35" : ""} ${detail?.soulwarCompleted === true ? "text-rose-300" : detail?.soulwarCompleted === false ? "text-emerald-300" : "text-slate-500"}`} title={isSuspiciousSoulWar ? "Soul War suspeita: 3/6 bosses encontrados indica alta chance de quest indisponível." : (detail && detail.soulwarCompleted == null ? "Sem dado conclusivo para a Soul War nesta consulta — o app não presume disponível nem indisponível." : undefined)}><div className="font-bold">{formatQuestStatus(detail, "soulwarCompleted", needsQuestDetails)}</div><QuestBossCounter detail={detail} field="soulwarCompleted" /></td>
+                      <td className={`h-12 px-1 py-2 text-center align-middle text-[10px] ${isSuspiciousSanguine ? "bg-rose-500/10 ring-1 ring-inset ring-rose-400/35" : ""} ${detail?.sanguineCompleted === true ? "text-rose-300" : detail?.sanguineCompleted === false ? "text-emerald-300" : "text-slate-500"}`} title={isSuspiciousSanguine ? "Sanguine suspeita: 2/5 bosses encontrados indica alta chance de quest indisponível." : (detail && detail.sanguineCompleted == null ? "Sem dado conclusivo para a Sanguine nesta consulta — o app não presume disponível nem indisponível." : undefined)}><div className="font-bold">{formatQuestStatus(detail, "sanguineCompleted", needsQuestDetails)}</div><QuestBossCounter detail={detail} field="sanguineCompleted" /></td>
                       <td className="h-10 px-1 py-1.5 text-center align-middle">
                         <div className="flex max-h-24 flex-col items-center justify-start gap-1 overflow-y-auto custom-scrollbar text-center">
                           {officialMetadata?.version && currentUser?.uid && (
