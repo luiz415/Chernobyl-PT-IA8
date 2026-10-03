@@ -20,6 +20,12 @@ export type NegotiationTimestamp = Timestamp | number;
 export interface ProbableMarker {
   soulwar?: boolean;
   sanguine?: boolean;
+  /**
+   * Crypt: campo previsto para a etapa futura do Gerenciador de PT's.
+   * Nenhum fluxo grava este marcador hoje — ele existe para o CharTable
+   * tratar as três quests com o MESMO código de exibição do aviso ⚠.
+   */
+  crypt?: boolean;
 }
 
 export type ProbableMarkersMap = Record<string, ProbableMarker>;
@@ -69,6 +75,15 @@ export interface Character {
   level: number;
   soulwar: boolean;
   sanguine: boolean;
+  /**
+   * CRYPT ("The Roost of the Graveborn") — disponibilidade da quest.
+   * OPCIONAL por retrocompatibilidade: personagens gravados antes do campo
+   * existir não o possuem e são tratados como DISPONÍVEL (`crypt !== false`),
+   * o mesmo padrão inicial de SW/SG na criação. A primeira edição grava o
+   * boolean real e o campo sincroniza pelos MESMOS caminhos de persistência
+   * (userCharacters/sharedCharacters) — nenhum write novo.
+   */
+  crypt?: boolean;
   soulwarDone?: boolean;
   sanguineDone?: boolean;
   /**
@@ -86,6 +101,11 @@ export interface Character {
   valorPago: number;
   dropSW: number;
   dropBakra: number;
+  /**
+   * LUCRO CRYPT em RC — equivalente de dropSW/dropBakra para a Crypt.
+   * Opcional (legado sem o campo = 0); some no Total via `calcTotal`.
+   */
+  dropCrypt?: number;
   valorVenda: number;
   valorVendaOriginal?: number;
   taxaAplicada?: number;
@@ -97,6 +117,8 @@ export interface Character {
   notes?: string;
   itemDropadoSW?: string;
   itemDropadoSG?: string;
+  /** DROP CRYPT — item obtido na Crypt (lista CRYPT_ITEMS do CharTable). */
+  itemDropadoCrypt?: string;
   /**
    * Registro completo da venda do item da Quest (modal "Item Vendido").
    * Separado por Quest — o MESMO personagem pode ter vendas diferentes em
@@ -104,6 +126,9 @@ export interface Character {
    */
   itemSaleSW?: ItemSaleRecord;
   itemSaleSG?: ItemSaleRecord;
+  /** Venda do item da CRYPT (modal "Item Vendido") — contexto próprio, nunca
+   *  misturado com SW/SG (mesma regra de separação por Quest). */
+  itemSaleCrypt?: ItemSaleRecord;
   /**
    * ITENS DO BAZAAR importados na compra (Bazaar → Itens → "Comprado").
    * Snapshot LOCAL da consulta que originou o cadastro — nenhuma nova
@@ -160,6 +185,7 @@ export interface BazaarItemsPurchasePrefill {
   /** Quests REAIS da consulta: true = já feita (indisponível); null = inconclusivo. */
   soulwarCompleted?: boolean | null;
   sanguineCompleted?: boolean | null;
+  cryptCompleted?: boolean | null;
   /** Itens encontrados na consulta — associados ao personagem ao salvar. */
   items: CharacterBazaarItemsSnapshot;
 }
@@ -717,7 +743,9 @@ export const VOC_LABEL: Record<Vocation, string> = {
 };
 
 export function calcTotal(c: Character): number {
-  return (c.dropSW + c.dropBakra + c.valorVenda) - c.valorPago;
+  // `dropCrypt` é opcional (personagens antigos não têm o campo): `|| 0`
+  // preserva o Total deles exatamente como antes da Crypt existir.
+  return (c.dropSW + c.dropBakra + (c.dropCrypt || 0) + c.valorVenda) - c.valorPago;
 }
 
 export function formatRC(n: number): string {

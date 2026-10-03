@@ -3869,9 +3869,11 @@ export default function App() {
       // confere no próprio CharacterModal antes de salvar.
       soulwar: prefill.soulwarCompleted === true ? false : true,
       sanguine: prefill.sanguineCompleted === true ? false : true,
+      crypt: prefill.cryptCompleted === true ? false : true,
       valorPago: 0,
       dropSW: 0,
       dropBakra: 0,
+      dropCrypt: 0,
       valorVenda: 0,
       vendido: false,
       aVenda: false,
@@ -3942,9 +3944,11 @@ export default function App() {
       // disponíveis até que os fluxos próprios da aplicação as atualizem.
       soulwar: true,
       sanguine: true,
+      crypt: true,
       valorPago,
       dropSW: 0,
       dropBakra: 0,
+      dropCrypt: 0,
       valorVenda: 0,
       vendido: false,
       aVenda: false,
@@ -4353,8 +4357,10 @@ export default function App() {
           ...c,
           itemDropadoSW: currentCharacter.itemDropadoSW,
           itemDropadoSG: currentCharacter.itemDropadoSG,
+          itemDropadoCrypt: currentCharacter.itemDropadoCrypt,
           dropSW: currentCharacter.dropSW,
           dropBakra: currentCharacter.dropBakra,
+          dropCrypt: currentCharacter.dropCrypt,
         };
       }
     }

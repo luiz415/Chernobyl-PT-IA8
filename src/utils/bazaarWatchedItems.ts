@@ -97,6 +97,8 @@ export interface BazaarItemsCharacterResult {
    */
   soulwarCompleted?: boolean | null;
   sanguineCompleted?: boolean | null;
+  /** Crypt (The Roost of the Graveborn) — mesma derivação/semântica. */
+  cryptCompleted?: boolean | null;
   /**
    * Origem da identificação das quests nesta consulta: "quests" = lista de
    * quests do payload (modo novo; SEM contador de bosses — a célula mostra
@@ -112,6 +114,7 @@ export interface BazaarItemsCharacterResult {
    */
   soulWarBossCount?: number;
   sanguineBossCount?: number;
+  cryptBossCount?: number;
   /** Valor (bid) do personagem NO MOMENTO da consulta — só exibição. */
   bid?: number;
   /** Encerramento do leilão (s ou ms, normalizado na exibição) — só exibição. */

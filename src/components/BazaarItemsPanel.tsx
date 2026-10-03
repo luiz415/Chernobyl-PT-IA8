@@ -27,7 +27,7 @@ import { FilterDateMax, FilterInline, FilterMulti, FilterNumber } from "./Filter
 // segunda implementação): as colunas SW/SG desta guia apenas os alimentam com
 // as quests já derivadas pela consulta de itens (mesmo payload, mesma função
 // do Electron — zero consultas extras).
-import { STICKY_FILTER_CELL_CLASS, STICKY_HEAD_CELL_CLASS, closeRubinotBrowserFromRenderer, formatQuestStatus, isAuctionVisibleWithEndedGrace, isQuestSuspicious, QuestBossCounter, type BazaarQuestStatusDetail } from "./BazarPanel";
+import { STICKY_FILTER_CELL_CLASS, STICKY_HEAD_CELL_CLASS, closeRubinotBrowserFromRenderer, isAuctionVisibleWithEndedGrace, isQuestSuspicious, QuestBossCounter, QuestStatusIndicator, type BazaarQuestStatusDetail } from "./BazarPanel";
 import type { BazaarQuestSource, BazaarRetryCounts, BazaarSpeedMode } from "./BazaarBrowserModal";
 import { loadUIState, loadNotifications } from "../storage";
 import { computeItemRC, formatKkValue as formatKkValueBase } from "../utils/itemSale";
@@ -139,6 +139,7 @@ interface ItemsDetailsResult {
     /** Quests REAIS do payload (deriveQuestsFromApiPayload): true = feita. */
     soulwarCompleted?: boolean | null;
     sanguineCompleted?: boolean | null;
+    cryptCompleted?: boolean | null;
     /**
      * Origem da identificação: "quests" = lista de quests do payload (modo
      * novo; sem contador de bosses). Ausente = Bosstiary (comportamento
@@ -148,6 +149,7 @@ interface ItemsDetailsResult {
     /** Contadores de bosses ("X/Y") — mesma função, mesmo payload. */
     soulWarBossCount?: number;
     sanguineBossCount?: number;
+    cryptBossCount?: number;
     error?: string;
   }>;
   analyzedCount?: number;
@@ -361,16 +363,18 @@ function saveItemsSelectedServer(value: string) {
 // persistida SEM os campos de quest => undefined (a célula mostra "—",
 // nunca um resultado inventado).
 function questDetailFromItemsResult(result: BazaarItemsCharacterResult): BazaarQuestStatusDetail | undefined {
-  if (result.soulwarCompleted === undefined && result.sanguineCompleted === undefined) return undefined;
+  if (result.soulwarCompleted === undefined && result.sanguineCompleted === undefined && result.cryptCompleted === undefined) return undefined;
   return {
     soulwarCompleted: result.soulwarCompleted ?? null,
     sanguineCompleted: result.sanguineCompleted ?? null,
+    cryptCompleted: result.cryptCompleted ?? null,
     // Contadores ausentes (consulta anterior ao campo ou payload inconclusivo)
     // ficam undefined — o QuestBossCounter exibe "0/Y" apagado, como a guia
     // Quests faz com detail sem contadores. Totais padrão (6/5) vêm do
     // próprio helper getQuestBossCount — fonte única.
     ...(typeof result.soulWarBossCount === "number" ? { soulWarBossCount: result.soulWarBossCount } : {}),
     ...(typeof result.sanguineBossCount === "number" ? { sanguineBossCount: result.sanguineBossCount } : {}),
+    ...(typeof result.cryptBossCount === "number" ? { cryptBossCount: result.cryptBossCount } : {}),
     // Origem "quests": o QuestBossCounter exibe "—" (contador de bosses não
     // se aplica à identificação pela guia Quests) — mesmo padrão da guia Quests.
     ...(result.questSource === "quests" ? { questSource: "quests" as const } : {}),
@@ -1263,6 +1267,7 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
           // abre com o padrão (usuário confere).
           ...(detail.soulwarCompleted !== undefined ? { soulwarCompleted: detail.soulwarCompleted } : {}),
           ...(detail.sanguineCompleted !== undefined ? { sanguineCompleted: detail.sanguineCompleted } : {}),
+          ...(detail.cryptCompleted !== undefined ? { cryptCompleted: detail.cryptCompleted } : {}),
           // Origem da identificação (modo "quests" oculta o contador "X/Y").
           ...(detail.questSource === "quests" ? { questSource: "quests" as const } : {}),
           // CONTADORES de bosses das quests — mesmos dados da MESMA função
@@ -1270,6 +1275,7 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
           // "X/Y" das colunas SW/SG desta guia (padrão da guia Quests).
           ...(typeof detail.soulWarBossCount === "number" ? { soulWarBossCount: detail.soulWarBossCount } : {}),
           ...(typeof detail.sanguineBossCount === "number" ? { sanguineBossCount: detail.sanguineBossCount } : {}),
+          ...(typeof detail.cryptBossCount === "number" ? { cryptBossCount: detail.cryptBossCount } : {}),
           // Dados de EXIBIÇÃO da listagem no momento da consulta (valor do
           // personagem e encerramento) — nenhum efeito no cálculo dos itens.
           bid: Number(auction.bid || 0),
@@ -1637,6 +1643,7 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
       vocation: result.vocation,
       soulwarCompleted: result.soulwarCompleted ?? null,
       sanguineCompleted: result.sanguineCompleted ?? null,
+      cryptCompleted: result.cryptCompleted ?? null,
       items: {
         server: result.server,
         totalKk: result.totalKk,
@@ -2241,6 +2248,7 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                     consulta extra, nenhuma segunda implementação. */}
                 <th className={`${STICKY_HEAD_CELL_CLASS} h-10 px-1 py-2 text-center align-middle leading-none`} title="Quest Soul War — mesma verificação da guia Quests, derivada do payload desta própria consulta (sem consulta extra). Concl. = já feita (indisponível para o comprador); Disp. = disponível; ? = sem dado conclusivo (o app nunca presume).">SW</th>
                 <th className={`${STICKY_HEAD_CELL_CLASS} h-10 px-1 py-2 text-center align-middle leading-none`} title="Quest Sanguine — mesma verificação da guia Quests, derivada do payload desta própria consulta (sem consulta extra). Concl. = já feita (indisponível para o comprador); Disp. = disponível; ? = sem dado conclusivo (o app nunca presume).">SG</th>
+                <th className={`${STICKY_HEAD_CELL_CLASS} h-10 px-1 py-2 text-center align-middle leading-none`} title="Quest Crypt (The Roost of the Graveborn) — mesma verificação da guia Quests, derivada do payload desta própria consulta (sem consulta extra). INFORMATIVA, nunca critério de resultado válido. Consulta antiga sem o dado mostra —.">Crypt</th>
                 <th className={`${STICKY_HEAD_CELL_CLASS} h-10 px-1 py-2 text-center align-middle leading-none`}>Detalhes</th>
                 <th className={`${STICKY_HEAD_CELL_CLASS} h-10 px-1 py-2 text-center align-middle leading-none`}>Tenho Interesse</th>
                 <th className={`${STICKY_HEAD_CELL_CLASS} h-10 px-1 py-2 text-center align-middle leading-none`}>Link</th>
@@ -2313,7 +2321,7 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                 // usuário não perca o acesso ao botão de limpar justamente
                 // quando os filtros não retornam resultados.
                 <tr>
-                  <td colSpan={14} className="px-4 py-10 text-center align-middle text-sm text-slate-500">
+                  <td colSpan={15} className="px-4 py-10 text-center align-middle text-sm text-slate-500">
                     <div className="flex flex-col items-center justify-center gap-3">
                       <span>Nenhum personagem encontrado para os filtros atuais.</span>
                       {hasActiveTableFilters && (
@@ -2559,21 +2567,24 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                       — zero consultas extras). Consulta antiga sem o dado
                       mostra "—". Cores idênticas às da guia Quests: Concl. =
                       rose (indisponível p/ comprador), Disp. = emerald. */}
-                  {(["soulwarCompleted", "sanguineCompleted"] as const).map(questField => {
+                  {(["soulwarCompleted", "sanguineCompleted", "cryptCompleted"] as const).map(questField => {
                     const questDetail = questDetailFromItemsResult(result);
                     const isSuspiciousQuest = isQuestSuspicious(questDetail, questField);
                     const questValue = questDetail?.[questField];
+                    const questLabel = questField === "soulwarCompleted" ? "Soul War" : questField === "sanguineCompleted" ? "Sanguine" : "Crypt";
                     return (
                       <td
                         key={questField}
                         className={`px-1 py-1.5 text-center align-middle text-[10px] ${isSuspiciousQuest ? "bg-rose-500/10 ring-1 ring-inset ring-rose-400/35" : ""} ${questValue === true ? "text-rose-300" : questValue === false ? "text-emerald-300" : "text-slate-500"}`}
                         title={isSuspiciousQuest
-                          ? `${questField === "soulwarCompleted" ? "Soul War" : "Sanguine"} suspeita: contador de bosses muito próximo do total indica alta chance de quest indisponível.`
+                          ? `${questLabel} suspeita: contador de bosses muito próximo do total indica alta chance de quest indisponível.`
                           : questDetail
                             ? "Verificação feita nesta própria consulta de itens — mesma lógica da guia Quests, sem consulta extra."
                             : "Consulta anterior à verificação de quests na guia Itens — refaça a consulta para obter este dado."}
                       >
-                        <div className="font-bold">{formatQuestStatus(questDetail, questField, false)}</div>
+                        {/* Ícones compactos (Check verde = disponível; X = indisponível;
+                            "?" preservado) — MESMO componente da guia Quests. */}
+                        <div className="font-bold"><QuestStatusIndicator detail={questDetail} field={questField} needsQuestDetails={false} /></div>
                         <QuestBossCounter detail={questDetail} field={questField} />
                       </td>
                     );

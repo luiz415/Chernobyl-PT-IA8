@@ -508,6 +508,12 @@ function registerBazaarItemsMethod(deps) {
               extraPaths: extra.paths,
               soulwarCompleted: quests.soulwarCompleted,
               sanguineCompleted: quests.sanguineCompleted,
+              // CRYPT ("The Roost of the Graveborn") — MESMA derivação, MESMO
+              // payload, nenhuma chamada extra: o campo já era calculado pelas
+              // funções compartilhadas; aqui apenas deixa de ser descartado.
+              // Informativo na guia Itens (nunca critério de resultado) e
+              // reaproveitado pelo fluxo "Comprado" (prefill do personagem).
+              cryptCompleted: quests.cryptCompleted,
               // Origem da identificação: no modo "quests" o renderer oculta o
               // contador de bosses ("X/Y"), que não se aplica à guia Quests.
               ...(questSource === 'quests' ? { questSource: 'quests' } : {}),
@@ -519,6 +525,7 @@ function registerBazaarItemsMethod(deps) {
               // no modo "quests" o contador NÃO existe (derivação sem bosses).
               soulWarBossCount: quests.soulWarBossCount,
               sanguineBossCount: quests.sanguineBossCount,
+              cryptBossCount: quests.cryptBossCount,
               fetchedAt: Date.now(),
             };
           } else {

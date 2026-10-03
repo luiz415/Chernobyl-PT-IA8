@@ -1190,6 +1190,36 @@ export function formatQuestStatus(
   return "?";
 }
 
+/**
+ * INDICADOR VISUAL das colunas de Quest (SW/SG/Crypt) — ícones compactos no
+ * lugar dos textos "Concl./Disp.":
+ *
+ *   • DISPONÍVEL (completed === false)  -> Check VERDE;
+ *   • INDISPONÍVEL (completed === true) -> X (rose);
+ *   • INCONCLUSIVO (null)               -> "?" preservado — o app NUNCA
+ *     presume disponível nem indisponível;
+ *   • sem detail / não verificado       -> textos atuais ("—", "...",
+ *     "Não verificado") inalterados.
+ *
+ * O estado continua vindo de `formatQuestStatus` (fonte única) — este
+ * componente apenas TROCA a representação dos dois estados conclusivos.
+ */
+export function QuestStatusIndicator({ detail, field, needsQuestDetails, questRequired = true }: {
+  detail: BazaarQuestStatusDetail | undefined;
+  field: QuestField;
+  needsQuestDetails: boolean;
+  questRequired?: boolean;
+}) {
+  const status = formatQuestStatus(detail, field, needsQuestDetails, questRequired);
+  if (status === "Disp.") {
+    return <Check size={14} strokeWidth={3.5} className="inline-block align-middle text-emerald-400" aria-label={`${QUEST_FIELD_META[field].label} disponível`} />;
+  }
+  if (status === "Concl.") {
+    return <X size={14} strokeWidth={3.5} className="inline-block align-middle text-rose-400" aria-label={`${QUEST_FIELD_META[field].label} concluída (indisponível)`} />;
+  }
+  return <span>{status}</span>;
+}
+
 function getQuestBossCount(detail: BazaarQuestStatusDetail | undefined, field: QuestField) {
   const meta = QUEST_FIELD_META[field];
   const current = detail?.[meta.countKey];
@@ -4516,7 +4546,7 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
                   // perderia o acesso ao botão de limpar justamente quando os filtros
                   // não retornam resultados.
                   <tr>
-                    <td colSpan={13} className="px-4 py-10 text-center align-middle text-sm text-slate-500">
+                    <td colSpan={14} className="px-4 py-10 text-center align-middle text-sm text-slate-500">
                       <div className="flex flex-col items-center justify-center gap-3">
                         <span>Nenhum personagem encontrado para os filtros atuais.</span>
                         {hasActiveTableFilters && (
@@ -4731,9 +4761,9 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
                           );
                         })()}
                       </td>
-                      <td className={`h-12 px-1 py-2 text-center align-middle text-[10px] ${isSuspiciousSoulWar ? "bg-rose-500/10 ring-1 ring-inset ring-rose-400/35" : ""} ${detail?.soulwarCompleted === true ? "text-rose-300" : detail?.soulwarCompleted === false ? "text-emerald-300" : "text-slate-500"}`} title={isSuspiciousSoulWar ? "Soul War suspeita: 3/6 bosses encontrados indica alta chance de quest indisponível." : (detail && detail.soulwarCompleted == null ? "Sem dado conclusivo para a Soul War nesta consulta — o app não presume disponível nem indisponível." : undefined)}><div className="font-bold">{formatQuestStatus(detail, "soulwarCompleted", needsQuestDetails)}</div><QuestBossCounter detail={detail} field="soulwarCompleted" /></td>
-                      <td className={`h-12 px-1 py-2 text-center align-middle text-[10px] ${isSuspiciousSanguine ? "bg-rose-500/10 ring-1 ring-inset ring-rose-400/35" : ""} ${detail?.sanguineCompleted === true ? "text-rose-300" : detail?.sanguineCompleted === false ? "text-emerald-300" : "text-slate-500"}`} title={isSuspiciousSanguine ? "Sanguine suspeita: 2/5 bosses encontrados indica alta chance de quest indisponível." : (detail && detail.sanguineCompleted == null ? "Sem dado conclusivo para a Sanguine nesta consulta — o app não presume disponível nem indisponível." : undefined)}><div className="font-bold">{formatQuestStatus(detail, "sanguineCompleted", needsQuestDetails)}</div><QuestBossCounter detail={detail} field="sanguineCompleted" /></td>
-                      <td className={`h-12 px-1 py-2 text-center align-middle text-[10px] ${isSuspiciousCrypt ? "bg-rose-500/10 ring-1 ring-inset ring-rose-400/35" : ""} ${detail?.cryptCompleted === true ? "text-rose-300" : detail?.cryptCompleted === false ? "text-emerald-300" : "text-slate-500"}`} title={isSuspiciousCrypt ? "Crypt suspeita: 2/5 bosses encontrados indica alta chance de quest indisponível." : (detail && detail.cryptCompleted == null ? "Sem dado conclusivo para a Crypt nesta consulta — o app não presume disponível nem indisponível." : undefined)}><div className="font-bold">{formatQuestStatus(detail, "cryptCompleted", needsQuestDetails)}</div><QuestBossCounter detail={detail} field="cryptCompleted" /></td>
+                      <td className={`h-12 px-1 py-2 text-center align-middle text-[10px] ${isSuspiciousSoulWar ? "bg-rose-500/10 ring-1 ring-inset ring-rose-400/35" : ""} ${detail?.soulwarCompleted === true ? "text-rose-300" : detail?.soulwarCompleted === false ? "text-emerald-300" : "text-slate-500"}`} title={isSuspiciousSoulWar ? "Soul War suspeita: 3/6 bosses encontrados indica alta chance de quest indisponível." : (detail && detail.soulwarCompleted == null ? "Sem dado conclusivo para a Soul War nesta consulta — o app não presume disponível nem indisponível." : undefined)}><div className="font-bold"><QuestStatusIndicator detail={detail} field="soulwarCompleted" needsQuestDetails={needsQuestDetails} /></div><QuestBossCounter detail={detail} field="soulwarCompleted" /></td>
+                      <td className={`h-12 px-1 py-2 text-center align-middle text-[10px] ${isSuspiciousSanguine ? "bg-rose-500/10 ring-1 ring-inset ring-rose-400/35" : ""} ${detail?.sanguineCompleted === true ? "text-rose-300" : detail?.sanguineCompleted === false ? "text-emerald-300" : "text-slate-500"}`} title={isSuspiciousSanguine ? "Sanguine suspeita: 2/5 bosses encontrados indica alta chance de quest indisponível." : (detail && detail.sanguineCompleted == null ? "Sem dado conclusivo para a Sanguine nesta consulta — o app não presume disponível nem indisponível." : undefined)}><div className="font-bold"><QuestStatusIndicator detail={detail} field="sanguineCompleted" needsQuestDetails={needsQuestDetails} /></div><QuestBossCounter detail={detail} field="sanguineCompleted" /></td>
+                      <td className={`h-12 px-1 py-2 text-center align-middle text-[10px] ${isSuspiciousCrypt ? "bg-rose-500/10 ring-1 ring-inset ring-rose-400/35" : ""} ${detail?.cryptCompleted === true ? "text-rose-300" : detail?.cryptCompleted === false ? "text-emerald-300" : "text-slate-500"}`} title={isSuspiciousCrypt ? "Crypt suspeita: 2/5 bosses encontrados indica alta chance de quest indisponível." : (detail && detail.cryptCompleted == null ? "Sem dado conclusivo para a Crypt nesta consulta — o app não presume disponível nem indisponível." : undefined)}><div className="font-bold"><QuestStatusIndicator detail={detail} field="cryptCompleted" needsQuestDetails={needsQuestDetails} /></div><QuestBossCounter detail={detail} field="cryptCompleted" /></td>
                       <td className="h-10 px-1 py-1.5 text-center align-middle">
                         <div className="flex max-h-24 flex-col items-center justify-start gap-1 overflow-y-auto custom-scrollbar text-center">
                           {officialMetadata?.version && currentUser?.uid && (
@@ -4828,7 +4858,7 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
                     </tr>
                     {isInlinePurchaseOpen && !isAlreadyAddedToPersonalList && inlinePurchaseDraft && (
                       <tr className="border-b border-emerald-500/20 bg-emerald-500/[0.035]">
-                        <td colSpan={13} className="px-2 py-2 sm:px-3">
+                        <td colSpan={14} className="px-2 py-2 sm:px-3">
                           <form
                             onSubmit={event => {
                               event.preventDefault();

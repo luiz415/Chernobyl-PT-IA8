@@ -59,9 +59,11 @@ function emptyCharacter(): DraftCharacter {
     level: 0,
     soulwar: true,
     sanguine: true,
+    crypt: true,
     valorPago: 0,
     dropSW: 0,
     dropBakra: 0,
+    dropCrypt: 0,
     valorVenda: 0,
     vendido: false,
     aVenda: false,
@@ -371,7 +373,7 @@ export default function CharacterModal({ open, initial, accounts, servers, onSav
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-4 pt-2 border-t border-red-900/20">
+          <div className="grid grid-cols-3 gap-4 pt-2 border-t border-red-900/20">
             <div>
               <label className="block text-[10px] font-bold uppercase tracking-wider text-red-400/80 mb-1.5">
                 SoulWar Disponível?
@@ -431,9 +433,39 @@ export default function CharacterModal({ open, initial, accounts, servers, onSav
                 </button>
               </div>
             </div>
+
+            <div>
+              <label className="block text-[10px] font-bold uppercase tracking-wider text-red-400/80 mb-1.5">
+                Crypt Disponível?
+              </label>
+              <div className="grid grid-cols-2 gap-1 h-[38px]">
+                <button
+                  type="button"
+                  onClick={() => set("crypt", true)}
+                  className={`rounded-lg border text-xs font-bold transition-all cursor-pointer ${
+                    data.crypt !== false
+                      ? "border-emerald-500/50 bg-emerald-500/20 text-emerald-300 shadow-sm"
+                      : "border-red-900/30 bg-black/20 text-slate-500 hover:bg-red-900/20 hover:text-slate-300"
+                  }`}
+                >
+                  SIM
+                </button>
+                <button
+                  type="button"
+                  onClick={() => set("crypt", false)}
+                  className={`rounded-lg border text-xs font-bold transition-all cursor-pointer ${
+                    data.crypt === false
+                      ? "border-rose-500/50 bg-rose-500/20 text-rose-300 shadow-sm"
+                      : "border-red-900/30 bg-black/20 text-slate-500 hover:bg-red-900/20 hover:text-slate-300"
+                  }`}
+                >
+                  NÃO
+                </button>
+              </div>
+            </div>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4 pt-2 border-t border-red-900/20">
+          <div className="grid grid-cols-1 md:grid-cols-5 gap-4 pt-2 border-t border-red-900/20">
             <div>
               <label className="block text-[10px] font-bold uppercase tracking-wider text-red-400/80 mb-1.5" title="Custo de compra ou investimento">
                 Valor Pago (RC)
@@ -484,6 +516,25 @@ export default function CharacterModal({ open, initial, accounts, servers, onSav
                 onChange={(e) => {
                   const n = parseInt(e.target.value.replace(/[^\d-]/g, ""), 10);
                   set("dropBakra", Number.isFinite(n) ? n : 0);
+                }}
+                placeholder="0"
+                title={lockedQuestFinancialFields ? questFinancialLockTitle : undefined}
+                className="w-full bg-black/40 border border-red-900/30 rounded-lg px-3 py-2 text-sm text-left tabular-nums text-emerald-400 font-medium focus:outline-none focus:border-red-700/50 placeholder-slate-600 transition-colors disabled:cursor-not-allowed disabled:opacity-45"
+              />
+            </div>
+
+            <div>
+              <label className="mb-1.5 flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider text-red-400/80" title={lockedQuestFinancialFields ? questFinancialLockTitle : undefined}>
+                Drop Crypt (RC) {lockedQuestFinancialFields && <Lock size={10} className="text-violet-300" />}
+              </label>
+              <input
+                type="text"
+                inputMode="numeric"
+                disabled={lockedQuestFinancialFields}
+                value={(data.dropCrypt || 0) === 0 ? "" : data.dropCrypt}
+                onChange={(e) => {
+                  const n = parseInt(e.target.value.replace(/[^\d-]/g, ""), 10);
+                  set("dropCrypt", Number.isFinite(n) ? n : 0);
                 }}
                 placeholder="0"
                 title={lockedQuestFinancialFields ? questFinancialLockTitle : undefined}

@@ -225,16 +225,18 @@ function csvEscape(v: unknown): string {
 export function exportCSV(data: AppData): void {
   const headers = [
     "Account", "Personagem", "Servidor", "Voc", "Level",
-    "SoulWar", "Sanguine", "Valor pago", "Drop SW", "Drop Bakra",
+    "SoulWar", "Sanguine", "Crypt", "Valor pago", "Drop SW", "Drop Bakra", "Drop Crypt",
     "Valor de venda", "Total", "Data de compra", "Vendido", "Data de venda"
   ];
   const rows = (data.characters || []).map((c: Character) => {
-    const total = (c.dropSW + c.dropBakra + c.valorVenda) - c.valorPago;
+    // Mesma regra do calcTotal: `dropCrypt` é opcional (legado = 0).
+    const total = (c.dropSW + c.dropBakra + (c.dropCrypt || 0) + c.valorVenda) - c.valorPago;
     return [
       c.account, c.personagem, c.servidor, c.voc, c.level,
       c.soulwar ? "Sim" : "Não",
       c.sanguine ? "Sim" : "Não",
-      c.valorPago, c.dropSW, c.dropBakra, c.valorVenda, total,
+      c.crypt !== false ? "Sim" : "Não",
+      c.valorPago, c.dropSW, c.dropBakra, c.dropCrypt || 0, c.valorVenda, total,
       c.dataCompra || "", c.vendido ? "Sim" : "Não", c.dataVenda || "",
     ].map(csvEscape).join(",");
   });

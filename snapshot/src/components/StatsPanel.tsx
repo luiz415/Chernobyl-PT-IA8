@@ -108,6 +108,12 @@ const SANGUINE_ITEMS = [
   "Sanguine Crossbow", "Sanguine Battleaxe", "Sanguine Hatchet", "Sanguine Cudgel",
 ];
 
+// CRYPT — mesma lista/ordem (mais → menos valioso) do CharTable (CRYPT_ITEMS).
+const CRYPT_ITEMS = [
+  "Necromantic Crypt Rune", "Icy Crypt Rune", "Deathly Crypt Rune",
+  "Fiery Crypt Rune", "Ancient Crypt Rune",
+];
+
 const ITEM_COLORS: Record<string, string> = {
   "Soulbleeder": "#22c55e", "Soulkamas": "#22c55e", "Soulshredder": "#22c55e",
   "Pair of Soulwalkers": "#4ade80", "Soulshell": "#4ade80",
@@ -131,6 +137,10 @@ const ITEM_COLORS: Record<string, string> = {
   "Sanguine Bludgeon": "#f97316", "Sanguine Blade": "#f97316",
   "Sanguine Crossbow": "#ef4444", "Sanguine Battleaxe": "#ef4444",
   "Sanguine Hatchet": "#dc2626", "Sanguine Cudgel": "#dc2626",
+  // CRYPT — cores relativas (verde = topo, vermelho = base), como no CharTable.
+  "Necromantic Crypt Rune": "#22c55e", "Icy Crypt Rune": "#4ade80",
+  "Deathly Crypt Rune": "#eab308", "Fiery Crypt Rune": "#f97316",
+  "Ancient Crypt Rune": "#ef4444",
 };
 
 const SW_PRIORITY = [
@@ -143,6 +153,10 @@ const SG_PRIORITY = [
   "#eab308", "#f97316", "#ef4444", "#dc2626",
 ];
 
+const CRYPT_PRIORITY = [
+  "#22c55e", "#4ade80", "#eab308", "#f97316", "#ef4444",
+];
+
 const GOLD_BORDER = "border-amber-600/25";
 const GOLD_BORDER_HOVER = "hover:border-amber-500/45";
 
@@ -150,6 +164,9 @@ type ValueFilter = {
   valorPago: boolean;
   dropSW: boolean;
   dropBakra: boolean;
+  /** Lucro Crypt (dropCrypt) — opcional no estado salvo (legado): a leitura
+   *  mescla com o DEFAULT para o filtro antigo continuar incluindo a Crypt. */
+  dropCrypt: boolean;
   valorVenda: boolean;
 };
 
@@ -234,6 +251,7 @@ const DEFAULT_VALUE_FILTER: ValueFilter = {
   valorPago: true,
   dropSW: true,
   dropBakra: true,
+  dropCrypt: true,
   valorVenda: true,
 };
 
@@ -337,6 +355,7 @@ function calcResult(c: Character, vf: ValueFilter): number {
   let total = 0;
   if (vf.dropSW) total += c.dropSW || 0;
   if (vf.dropBakra) total += c.dropBakra || 0;
+  if (vf.dropCrypt) total += c.dropCrypt || 0;
   if (vf.valorVenda) total += c.valorVenda || 0;
   if (vf.valorPago) total -= c.valorPago || 0;
   return total;
@@ -368,7 +387,11 @@ function daysBetween(a: Date, b: Date): number {
 
 export default function StatsPanel({ characters, parties = [], userName = "", userStats = null, userNames = {}, services = [], characterAcquisitions = [], characterAcquisitionBuyerDetails = [], currentUserUid = "" }: Props) {
   const [totalVisible, setTotalVisible] = usePersistedState("stats_totalVisible", true);
-  const [valueFilter, setValueFilter] = usePersistedState<ValueFilter>("stats_value_filter", DEFAULT_VALUE_FILTER);
+  const [valueFilterStored, setValueFilter] = usePersistedState<ValueFilter>("stats_value_filter", DEFAULT_VALUE_FILTER);
+  // BLINDAGEM do estado salvo: filtros gravados ANTES da Crypt não têm
+  // `dropCrypt` — o merge com o DEFAULT liga a Crypt neles (mesmo
+  // comportamento que o usuário tinha: todos os componentes somando).
+  const valueFilter = useMemo<ValueFilter>(() => ({ ...DEFAULT_VALUE_FILTER, ...valueFilterStored }), [valueFilterStored]);
   const [statusFilter, setStatusFilter] = usePersistedState<StatusFilter>("stats_statusFilter", DEFAULT_STATUS);
   const [period, setPeriod] = usePersistedState<PeriodKey>("stats_period_v2", "all");
   // "Apenas personagens completos" — filtra para personagens com Custo preenchido
@@ -410,9 +433,9 @@ export default function StatsPanel({ characters, parties = [], userName = "", us
         if (!ms || ms < periodRange.start || ms > periodRange.end) return false;
       }
       if (onlyComplete) {
-        // Completo = Custo preenchido E pelo menos um dos lucros (SW ou SG).
+        // Completo = Custo preenchido E pelo menos um dos lucros (SW, SG ou Crypt).
         const hasCost = (c.valorPago || 0) > 0;
-        const hasAnyProfit = (c.dropSW || 0) > 0 || (c.dropBakra || 0) > 0;
+        const hasAnyProfit = (c.dropSW || 0) > 0 || (c.dropBakra || 0) > 0 || (c.dropCrypt || 0) > 0;
         if (!hasCost || !hasAnyProfit) return false;
       }
       // ── Filtros avançados (quadro dedicado) — todos combinados ──────────
@@ -536,11 +559,14 @@ export default function StatsPanel({ characters, parties = [], userName = "", us
     const vendidos = baseFiltered.filter((c) => c.vendido);
     const dropSWAvg = avgNonZero([...baseFiltered.map((c) => c.dropSW), ...acquisitionFinance.questProfitSWValues]);
     const dropBakraAvg = avgNonZero([...baseFiltered.map((c) => c.dropBakra), ...acquisitionFinance.questProfitSGValues]);
+    // Crypt não tem negociações entre usuários (sem Service): só personagens.
+    const dropCryptAvg = avgNonZero(baseFiltered.map((c) => c.dropCrypt || 0));
     const valorPagoAvg = avgNonZero([...baseFiltered.map((c) => c.valorPago), ...acquisitionFinance.acquisitionCostValues]);
     const valorVendaAvg = avgNonZero([...vendidos.map((c) => c.valorVenda), ...acquisitionFinance.saleValueValues]);
     const totalInvestido = sum(baseFiltered.map((c) => c.valorPago)) + acquisitionFinance.acquisitionCost;
     const totalDropSW = sum(baseFiltered.map((c) => c.dropSW)) + acquisitionFinance.questProfitSW;
     const totalDropBakra = sum(baseFiltered.map((c) => c.dropBakra)) + acquisitionFinance.questProfitSG;
+    const totalDropCrypt = sum(baseFiltered.map((c) => c.dropCrypt || 0));
     const totalVendas = sum(vendidos.map((c) => c.valorVenda)) + acquisitionFinance.saleRevenue;
 
     const filteredResults = baseFiltered.map((c) => calcResult(c, valueFilter));
@@ -555,8 +581,8 @@ export default function StatsPanel({ characters, parties = [], userName = "", us
       ativos: ativos.length + acquisitionFinance.buyerActiveCount,
       vendidos: vendidos.length + acquisitionFinance.buyerSoldCount,
       totalCharacters: baseFiltered.length + acquisitionFinance.buyerActiveCount + acquisitionFinance.buyerSoldCount,
-      dropSWAvg, dropBakraAvg, valorPagoAvg, valorVendaAvg,
-      totalInvestido, totalDropSW, totalDropBakra, totalVendas,
+      dropSWAvg, dropBakraAvg, dropCryptAvg, valorPagoAvg, valorVendaAvg,
+      totalInvestido, totalDropSW, totalDropBakra, totalDropCrypt, totalVendas,
       totalGeral, lucroMedio, desvalorizacaoMedia, roiGlobal,
       acquisitionFinance,
     };
@@ -774,15 +800,18 @@ export default function StatsPanel({ characters, parties = [], userName = "", us
       .sort((a, b) => b.totalProfit - a.totalProfit || b.ptCount - a.ptCount);
   }, [acquisitionFinance.buyerEntries, baseFiltered, completedParties, characters, valueFilter]);
 
-  // ── Drops (Soulwar / Sanguine) ───────────────────────────────────────────
+  // ── Drops (Soulwar / Sanguine / Crypt) ───────────────────────────────────
   const itemStats = useMemo(() => {
     const swCounts: Record<string, number> = {};
     const sgCounts: Record<string, number> = {};
+    const cryptCounts: Record<string, number> = {};
     SOULWAR_ITEMS.forEach((item) => { swCounts[item] = 0; });
     SANGUINE_ITEMS.forEach((item) => { sgCounts[item] = 0; });
+    CRYPT_ITEMS.forEach((item) => { cryptCounts[item] = 0; });
     baseFiltered.forEach((c) => {
       if (c.itemDropadoSW && swCounts[c.itemDropadoSW] !== undefined) swCounts[c.itemDropadoSW]++;
       if (c.itemDropadoSG && sgCounts[c.itemDropadoSG] !== undefined) sgCounts[c.itemDropadoSG]++;
+      if (c.itemDropadoCrypt && cryptCounts[c.itemDropadoCrypt] !== undefined) cryptCounts[c.itemDropadoCrypt]++;
     });
     // Os drops privados do adquirente usam a mesma lista SW/SG da tabela de
     // personagens. Eles não são expostos ao dono original, mas entram nas
@@ -794,31 +823,26 @@ export default function StatsPanel({ characters, parties = [], userName = "", us
       });
     });
 
-    const getPriority = (itemName: string, isSanguine: boolean) => {
+    const getPriority = (itemName: string, type: "sw" | "sg" | "crypt") => {
       const color = ITEM_COLORS[itemName];
-      const list = isSanguine ? SG_PRIORITY : SW_PRIORITY;
+      const list = type === "sg" ? SG_PRIORITY : type === "crypt" ? CRYPT_PRIORITY : SW_PRIORITY;
       const idx = list.indexOf(color);
       return idx === -1 ? 999 : idx;
     };
 
-    const sortSW = (a: [string, number], b: [string, number]) => {
-      const pA = getPriority(a[0], false);
-      const pB = getPriority(b[0], false);
-      if (pA !== pB) return pA - pB;
-      return b[1] - a[1] || a[0].localeCompare(b[0]);
-    };
-
-    const sortSG = (a: [string, number], b: [string, number]) => {
-      const pA = getPriority(a[0], true);
-      const pB = getPriority(b[0], true);
+    const sortBy = (type: "sw" | "sg" | "crypt") => (a: [string, number], b: [string, number]) => {
+      const pA = getPriority(a[0], type);
+      const pB = getPriority(b[0], type);
       if (pA !== pB) return pA - pB;
       return b[1] - a[1] || a[0].localeCompare(b[0]);
     };
 
     return {
-      swList: Object.entries(swCounts).sort(sortSW),
-      sgList: Object.entries(sgCounts).sort(sortSG),
+      swList: Object.entries(swCounts).sort(sortBy("sw")),
+      sgList: Object.entries(sgCounts).sort(sortBy("sg")),
+      cryptList: Object.entries(cryptCounts).sort(sortBy("crypt")),
       totalSW: sum(Object.values(swCounts)), totalSG: sum(Object.values(sgCounts)),
+      totalCrypt: sum(Object.values(cryptCounts)),
     };
   }, [acquisitionFinance.buyerEntries, baseFiltered]);
 
@@ -901,7 +925,7 @@ export default function StatsPanel({ characters, parties = [], userName = "", us
     if (period !== "all" && (period !== "custom" || periodRange !== null)) n += 1;
     if (!statusFilter.ativos || !statusFilter.historico) n += 1;
     if (onlyComplete) n += 1;
-    if (!valueFilter.valorPago || !valueFilter.dropSW || !valueFilter.dropBakra || !valueFilter.valorVenda) n += 1;
+    if (!valueFilter.valorPago || !valueFilter.dropSW || !valueFilter.dropBakra || !valueFilter.dropCrypt || !valueFilter.valorVenda) n += 1;
     if (adv.servers.length > 0) n += 1;
     if (adv.vocations.length > 0) n += 1;
     for (const range of [adv.level, adv.cost, adv.sale]) if (rangeOn(range)) n += 1;
@@ -929,6 +953,7 @@ export default function StatsPanel({ characters, parties = [], userName = "", us
     ptsDia: `FREQUÊNCIA DE PT's\n\nMédia diária de PT's CONCLUÍDAS (sucesso).`,
     medDropSW: `MÉDIA DE DROP SOULWAR\n\nLucro médio (RC) em Soulwar por personagem que dropou.`,
     medDropSG: `MÉDIA DE DROP SANGUINE\n\nLucro médio (RC) em Sanguine por personagem que dropou.`,
+    medDropCrypt: `MÉDIA DE DROP CRYPT\n\nLucro médio (RC) na Crypt por personagem que dropou.`,
     custoUnit: `CUSTO UNITÁRIO MÉDIO\n\nPreço médio pago pelos personagens da base filtrada.`,
     vendaUnit: `VENDA UNITÁRIA MÉDIA\n\nValor médio de revenda dos personagens vendidos.`,
     resultadoMedio: `RESULTADO MÉDIO\n\nLucro líquido médio por personagem.`,
@@ -1092,6 +1117,7 @@ export default function StatsPanel({ characters, parties = [], userName = "", us
                 <button onClick={() => setValueFilter((f) => ({ ...f, valorPago: !f.valorPago }))} className={`px-2 py-0.5 rounded-md text-[9px] font-bold border transition-all ${valueFilter.valorPago ? "border-rose-500/60 bg-rose-500/20 text-rose-300" : `${pillIdle} opacity-50`}`} title="Custo (subtrai)">Custo</button>
                 <button onClick={() => setValueFilter((f) => ({ ...f, dropSW: !f.dropSW }))} className={`px-2 py-0.5 rounded-md text-[9px] font-bold border transition-all ${valueFilter.dropSW ? "border-purple-500/60 bg-purple-500/20 text-purple-300" : `${pillIdle} opacity-50`}`} title="Drop SW (soma)">Drop SW</button>
                 <button onClick={() => setValueFilter((f) => ({ ...f, dropBakra: !f.dropBakra }))} className={`px-2 py-0.5 rounded-md text-[9px] font-bold border transition-all ${valueFilter.dropBakra ? "border-orange-500/60 bg-orange-500/20 text-orange-300" : `${pillIdle} opacity-50`}`} title="Drop SG (soma)">Drop SG</button>
+                <button onClick={() => setValueFilter((f) => ({ ...f, dropCrypt: !(f.dropCrypt ?? true) }))} className={`px-2 py-0.5 rounded-md text-[9px] font-bold border transition-all ${valueFilter.dropCrypt ? "border-cyan-500/60 bg-cyan-500/20 text-cyan-300" : `${pillIdle} opacity-50`}`} title="Drop Crypt (soma)">Drop Crypt</button>
                 <button onClick={() => setValueFilter((f) => ({ ...f, valorVenda: !f.valorVenda }))} className={`px-2 py-0.5 rounded-md text-[9px] font-bold border transition-all ${valueFilter.valorVenda ? "border-emerald-500/60 bg-emerald-500/20 text-emerald-300" : `${pillIdle} opacity-50`}`} title="Venda (soma)">Venda</button>
               </div>
             </StatsFilterBox>
@@ -1111,7 +1137,7 @@ export default function StatsPanel({ characters, parties = [], userName = "", us
             {money(stats.totalGeral)} {stats.totalGeral >= 0 ? <TrendingUp size={18} /> : <TrendingDown size={18} />}
           </div>
           <div className="mt-1 text-[9px] text-slate-500 truncate">
-            Custos {money(stats.totalInvestido)} · Drops {money(stats.totalDropSW + stats.totalDropBakra)} · Vendas {money(stats.totalVendas)}
+            Custos {money(stats.totalInvestido)} · Drops {money(stats.totalDropSW + stats.totalDropBakra + stats.totalDropCrypt)} · Vendas {money(stats.totalVendas)}
           </div>
         </div>
 
@@ -1131,6 +1157,7 @@ export default function StatsPanel({ characters, parties = [], userName = "", us
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
             <StatRow label="Lucro Médio SW" value={moneyAvg(stats.dropSWAvg.avg)} title={tt.medDropSW} />
             <StatRow label="Lucro Médio SG" value={moneyAvg(stats.dropBakraAvg.avg)} title={tt.medDropSG} />
+            <StatRow label="Lucro Médio Crypt" value={moneyAvg(stats.dropCryptAvg.avg)} title={tt.medDropCrypt} />
             <StatRow label="Custo Médio / Personagem" value={moneyAvg(stats.valorPagoAvg.avg)} title={tt.custoUnit} />
             <StatRow label="Venda Média / Personagem" value={moneyAvg(stats.valorVendaAvg.avg)} title={tt.vendaUnit} />
             <StatRow label="Resultado Médio / Personagem" value={moneyAvg(stats.lucroMedio.avg)} valueColor={stats.lucroMedio.avg >= 0 ? "text-emerald-400" : "text-rose-400"} title={tt.resultadoMedio} />
@@ -1206,9 +1233,10 @@ export default function StatsPanel({ characters, parties = [], userName = "", us
       </div>
 
       {/* ═══════════ DROPS | PARCEIROS ═══════════ */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-2 items-stretch">
+      <div className="grid grid-cols-1 lg:grid-cols-4 gap-2 items-stretch">
         <ItemSection title="Drop Soulwar" list={itemStats.swList} masterList={SOULWAR_ITEMS} total={itemStats.totalSW} type="sw" />
         <ItemSection title="Drop Sanguine" list={itemStats.sgList} masterList={SANGUINE_ITEMS} total={itemStats.totalSG} type="sg" />
+        <ItemSection title="Drop Crypt" list={itemStats.cryptList} masterList={CRYPT_ITEMS} total={itemStats.totalCrypt} type="crypt" />
         <PartnerSection title="Parceiros de Quest (Top 5)" partners={displayPartners} />
       </div>
 
@@ -1332,10 +1360,10 @@ function PartyTypeBar({ label, count, total, color, title }: { label: string; co
   );
 }
 
-function ItemSection({ title, list, masterList, total, type }: { title: string; list: [string, number][]; masterList: string[]; total: number; type: "sw" | "sg" }) {
+function ItemSection({ title, list, masterList, total, type }: { title: string; list: [string, number][]; masterList: string[]; total: number; type: "sw" | "sg" | "crypt" }) {
   const fullList = useMemo(() => {
     const map = new Map(list);
-    const priorityList = type === "sw" ? SW_PRIORITY : SG_PRIORITY;
+    const priorityList = type === "sw" ? SW_PRIORITY : type === "crypt" ? CRYPT_PRIORITY : SG_PRIORITY;
     return masterList.map(name => ({ name, count: map.get(name) || 0 })).sort((a, b) => {
       const colorA = ITEM_COLORS[a.name];
       const colorB = ITEM_COLORS[b.name];

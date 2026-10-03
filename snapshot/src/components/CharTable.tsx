@@ -50,22 +50,22 @@ interface Props {
   onViewBazaarItems?: (c: Character) => void;
 }
 
-const NUMERIC_COLUMNS = new Set(["level", "valorPago", "dropSW", "dropBakra", "valorVenda", "total"]);
-const BOOLEAN_COLUMNS = new Set(["soulwar", "sanguine", "vendido"]);
+const NUMERIC_COLUMNS = new Set(["level", "valorPago", "dropSW", "dropBakra", "dropCrypt", "valorVenda", "total"]);
+const BOOLEAN_COLUMNS = new Set(["soulwar", "sanguine", "crypt", "vendido"]);
 const TEXT_FILTER_COLUMNS = new Set(["personagem", "dataCompra", "dataVenda", "notes"]);
 // Colunas de MÚLTIPLA seleção (FilterMulti, padrão do Painel Bazaar):
 // categorias com opções independentes onde combinar valores faz sentido.
 // Toggles binários (SW/SG/PT/Compartilhar/Vendido), textos e numéricos
 // continuam com os filtros atuais.
-const MULTI_CHOICE_COLUMNS = ["account", "servidor", "voc", "itemDropadoSW", "itemDropadoSG"] as const;
+const MULTI_CHOICE_COLUMNS = ["account", "servidor", "voc", "itemDropadoSW", "itemDropadoSG", "itemDropadoCrypt"] as const;
 
 const COLLAPSED_WIDTH = 22;
 
 const DEFAULT_COL_WIDTHS: Record<string, number> = {
   account: 95, personagem: 100, servidor: 65, voc: 42, level: 48,
-  soulwar: 45, sanguine: 45, pt: 45, dropSW: 70, dropBakra: 75, total: 75,
+  soulwar: 45, sanguine: 45, crypt: 45, pt: 45, dropSW: 70, dropBakra: 75, dropCrypt: 75, total: 75,
   dataCompra: 80, valorPago: 75, dataVenda: 80, vendido: 55, shared: 40,
-  itemDropadoSW: 140, itemDropadoSG: 140, bazaarItems: 55,
+  itemDropadoSW: 140, itemDropadoSG: 140, itemDropadoCrypt: 150, bazaarItems: 55,
 };
 
 export const SOULWAR_ITEMS = [
@@ -84,6 +84,16 @@ export const SANGUINE_ITEMS = [
   "Sanguine Razor", "Sanguine Claws", "Sanguine Rod", "Sanguine Trousers",
   "Sanguine Boots", "Sanguine Galoshes", "Sanguine Bludgeon", "Sanguine Blade",
   "Sanguine Crossbow", "Sanguine Battleaxe", "Sanguine Hatchet", "Sanguine Cudgel",
+];
+
+/**
+ * DROPS DA CRYPT ("The Roost of the Graveborn") — ordenados do MAIS valioso
+ * para o MENOS valioso (ordem oficial da tarefa). As cores relativas seguem
+ * o MESMO padrão visual das outras Quests (verde = topo, vermelho = base).
+ */
+export const CRYPT_ITEMS = [
+  "Necromantic Crypt Rune", "Icy Crypt Rune", "Deathly Crypt Rune",
+  "Fiery Crypt Rune", "Ancient Crypt Rune",
 ];
 
 /**
@@ -114,6 +124,11 @@ export const ITEM_COLORS: Record<string, string> = {
   "Sanguine Bludgeon": "#f97316", "Sanguine Blade": "#f97316",
   "Sanguine Crossbow": "#ef4444", "Sanguine Battleaxe": "#ef4444",
   "Sanguine Hatchet": "#dc2626", "Sanguine Cudgel": "#dc2626",
+  // CRYPT — 5 runes, do mais valioso (verde) ao menos valioso (vermelho),
+  // reutilizando a escala de cores existente (SW/SG permanecem intactas).
+  "Necromantic Crypt Rune": "#22c55e", "Icy Crypt Rune": "#4ade80",
+  "Deathly Crypt Rune": "#eab308", "Fiery Crypt Rune": "#f97316",
+  "Ancient Crypt Rune": "#ef4444",
 };
 
 function hashStr(s: string): number {
@@ -342,15 +357,15 @@ export default function CharTable({ characters, activeParties = [], readOnly, sh
   // Modal "Item Vendido" (Lucro SW/Lucro SG): personagem + quest do contexto.
   // A separação SW × SG é preservada — cada quest tem o próprio registro
   // (itemSaleSW/itemSaleSG) e o próprio campo de lucro (dropSW/dropBakra).
-  const [itemSaleTarget, setItemSaleTarget] = useState<{ characterId: string; quest: "soulwar" | "sanguine" } | null>(null);
+  const [itemSaleTarget, setItemSaleTarget] = useState<{ characterId: string; quest: "soulwar" | "sanguine" | "crypt" } | null>(null);
 
-  // ── EDIÇÃO INLINE da disponibilidade de Quest (SW/SG) ─────────────────────
+  // ── EDIÇÃO INLINE da disponibilidade de Quest (SW/SG/Crypt) ───────────────
   // 1º clique no ✓/✕ arma a CONFIRMAÇÃO (o botão vira "Confirmar"); o 2º
   // clique NO MESMO botão salva via onCharacterInlineChange — a MESMA
   // persistência do app (nenhuma segunda fonte de verdade; o modal continua
   // intocado). Clique em outro personagem/quest move a confirmação para o
   // novo alvo; clique em qualquer área externa cancela sem salvar.
-  const [questConfirm, setQuestConfirm] = useState<{ id: string; quest: "soulwar" | "sanguine" } | null>(null);
+  const [questConfirm, setQuestConfirm] = useState<{ id: string; quest: "soulwar" | "sanguine" | "crypt" } | null>(null);
 
   // Cancelamento natural: mousedown em qualquer lugar FORA do botão armado
   // (os botões interrompem a propagação do próprio mousedown) desarma a
@@ -409,8 +424,12 @@ export default function CharTable({ characters, activeParties = [], readOnly, sh
     setHiddenColumns((prev) => prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key]);
   }
 
-  const [columnsOrder, setColumnsOrder] = usePersistedState<string[]>(storageKey("columnsOrder_v7"), [
-    "account", "personagem", "servidor", "voc", "level", "soulwar", "sanguine", "pt", "itemDropadoSW", "itemDropadoSG", "dropSW", "dropBakra", "total", "dataCompra", "valorPago", "dataVenda", "vendido", "shared"
+  // v8: Crypt entra IMEDIATAMENTE após SW/SG em cada grupo (disponibilidade,
+  // drop e lucro). O bump da chave reinicia a ordem personalizada UMA vez —
+  // mesmo mecanismo usado nos bumps anteriores (v1..v7) quando o conjunto de
+  // colunas mudou.
+  const [columnsOrder, setColumnsOrder] = usePersistedState<string[]>(storageKey("columnsOrder_v8"), [
+    "account", "personagem", "servidor", "voc", "level", "soulwar", "sanguine", "crypt", "pt", "itemDropadoSW", "itemDropadoSG", "itemDropadoCrypt", "dropSW", "dropBakra", "dropCrypt", "total", "dataCompra", "valorPago", "dataVenda", "vendido", "shared"
   ]);
 
   const characterInParty = useMemo(() => {
@@ -486,9 +505,11 @@ export default function CharTable({ characters, activeParties = [], readOnly, sh
    * sincronização do app — nenhuma segunda fonte de verdade) e o aviso ⚠
    * de "provavelmente já fez" é preservado sem alteração.
    */
-  function renderQuestAvailabilityCell(c: Character, quest: "soulwar" | "sanguine") {
-    const value = quest === "soulwar" ? c.soulwar : c.sanguine;
-    const questLabel = quest === "soulwar" ? "Soulwar" : "Sanguine";
+  function renderQuestAvailabilityCell(c: Character, quest: "soulwar" | "sanguine" | "crypt") {
+    // Crypt é opcional no tipo (legado sem o campo): `!== false` trata o
+    // personagem antigo como DISPONÍVEL — o mesmo padrão inicial de SW/SG.
+    const value = quest === "soulwar" ? c.soulwar : quest === "sanguine" ? c.sanguine : c.crypt !== false;
+    const questLabel = quest === "soulwar" ? "Soulwar" : quest === "sanguine" ? "Sanguine" : "Crypt";
     const showWarning = probableMarkers[c.id]?.[quest] === true && value;
     const warningTitle = `Esse personagem provavelmente já fez ${questLabel} e precisa ser atualizado.`;
     const locked = lockedQuestFinancialIds.has(c.id);
@@ -630,6 +651,12 @@ export default function CharTable({ characters, activeParties = [], readOnly, sh
       render: (c) => renderQuestAvailabilityCell(c, "sanguine"),
     },
     {
+      key: "crypt", label: "Crypt", align: "center",
+      // Legado sem o campo = disponível (mesma regra da célula inline).
+      get: (c) => (c.crypt !== false ? "Sim" : "Não"),
+      render: (c) => renderQuestAvailabilityCell(c, "crypt"),
+    },
+    {
       key: "pt", label: "PT", align: "center",
       get: (c) => characterInParty.has(c.id) ? 1 : 0,
       render: (c) => {
@@ -673,6 +700,22 @@ export default function CharTable({ characters, activeParties = [], readOnly, sh
             itemList={SANGUINE_ITEMS}
             disabled={locked}
             disabledReason="Bloqueado: o Drop SG desta Quest pertence ao comprador da negociação"
+          />
+        );
+      },
+    },
+    {
+      key: "itemDropadoCrypt", label: "DROP CRYPT", align: "center",
+      get: (c) => c.itemDropadoCrypt || "",
+      render: (c) => {
+        const locked = lockedQuestFinancialIds.has(c.id);
+        return (
+          <ItemSelect
+            value={c.itemDropadoCrypt || ""}
+            onChange={(val) => onCharacterInlineChange?.({ ...c, itemDropadoCrypt: val })}
+            itemList={CRYPT_ITEMS}
+            disabled={locked}
+            disabledReason="Bloqueado: o Drop Crypt desta Quest pertence ao comprador da negociação"
           />
         );
       },
@@ -747,6 +790,43 @@ export default function CharTable({ characters, activeParties = [], readOnly, sh
               </button>
             )}
             {displayRC(c.dropBakra)}
+          </span>
+        );
+      },
+    },
+    {
+      key: "dropCrypt", label: "LUCRO CRYPT", align: "center",
+      get: (c) => c.dropCrypt || 0,
+      render: (c) => {
+        const locked = lockedQuestFinancialIds.has(c.id);
+        // Mesmo fluxo de SW/SG, contexto SEMPRE Crypt (Lucro Crypt) —
+        // registro próprio (itemSaleCrypt/dropCrypt), nunca misturado.
+        const hasDrop = !!(c.itemDropadoCrypt || "").trim();
+        const hasSale = !!c.itemSaleCrypt && (c.itemSaleCrypt.resultRC || 0) > 0;
+        const canSell = !locked && !readOnly && hasDrop && !!onCharacterInlineChange;
+        return (
+          <span className={`inline-flex items-center gap-1 tabular-nums text-[11px] ${locked ? "text-slate-500" : "text-slate-300"}`} title={locked ? "Bloqueado: o Lucro Crypt desta Quest pertence ao comprador da negociação" : undefined}>
+            {locked && <Lock size={10} className="text-violet-300" />}
+            {onCharacterInlineChange && !locked && !readOnly && (
+              <button
+                type="button"
+                disabled={!canSell}
+                onClick={(e) => { e.stopPropagation(); if (canSell) setItemSaleTarget({ characterId: c.id, quest: "crypt" }); }}
+                title={!hasDrop ? "Selecione um item em DROP CRYPT para habilitar a venda" : hasSale ? "Venda registrada — clique para revisar" : "Registrar a venda do item (valor, cotação do RC e Taxa Market)"}
+                className={`inline-flex items-center gap-0.5 px-1 py-0.5 rounded border text-[9px] font-bold transition-colors ${
+                  hasSale
+                    ? "border-emerald-500/50 bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30 cursor-pointer"
+                    : canSell
+                      ? "border-amber-500/40 bg-amber-500/10 text-amber-300 hover:bg-amber-500/25 cursor-pointer"
+                      : "border-white/10 bg-white/[0.03] text-slate-600 opacity-50 cursor-not-allowed"
+                }`}
+              >
+                {/* Texto pelo ESTADO PERSISTIDO (itemSaleCrypt.resultRC):
+                    "Vender" (âmbar) antes da confirmação; "Vendido" (verde) depois. */}
+                {hasSale ? <Check size={8} /> : <Coins size={8} />} {hasSale ? "Vendido" : "Vender"}
+              </button>
+            )}
+            {displayRC(c.dropCrypt || 0)}
           </span>
         );
       },
@@ -905,7 +985,7 @@ export default function CharTable({ characters, activeParties = [], readOnly, sh
           continue;
         }
 
-        if (key === "account" || key === "servidor" || key === "voc" || key === "itemDropadoSW" || key === "itemDropadoSG") {
+        if (key === "account" || key === "servidor" || key === "voc" || key === "itemDropadoSW" || key === "itemDropadoSG" || key === "itemDropadoCrypt") {
           // MÚLTIPLA seleção (padrão do Bazaar): sem valores = sem filtro;
           // com valores, o personagem precisa casar com ALGUM deles.
           const sel = multiChoiceFilters[key];
@@ -1094,6 +1174,22 @@ export default function CharTable({ characters, activeParties = [], readOnly, sh
       );
     }
 
+    // 11b. Drop Crypt — FilterMulti searchable (mesmo padrão de SW/SG)
+    if (key === "itemDropadoCrypt") {
+      return (
+        <div className="flex justify-center">
+          <FilterMulti
+            label="Drop Crypt"
+            options={CRYPT_ITEMS}
+            selected={multiChoiceFilters.itemDropadoCrypt || []}
+            onApply={(values) => setMultiChoiceFilters((f) => ({ ...f, itemDropadoCrypt: values }))}
+            placeholder="Drop Crypt"
+            searchable
+          />
+        </div>
+      );
+    }
+
     // 12–16. Colunas numéricas — FilterNumber (level, dropSW, dropBakra, valorVenda, valorPago, total)
     if (NUMERIC_COLUMNS.has(key)) {
       const st = numericFilters[key] ?? { value: "", op: "gte" as NumericOp };
@@ -1109,8 +1205,8 @@ export default function CharTable({ characters, activeParties = [], readOnly, sh
       );
     }
 
-    // 7–8. SW / SG — FilterToggle (✓/✕/−) via booleanFilters
-    if (key === "soulwar" || key === "sanguine") {
+    // 7–8. SW / SG / Crypt — FilterToggle (✓/✕/−) via booleanFilters
+    if (key === "soulwar" || key === "sanguine" || key === "crypt") {
       const sel = booleanFilters[key] || "";
       const state: ToggleState = sel === "Sim" ? "yes" : sel === "Não" ? "no" : "off";
       return (
@@ -1485,7 +1581,7 @@ export default function CharTable({ characters, activeParties = [], readOnly, sh
                   return <td key={col.key} className="border-b border-white/5 bg-black/20 p-0"></td>;
                 }
 
-                const isInteractiveNoModal = col.key === "itemDropadoSW" || col.key === "itemDropadoSG";
+                const isInteractiveNoModal = col.key === "itemDropadoSW" || col.key === "itemDropadoSG" || col.key === "itemDropadoCrypt";
 
                 return (
                   <td
@@ -1534,21 +1630,27 @@ export default function CharTable({ characters, activeParties = [], readOnly, sh
       {itemSaleTarget && (() => {
         const target = characters.find(ch => ch.id === itemSaleTarget.characterId);
         if (!target) return null;
-        const isSW = itemSaleTarget.quest === "soulwar";
-        const itemName = (isSW ? target.itemDropadoSW : target.itemDropadoSG) || "Item";
-        const existing = (isSW ? target.itemSaleSW : target.itemSaleSG) || null;
+        // Contexto por Quest — soulwar -> itemSaleSW/dropSW; sanguine ->
+        // itemSaleSG/dropBakra; crypt -> itemSaleCrypt/dropCrypt. Os três
+        // registros são independentes e nunca se misturam.
+        const quest = itemSaleTarget.quest;
+        const itemName = (quest === "soulwar" ? target.itemDropadoSW : quest === "sanguine" ? target.itemDropadoSG : target.itemDropadoCrypt) || "Item";
+        const existing = (quest === "soulwar" ? target.itemSaleSW : quest === "sanguine" ? target.itemSaleSG : target.itemSaleCrypt) || null;
+        const contextName = quest === "soulwar" ? "Lucro SW" : quest === "sanguine" ? "Lucro SG" : "Lucro Crypt";
         return (
           <ItemSoldModal
             itemName={itemName}
-            contextLabel={`${target.personagem} — ${isSW ? "Lucro SW" : "Lucro SG"}`}
+            contextLabel={`${target.personagem} — ${contextName}`}
             initial={existing}
             onCancel={() => setItemSaleTarget(null)}
             onSave={(sale: ItemSaleRecord) => {
               onCharacterInlineChange?.({
                 ...target,
-                ...(isSW
+                ...(quest === "soulwar"
                   ? { itemSaleSW: sale, dropSW: sale.resultRC }
-                  : { itemSaleSG: sale, dropBakra: sale.resultRC }),
+                  : quest === "sanguine"
+                    ? { itemSaleSG: sale, dropBakra: sale.resultRC }
+                    : { itemSaleCrypt: sale, dropCrypt: sale.resultRC }),
               });
               setItemSaleTarget(null);
             }}
