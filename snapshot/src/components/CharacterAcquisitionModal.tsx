@@ -111,10 +111,17 @@ export default function CharacterAcquisitionModal({ open, context, onClose, onCo
    */
   function copyWhatsAppSummary() {
     if (!context) return;
+    // Level no padrão do exemplo oficial: "Dragon Slayer — EK 552" (vocação +
+    // Level já disponíveis no contexto do modal — os mesmos exibidos no
+    // cabeçalho "Servidor · Voc · Lv"). Sem Level válido (> 0), nada é
+    // acrescentado; sem vocação, usa o prefixo "Lv" para manter a clareza.
+    const vocLevel = context.level > 0
+      ? ` — ${context.vocation ? `${context.vocation} ` : "Lv "}${context.level}`
+      : "";
     const linhas = [
       "🧾 *Venda de Char — Chernobyl PT*",
       "",
-      `🎯 *Personagem:* ${context.characterName}${context.server ? ` (${context.server})` : ""}`,
+      `🎯 *Personagem:* ${context.characterName}${vocLevel}${context.server ? ` (${context.server})` : ""}`,
       `🤝 *Vendedor:* ${context.originalOwnerName || "—"}`,
       `👤 *Comprador:* ${context.acquirerName || "—"}`,
       "",
