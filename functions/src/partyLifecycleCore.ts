@@ -42,6 +42,14 @@ export interface LifecycleSlot {
   paidByName: string;
   paidAt: number;
   isService: boolean;
+  /**
+   * SANGUINE — resposta da coluna "Drop?" do slot (true = dropou o item,
+   * false = não dropou, undefined = SEM resposta). A finalização por
+   * pagamento de uma PT Sanguine é rejeitada (`sg_drop_pending`) enquanto
+   * qualquer participante estiver sem resposta — espelho autoritativo do
+   * bloqueio aplicado pelo frontend.
+   */
+  sgDrop?: boolean;
 }
 
 export interface LifecycleParty {
@@ -199,6 +207,8 @@ export interface SanitizedPartyArchive {
     paidByName: string;
     paidAt: number;
     isService: boolean;
+    /** SANGUINE: resposta "Drop?" preservada no arquivo (fidelidade do histórico/Att Chars). */
+    sgDrop?: boolean;
   }>;
   totals: PartySettlementProjection["totals"];
 }
@@ -330,6 +340,8 @@ function slotFromRaw(id: string, rawSlot: UnknownRecord, rawSnapshot: UnknownRec
     paidByName: text(rawSlot.paidByName, 120),
     paidAt: integer(rawSlot.paidAt),
     isService: rawSlot.isService === true,
+    // Tri-state preservado: só boolean explícito vale como resposta.
+    sgDrop: rawSlot.sgDrop === true ? true : rawSlot.sgDrop === false ? false : undefined,
   };
 }
 
@@ -589,6 +601,9 @@ export function buildSanitizedPartyArchive(
     paidByName: slot.paidByName,
     paidAt: slot.paidAt,
     isService: slot.isService,
+    // SANGUINE: a resposta "Drop?" entra no arquivo sanitizado apenas quando
+    // definida (tri-state preservado; SW/GB nunca têm o campo).
+    ...(slot.sgDrop === undefined ? {} : { sgDrop: slot.sgDrop }),
   }]));
   const memberSnapshots = Object.fromEntries(party.slots.map(slot => [slot.id, {
     id: slot.id,
@@ -649,6 +664,16 @@ export function validateFinalization(party: LifecycleParty, reason: Finalization
   }
   if (!party.questConcluida || party.questFalha) return "quest_not_completed";
   if (party.validationErrors.length > 0) return party.validationErrors[0];
+
+  // SANGUINE: todo participante precisa ter a coluna "Drop?" respondida
+  // (Sim/Não) antes da finalização por pagamento. O erro NOMEIA os
+  // pendentes (mesmo padrão de `acquisition_pending_pre_approval`).
+  if (party.questType === "sanguine") {
+    const pendingNames = party.slots
+      .filter(slot => slot.sgDrop === undefined)
+      .map(slot => slot.characterName || slot.ownerName || slot.id);
+    if (pendingNames.length > 0) return `sg_drop_pending:${pendingNames.join(", ")}`;
+  }
 
   const splitSlots = party.slots.filter(slot => slot.split);
   const hasUnsoldSplitItem = splitSlots.some(slot => !!slot.itemDropado && slot.itemVendido <= 0);

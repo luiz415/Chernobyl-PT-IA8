@@ -5,6 +5,7 @@ import { VOCATIONS, VOC_COLORS, calcTotal, formatRC, formatDateBR, customConfirm
 import ItemSoldModal from "./ItemSoldModal";
 import { FilterMulti, FilterToggle, FilterNumber, FilterInline, type ToggleState } from "./FilterTypes";
 import { serverLabel } from "../constants/servers";
+import { describeSgCooldown, formatSgCooldownRemaining, isSgCooldownActive, normalizeSgRot } from "../utils/sanguineRotation";
 
 type NumericOp = "gte" | "lte";
 type BooleanFilter = "Sim" | "Não" | "À Venda" | "";
@@ -63,7 +64,7 @@ const COLLAPSED_WIDTH = 22;
 
 const DEFAULT_COL_WIDTHS: Record<string, number> = {
   account: 95, personagem: 100, servidor: 65, voc: 42, level: 48,
-  soulwar: 45, sanguine: 45, crypt: 45, pt: 45, dropSW: 70, dropBakra: 75, dropCrypt: 75, total: 75,
+  soulwar: 45, sanguine: 45, sgRot: 90, crypt: 45, pt: 45, dropSW: 70, dropBakra: 75, dropCrypt: 75, total: 75,
   dataCompra: 80, valorPago: 75, dataVenda: 80, vendido: 55, shared: 40,
   itemDropadoSW: 140, itemDropadoSG: 140, itemDropadoCrypt: 150, bazaarItems: 55,
 };
@@ -367,6 +368,26 @@ export default function CharTable({ characters, activeParties = [], readOnly, sh
   // novo alvo; clique em qualquer área externa cancela sem salvar.
   const [questConfirm, setQuestConfirm] = useState<{ id: string; quest: "soulwar" | "sanguine" | "crypt" } | null>(null);
 
+  // ── ROT SG — edição inline + contador do cooldown do Bakragore ──────────
+  // `sgRotEdit`: personagem com o campo numérico aberto (null = nenhum).
+  // `sgNowTick`: relógio discreto do contador regressivo (30s — o contador
+  // exibe horas/minutos; quando expira, some sozinho no próximo tique).
+  const [sgRotEdit, setSgRotEdit] = useState<{ id: string; value: string } | null>(null);
+  const [sgNowTick, setSgNowTick] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = window.setInterval(() => setSgNowTick(Date.now()), 30_000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  function commitSgRotEdit(c: Character) {
+    if (!sgRotEdit || sgRotEdit.id !== c.id) return;
+    const parsed = parseInt(sgRotEdit.value, 10);
+    setSgRotEdit(null);
+    if (!Number.isFinite(parsed) || parsed < 1) return; // valor inválido: não salva
+    if (parsed === normalizeSgRot(c.sgRot)) return;     // sem mudança: nenhum write
+    onCharacterInlineChange?.({ ...c, sgRot: parsed });
+  }
+
   // Cancelamento natural: mousedown em qualquer lugar FORA do botão armado
   // (os botões interrompem a propagação do próprio mousedown) desarma a
   // confirmação — mesma mecânica do menu de contexto desta tabela.
@@ -424,12 +445,12 @@ export default function CharTable({ characters, activeParties = [], readOnly, sh
     setHiddenColumns((prev) => prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key]);
   }
 
-  // v8: Crypt entra IMEDIATAMENTE após SW/SG em cada grupo (disponibilidade,
-  // drop e lucro). O bump da chave reinicia a ordem personalizada UMA vez —
-  // mesmo mecanismo usado nos bumps anteriores (v1..v7) quando o conjunto de
-  // colunas mudou.
-  const [columnsOrder, setColumnsOrder] = usePersistedState<string[]>(storageKey("columnsOrder_v8"), [
-    "account", "personagem", "servidor", "voc", "level", "soulwar", "sanguine", "crypt", "pt", "itemDropadoSW", "itemDropadoSG", "itemDropadoCrypt", "dropSW", "dropBakra", "dropCrypt", "total", "dataCompra", "valorPago", "dataVenda", "vendido", "shared"
+  // v9: nova coluna "Rot SG" (rotação atual da Sanguine + contador do
+  // cooldown do Bakragore) imediatamente após SG. O bump da chave reinicia a
+  // ordem personalizada UMA vez — mesmo mecanismo dos bumps anteriores
+  // (v1..v8) quando o conjunto de colunas mudou.
+  const [columnsOrder, setColumnsOrder] = usePersistedState<string[]>(storageKey("columnsOrder_v9"), [
+    "account", "personagem", "servidor", "voc", "level", "soulwar", "sanguine", "sgRot", "crypt", "pt", "itemDropadoSW", "itemDropadoSG", "itemDropadoCrypt", "dropSW", "dropBakra", "dropCrypt", "total", "dataCompra", "valorPago", "dataVenda", "vendido", "shared"
   ]);
 
   const characterInParty = useMemo(() => {
@@ -649,6 +670,78 @@ export default function CharTable({ characters, activeParties = [], readOnly, sh
       key: "sanguine", label: "SG", align: "center",
       get: (c) => (c.sanguine ? "Sim" : "Não"),
       render: (c) => renderQuestAvailabilityCell(c, "sanguine"),
+    },
+    {
+      // ROT SG — rotação ATUAL da Sanguine (1ª = padrão/legado). Editável
+      // inline (mesmas permissões da edição inline existente); exibe também
+      // o contador regressivo do cooldown de 72h do Bakragore enquanto
+      // ativo (some sozinho ao expirar).
+      key: "sgRot", label: "Rot SG", align: "center",
+      get: (c) => normalizeSgRot(c.sgRot),
+      render: (c) => {
+        const locked = lockedQuestFinancialIds.has(c.id);
+        const canEditInline = !readOnly && !locked && !!onCharacterInlineChange;
+        const rot = normalizeSgRot(c.sgRot);
+        const cooldownOn = isSgCooldownActive(c.sgBakraCooldownUntil, sgNowTick);
+        const cooldownBadge = cooldownOn && (
+          <span
+            className="inline-flex items-center gap-0.5 px-1 py-0.5 rounded border border-amber-500/30 bg-amber-500/10 text-amber-300 text-[9px] font-bold tabular-nums"
+            title={describeSgCooldown(c.sgBakraCooldownUntil!)}
+          >
+            ⏳ {formatSgCooldownRemaining(c.sgBakraCooldownUntil!, sgNowTick)}
+          </span>
+        );
+
+        if (sgRotEdit?.id === c.id && canEditInline) {
+          return (
+            <input
+              type="number"
+              min={1}
+              autoFocus
+              value={sgRotEdit.value}
+              onChange={(e) => setSgRotEdit({ id: c.id, value: e.target.value })}
+              onBlur={() => commitSgRotEdit(c)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") commitSgRotEdit(c);
+                if (e.key === "Escape") setSgRotEdit(null);
+              }}
+              onMouseDown={(e) => e.stopPropagation()}
+              onClick={(e) => e.stopPropagation()}
+              onDoubleClick={(e) => e.stopPropagation()}
+              className="w-12 bg-black/70 border border-rose-500/50 rounded px-1 py-0.5 text-[11px] text-center text-rose-200 focus:outline-none tabular-nums"
+              title="Rotação atual da Sanguine (Enter salva, Esc cancela)"
+            />
+          );
+        }
+
+        const rotLabel = <span className="font-bold text-rose-300 text-[11px] tabular-nums">{rot}ª Rot</span>;
+        if (!canEditInline) {
+          return (
+            <span className="inline-flex items-center justify-center gap-1" title={`Rotação atual da Sanguine: ${rot}ª`}>
+              {rotLabel}
+              {cooldownBadge}
+            </span>
+          );
+        }
+        return (
+          <span className="inline-flex items-center justify-center gap-1">
+            <button
+              type="button"
+              onMouseDown={(e) => e.stopPropagation()}
+              onDoubleClick={(e) => e.stopPropagation()}
+              onClick={(e) => {
+                e.stopPropagation();
+                setSgRotEdit({ id: c.id, value: String(rot) });
+              }}
+              className="inline-flex items-center justify-center px-1 py-0.5 rounded-md border border-transparent hover:border-rose-500/40 hover:bg-rose-500/10 cursor-pointer transition-all"
+              title={`Rotação atual da Sanguine: ${rot}ª — clique para editar manualmente`}
+            >
+              {rotLabel}
+            </button>
+            {cooldownBadge}
+          </span>
+        );
+      },
     },
     {
       key: "crypt", label: "GB", align: "center",

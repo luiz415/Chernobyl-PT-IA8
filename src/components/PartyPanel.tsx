@@ -4,6 +4,8 @@ import { isServiceOpenToAnyone } from "../utils/serviceVisibility";
 import { ACQUISITION_ACCEPT_EVENT, clearPendingAcquisitionAccept, peekPendingAcquisitionAccept, type AcquisitionAcceptRequestDetail } from "../utils/acquisitionAcceptNavigation";
 import ConfirmModal from "./ConfirmModal";
 import PausePartyModal from "./PausePartyModal";
+import NextRotationModal from "./NextRotationModal";
+import { describeSgCooldown, formatSgCooldownRemaining, isSgCooldownActive, normalizeSgRot } from "../utils/sanguineRotation";
 import {
   cooldownRemainingMs,
   findQuestBoss,
@@ -11,7 +13,7 @@ import {
   questBossLabel,
 } from "../constants/questBosses";
 import type { QuestBoss } from "../constants/questBosses";
-import { ArrowDown, ArrowUp, ArrowUpDown, Plus, Minus, X, UserPlus, ExternalLink, Play, Clock, Pencil, Check, Lock, Users, Tv, Handshake, Coins, MessageCircle } from "lucide-react";
+import { ArrowDown, ArrowUp, ArrowUpDown, Plus, Minus, X, UserPlus, ExternalLink, Play, Clock, Pencil, Check, Lock, Users, Tv, Handshake, Coins, MessageCircle, RotateCw } from "lucide-react";
 import type { Character, CharacterAcquisition, PartyFinalizationReason, PartyTab, PartyCustomMember, PartySlotData, Vocation, WaitingService } from "../types";
 import { getCharacterAccountKey, hasAccountConflictWith } from "../utils/accountIdentity";
 import { resolveSplitBeneficiaryCandidate, buildResolvedUidPatch, type SplitBeneficiaryContext } from "../utils/splitBeneficiary";
@@ -121,6 +123,22 @@ interface Props {
    * (`payment_confirmed` em diante) o serviço/Rules negam o cancelamento.
    */
   onCancelCharacterAcquisitionPreApproval?: (acquisitionId: string) => Promise<{ ok: boolean; error?: string }>;
+  /**
+   * SANGUINE — resposta da coluna "Drop?" gravada/alterada/desfeita. O App
+   * sincroniza o marcador (probableMarkers) e o transporte do alvo para o
+   * dono do personagem (sharedCharacters.partyProfit). `answer === null` =
+   * resposta desfeita.
+   */
+  onSanguineDropAnswered?: (party: PartyTab, charId: string, answer: boolean | null) => void;
+  /**
+   * SANGUINE — confirmação do modal "Próxima Rotação": cria a nova PT
+   * Sanguine pelo fluxo normal de criação (App.createParty).
+   */
+  onCreateNextRotation?: (
+    sourceParty: PartyTab,
+    selectedIds: string[],
+    opts: { visibility: "public" | "private"; horarioTimestamp?: number },
+  ) => Promise<void> | void;
 }
 
 type SortDir = "asc" | "desc" | null;
@@ -177,6 +195,12 @@ function describeFinalizationError(rawError: string): string {
       const separatorIndex = rawError.indexOf(":");
       const characterNames = separatorIndex >= 0 ? rawError.slice(separatorIndex + 1).trim() : "";
       return `Existe venda pré-aprovada aguardando decisão do comprador${characterNames ? ` para: ${characterNames}` : ""}. O comprador precisa confirmar a compra ou o dono original cancelar a pré-aprovação antes de finalizar a PT.`;
+    }
+    case "sg_drop_pending": {
+      // O backend envia os nomes dos personagens pendentes após o ":".
+      const separatorIndex = rawError.indexOf(":");
+      const characterNames = separatorIndex >= 0 ? rawError.slice(separatorIndex + 1).trim() : "";
+      return `A coluna "Drop?" está sem resposta${characterNames ? ` para: ${characterNames}` : " para algum participante"}. Responda Sim ou Não para todos os personagens antes de finalizar a PT Sanguine.`;
     }
     case "party_not_found":
       return "A PT não foi encontrada no servidor — ela pode já ter sido finalizada por outro dispositivo.";
@@ -669,7 +693,7 @@ function formatWhatsDisplay(service: WaitingService): string {
   return `+${country} ${area} ${number}`.trim();
 }
 
-export default function PartyPanel({ party, characters, waitingList, allParties, userName, onUpdate, onPersistPartyNow, onDelete, onSaveParty, onRequestFinalization, onRefresh, characterAcquisitions = [], onCreateCharacterAcquisition, onConfirmCharacterAcquisitionPayment, onCancelCharacterAcquisitionPreApproval }: Props) {
+export default function PartyPanel({ party, characters, waitingList, allParties, userName, onUpdate, onPersistPartyNow, onDelete, onSaveParty, onRequestFinalization, onRefresh, characterAcquisitions = [], onCreateCharacterAcquisition, onConfirmCharacterAcquisitionPayment, onCancelCharacterAcquisitionPreApproval, onSanguineDropAnswered, onCreateNextRotation }: Props) {
   const { currentUser, userProfile, allUsers, acceptedFriendUids } = useAuth();
   const [showAddCustom, setShowAddCustom] = useState(false);
   // Estado `showSuggestModal` removido junto com o botão "Sugerir PT" — esse
@@ -1900,6 +1924,49 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
     || canToggleSplitAfterQuest
   );
 
+  // ══════════════════════════════════════════════════════════════════════════
+  // SANGUINE — coluna "Drop?", rotações (Rot SG) e "Próxima Rotação"
+  // ──────────────────────────────────────────────────────────────────────────
+  // • "Drop?" só existe em PT Sanguine e só aceita resposta APÓS a conclusão
+  //   da Quest (post_complete), enquanto a PT não for finalizada/pausada.
+  //   Podem responder: o LÍDER (por todos) e o DONO do personagem (pelos
+  //   próprios slots). Slot com fluxo financeiro travado (pago/dropLocked)
+  //   não muda mais de resposta.
+  // • Clicar na resposta já marcada DESFAZ (volta a "sem resposta").
+  // • Drop ≠ Sim limpa o Item Dropado do slot (o item não existe para ele);
+  //   o valor de venda/Service (`itemVendido`) é preservado.
+  // ══════════════════════════════════════════════════════════════════════════
+  const isSanguinePT = party.ptType === "sanguine";
+  const [showNextRotation, setShowNextRotation] = useState(false);
+  // Relógio do contador regressivo do cooldown do Bakragore (atualiza a cada
+  // 30s — leve; o interval só roda em PT Sanguine).
+  const [sgNowTick, setSgNowTick] = useState(() => Date.now());
+  useEffect(() => {
+    if (!isSanguinePT) return;
+    const timer = window.setInterval(() => setSgNowTick(Date.now()), 30_000);
+    return () => window.clearInterval(timer);
+  }, [isSanguinePT]);
+
+  const canAnswerSgDrop = (id: string): boolean => {
+    if (!isSanguinePT || questState !== "post_complete") return false;
+    if (party.pagamentoFeito || isPausedActive || isFinalizationRequested) return false;
+    const d = getSD(id);
+    if (d.pago || d.dropLocked) return false;
+    const ownerUid = d.ownerUid || party.memberSnapshots?.[id]?.ownerUid || "";
+    const isOwnSlot = !!currentUser?.uid && !!ownerUid && ownerUid === currentUser.uid;
+    return isLeaderPT || isOwnSlot;
+  };
+
+  function answerSgDrop(id: string, answer: boolean) {
+    const current = getSD(id);
+    const next: boolean | null = current.sgDrop === answer ? null : answer;
+    const patch: Partial<ExtendedPartySlotData> = { sgDrop: next === null ? undefined : next };
+    if (next !== true && current.itemDropado) patch.itemDropado = "";
+    setSD(id, patch);
+    // Marcador + transporte para o dono (App) — melhor esforço, nunca bloqueia a UI.
+    onSanguineDropAnswered?.(party, id, next);
+  }
+
   const isLeaderPTInParty = isLeaderPT && (
     party.selectedIds.some(id => {
       const ch = characters.find(c => c.id === id);
@@ -2934,10 +3001,16 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
     { k: "servidor", al: "center", l: "Servidor" },
     { k: "voc", al: "center", l: "Voc" },
     { k: "level", al: "center", l: "Level" },
+    // SANGUINE: rotação atual de cada personagem (com contador do cooldown
+    // do Bakragore quando ativo). Só existe em PT Sanguine.
+    ...(isSanguinePT ? [{ k: "rotsg", al: "center", l: "Rot SG" }] : []),
     { k: "dono", al: "center", l: "Dono" },
     { k: "jogador", al: "center", l: "Jogador" },
     { k: "mortes", al: "center", l: "Mortes" },
     { k: "dividir", al: "center", l: "Dividir" },
+    // SANGUINE: resposta "Drop?" (Sim/Não) — entre DIVIDIR e ITEM DROPADO,
+    // disponível somente após a conclusão da Quest.
+    ...(isSanguinePT ? [{ k: "sgdrop", al: "center", l: "Drop?" }] : []),
     { k: "itemDropado", al: "center", l: "Item Dropado" },
     { k: "itemVendido", al: "center", l: "Item Vendido/Service (RC)" },
     { k: "pago", al: "center", l: "PG" },
@@ -4199,6 +4272,36 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
                     <td className={srvCellClass}>{srv || "—"}</td>
                     <td className="px-2 py-0.5 text-center whitespace-nowrap"><span className="font-bold" style={{ color: VOC_COLORS[voc!] }}>{voc}</span></td>
                     <td className="px-2 py-0.5 text-center tabular-nums whitespace-nowrap">{lvl}</td>
+                    {isSanguinePT && (() => {
+                      // ROT SG — rotação ATUAL do personagem neste slot.
+                      // Pós-conclusão usa o snapshot CONGELADO (histórico fiel);
+                      // antes da conclusão, o personagem vivo (lista atual).
+                      const snapChar = party.memberSnapshots?.[id];
+                      const liveChar = slot.type === "char" ? slot.char : undefined;
+                      const rotSource = questState === "post_complete"
+                        ? (snapChar?.sgRot ?? liveChar?.sgRot)
+                        : (liveChar?.sgRot ?? snapChar?.sgRot);
+                      const rot = normalizeSgRot(rotSource);
+                      // Cooldown do Bakragore: prioriza o personagem VIVO (o
+                      // snapshot congela antes de a resposta Drop? existir).
+                      const cooldownUntil = liveChar?.sgBakraCooldownUntil || snapChar?.sgBakraCooldownUntil || 0;
+                      const cooldownOn = isSgCooldownActive(cooldownUntil, sgNowTick);
+                      return (
+                        <td className="px-1 py-0.5 text-center whitespace-nowrap">
+                          <span className="inline-flex items-center justify-center gap-1">
+                            <span className="text-[11px] font-bold text-rose-300 tabular-nums" title={`Rotação atual da Sanguine: ${rot}ª`}>{rot}ª</span>
+                            {cooldownOn && (
+                              <span
+                                className="inline-flex items-center gap-0.5 px-1 py-0.5 rounded border border-amber-500/30 bg-amber-500/10 text-amber-300 text-[9px] font-bold tabular-nums"
+                                title={describeSgCooldown(cooldownUntil)}
+                              >
+                                ⏳ {formatSgCooldownRemaining(cooldownUntil, sgNowTick)}
+                              </span>
+                            )}
+                          </span>
+                        </td>
+                      );
+                    })()}
                     <td className="px-2 py-0.5 text-center text-sky-300 whitespace-nowrap font-medium">{d.owner || "—"}</td>
                     <td className="px-1 py-0.5 text-center">
                       {/* JOGADOR: participante (DONO/JOGADOR) ou líder alteram;
@@ -4312,8 +4415,61 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
                         className={`w-4 h-4 accent-emerald-500 cursor-pointer appearance-none rounded-[3px] border ${d.split ? "border-emerald-400 bg-emerald-500/30" : "border-emerald-900"} bg-[var(--th-n-panel)] checked:bg-emerald-500/40 checked:border-emerald-400 relative checked:after:content-['✓'] checked:after:absolute checked:after:inset-0 checked:after:flex checked:after:items-center checked:after:justify-center checked:after:text-[9px] checked:after:text-emerald-300 checked:after:font-bold`}
                       />
                     </td>
+                    {isSanguinePT && (() => {
+                      // "DROP?" — resposta por personagem, apenas pós-conclusão.
+                      const answer = typeof d.sgDrop === "boolean" ? d.sgDrop : null;
+                      const canAnswer = canAnswerSgDrop(id);
+                      const pendingHighlight = questState === "post_complete" && answer === null && !party.pagamentoFeito;
+                      return (
+                        <td className="px-1 py-0.5 text-center whitespace-nowrap">
+                          <div
+                            className={`inline-flex items-center gap-0.5 rounded-md border px-0.5 py-0.5 transition-colors ${
+                              pendingHighlight
+                                ? "border-amber-500/50 bg-amber-500/10 animate-pulse"
+                                : "border-white/10 bg-white/[0.02]"
+                            } ${questState !== "post_complete" ? "opacity-40" : ""}`}
+                            title={questState !== "post_complete"
+                              ? "Disponível após a conclusão da Quest"
+                              : pendingHighlight
+                                ? "Responda se este personagem dropou o item (obrigatório para finalizar a PT)"
+                                : undefined}
+                          >
+                            <button
+                              type="button"
+                              disabled={!canAnswer}
+                              onClick={() => answerSgDrop(id, true)}
+                              className={`px-1.5 py-0.5 rounded text-[10px] font-black uppercase transition-colors ${
+                                answer === true
+                                  ? "bg-emerald-500/30 text-emerald-300 border border-emerald-400/60"
+                                  : "text-slate-400 border border-transparent hover:bg-emerald-500/10 hover:text-emerald-300"
+                              } disabled:cursor-not-allowed disabled:hover:bg-transparent ${canAnswer ? "cursor-pointer" : ""}`}
+                              title={answer === true
+                                ? "Dropou o item — SG realizada para este personagem. Clique para desfazer."
+                                : "Marcar que este personagem DROPOU o item (SG realizada; libera o Item Dropado)"}
+                            >
+                              Sim
+                            </button>
+                            <button
+                              type="button"
+                              disabled={!canAnswer}
+                              onClick={() => answerSgDrop(id, false)}
+                              className={`px-1.5 py-0.5 rounded text-[10px] font-black uppercase transition-colors ${
+                                answer === false
+                                  ? "bg-rose-500/30 text-rose-300 border border-rose-400/60"
+                                  : "text-slate-400 border border-transparent hover:bg-rose-500/10 hover:text-rose-300"
+                              } disabled:cursor-not-allowed disabled:hover:bg-transparent ${canAnswer ? "cursor-pointer" : ""}`}
+                              title={answer === false
+                                ? "Não dropou — SG continua disponível; rotação avança e o Bakragore entra em cooldown de 72h. Clique para desfazer."
+                                : "Marcar que este personagem NÃO dropou o item (rotação +1 e cooldown de 72h do Bakragore)"}
+                            >
+                              Não
+                            </button>
+                          </div>
+                        </td>
+                      );
+                    })()}
 
-                    <td className={`px-1 py-0.5 text-center ${(questState !== "post_complete") || !!party.isLocked || isPausedActive ? "pointer-events-none opacity-50" : ""}`}><ItemSelect value={d.itemDropado || ""} onChange={v => setSD(id, { itemDropado: v })} ptType={party.ptType} disabled={(questState !== "post_complete") || !!party.isLocked || isPausedActive || !!d.pago || !!d.dropLocked} /></td>
+                    <td className={`px-1 py-0.5 text-center ${(questState !== "post_complete") || !!party.isLocked || isPausedActive ? "pointer-events-none opacity-50" : ""}`}><ItemSelect value={d.itemDropado || ""} onChange={v => setSD(id, { itemDropado: v })} ptType={party.ptType} disabled={(questState !== "post_complete") || !!party.isLocked || isPausedActive || !!d.pago || !!d.dropLocked || (isSanguinePT && d.sgDrop !== true)} /></td>
                     <td className={`px-1 py-0.5 text-center whitespace-nowrap ${(questState !== "post_complete") || !!party.isLocked || isPausedActive ? "pointer-events-none opacity-50" : ""}`}>
                       {/* === BOTÃO "VENDIDO" (modal Item Vendido) + CAMPO RC === */}
                       {(() => {
@@ -4626,6 +4782,23 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
                       disabled={party.LeaderPT !== userName || !party.questConcluida || !!party.pagamentoFeito || !allSplitItemsSold || isPausedActive || isFinalizationRequested}
                       onClick={() => {
                         if (party.LeaderPT !== userName || !party.questConcluida || party.pagamentoFeito || !allSplitItemsSold) return;
+                        // SANGUINE: a coluna "Drop?" precisa estar respondida
+                        // para TODOS os participantes. Mesma regra validada
+                        // de forma autoritativa pela Cloud Function
+                        // (`sg_drop_pending`) — aqui o aviso chega antes e já
+                        // NOMEIA os personagens pendentes.
+                        if (isSanguinePT) {
+                          const sgPendingNames = allMemberIds
+                            .filter(mid => typeof getSD(mid).sgDrop !== "boolean")
+                            .map(mid => party.memberSnapshots?.[mid]?.personagem || getSD(mid).owner || mid);
+                          if (sgPendingNames.length > 0) {
+                            customAlert(
+                              `A coluna "Drop?" está sem resposta para: ${sgPendingNames.join(", ")}. Responda Sim ou Não para todos os personagens antes de finalizar a PT Sanguine.`,
+                              "Drop? pendente",
+                            );
+                            return;
+                          }
+                        }
                         const splitBlock = splitCount > 0 && !allSplitPaid;
                         if (splitBlock) {
                           customAlert("Realize o pagamento de todos os membros com DIVIDIR marcado antes de finalizar");
@@ -4655,11 +4828,41 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
                     >
                       {isFinalizationRequested ? "PROCESSANDO FINALIZAÇÃO..." : party.pagamentoFeito ? "✓ PT FINALIZADA / PAGAMENTO REALIZADO" : "PAGAMENTO REALIZADO / FINALIZAR PT"}
                     </button>
+                    {/* SANGUINE — "PRÓXIMA ROTAÇÃO": abre o modal com os
+                        personagens Drop? = Não pré-selecionados e cria uma
+                        nova PT Sanguine pelo fluxo normal. Exclusivo do
+                        líder, após a conclusão da Quest. */}
+                    {isSanguinePT && questState === "post_complete" && !party.questFalha && (
+                      <button
+                        type="button"
+                        disabled={!isLeaderPT}
+                        onClick={() => {
+                          const candidates = allMemberIds.filter(mid => getSD(mid).sgDrop === false);
+                          if (candidates.length === 0) {
+                            customAlert("Nenhum personagem com Drop? = Não nesta PT. Responda a coluna Drop? antes de criar a próxima rotação.", "Próxima Rotação");
+                            return;
+                          }
+                          setShowNextRotation(true);
+                        }}
+                        className={`inline-flex items-center gap-1 px-2 py-1 rounded-md border text-[10px] font-bold transition-colors whitespace-nowrap relative z-40 ${
+                          !isLeaderPT
+                            ? "opacity-40 cursor-not-allowed border-white/10 bg-white/5 text-slate-500"
+                            : "bg-rose-500/10 text-rose-300 hover:bg-rose-500/20 border-rose-500/40 cursor-pointer"
+                        }`}
+                        title={!isLeaderPT ? "Apenas o líder da PT pode criar a próxima rotação" : "Criar a PT da próxima rotação com os personagens que não droparam o item"}
+                      >
+                        <RotateCw size={11} />
+                        PRÓXIMA ROTAÇÃO
+                      </button>
+                    )}
                   </div>
                 </td>
-                <td colSpan={4} className="px-2 py-1 text-center text-sm font-black uppercase tracking-wider whitespace-nowrap bg-gradient-to-l from-amber-500/10 to-transparent text-amber-300 border-l border-amber-500/20">⚡ TOTAL:</td>
+                <td colSpan={isSanguinePT ? 5 : 4} className="px-2 py-1 text-center text-sm font-black uppercase tracking-wider whitespace-nowrap bg-gradient-to-l from-amber-500/10 to-transparent text-amber-300 border-l border-amber-500/20">⚡ TOTAL:</td>
                 <td className="px-2 py-1 text-center font-bold tabular-nums text-white whitespace-nowrap">{totalDeaths}</td>
                 <td className="px-2 py-1 text-center font-bold tabular-nums text-emerald-400 whitespace-nowrap">{splitCount}/{allMemberIds.length}</td>
+                {/* SANGUINE: célula vazia sob a coluna "Drop?" (mantém o
+                    alinhamento do rodapé com o cabeçalho). */}
+                {isSanguinePT && <td></td>}
                 <td className="px-2 py-1 text-center font-bold text-xs whitespace-nowrap" style={{ color: dropClassification.color }}>{dropClassification.label}</td>
                 <td className="pl-2 pr-1 py-1.5 text-right font-bold tabular-nums whitespace-nowrap">
                   <span className="text-emerald-400">{formatRC(totalItemVendidoGeral)}</span>
@@ -4791,6 +4994,26 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
         onConfirm={confirmPause}
         onCancel={() => setIsPauseModalOpen(false)}
       />
+
+      {/* SANGUINE — modal "Próxima Rotação": personagens Drop? = Não
+          pré-selecionados, cooldown automático (72h) editável e visibilidade
+          Privada/Pública. Confirmar cria a nova PT Sanguine pelo fluxo normal
+          (App.createParty) e fecha o modal. */}
+      {isSanguinePT && (
+        <NextRotationModal
+          open={showNextRotation}
+          party={party}
+          candidateIds={allMemberIds.filter(mid => getSD(mid).sgDrop === false)}
+          onConfirm={async (selectedIds, opts) => {
+            try {
+              await onCreateNextRotation?.(party, selectedIds, opts);
+            } finally {
+              setShowNextRotation(false);
+            }
+          }}
+          onCancel={() => setShowNextRotation(false)}
+        />
+      )}
 
       {/* SuggestPartyModal removido: o botão "Sugerir PT" foi movido para o
           PartyManager e agora cria uma NOVA PT a partir da sugestão, em vez

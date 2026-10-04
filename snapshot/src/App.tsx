@@ -11,6 +11,7 @@ import { setGlobalDialogHandler, customAlert, customConfirm, formatRC } from "./
 import { loadData, saveData, exportCSV, exportJSON, importJSON, buildPersonalBackup, normalizeImportedBackup, saveAutoSaveHandle, loadAutoSaveHandle, loadUIState, saveUIState, saveCloseTray, saveStartWithWindows, saveLowCpuUsage, loadSharedCharsCache, saveSharedCharsCache, isSharedCharsCacheFresh, invalidateSharedCharsCache } from "./storage";
 import { canViewServiceEntry, canViewServiceForViewer, projectServiceForViewer } from "./utils/serviceVisibility";
 import { applyPartyProfitToCharacters, buildCharacterProfitPatch, computePartyProfitMap } from "./utils/partyProfit";
+import { collectSanguineTransportMap, computeSanguineOutcome, isConcludedSanguineParty, sanguineSlotBaseRot, sanguineTargetFromTransport, applySanguineOutcomeToCharacter } from "./utils/sanguineRotation";
 import { calculateAcquiredQuestDrops, calculateAcquiredQuestProfit, cancelCharacterAcquisitionPreApproval, confirmCharacterAcquisitionPayment, confirmCharacterAcquisitionSalePayout, createCharacterAcquisition, getCharacterAcquisition, isPaymentConfirmed, subscribeCharacterAcquisitionBuyerDetails, subscribeCharacterAcquisitions, updateCharacterAcquisitionLifecycle, upsertCharacterAcquisitionBuyerDetails } from "./services/characterAcquisitionService";
 import { toFirestoreMillis } from "./utils/firestoreTimestamp";
 import { getPersonalPartyHistoryEntry, readPersonalPartyHistoryCache, requestPartyFinalization, subscribePersonalPartyHistory } from "./services/partyHistoryService";
@@ -1291,7 +1292,7 @@ export default function App() {
   // apagado quando um personagem sai; apenas o array `characters` encolhe.
   // ============================================================================
   function applyOwnIncomingPartyProfit(
-    incomingProfit: Record<string, Record<string, { questType: string; lucro: number }>>,
+    incomingProfit: Record<string, Record<string, { questType: string; lucro?: number; sgDrop?: boolean; sgRot?: number; sgCooldownUntil?: number }>>,
   ) {
     try {
       if (!incomingProfit || Object.keys(incomingProfit).length === 0) return;
@@ -1303,29 +1304,50 @@ export default function App() {
           let applied = false;
           let questType: string | null = null;
           let lucro = 0;
+          // SANGUINE: a mesma entrada pode transportar também o ALVO do fluxo
+          // Drop?/rotação/cooldown (campos SG) — com ou sem lucro.
+          let sgTarget: ReturnType<typeof sanguineTargetFromTransport> = null;
           Object.values(incomingProfit).forEach(byParty => {
             const entry = byParty?.[char.id];
-            if (entry && entry.lucro > 0) {
+            if (!entry) return;
+            if ((entry.lucro || 0) > 0) {
               questType = entry.questType;
-              lucro = entry.lucro;
+              lucro = entry.lucro || 0;
+              applied = true;
+            }
+            const target = sanguineTargetFromTransport(entry);
+            if (target) {
+              sgTarget = target;
               applied = true;
             }
           });
           if (!applied) return char;
-          if (questType === "sanguine") {
-            if ((char.dropBakra || 0) === lucro) return char;
-            changed = true;
-            return { ...char, dropBakra: lucro };
+          let next = char;
+          if (sgTarget) {
+            const reconciled = applySanguineOutcomeToCharacter(next, sgTarget);
+            if (reconciled) {
+              next = reconciled;
+              changed = true;
+            }
           }
-          // GB (`crypt`): lucro vai para `dropCrypt` (Lucro GB).
-          if (questType === "crypt") {
-            if ((char.dropCrypt || 0) === lucro) return char;
-            changed = true;
-            return { ...char, dropCrypt: lucro };
+          if (lucro > 0) {
+            if (questType === "sanguine") {
+              if ((next.dropBakra || 0) !== lucro) {
+                next = { ...next, dropBakra: lucro };
+                changed = true;
+              }
+            } else if (questType === "crypt") {
+              // GB (`crypt`): lucro vai para `dropCrypt` (Lucro GB).
+              if ((next.dropCrypt || 0) !== lucro) {
+                next = { ...next, dropCrypt: lucro };
+                changed = true;
+              }
+            } else if ((next.dropSW || 0) !== lucro) {
+              next = { ...next, dropSW: lucro };
+              changed = true;
+            }
           }
-          if ((char.dropSW || 0) === lucro) return char;
-          changed = true;
-          return { ...char, dropSW: lucro };
+          return next;
         });
         if (!changed) return prev;
         return { ...prev, characters: nextChars };
@@ -1640,6 +1662,12 @@ export default function App() {
     if (isSimulation || !db) return;
     const questType = party.ptType;
     if (!questType || party.questFalha) return;
+    // SANGUINE (fluxo reformulado): a conclusão NÃO marca mais todos os
+    // participantes como "provavelmente realizada". A SG só é realizada POR
+    // PERSONAGEM quando a coluna "Drop?" é respondida com SIM — o marcador é
+    // gravado nesse momento, em `syncSanguineAnswerForOwner`. SW/GB mantêm o
+    // comportamento original.
+    if (questType === "sanguine") return;
 
     const slotData = party.slotData || {};
     // Agrupar charIds por ownerUid (a partir do slotData gravado na PT)
@@ -1692,6 +1720,180 @@ export default function App() {
       Promise.allSettled(writePromises);
     }
   }
+
+  // ============================================================================
+  // SANGUINE — RESPOSTA "DROP?" → marcador + transporte para o DONO
+  // ----------------------------------------------------------------------------
+  // Chamado pelo PartyPanel quando alguém (líder ou dono do personagem)
+  // responde a coluna "Drop?" de uma PT Sanguine concluída.
+  //
+  //   • Drop = SIM → grava `probableMarkers.{charId}.sanguine = true` no doc
+  //     sharedCharacters do dono (mesmo canal/permissão do writeProbableMarkers)
+  //     — todos os usuários passam a ver o personagem como "provavelmente
+  //     realizou SG". Sim → Não/vazio REMOVE o marcador.
+  //   • Para dono ≠ quem respondeu: grava também o TRANSPORTE do alvo em
+  //     `partyProfit.{partyId}.{charId}` (campos SG) — o dono aplica na
+  //     própria lista ao abrir o app (mesmo mecanismo do lucro) e limpa.
+  //     Os PRÓPRIOS personagens de quem está online são reconciliados pelo
+  //     efeito reativo abaixo (observando cloudParties), sem transporte.
+  //
+  // Escrita permitida pelas Firestore Rules atuais (não-dono: hasOnly
+  // ['probableMarkers','partyProfit']) — nenhuma mudança de regra necessária.
+  // ============================================================================
+  function syncSanguineAnswerForOwner(party: PartyTab, charId: string, answer: boolean | null) {
+    try {
+      if (isSimulation || !db || !currentUser?.uid) return;
+      if (party.ptType !== "sanguine" || !party.questConcluida || party.questFalha) return;
+      const slot = party.slotData?.[charId];
+      const snap = party.memberSnapshots?.[charId];
+      const ownerUid = slot?.ownerUid || snap?.ownerUid || "";
+
+      // Estado local dos marcadores — UI reativa imediata para o respondente.
+      setProbableMarkers(prev => {
+        const next = { ...prev };
+        if (answer === true) {
+          next[charId] = { ...(next[charId] || {}), sanguine: true };
+        } else if (next[charId]) {
+          const marker = { ...next[charId] };
+          delete (marker as any).sanguine;
+          if (!marker.soulwar && !marker.sanguine && !marker.crypt) delete next[charId];
+          else next[charId] = marker;
+        }
+        try { localStorage.setItem("cloud_cache_probableMarkers", JSON.stringify(next)); } catch {}
+        return next;
+      });
+
+      if (!ownerUid) return; // personagem externo sem conta: nada a gravar
+
+      const updates: Record<string, any> = {};
+      // Marcador: true marca; null remove (mesma convenção dos fluxos SW/GB —
+      // o consumo compara `=== true`).
+      updates[`probableMarkers.${charId}.sanguine`] = answer === true ? true : null;
+
+      if (ownerUid !== currentUser.uid) {
+        if (answer === null) {
+          // Resposta desfeita: remove o transporte pendente (se o dono ainda
+          // não aplicou). Se já aplicou, a nova resposta regrava o alvo.
+          updates[`partyProfit.${party.id}.${charId}`] = deleteField();
+        } else {
+          const target = computeSanguineOutcome(answer, sanguineSlotBaseRot(party, charId), toFirestoreMillis(party.questFinalizedAt));
+          updates[`partyProfit.${party.id}.${charId}.questType`] = "sanguine";
+          updates[`partyProfit.${party.id}.${charId}.sgDrop`] = answer;
+          updates[`partyProfit.${party.id}.${charId}.sgRot`] = target.sgRot;
+          if (target.sgBakraCooldownUntil !== null) {
+            updates[`partyProfit.${party.id}.${charId}.sgCooldownUntil`] = target.sgBakraCooldownUntil;
+          }
+        }
+      }
+
+      updateDoc(doc(db, "sharedCharacters", ownerUid), updates).catch(() => {
+        // Documento pode não existir — cria com setDoc + merge (sem field paths).
+        if (answer === null) return;
+        const payload: Record<string, any> = {
+          probableMarkers: answer === true ? { [charId]: { sanguine: true } } : {},
+        };
+        if (ownerUid !== currentUser.uid) {
+          const target = computeSanguineOutcome(answer, sanguineSlotBaseRot(party, charId), toFirestoreMillis(party.questFinalizedAt));
+          payload.partyProfit = {
+            [party.id]: {
+              [charId]: {
+                questType: "sanguine",
+                sgDrop: answer,
+                sgRot: target.sgRot,
+                ...(target.sgBakraCooldownUntil !== null ? { sgCooldownUntil: target.sgBakraCooldownUntil } : {}),
+              },
+            },
+          };
+        }
+        setDoc(doc(db, "sharedCharacters", ownerUid), payload, { merge: true }).catch(() => {});
+      });
+    } catch (err) {
+      console.error("Sanguine: falha ao sincronizar resposta Drop?:", err);
+    }
+  }
+
+  // ============================================================================
+  // SANGUINE — RECONCILIAÇÃO DOS PRÓPRIOS PERSONAGENS (sempre ativa)
+  // ----------------------------------------------------------------------------
+  // Cada dispositivo observa as PTs visíveis (cloudParties) e, para PTs
+  // Sanguine concluídas com respostas "Drop?" definidas, reconcilia os
+  // PRÓPRIOS personagens para o alvo determinístico (disponibilidade,
+  // rotação e cooldown). NÃO depende do toggle Auto-Att: é a regra central
+  // da Quest, não um espelhamento de conveniência (o lucro continua gated).
+  //
+  // Idempotência/anti-regressão: cada par (PT, personagem, resposta) é
+  // aplicado UMA única vez por dispositivo (guarda persistida em
+  // localStorage). Alternar Sim ↔ Não gera uma chave nova e reconcilia para
+  // o novo alvo ABSOLUTO (calculado sobre a rotação congelada na conclusão),
+  // nunca um incremento cego — sem duplicação. Edições manuais feitas DEPOIS
+  // da aplicação não são sobrescritas em re-renders (a chave já consta como
+  // aplicada).
+  // ============================================================================
+  const SG_OUTCOME_APPLIED_KEY = "chernobyl_sg_outcome_applied_v1";
+  const sgOutcomeAppliedRef = useRef<Record<string, number> | null>(null);
+
+  function loadSgOutcomeApplied(): Record<string, number> {
+    if (sgOutcomeAppliedRef.current) return sgOutcomeAppliedRef.current;
+    let loaded: Record<string, number> = {};
+    try {
+      const raw = localStorage.getItem(SG_OUTCOME_APPLIED_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) loaded = parsed;
+      }
+    } catch {}
+    sgOutcomeAppliedRef.current = loaded;
+    return loaded;
+  }
+
+  function persistSgOutcomeApplied(map: Record<string, number>) {
+    // Poda leve: o mapa guarda o instante de cada aplicação — acima de 600
+    // entradas, mantém apenas as 400 mais recentes (PTs antigas já sumiram
+    // do Firestore e as chaves nunca mais seriam consultadas).
+    let next = map;
+    const keys = Object.keys(next);
+    if (keys.length > 600) {
+      next = {};
+      keys
+        .sort((a, b) => (map[b] || 0) - (map[a] || 0))
+        .slice(0, 400)
+        .forEach(key => { next[key] = map[key]; });
+    }
+    sgOutcomeAppliedRef.current = next;
+    try { localStorage.setItem(SG_OUTCOME_APPLIED_KEY, JSON.stringify(next)); } catch {}
+  }
+
+  useEffect(() => {
+    if (!currentUser?.uid || isSimulation || !hydrated) return;
+    const applied = { ...loadSgOutcomeApplied() };
+    let dirty = false;
+
+    cloudParties.forEach(pt => {
+      if (!isConcludedSanguineParty(pt)) return;
+      const conclusionAt = toFirestoreMillis(pt.questFinalizedAt);
+      (pt.selectedIds || []).forEach(charId => {
+        const sgDrop = pt.slotData?.[charId]?.sgDrop;
+        if (typeof sgDrop !== "boolean") return;
+        const key = `${pt.id}|${charId}|${sgDrop ? "y" : "n"}`;
+        if (applied[key]) return;
+        const character = data.characters.find(c => c.id === charId);
+        if (!character) return; // não é meu / transporte via sharedCharacters cobre
+        const target = computeSanguineOutcome(sgDrop, sanguineSlotBaseRot(pt, charId), conclusionAt);
+        const updated = applySanguineOutcomeToCharacter(character, target);
+        if (updated) {
+          setData(current => ({
+            ...current,
+            characters: current.characters.map(c => c.id === charId ? { ...c, sanguine: target.sanguine, sgRot: target.sgRot, ...(target.sgBakraCooldownUntil !== null ? { sgBakraCooldownUntil: target.sgBakraCooldownUntil } : {}) } : c),
+          }));
+        }
+        applied[key] = Date.now();
+        dirty = true;
+      });
+    });
+
+    if (dirty) persistSgOutcomeApplied(applied);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cloudParties, currentUser?.uid, hydrated, data.characters]);
 
   // ============================================================================
   // SERVICES — Remoção automática da Lista de Espera ao concluir a Quest
@@ -2998,7 +3200,49 @@ export default function App() {
   // FIRESTORE WRITE OPERATIONS - PT's
   // ============================================================================
 
-  async function createParty(_name: string, ptType?: "soulwar" | "sanguine" | "crypt", horarioTimestamp?: number, visibility?: "public" | "private", invitedUsers?: string[], servidor?: string, suggestedIds?: string[]) {
+  // ============================================================================
+  // SANGUINE — "PRÓXIMA ROTAÇÃO": cria uma nova PT Sanguine pelo FLUXO NORMAL
+  // ----------------------------------------------------------------------------
+  // Reaproveita `createParty` (numeração atômica, notificações "você foi
+  // adicionado", visibilidade pública/privada, slotData inicial). Os
+  // personagens selecionados no modal (Drop? = Não) entram como `suggestedIds`;
+  // DONO/JOGADOR vêm congelados da PT de origem via `slotSeed`, para nunca
+  // cair no fallback que atribuiria o criador como dono.
+  // ============================================================================
+  async function handleCreateNextRotation(
+    sourceParty: PartyTab,
+    selectedIds: string[],
+    opts: { visibility: "public" | "private"; horarioTimestamp?: number },
+  ) {
+    if (!currentUser || selectedIds.length === 0) return;
+    const slotSeed: Record<string, { owner: string; ownerUid: string; player: string; playerUid?: string }> = {};
+    const invited = new Set<string>([currentUser.uid]);
+    selectedIds.forEach(id => {
+      const slot = sourceParty.slotData?.[id];
+      const snap = sourceParty.memberSnapshots?.[id];
+      const ownerUid = slot?.ownerUid || snap?.ownerUid || "";
+      const owner = slot?.owner || snap?.ownerName || "";
+      slotSeed[id] = {
+        owner,
+        ownerUid,
+        player: slot?.player || owner,
+        playerUid: slot?.playerUid || ownerUid || undefined,
+      };
+      if (ownerUid) invited.add(ownerUid);
+    });
+    await createParty(
+      "",
+      "sanguine",
+      opts.horarioTimestamp,
+      opts.visibility,
+      opts.visibility === "private" ? Array.from(invited) : undefined,
+      sourceParty.servidor || "",
+      selectedIds,
+      slotSeed,
+    );
+  }
+
+  async function createParty(_name: string, ptType?: "soulwar" | "sanguine" | "crypt", horarioTimestamp?: number, visibility?: "public" | "private", invitedUsers?: string[], servidor?: string, suggestedIds?: string[], slotSeed?: Record<string, { owner: string; ownerUid: string; player: string; playerUid?: string }>) {
     if (!currentUser) return;
     if (globalSettings.publicPartiesEnabled === false && (visibility || "public") === "public") {
       customAlert("A criação de PTs públicas está temporariamente pausada pelo administrador.", "PT Pública pausada");
@@ -3084,6 +3328,16 @@ export default function App() {
           ownerVal = (ch as any).ownerName || displayUserName;
           ownerUidVal = (ch as any).ownerUid || currentUser.uid;
           playerVal = ownerVal;
+        } else if (slotSeed?.[charId]) {
+          // SEMENTE DE SLOT (ex.: "Próxima Rotação" da Sanguine): o personagem
+          // pode não estar em `availableCharactersForParty` neste momento (dono
+          // parou de compartilhar, cache expirado, etc.). Os dados de DONO/
+          // JOGADOR vêm congelados da PT de origem — nunca caem no fallback
+          // que atribuiria o criador como dono.
+          const seed = slotSeed[charId];
+          ownerVal = seed.owner || displayUserName;
+          ownerUidVal = seed.ownerUid || "";
+          playerVal = seed.player || seed.owner || displayUserName;
         } else {
           ownerVal = displayUserName;
           ownerUidVal = currentUser.uid;
@@ -3446,20 +3700,26 @@ export default function App() {
 
   function syncPartyProfitToOwners(party: PartyTab) {
     try {
-      if (!userProfile?.autoCharUpdate) return;
+      // SANGUINE: o transporte do estado Drop?/rotação/cooldown é regra
+      // CENTRAL da Quest e roda SEMPRE na finalização (garantia de entrega
+      // para donos offline — a PT é apagada depois). O LUCRO continua
+      // exclusivo do Auto-Att, como antes.
+      const isSanguineParty = party.ptType === "sanguine";
+      if (!userProfile?.autoCharUpdate && !isSanguineParty) return;
       if (!currentUser?.uid || !db) return;
       const finalized = !!party.pagamentoFeito || (!!party.archived && !!party.questConcluida);
       if (!finalized) return;
       if (!party.questConcluida || party.questFalha) return;
       if (!party.id) return;
 
-      const profitMap = computePartyProfitMap(party);
-      if (Object.keys(profitMap).length === 0) return;
+      const profitMap = userProfile?.autoCharUpdate ? computePartyProfitMap(party) : {};
+      const sgMap = isSanguineParty ? collectSanguineTransportMap(party) : {};
+      if (Object.keys(profitMap).length === 0 && Object.keys(sgMap).length === 0) return;
 
       // Agrupa charIds por dono (do slot/snapshot da PT — id, não nome).
       const byOwner: Record<string, string[]> = {};
       (party.selectedIds || []).forEach(id => {
-        if (!profitMap[id]) return;
+        if (!profitMap[id] && !sgMap[id]) return;
         const slot = party.slotData?.[id];
         const snap = party.memberSnapshots?.[id];
         const ownerUid = slot?.ownerUid || snap?.ownerUid;
@@ -3476,8 +3736,18 @@ export default function App() {
 
         const updates: Record<string, any> = {};
         charIds.forEach(id => {
-          updates[`partyProfit.${party.id}.${id}.questType`] = profitMap[id].questType;
-          updates[`partyProfit.${party.id}.${id}.lucro`] = profitMap[id].lucro;
+          const questType = profitMap[id]?.questType || sgMap[id]?.questType;
+          updates[`partyProfit.${party.id}.${id}.questType`] = questType;
+          if (profitMap[id]) {
+            updates[`partyProfit.${party.id}.${id}.lucro`] = profitMap[id].lucro;
+          }
+          if (sgMap[id]) {
+            updates[`partyProfit.${party.id}.${id}.sgDrop`] = sgMap[id].sgDrop;
+            updates[`partyProfit.${party.id}.${id}.sgRot`] = sgMap[id].sgRot;
+            if (typeof sgMap[id].sgCooldownUntil === "number") {
+              updates[`partyProfit.${party.id}.${id}.sgCooldownUntil`] = sgMap[id].sgCooldownUntil;
+            }
+          }
         });
 
         updateDoc(doc(db, "sharedCharacters", ownerUid), updates).catch(() => {
@@ -3488,7 +3758,7 @@ export default function App() {
               ...(payload[`partyProfit`] || {}),
               [party.id]: {
                 ...(payload[`partyProfit`]?.[party.id] || {}),
-                [id]: profitMap[id],
+                [id]: { ...(profitMap[id] || {}), ...(sgMap[id] || {}) },
               },
             };
           });
@@ -3772,8 +4042,27 @@ export default function App() {
       // o exibido na PT. Agora os dois usam `partyProfit`, definição única.
       const applyQuestCompletionPatch = (c: Character): Character => {
         if (!myCharIds.includes(c.id)) return c;
-        // A conclusão da Quest continua sendo marcada exatamente como antes.
-        const patch: Partial<Character> = { [questField]: false } as Partial<Character>;
+        const patch: Partial<Character> = {};
+        if (questType === "sanguine") {
+          // SANGUINE (fluxo reformulado): a conclusão NÃO marca mais a SG como
+          // realizada para todos. O resultado é POR PERSONAGEM, pela resposta
+          // "Drop?" do slot: Sim → realizada; Não → disponível + rotação +1 +
+          // cooldown 72h do Bakragore. SEM resposta → disponibilidade intocada.
+          const sgDrop = (ptDoc as PartyTab).slotData?.[c.id]?.sgDrop;
+          if (typeof sgDrop === "boolean") {
+            const target = computeSanguineOutcome(
+              sgDrop,
+              sanguineSlotBaseRot(ptDoc as PartyTab, c.id),
+              toFirestoreMillis((ptDoc as PartyTab).questFinalizedAt),
+            );
+            patch.sanguine = target.sanguine;
+            patch.sgRot = target.sgRot;
+            if (target.sgBakraCooldownUntil !== null) patch.sgBakraCooldownUntil = target.sgBakraCooldownUntil;
+          }
+        } else {
+          // SW/GB: a conclusão da Quest continua sendo marcada exatamente como antes.
+          (patch as any)[questField] = false;
+        }
         // Drop e lucro só entram quando REALMENTE mudaram; patch vazio deixa o
         // personagem intocado e não gera write.
         Object.assign(patch, buildCharacterProfitPatch(ptDoc as PartyTab, c, questType));
@@ -5290,6 +5579,8 @@ export default function App() {
             onCreateCharacterAcquisition={demoData ? undefined : createCharacterAcquisitionFromParty}
             onConfirmCharacterAcquisitionPayment={demoData ? undefined : confirmCharacterAcquisitionPaymentFromParty}
             onCancelCharacterAcquisitionPreApproval={demoData ? undefined : cancelCharacterAcquisitionPreApprovalFromParty}
+            onSanguineDropAnswered={demoData ? undefined : syncSanguineAnswerForOwner}
+            onCreateNextRotation={demoData ? undefined : handleCreateNextRotation}
             publicPartiesEnabled={globalSettings.publicPartiesEnabled}
             onTabChange={() => {
               // Ao abrir a aba "Gerenciador de PT's": carrega PTs públicas e personagens

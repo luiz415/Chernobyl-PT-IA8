@@ -87,6 +87,23 @@ export interface Character {
   soulwarDone?: boolean;
   sanguineDone?: boolean;
   /**
+   * ROT SG — rotação ATUAL da Sanguine deste personagem. `1` = primeira
+   * rotação (padrão para personagens sem o campo — legado). Incrementa
+   * quando uma rotação termina SEM drop do item (Drop? = Não na PT Sanguine
+   * concluída); Drop? = Sim (SG realizada) MANTÉM o valor. Editável
+   * manualmente em Meus Personagens (coluna "Rot SG").
+   */
+  sgRot?: number;
+  /**
+   * COOLDOWN DO BAKRAGORE — epoch ms (data/hora ABSOLUTA, confiável entre
+   * dispositivos/fusos) do fim da indisponibilidade de 72h do boss, iniciada
+   * na CONCLUSÃO da Quest Sanguine quando o personagem NÃO dropou o item
+   * (Drop? = Não). A UI exibe um contador regressivo discreto apenas
+   * enquanto `Date.now() < sgBakraCooldownUntil`; expirado, some sozinho
+   * (nenhuma limpeza de dado é necessária).
+   */
+  sgBakraCooldownUntil?: number;
+  /**
    * Identidade da conta (`ownerUid + nome normalizado`), usada para saber se
    * dois personagens são da MESMA conta real. Existe porque `account` guarda
    * apenas o nome escolhido pelo usuário — "1"/"Main" se repetem entre pessoas
@@ -297,6 +314,18 @@ export interface PartySlotData {
   playerUid?: string;
   /** UID que recebe a divisão deste slot, congelado junto com splitTarget. */
   splitBeneficiaryUid?: string;
+  /**
+   * SANGUINE — resposta da coluna "Drop?" (disponível apenas APÓS a
+   * conclusão da Quest em PTs Sanguine):
+   *   • `true`  = o personagem dropou o item → SG realizada para ELE
+   *               (libera a coluna Item Dropado do slot);
+   *   • `false` = não dropou → SG continua disponível, a rotação avança
+   *               (+1) e o Bakragore entra em cooldown de 72h;
+   *   • ausente = ainda SEM resposta — a finalização da PT é bloqueada
+   *               (frontend + Cloud Function, código `sg_drop_pending`).
+   * Exclusivo de PTs Sanguine; SW/GB nunca gravam este campo.
+   */
+  sgDrop?: boolean;
 }
 
 export type PtType = "soulwar" | "sanguine" | "crypt";

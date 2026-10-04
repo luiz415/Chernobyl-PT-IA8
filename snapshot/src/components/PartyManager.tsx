@@ -64,6 +64,20 @@ interface Props {
   onConfirmCharacterAcquisitionPayment?: (acquisitionId: string, deferPayment?: boolean) => Promise<{ ok: boolean; error?: string }>;
   /** Dono cancela pré-venda pendente (`pre_approved`); repassado ao PartyPanel. */
   onCancelCharacterAcquisitionPreApproval?: (acquisitionId: string) => Promise<{ ok: boolean; error?: string }>;
+  /**
+   * SANGUINE: resposta da coluna "Drop?" gravada/removida — o App sincroniza
+   * marcador + transporte para o dono do personagem. Repassado ao PartyPanel.
+   */
+  onSanguineDropAnswered?: (party: PartyTab, charId: string, answer: boolean | null) => void;
+  /**
+   * SANGUINE: cria a nova PT da "Próxima Rotação" (modal do PartyPanel) pelo
+   * fluxo normal de criação. Repassado ao PartyPanel.
+   */
+  onCreateNextRotation?: (
+    sourceParty: PartyTab,
+    selectedIds: string[],
+    opts: { visibility: "public" | "private"; horarioTimestamp?: number },
+  ) => Promise<void> | void;
   // Chamado pelo PartyManager ao montar (aba "PT's" ativa).
   // O App.tsx usa este callback para buscar PTs públicas via getDocs()
   // de forma sob demanda, em vez de manter um listener contínuo.
@@ -207,7 +221,7 @@ function formatStageCardDuration(ms: number): string {
   return `${h}h${m}m`;
 }
 
-export default function PartyManager({ parties, characters, waitingList, userName, onUpdate, onPersistPartyNow, onDelete, onCreate, onSaveParty, activePt, setActivePt, minimized, setMinimized, onPaymentMarked, onNotifyMembers, onRequestFinalization, onRefresh, characterAcquisitions = [], onCreateCharacterAcquisition, onConfirmCharacterAcquisitionPayment, onCancelCharacterAcquisitionPreApproval, onTabChange, publicPartiesEnabled = true }: Props) {
+export default function PartyManager({ parties, characters, waitingList, userName, onUpdate, onPersistPartyNow, onDelete, onCreate, onSaveParty, activePt, setActivePt, minimized, setMinimized, onPaymentMarked, onNotifyMembers, onRequestFinalization, onRefresh, characterAcquisitions = [], onCreateCharacterAcquisition, onConfirmCharacterAcquisitionPayment, onCancelCharacterAcquisitionPreApproval, onSanguineDropAnswered, onCreateNextRotation, onTabChange, publicPartiesEnabled = true }: Props) {
   const { currentUser, userProfile, allUsers, acceptedFriendUids } = useAuth();
   const isNormalUser = userProfile?.role === "Normal";
   const tabsContainerRef = useRef<HTMLDivElement>(null);
@@ -1438,6 +1452,8 @@ export default function PartyManager({ parties, characters, waitingList, userNam
                 onCreateCharacterAcquisition={onCreateCharacterAcquisition}
                 onConfirmCharacterAcquisitionPayment={onConfirmCharacterAcquisitionPayment}
                 onCancelCharacterAcquisitionPreApproval={onCancelCharacterAcquisitionPreApproval}
+                onSanguineDropAnswered={onSanguineDropAnswered}
+                onCreateNextRotation={onCreateNextRotation}
               />
             );
           })()
