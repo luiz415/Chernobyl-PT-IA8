@@ -92,6 +92,8 @@ export interface BazaarHistoryRawEntry {
   skills?: ItemsCharacterSkills;
   soulwarCompleted?: boolean | null;
   sanguineCompleted?: boolean | null;
+  /** GB ("The Roost of the Graveborn"). Ausente em consultas antigas = "sem dado". */
+  cryptCompleted?: boolean | null;
   charmPoints?: number | null;
   auraCount?: number | null;
   hirelingCount?: number | null;
@@ -148,6 +150,8 @@ export interface BazaarHistoryEntry {
   skills?: ItemsCharacterSkills;
   soulwar: boolean | null;
   sanguine: boolean | null;
+  /** GB ("The Roost of the Graveborn"). Entradas antigas sem o dado = null. */
+  crypt: boolean | null;
   charmPoints: number | null;
   auraCount: number | null;
   hirelingCount: number | null;
@@ -195,6 +199,8 @@ export function charmBucketKey(charm: number): string { return bandKeyOf(CHARM_B
  * OPCIONAIS ausentes = "sem dado" (nunca um valor fictício):
  *   v vocação · l level · b lance RC · i itens RC (0 = sem itens avaliados)
  *   w soulwar (1 concluída / 0 disponível / ausente sem dado) · g sanguine
+ *   r Graveborn/GB ("Roost" — mesma convenção 1/0/ausente; tuplas gravadas
+ *   antes da GB existir não têm o campo = "sem dado", nunca presumido)
  *   c charm points · u auras · h hirelings · d passes Deluxe (0 é VÁLIDO:
  *   personagem com Battlepass todo "não") · s skills presentes (inteiras).
  */
@@ -205,6 +211,7 @@ export interface AuctionTuple {
   i: number;
   w?: 0 | 1;
   g?: 0 | 1;
+  r?: 0 | 1;
   c?: number;
   u?: number;
   h?: number;
@@ -222,6 +229,7 @@ export function entryToTuple(entry: BazaarHistoryEntry): AuctionTuple {
   };
   if (entry.soulwar === true) tuple.w = 1; else if (entry.soulwar === false) tuple.w = 0;
   if (entry.sanguine === true) tuple.g = 1; else if (entry.sanguine === false) tuple.g = 0;
+  if (entry.crypt === true) tuple.r = 1; else if (entry.crypt === false) tuple.r = 0;
   if (typeof entry.charmPoints === "number" && Number.isFinite(entry.charmPoints)) tuple.c = Math.max(0, Math.floor(entry.charmPoints));
   if (typeof entry.auraCount === "number" && Number.isFinite(entry.auraCount)) tuple.u = Math.max(0, Math.floor(entry.auraCount));
   if (typeof entry.hirelingCount === "number" && Number.isFinite(entry.hirelingCount)) tuple.h = Math.max(0, Math.floor(entry.hirelingCount));
@@ -290,6 +298,8 @@ export interface HistoryMetricsFilters {
   deluxe: NumberRange;
   soulwar: HistoryQuestFilter;
   sanguine: HistoryQuestFilter;
+  /** GB ("The Roost of the Graveborn") — mesma semântica de SW/SG. */
+  crypt: HistoryQuestFilter;
   /**
    * Faixas por SKILL (chave = skill da guia Itens: axe/club/sword/fist/
    * distance/magic/shielding). Uma skill com faixa ativa só aceita
@@ -319,7 +329,7 @@ export function defaultHistoryFilters(): HistoryMetricsFilters {
     months: [], servers: [], vocations: [],
     level: emptyRange(), bid: emptyRange(), items: emptyRange(),
     charm: emptyRange(), auras: emptyRange(), hirelings: emptyRange(), deluxe: emptyRange(),
-    soulwar: "any", sanguine: "any",
+    soulwar: "any", sanguine: "any", crypt: "any",
     skills: {},
     discountItems: false,
     value: emptyRange(),
@@ -349,6 +359,7 @@ export function countActiveHistoryFilters(filters: HistoryMetricsFilters): numbe
   }
   if (filters.soulwar !== "any") active += 1;
   if (filters.sanguine !== "any") active += 1;
+  if (filters.crypt !== "any") active += 1;
   for (const range of Object.values(filters.skills)) {
     if (rangeActive(range)) active += 1;
   }
@@ -399,6 +410,7 @@ export function tupleMatchesFilters(
   if (filters.discountItems && rangeActive(filters.value) && !inRange(adjustedPriceOf(tuple), filters.value)) return false;
   if (!matchQuest(tuple.w, filters.soulwar)) return false;
   if (!matchQuest(tuple.g, filters.sanguine)) return false;
+  if (!matchQuest(tuple.r, filters.crypt)) return false;
   if (rangeActive(filters.charm) && (tuple.c === undefined || !inRange(tuple.c, filters.charm))) return false;
   if (rangeActive(filters.auras) && (tuple.u === undefined || !inRange(tuple.u, filters.auras))) return false;
   if (rangeActive(filters.hirelings) && (tuple.h === undefined || !inRange(tuple.h, filters.hirelings))) return false;
@@ -455,6 +467,8 @@ export interface BazaarHistoryStats {
   byMonth: { label: string; count: number; avgBid: number }[];
   soulwar: { available: number; completed: number; unknown: number };
   sanguine: { available: number; completed: number; unknown: number };
+  /** GB ("The Roost of the Graveborn") — tuplas antigas sem o dado = unknown. */
+  crypt: { available: number; completed: number; unknown: number };
   bidDistribution: { label: string; count: number }[];
   charmDistribution: { label: string; count: number }[];
   /** Médias de skills por vocação (somente skills presentes). */
@@ -491,6 +505,7 @@ export function computeStatsFromMetricDocs(
   const byMonth = new Map<string, { count: number; bidSum: number }>();
   const sw = { available: 0, completed: 0, unknown: 0 };
   const sg = { available: 0, completed: 0, unknown: 0 };
+  const gb = { available: 0, completed: 0, unknown: 0 };
   const bidDist = new Map<string, number>();
   const charmDist = new Map<string, number>();
   const skillsByVoc = new Map<string, { count: number; sk: Record<string, { s: number; n: number }> }>();
@@ -537,6 +552,7 @@ export function computeStatsFromMetricDocs(
       byMonth.set(docData.ym, month);
       if (tuple.w === 0) sw.available += 1; else if (tuple.w === 1) sw.completed += 1; else sw.unknown += 1;
       if (tuple.g === 0) sg.available += 1; else if (tuple.g === 1) sg.completed += 1; else sg.unknown += 1;
+      if (tuple.r === 0) gb.available += 1; else if (tuple.r === 1) gb.completed += 1; else gb.unknown += 1;
       const bidBucket = bidBucketKey(price); // histograma na mesma medida
       bidDist.set(bidBucket, (bidDist.get(bidBucket) || 0) + 1);
 
@@ -592,6 +608,7 @@ export function computeStatsFromMetricDocs(
       .sort((a, b) => a.label.localeCompare(b.label)),
     soulwar: sw,
     sanguine: sg,
+    crypt: gb,
     bidDistribution: BID_BUCKETS
       .map(bucket => ({ label: bucket.label, count: bidDist.get(bucket.key) || 0 }))
       .filter(row => row.count > 0),

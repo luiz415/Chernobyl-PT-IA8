@@ -919,6 +919,13 @@ function registerBazaarHistoryMethod(deps) {
               skills: extra.skills,
               soulwarCompleted: quests.soulwarCompleted,
               sanguineCompleted: quests.sanguineCompleted,
+              // GB ("The Roost of the Graveborn") — MESMA derivação, MESMO
+              // payload JSON já baixado (deriveQuestsFromQuestEntries /
+              // deriveQuestsFromApiPayload, compartilhadas com as demais
+              // consultas): o campo já era calculado; aqui apenas deixa de
+              // ser descartado. Inconclusivo = null → "sem dado" nas
+              // métricas/filtros, nunca presumido. Nenhuma chamada extra.
+              cryptCompleted: quests.cryptCompleted ?? null,
               charmPoints: extras.charmPoints,
               auraCount: extras.auraCount,
               hirelingCount: extras.hirelingCount,

@@ -63,6 +63,13 @@ export interface UserProfile {
   questMinLevels?: {
     suggest?: Partial<Record<"soulwar" | "sanguine" | "crypt", Record<string, number>>>;
     overview?: Partial<Record<"soulwar" | "sanguine" | "crypt", Record<string, number>>>;
+    /**
+     * Versão dos PADRÕES por quest com que a configuração foi gravada
+     * (ausente = 1). Usada pelo useQuestMinLevels para corrigir, UMA única
+     * vez, conjuntos nunca personalizados quando os padrões oficiais mudam —
+     * sem jamais sobrescrever personalizações reais do usuário.
+     */
+    defaultsVersion?: number;
   };
 }
 export interface AuthNotification {

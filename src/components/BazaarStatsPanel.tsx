@@ -443,6 +443,10 @@ export default function BazaarStatsPanel({ isBossUser, isElectron, isOtherQueryR
             coinRateKk: coinRate,
             soulwar: raw.soulwarCompleted ?? null,
             sanguine: raw.sanguineCompleted ?? null,
+            // GB ("The Roost of the Graveborn") — derivada pelo canal do
+            // histórico com as MESMAS funções das demais consultas, do MESMO
+            // payload JSON. Consulta antiga/inconclusiva = null ("sem dado").
+            crypt: raw.cryptCompleted ?? null,
             charmPoints: raw.charmPoints ?? null,
             auraCount: raw.auraCount ?? null,
             hirelingCount: raw.hirelingCount ?? null,
@@ -721,10 +725,18 @@ export default function BazaarStatsPanel({ isBossUser, isElectron, isOtherQueryR
         </div>
       )}
 
+      {/* ── FILTROS + ESTATÍSTICAS — UMA ÚNICA ESTRUTURA ROLÁVEL ───────────
+          Os dois quadros (filtros da análise e resultados) vivem DENTRO do
+          mesmo contêiner de rolagem e se movem JUNTOS, como uma única
+          unidade — em desktop e mobile. Nada do conteúdo/funcionamento de
+          cada quadro mudou: apenas a organização visual (antes o quadro de
+          filtros tinha rolagem própria, separada dos resultados). */}
+      <div className="flex-1 min-h-0 overflow-y-auto space-y-1.5 pr-0.5">
+
       {/* ── FILTROS DA ANÁLISE (quadro dedicado — 100% local, zero leituras) ─
           Todas as condições valem EM CONJUNTO sobre as tuplas em memória:
           mudar filtro NUNCA consulta o site nem relê documentos. ─────────── */}
-      <div className="rounded-xl border border-sky-500/25 bg-[var(--th-n-base)]/90 backdrop-blur-md px-3 py-2 space-y-2 flex-shrink-0 max-h-[45%] overflow-y-auto shadow-[0_0_14px_color-mix(in_oklab,var(--color-sky-500)_6%,transparent)]">
+      <div className="rounded-xl border border-sky-500/25 bg-[var(--th-n-base)]/90 backdrop-blur-md px-3 py-2 space-y-2 shadow-[0_0_14px_color-mix(in_oklab,var(--color-sky-500)_6%,transparent)]">
         {/* Cabeçalho do quadro: título + selo de filtros ativos + limpar */}
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
           <div className="flex items-center gap-2 text-slate-100">
@@ -812,7 +824,10 @@ export default function BazaarStatsPanel({ isBossUser, isElectron, isOtherQueryR
           </FilterCategory>
 
           <FilterCategory title="Quests">
-            {([["Soul War", "soulwar"], ["Sanguine", "sanguine"]] as const).map(([label, field]) => {
+            {/* GB ("Graveborn") usa a MESMA semântica de SW/SG; tuplas
+                gravadas antes da GB existir não têm o dado e ficam fora
+                quando uma opção específica é escolhida. */}
+            {([["Soul War", "soulwar"], ["Sanguine", "sanguine"], ["Graveborn", "crypt"]] as const).map(([label, field]) => {
               const hint = `${label}: “Tanto Faz” ignora a quest; “Disponível” só personagens com a quest AINDA DISPONÍVEL para fazer; “Feita” só personagens que já a concluíram. Personagens sem o dado ficam fora quando uma opção específica é escolhida.`;
               return (
                 <div key={field} className="flex flex-col gap-0.5" title={hint}>
@@ -859,8 +874,9 @@ export default function BazaarStatsPanel({ isBossUser, isElectron, isOtherQueryR
         </div>
       </div>
 
-      {/* ── ESTATÍSTICAS (somente métricas agregadas) ─────────────────────── */}
-      <div className="flex-1 min-h-0 overflow-y-auto space-y-1.5 pr-0.5">
+      {/* ── ESTATÍSTICAS (somente métricas agregadas) — rolam JUNTO com o
+          quadro de filtros acima (contêiner único). ─────────────────────── */}
+      <div className="space-y-1.5">
         {metricDocs.length === 0 ? (
           <div className="rounded-xl border border-[var(--th-line)]/60 bg-[var(--th-n-base)]/80 px-4 py-8 text-center text-xs text-slate-400">
             {isBossUser && isElectron
@@ -955,8 +971,8 @@ export default function BazaarStatsPanel({ isBossUser, isElectron, isOtherQueryR
             {/* SW/SG + DISTRIBUIÇÕES */}
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-1.5">
               <div className="rounded-xl border border-[var(--th-line)]/60 bg-[var(--th-n-base)]/80 px-3 py-2">
-                <div className="text-[9px] font-black uppercase tracking-wide text-slate-400 mb-1">Soul War / Sanguine</div>
-                {([["Soul War", stats.soulwar], ["Sanguine", stats.sanguine]] as const).map(([label, dist]) => (
+                <div className="text-[9px] font-black uppercase tracking-wide text-slate-400 mb-1">Soul War / Sanguine / Graveborn</div>
+                {([["Soul War", stats.soulwar], ["Sanguine", stats.sanguine], ["Graveborn", stats.crypt]] as const).map(([label, dist]) => (
                   <div key={label} className="flex items-center justify-between gap-2 text-[10px] py-0.5">
                     <span className="font-bold text-slate-300">{label}</span>
                     <span className="text-slate-400">
@@ -1030,6 +1046,9 @@ export default function BazaarStatsPanel({ isBossUser, isElectron, isOtherQueryR
             )}
           </>
         )}
+      </div>
+
+      {/* Fecha o contêiner único de rolagem (filtros + estatísticas). */}
       </div>
 
       {/* ── Configuração da consulta — MESMO modal das demais consultas do
