@@ -31,7 +31,7 @@ import PersonalPartyHistoryList from "./components/PersonalPartyHistoryList";
 import StatsPanel from "./components/StatsPanel";
 import RankingPanel from "./components/RankingPanel";
 import MyServicesPanel from "./components/MyServicesPanel";
-import { fetchAllSharedServicesAsWaiting, isServiceProbablyDone, readAllSharedServicesCache, readServiceRequestsCache, readSharedServicesCache, replaceOwnerSharedServicesInWaitingCache } from "./services/sharedServicesService";
+import { applySanguineOutcomeToOwnServices, fetchAllSharedServicesAsWaiting, isServiceProbablyDone, readAllSharedServicesCache, readServiceRequestsCache, readSharedServicesCache, replaceOwnerSharedServicesInWaitingCache } from "./services/sharedServicesService";
 import { backfillServiceQueueEntries, buildServiceQueueKey, freeServiceQueueEntry, registerServiceQueueEntry } from "./services/serviceQueueIndexService";
 import NotesPanel from "./components/NotesPanel";
 import WaitingListPanel from "./components/WaitingListPanel";
@@ -1395,6 +1395,24 @@ export default function App() {
         });
       });
 
+      // MEUS SERVICES — "Rot SG": entradas SG cujo id NÃO é um personagem
+      // próprio podem ser SERVICES deste Serviceiro (o service entra na PT
+      // como slot "waiting" com id = SharedService.id). Aplica o MESMO alvo
+      // absoluto ao registro em `sharedServices/{uid}` (guardas internas:
+      // só quest Sanguine + anti-regressão — nunca duplica incremento).
+      const serviceSgTargets: Record<string, { sgRot: number; sgDropRot: number | null }> = {};
+      Object.values(incomingProfit).forEach(byParty => {
+        Object.entries(byParty || {}).forEach(([id, entry]) => {
+          const target = sanguineTargetFromTransport(entry);
+          if (!target) return;
+          if (data.characters.some(c => c.id === id)) return; // personagem: já tratado acima
+          serviceSgTargets[id] = { sgRot: target.sgRot, sgDropRot: target.sgDropRot };
+        });
+      });
+      if (Object.keys(serviceSgTargets).length > 0) {
+        void applySanguineOutcomeToOwnServices(currentUser.uid, serviceSgTargets);
+      }
+
       // Limpa o campo `partyProfit` do próprio documento (escrita do dono,
       // permitida) para não reaplicar no próximo load — evita loop/write
       // repetido.
@@ -1913,6 +1931,12 @@ export default function App() {
     if (!currentUser?.uid || isSimulation || !hydrated) return;
     const applied = { ...loadSgOutcomeApplied() };
     let dirty = false;
+    // MEUS SERVICES — "Rot SG": alvos pendentes de slots que são SERVICES do
+    // próprio usuário (id = SharedService.id, ownerUid = serviceiroUid).
+    // Acumulados aqui e aplicados em lote após o loop; as chaves idempotentes
+    // só são marcadas quando a gravação confirma (falha de rede ⇒ retry no
+    // próximo tick do efeito).
+    const pendingServiceTargets: Record<string, { serviceId: string; sgRot: number; sgDropRot: number | null }> = {};
 
     cloudParties.forEach(pt => {
       if (!isConcludedSanguineParty(pt)) return;
@@ -1921,7 +1945,19 @@ export default function App() {
         const sgDrop = pt.slotData?.[charId]?.sgDrop;
         if (typeof sgDrop !== "boolean") return;
         const character = data.characters.find(c => c.id === charId);
-        if (!character) return; // não é meu / transporte via sharedCharacters cobre
+        if (!character) {
+          // Não é personagem meu. É um SERVICE meu? (mesmo canal de
+          // identificação do writeProbableMarkers: ownerUid do slot/snapshot.)
+          const ownerUid = pt.slotData?.[charId]?.ownerUid || pt.memberSnapshots?.[charId]?.ownerUid || "";
+          if (ownerUid === currentUser.uid) {
+            const key = `svc|${pt.id}|${charId}|${sgDrop ? "y" : "n"}`;
+            if (!applied[key] && !pendingServiceTargets[key]) {
+              const target = computeSanguineOutcome(sgDrop, sanguineSlotBaseRot(pt, charId), conclusionAt);
+              pendingServiceTargets[key] = { serviceId: charId, sgRot: target.sgRot, sgDropRot: target.sgDropRot };
+            }
+          }
+          return; // demais casos: transporte via sharedCharacters cobre
+        }
         // Drop? = NÃO: a SG continua disponível — remove o marcador
         // "provavelmente já realizou" (incl. legados de PTs antigas), que
         // não deve aparecer para quem não dropou. Fora do gate `applied`:
@@ -1957,6 +1993,22 @@ export default function App() {
     });
 
     if (dirty) persistSgOutcomeApplied(applied);
+
+    // SERVICES com alvo pendente: 1 aplicação em lote (getDoc + write únicos).
+    const pendingKeys = Object.keys(pendingServiceTargets);
+    if (pendingKeys.length > 0) {
+      const targets: Record<string, { sgRot: number; sgDropRot: number | null }> = {};
+      pendingKeys.forEach(key => {
+        const entry = pendingServiceTargets[key];
+        targets[entry.serviceId] = { sgRot: entry.sgRot, sgDropRot: entry.sgDropRot };
+      });
+      void applySanguineOutcomeToOwnServices(currentUser.uid, targets).then(ok => {
+        if (!ok) return; // falhou (offline?) — chaves não marcadas ⇒ retry futuro
+        const map = { ...loadSgOutcomeApplied() };
+        pendingKeys.forEach(key => { map[key] = Date.now(); });
+        persistSgOutcomeApplied(map);
+      });
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cloudParties, currentUser?.uid, hydrated, data.characters]);
 

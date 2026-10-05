@@ -23,6 +23,7 @@ import WhatsappTemplateModal from "./WhatsappTemplateModal";
 import FirstMessageMarker from "./FirstMessageMarker";
 import PartyMembershipBadge from "./PartyMembershipBadge";
 import { buildPartyMembershipNames } from "../utils/partyMembership";
+import { completedSgRotations } from "../utils/sanguineRotation";
 import {
   DEFAULT_WHATSAPP_TEMPLATES,
   cleanWhatsappPhone,
@@ -141,6 +142,7 @@ const COL_WIDTHS: (number | null)[] = [
   76,   // Voc        — FilterMulti inline ("Voc (5)" + chevron 10 + px-2)
   84,   // Lv         — FilterNumber inline ("≥ 1000" + chevron 10 + px-2)
   86,   // Quest      — FilterSelect ("sanguine")
+  64,   // Rot SG     — rotação da Sanguine ("3ª Rot"), sem filtro
   96,   // Pgto       — FilterSelect ("combinado", o rótulo mais longo)
   90,   // Valor      — FilterNumber ("≥ 100000")
   null, // WhatsApp   — elástica (piso 116: "+55 99 999999999")
@@ -966,6 +968,9 @@ export default function MyServicesPanel({
         case "voc": return service.voc;
         case "level": return service.level || 0;
         case "quest": return service.quest;
+        // Rot SG: Sanguine ordena pela rotação registrada; Soul War (sem
+        // informação aplicável) vale -1 para agrupar abaixo de "0".
+        case "rotsg": return service.quest === "sanguine" ? completedSgRotations(service.sgRot) : -1;
         case "pgto": return service.paymentMethod || "";
         case "valor": return service.valorCombinado || 0;
         case "whatsapp": return formatWhatsDisplay(service);
@@ -1374,6 +1379,9 @@ export default function MyServicesPanel({
                 <SortTh colKey="voc" label="Voc" />
                 <SortTh colKey="level" label="Lv" />
                 <SortTh colKey="quest" label="Quest" />
+                {/* Rot SG — rotação da Sanguine do personagem do cliente
+                    (mesma semântica de Meus Personagens/Party Panel). */}
+                <SortTh colKey="rotsg" label="Rot SG" />
                 <SortTh colKey="pgto" label="Pgto" />
                 <SortTh colKey="valor" label="Valor" />
                 <SortTh colKey="whatsapp" label="WhatsApp" />
@@ -1466,6 +1474,8 @@ export default function MyServicesPanel({
                     }`}
                   />
                 </th>
+                {/* Rot SG — sem filtro (coluna informativa). */}
+                <th className={thFilterCls} />
                 <th className={thFilterCls}>
                   <FilterSelect
                     options={["pix", "rc", "5050", "combinado"]}
@@ -1553,6 +1563,10 @@ export default function MyServicesPanel({
                         }`}>
                           {request.quest === "sanguine" ? "SG" : "SW"}
                         </span>
+                      </td>
+                      {/* Rot SG — um pedido pendente ainda não tem rotação. */}
+                      <td className="px-1 py-1.5 text-center">
+                        <span className="text-[10px] italic text-slate-600">—</span>
                       </td>
                       <td className="px-1 py-1.5 text-center">
                         {request.paymentMethod ? (
@@ -1674,6 +1688,31 @@ export default function MyServicesPanel({
                     }`}>
                       {service.quest === "sanguine" ? "SG" : "SW"}
                     </span>
+                  </td>
+                  {/* Rot SG — rotações CONCLUÍDAS da Sanguine do personagem do
+                      cliente (MESMA semântica/exibição de Meus Personagens):
+                      atualizada automaticamente pelo resultado "Drop?" das PTs
+                      Sanguine concluídas. Soul War: sem informação aplicável. */}
+                  <td className="px-1 py-1.5 text-center">
+                    {service.quest === "sanguine" ? (() => {
+                      const rot = completedSgRotations(service.sgRot);
+                      if (rot === 0) {
+                        return <span className="font-bold text-[11px] text-slate-500" title="Nenhuma rotação de Sanguine registrada para este Service">-</span>;
+                      }
+                      const droppedHere = typeof service.sgDropRot === "number" && completedSgRotations(service.sgDropRot) === rot;
+                      return (
+                        <span
+                          className={`font-bold text-[11px] tabular-nums ${droppedHere ? "text-emerald-400" : "text-rose-300"}`}
+                          title={droppedHere
+                            ? `Dropou o item na ${rot}ª rotação da Sanguine (última realizada)`
+                            : `${rot}ª rotação realizada SEM drop — será necessária outra rotação`}
+                        >
+                          {rot}ª Rot
+                        </span>
+                      );
+                    })() : (
+                      <span className="text-slate-600 text-xs" title="Service de Soul War — rotação não se aplica">—</span>
+                    )}
                   </td>
                   <td className="px-1 py-1.5 text-center">
                     {service.paymentMethod ? (

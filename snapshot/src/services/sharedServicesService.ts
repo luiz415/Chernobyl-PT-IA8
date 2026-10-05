@@ -2,7 +2,8 @@ import { collection, deleteDoc, doc, getDoc, getDocs, onSnapshot, query, setDoc,
 import { db } from "../firebase/config";
 import type { ServicePaymentMethod, ServiceRequest, ServiceRequestStatus, SharedService, SharedServiceStatus, Vocation, WaitingService } from "../types";
 import { normalizeServerName } from "../constants/servers";
-import { resolveServiceValue } from "../types";
+import { resolveServiceValue, SERVICE_RC_VALUE } from "../types";
+import { completedSgRotations } from "../utils/sanguineRotation";
 import { createWithQueueGuard, freeServiceQueueEntry } from "./serviceQueueIndexService";
 
 // ============================================================================
@@ -200,6 +201,54 @@ export async function persistSharedServices(uid: string, services: SharedService
     return { ok: true };
   } catch (error: any) {
     return { ok: false, error: error?.message || String(error) };
+  }
+}
+
+// ============================================================================
+// SANGUINE × MEUS SERVICES — coluna "Rot SG"
+// ----------------------------------------------------------------------------
+// Aplica aos SERVICES do PRÓPRIO Serviceiro o resultado "Drop?" de PTs
+// Sanguine concluídas (o service entra na PT como slot "waiting" com
+// `id = SharedService.id` e `ownerUid = serviceiroUid`). O alvo vem do MESMO
+// cálculo absoluto de Meus Personagens/Party Panel (`computeSanguineOutcome`
+// / transporte `partyProfit`) — nenhuma segunda fonte de verdade.
+//
+// Guardas (mesmas da reconciliação de personagens):
+//   • só Services de SANGUINE são tocados (SW jamais ganha rotação);
+//   • anti-regressão: o alvo só é imposto enquanto o Service ainda NÃO
+//     registrou a rotação transportada (`concluídas < rotação da PT`) —
+//     reaplicar nunca duplica incremento;
+//   • nada a mudar ⇒ nenhuma escrita.
+//
+// Lê o documento do PRÓPRIO usuário (1 getDoc, somente quando existe alvo
+// pendente — evento raro) para nunca sobrescrever services com cache velho.
+// ============================================================================
+export async function applySanguineOutcomeToOwnServices(
+  uid: string,
+  targets: Record<string, { sgRot: number; sgDropRot: number | null }>,
+): Promise<boolean> {
+  if (!uid || Object.keys(targets).length === 0) return true;
+  if (!db) return false;
+  try {
+    const snap = await getDoc(doc(db, SHARED_SERVICES_COLLECTION, uid));
+    const raw = snap.exists() ? (snap.data()?.services as SharedService[] | undefined) : undefined;
+    const services = Array.isArray(raw) ? raw : [];
+    if (services.length === 0) return true; // nenhum service — alvo não se aplica
+    let changed = false;
+    const next = services.map(service => {
+      const target = targets[service.id];
+      if (!target || service.quest !== "sanguine") return service;
+      if (completedSgRotations(service.sgRot) >= target.sgRot) return service; // anti-regressão
+      changed = true;
+      const updated: SharedService = { ...service, sgRot: target.sgRot, updatedAt: Date.now() };
+      if (target.sgDropRot !== null) updated.sgDropRot = target.sgDropRot;
+      return updated;
+    });
+    if (!changed) return true;
+    const result = await persistSharedServices(uid, next);
+    return result.ok;
+  } catch {
+    return false;
   }
 }
 
@@ -594,7 +643,11 @@ export function requestToSharedService(request: ServiceRequest, serviceiroNome: 
     servidor: request.servidor,
     voc: request.voc,
     level: request.level,
-    valorCombinado: resolveServiceValue(request.paymentMethod, 0),
+    // VALOR importado do Formulário Público: PIX e 1K RC valem exatamente
+    // 1000 RC (SERVICE_RC_VALUE), independentemente da Quest ou dos demais
+    // dados do pedido. As outras formas seguem a resolução padrão
+    // (50/50 fica "a informar" até a conclusão).
+    valorCombinado: request.paymentMethod === "pix" ? SERVICE_RC_VALUE : resolveServiceValue(request.paymentMethod, 0),
     notes: request.notes,
     whatsappCountry: request.whatsappCountry,
     whatsappArea: request.whatsappArea,

@@ -711,6 +711,20 @@ export interface SharedService {
    * (guia Meus Services). Ausente = primeira mensagem ainda não enviada.
    */
   firstMessageSentAt?: number;
+  /**
+   * SANGUINE — rotações CONCLUÍDAS do personagem do CLIENTE neste Service
+   * (MESMA semântica de `Character.sgRot`: 0/ausente = nenhuma rotação
+   * registrada → coluna "Rot SG" exibe "-"). Atualizado automaticamente a
+   * partir do resultado "Drop?" das PTs Sanguine concluídas — o MESMO alvo
+   * absoluto (`computeSanguineOutcome`) usado em Meus Personagens/Party
+   * Panel, sem segunda fonte de verdade. Services de Soul War nunca usam.
+   */
+  sgRot?: number;
+  /**
+   * SANGUINE — rotação em que o DROP ocorreu (mesma semântica de
+   * `Character.sgDropRot`): igual a `sgRot` → última rotação dropou (verde).
+   */
+  sgDropRot?: number;
 }
 
 export type SharedServiceStatus = "disponivel" | "realizado";

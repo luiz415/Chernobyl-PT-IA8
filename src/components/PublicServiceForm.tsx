@@ -375,7 +375,7 @@ function DropsInfo({ quest }: { quest: PublicQuest }) {
                   <li>• Spiritual Horseshoe</li>
                 </ul>
                 <p className="text-[11px] text-slate-400 leading-relaxed">
-                  🤝 Esses itens são compartilhados entre a equipe responsável pelo service.
+                  🤝 Devido à baixíssima chance de drop desses itens, eles serão compartilhados entre a equipe responsável pelo service.
                 </p>
               </div>
             </div>
@@ -468,7 +468,10 @@ export default function PublicServiceForm() {
   const [ownerName, setOwnerName] = useState("");
   const [servidor, setServidor] = useState("");
   const [level, setLevel] = useState("");
-  const [voc, setVoc] = useState<Vocation>("EK");
+  // VOCAÇÃO: inicia SEM seleção ("") e é OBRIGATÓRIA — o avanço da etapa 5
+  // e o envio final são bloqueados enquanto o cliente não escolher (as
+  // validações de level mínimo continuam dependendo da vocação escolhida).
+  const [voc, setVoc] = useState<Vocation | "">("");
   const [quest, setQuest] = useState<PublicQuest | null>(null);
   const [whatsCountry, setWhatsCountry] = useState("55");
   const [whatsArea, setWhatsArea] = useState("");
@@ -627,7 +630,11 @@ export default function PublicServiceForm() {
   // Cada etapa valida SOMENTE os próprios campos ao avançar; `validate()`
   // (abaixo) revalida TUDO no envio final — nenhuma etapa pulada escapa.
   const parsedLevel = parseInt(level || "0", 10) || 0;
-  const levelBlock = quest ? publicLevelBlockReason(quest, voc, parsedLevel) : "Escolha a Quest na primeira etapa";
+  const levelBlock = !quest
+    ? "Escolha a Quest na primeira etapa"
+    : !voc
+      ? "Escolha a vocação na etapa anterior"
+      : publicLevelBlockReason(quest, voc, parsedLevel);
 
   function stepErrors(s: Step): Record<string, string> {
     const errors: Record<string, string> = {};
@@ -641,6 +648,7 @@ export default function PublicServiceForm() {
     if (s === 5) {
       if (!personagem.trim()) errors.personagem = "Informe o nome do personagem";
       if (!servidor.trim()) errors.servidor = "Informe o servidor";
+      if (!voc) errors.voc = "Escolha a vocação do personagem";
     }
     if (s === 6 && levelBlock) errors.level = levelBlock;
     return errors;
@@ -735,8 +743,8 @@ export default function PublicServiceForm() {
     // escolhida, termos aceitos e level dentro do mínimo da combinação
     // Quest + Vocação (fonte única: utils/publicServiceLevels).
     const levelNum = parseInt(level || "0", 10) || 0;
-    if (!quest || (SOULWAR_PAUSED && quest === "soulwar") || !termsAccepted || publicLevelBlockReason(quest, voc, levelNum)) {
-      setStep(!quest || (SOULWAR_PAUSED && quest === "soulwar") ? 1 : !termsAccepted ? 2 : 6);
+    if (!quest || (SOULWAR_PAUSED && quest === "soulwar") || !termsAccepted || !voc || publicLevelBlockReason(quest, voc, levelNum)) {
+      setStep(!quest || (SOULWAR_PAUSED && quest === "soulwar") ? 1 : !termsAccepted ? 2 : !voc ? 5 : 6);
       return;
     }
 
@@ -900,7 +908,7 @@ export default function PublicServiceForm() {
     setOwnerName("");
     setServidor("");
     setLevel("");
-    setVoc("EK");
+    setVoc("");
     setQuest(null);
     setStep(1);
     setTermsAccepted(false);
@@ -1601,9 +1609,16 @@ const inputCls = "w-full bg-black/60 border border-white/20 hover:border-white/3
                         );
                       })}
                     </div>
-                    <div className="text-[10px] text-slate-600 mt-1.5">
-                      Level mínimo para {questLabel} com {voc}: <strong className="text-slate-400">{publicMinLevelFor(quest, voc)}</strong>
-                    </div>
+                    {voc ? (
+                      <div className="text-[10px] text-slate-600 mt-1.5">
+                        Level mínimo para {questLabel} com {voc}: <strong className="text-slate-400">{publicMinLevelFor(quest, voc)}</strong>
+                      </div>
+                    ) : (
+                      <div className="text-[10px] text-slate-600 mt-1.5">
+                        Escolha a vocação do personagem para ver o level mínimo exigido.
+                      </div>
+                    )}
+                    {fieldErrors.voc && <div className="text-[10px] text-rose-400 mt-1.5">{fieldErrors.voc}</div>}
                   </div>
 
                   {/* Navegação */}
@@ -1622,7 +1637,7 @@ const inputCls = "w-full bg-black/60 border border-white/20 hover:border-white/3
             {/* ============================================================
                 ETAPA 6 — LEVEL + CADASTRO
                ============================================================ */}
-            {step === 6 && quest && (
+            {step === 6 && quest && voc && (
               <div className="psf-quadro bg-[color-mix(in_oklab,var(--th-n-elev)_92%,white)] border border-cyan-500/50 rounded-3xl shadow-2xl ring-1 ring-white/[0.06]" style={{ "--psf-quadro-accent": "#22d3ee" } as CSSProperties}>
                 <div className="psf-quadro-header bg-gradient-to-r from-cyan-500/10 via-cyan-500/15 to-cyan-500/10 border-b border-cyan-500/20 px-7 py-5 flex items-center gap-3">
                   <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-cyan-500 to-sky-600 flex items-center justify-center flex-shrink-0">
@@ -1727,8 +1742,8 @@ const inputCls = "w-full bg-black/60 border border-white/20 hover:border-white/3
                             </span>
                           </div>
                           <p className="text-[11px] text-slate-300 leading-relaxed">
-                            O service é realizado <strong className="text-white">em Live</strong> — você pode assistir
-                            à execução em tempo real. Entre no canal de{" "}
+                            O service é realizado <strong className="text-white">em Live</strong> — você pode e deve assistir
+                            à execução do service em tempo real. Entre no canal de{" "}
                             <strong className="text-violet-200">{streamTarget.nome}</strong>, acompanhe tudo de perto
                             e aproveite para <strong className="text-white">seguir o canal</strong>!
                           </p>
