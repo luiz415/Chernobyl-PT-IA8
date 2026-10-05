@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import type { CSSProperties } from "react";
 import publicFormBgUrl from "../assets/public-form-bg.jpg";
-import { Clock, Save, CheckCircle2, AlertTriangle, MessageCircle, Swords, ShieldCheck, Timer, Phone } from "lucide-react";
+import { Clock, Save, CheckCircle2, AlertTriangle, MessageCircle, Swords, ShieldCheck, Timer, Phone, ChevronLeft, ChevronRight, Check, XCircle } from "lucide-react";
 import type { WaitingService, Vocation } from "../types";
 import { VOCATIONS, VOC_COLORS, VOC_LABEL, todayISO } from "../types";
 import { db, auth, isSimulationMode } from "../firebase/config";
@@ -13,6 +13,8 @@ import { SERVER_OPTIONS } from "../constants/servers";
 import { createServiceRequest } from "../services/sharedServicesService";
 import { DUPLICATE_SERVICE_MESSAGE, createWithQueueGuard } from "../services/serviceQueueIndexService";
 import { getServiceFormIdFromLocation, resolveServiceFormTarget } from "../utils/serviceFormSlug";
+import type { PublicQuest } from "../utils/publicServiceLevels";
+import { PUBLIC_QUEST_LABEL, publicMinLevelFor, publicLevelBlockReason } from "../utils/publicServiceLevels";
 
 // ============================================================================
 // CONFIGURAÇÕES — PREENCHA ANTES DE PUBLICAR
@@ -102,6 +104,311 @@ async function getRecaptchaToken(): Promise<string> {
 // ============================================================================
 
 // ============================================================================
+// ETAPAS DO FORMULÁRIO
+//
+// O formulário público funciona em 6 etapas; TODO o estado vive no
+// componente principal, então avançar/voltar NUNCA perde dados:
+//   1 Quest      → boas-vindas + escolha Soul War / Sanguine;
+//   2 Termos     → informações DA QUEST ESCOLHIDA + aceite obrigatório;
+//   3 Seus Dados → nome do cliente + WhatsApp (mesma máscara/validação);
+//   4 Pagamento  → as 3 formas existentes (pix / rc / 5050), com valores
+//                  apresentados conforme a Quest;
+//   5 Personagem → nome + servidor + vocação (componentes existentes);
+//   6 Level      → level + "Cadastrar Personagem" (bloqueado abaixo do
+//                  mínimo da combinação Quest+Vocação — ver
+//                  utils/publicServiceLevels, fonte única também usada na
+//                  lógica de envio).
+// ============================================================================
+type Step = 1 | 2 | 3 | 4 | 5 | 6;
+
+const STEP_LABELS: Record<Step, string> = {
+  1: "Quest",
+  2: "Termos",
+  3: "Seus Dados",
+  4: "Pagamento",
+  5: "Personagem",
+  6: "Level",
+};
+
+// Rótulo curto das vocações nos cards de level mínimo (mesmo padrão visual
+// do quadro original de informações).
+const VOC_SHORT: Record<Vocation, string> = {
+  MS: "Sorcerer",
+  ED: "Druid",
+  EK: "Knight",
+  RP: "Paladin",
+  MK: "Monk",
+};
+
+// Ordem de exibição dos cards de level mínimo (mesma do quadro original).
+const LEVEL_CARD_ORDER: Vocation[] = ["MS", "ED", "EK", "RP", "MK"];
+
+// ----------------------------------------------------------------------------
+// Blocos de conteúdo da Etapa 2 — stateless, definidos FORA do componente
+// principal para não serem remontados a cada render.
+// ----------------------------------------------------------------------------
+
+function SectionTitle({ emoji, accent, children }: { emoji: string; accent: string; children: React.ReactNode }) {
+  return (
+    <h3 className="flex items-center gap-2 text-sm font-black text-white uppercase tracking-wider mb-4">
+      <span className={`w-7 h-7 rounded-lg ${accent} flex items-center justify-center text-sm`}>{emoji}</span>
+      {children}
+    </h3>
+  );
+}
+
+function Divider() {
+  return <div className="h-px bg-gradient-to-r from-transparent via-white/10 to-transparent" />;
+}
+
+/** Level Mínimo Exigido — cards por vocação, valores da Quest escolhida. */
+function LevelGrid({ quest }: { quest: PublicQuest }) {
+  return (
+    <div>
+      <SectionTitle emoji="📊" accent="bg-rose-500/15 border border-rose-500/30">Level Mínimo Exigido</SectionTitle>
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+        {LEVEL_CARD_ORDER.map((v, idx) => {
+          const color = VOC_COLORS[v];
+          const min = publicMinLevelFor(quest, v);
+          return (
+            <div
+              key={v}
+              className={`psf-voc bg-[var(--th-n-panel)] border rounded-2xl p-3 text-center ${idx === LEVEL_CARD_ORDER.length - 1 ? "col-span-2 sm:col-span-1" : ""}`}
+              style={{ "--voc-color": color } as CSSProperties}
+            >
+              <div className="psf-voc-letter text-base font-black tracking-wider mb-0.5" style={{ color }}>{v}</div>
+              <div className="text-[9px] text-slate-500 uppercase tracking-wider mb-1.5">{VOC_SHORT[v]}</div>
+              <div className="psf-voc-badge inline-flex items-center px-2 py-0.5 rounded-full text-xs font-black tabular-nums border" style={{ color, borderColor: `${color}44`, backgroundColor: `${color}11` }}>{min}+</div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/** Formas de Pagamento — cards 💎 Padrão / ⚖️ 50/50 com os valores da Quest. */
+function PaymentInfoCards({ quest }: { quest: PublicQuest }) {
+  return (
+    <div>
+      <SectionTitle emoji="💰" accent="bg-emerald-500/15 border border-emerald-500/30">Formas de Pagamento</SectionTitle>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        {/* Service Padrão */}
+        <div className="psf-card bg-[var(--th-n-panel)] border border-sky-500/20 rounded-2xl p-4 space-y-2" style={{ "--psf-accent": "#38bdf8" } as CSSProperties}>
+          <div className="flex items-center gap-2 text-sky-300 font-bold text-sm">
+            <span>💎</span> Service Padrão
+          </div>
+          {quest === "soulwar" ? (
+            <ul className="text-xs text-slate-300 space-y-1.5 leading-relaxed">
+              <li className="flex items-start gap-1.5">
+                <span className="text-sky-400 mt-0.5">•</span>
+                <span><strong className="text-white">1k Rubini Coins</strong> + 12kk de refil</span>
+              </li>
+              <li className="text-center text-slate-500 text-[10px] font-bold uppercase">ou</li>
+              <li className="flex items-start gap-1.5">
+                <span className="text-sky-400 mt-0.5">•</span>
+                <span><strong className="text-white">Pix R$ 91,00</strong> + 12kk de refil</span>
+              </li>
+            </ul>
+          ) : (
+            <div className="space-y-2">
+              <div>
+                <div className="text-[10px] font-black uppercase tracking-wider text-sky-400/80 mb-1">Primeira Rotação:</div>
+                <ul className="text-xs text-slate-300 space-y-1.5 leading-relaxed">
+                  <li className="flex items-start gap-1.5">
+                    <span className="text-sky-400 mt-0.5">•</span>
+                    <span><strong className="text-white">1k Rubini Coins</strong> + 12kk de refil</span>
+                  </li>
+                  <li className="text-center text-slate-500 text-[10px] font-bold uppercase">ou</li>
+                  <li className="flex items-start gap-1.5">
+                    <span className="text-sky-400 mt-0.5">•</span>
+                    <span><strong className="text-white">Pix R$ 91,00</strong> + 12kk de refil</span>
+                  </li>
+                </ul>
+              </div>
+              <div>
+                <div className="text-[10px] font-black uppercase tracking-wider text-rose-400/80 mb-1">Caso não drope — para cada próxima rotação:</div>
+                <ul className="text-xs text-slate-300 space-y-1.5 leading-relaxed">
+                  <li className="flex items-start gap-1.5">
+                    <span className="text-sky-400 mt-0.5">•</span>
+                    <span><strong className="text-white">400 Rubini Coins</strong></span>
+                  </li>
+                  <li className="text-center text-slate-500 text-[10px] font-bold uppercase">ou</li>
+                  <li className="flex items-start gap-1.5">
+                    <span className="text-sky-400 mt-0.5">•</span>
+                    <span><strong className="text-white">Pix R$ 37,00</strong></span>
+                  </li>
+                </ul>
+              </div>
+              <p className="text-[11px] text-amber-300/90 leading-relaxed bg-amber-500/5 border border-amber-500/20 rounded-lg px-2.5 py-2">
+                * O valor de refil não inclui o acesso à Quest, que custa <strong className="text-amber-200">5kk</strong>. Esse valor deve ser somado ao refil caso seja a <strong className="text-amber-200">primeira rotação</strong> do personagem.
+              </p>
+            </div>
+          )}
+        </div>
+
+        {/* Service 50/50 */}
+        <div className="psf-card bg-[var(--th-n-panel)] border border-violet-500/20 rounded-2xl p-4 space-y-2" style={{ "--psf-accent": "#a78bfa" } as CSSProperties}>
+          <div className="flex items-center gap-2 text-violet-300 font-bold text-sm">
+            <span>⚖️</span> Service 50/50
+          </div>
+          {quest === "soulwar" ? (
+            <ul className="text-xs text-slate-300 space-y-1.5 leading-relaxed">
+              <li className="flex items-start gap-1.5">
+                <span className="text-violet-400 mt-0.5">•</span>
+                <span>O cliente paga apenas <strong className="text-white">250 Rubini Coins</strong> + 10kk de refil.</span>
+              </li>
+              <li className="flex items-start gap-1.5">
+                <span className="text-violet-400 mt-0.5">•</span>
+                <span>Após a venda do item principal, o valor arrecadado é <strong className="text-white">dividido igualmente</strong> entre o cliente e o serviceiro.</span>
+              </li>
+            </ul>
+          ) : (
+            <ul className="text-xs text-slate-300 space-y-1.5 leading-relaxed">
+              <li className="flex items-start gap-1.5">
+                <span className="text-violet-400 mt-0.5">•</span>
+                <span>O cliente paga <strong className="text-white">200 Rubini Coins</strong> + 12kk de refil na primeira rotação.</span>
+              </li>
+              <li className="flex items-start gap-1.5">
+                <span className="text-violet-400 mt-0.5">•</span>
+                <span>Caso não haja Drop, é cobrado um adicional de <strong className="text-white">100 Rubini Coins</strong> para cada próxima rotação.</span>
+              </li>
+              <li className="flex items-start gap-1.5">
+                <span className="text-violet-400 mt-0.5">•</span>
+                <span>Na rotação em que ocorrer o Drop, após a venda do item principal, o valor arrecadado é <strong className="text-white">dividido igualmente</strong> entre o cliente e o serviceiro.</span>
+              </li>
+            </ul>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Drops e Recompensas — Soul War mantém EXATAMENTE o conteúdo original;
+ * Sanguine tem a apresentação específica da Quest.
+ */
+function DropsInfo({ quest }: { quest: PublicQuest }) {
+  return (
+    <div>
+      <SectionTitle emoji="🎁" accent="bg-amber-500/15 border border-amber-500/30">Drops e Recompensas</SectionTitle>
+
+      <div className="space-y-3">
+        {quest === "soulwar" ? (
+          <>
+            {/* No Service Padrão — conteúdo original preservado */}
+            <div className="psf-card bg-[var(--th-n-panel)] border border-white/5 rounded-2xl p-4 space-y-2.5" style={{ "--psf-accent": "#38bdf8" } as CSSProperties}>
+              <div className="flex items-center gap-2 text-sky-300 font-bold text-xs uppercase tracking-wider">
+                <span>💎</span> No Service Padrão
+              </div>
+              <p className="text-xs text-slate-300 leading-relaxed">
+                • Deixamos seu personagem pronto para abrir a reward e receber sua recompensa.
+              </p>
+              <div className="bg-amber-500/5 border border-amber-500/20 rounded-xl px-3.5 py-3 space-y-1.5">
+                <p className="text-xs text-slate-300 leading-relaxed">
+                  🏆 <strong className="text-amber-300">Todos os baús de loot dos bosses pertencem ao cliente</strong> e permanecem na reward, com exceção dos <strong className="text-yellow-400">drops amarelos</strong>, como:
+                </p>
+                <ul className="text-[11px] text-slate-400 space-y-0.5 pl-4">
+                  <li>• Bag You Desire</li>
+                  <li>• The Skull of a Beast</li>
+                  <li>• Spectral Horseshoes</li>
+                  <li>• Entre outros itens de categoria amarela.</li>
+                </ul>
+                <p className="text-[11px] text-slate-400 leading-relaxed">
+                  🤝 Esses itens são compartilhados entre a equipe responsável pelo service.
+                </p>
+              </div>
+            </div>
+
+            {/* No Service 50/50 — conteúdo original preservado */}
+            <div className="psf-card bg-[var(--th-n-panel)] border border-violet-500/15 rounded-2xl p-4 space-y-2" style={{ "--psf-accent": "#a78bfa" } as CSSProperties}>
+              <div className="flex items-center gap-2 text-violet-300 font-bold text-xs uppercase tracking-wider">
+                <span>⭐</span> No Service 50/50
+              </div>
+              <ul className="text-xs text-slate-300 space-y-1.5 leading-relaxed">
+                <li>📦 Nesta modalidade, <strong className="text-white">todos os baús de loot dos bosses ficam com a equipe</strong> de serviceiros.</li>
+                <li>🎥 A abertura da reward é <strong className="text-white">gravada</strong> e o vídeo é enviado diretamente para o seu WhatsApp.</li>
+                <li>💰 Após a venda do item principal, <strong className="text-emerald-300">50% do valor é transferida em Rubini Coins</strong> para você.</li>
+              </ul>
+            </div>
+          </>
+        ) : (
+          <>
+            {/* No Service Padrão — Sanguine */}
+            <div className="psf-card bg-[var(--th-n-panel)] border border-white/5 rounded-2xl p-4 space-y-2.5" style={{ "--psf-accent": "#38bdf8" } as CSSProperties}>
+              <div className="flex items-center gap-2 text-sky-300 font-bold text-xs uppercase tracking-wider">
+                <span>💎</span> No Service Padrão
+              </div>
+              <p className="text-xs text-slate-300 leading-relaxed">
+                • Deixamos seu personagem pronto para resgatar seu item Sanguine.
+              </p>
+              <div className="bg-amber-500/5 border border-amber-500/20 rounded-xl px-3.5 py-3 space-y-1.5">
+                <p className="text-xs text-slate-300 leading-relaxed">
+                  🏆 <strong className="text-amber-300">Todos os baús de loot dos bosses pertencem ao cliente</strong> e permanecem na reward, com exceção de <strong className="text-yellow-400">dois itens</strong>:
+                </p>
+                <ul className="text-[11px] text-slate-400 space-y-0.5 pl-4">
+                  <li>• Bag You Covet</li>
+                  <li>• Spiritual Horseshoe</li>
+                </ul>
+                <p className="text-[11px] text-slate-400 leading-relaxed">
+                  🤝 Esses itens são compartilhados entre a equipe responsável pelo service.
+                </p>
+              </div>
+            </div>
+
+            {/* No Service 50/50 — Sanguine */}
+            <div className="psf-card bg-[var(--th-n-panel)] border border-violet-500/15 rounded-2xl p-4 space-y-2" style={{ "--psf-accent": "#a78bfa" } as CSSProperties}>
+              <div className="flex items-center gap-2 text-violet-300 font-bold text-xs uppercase tracking-wider">
+                <span>⭐</span> No Service 50/50
+              </div>
+              <ul className="text-xs text-slate-300 space-y-1.5 leading-relaxed">
+                <li>📦 Nesta modalidade, <strong className="text-white">todos os baús de loot dos bosses ficam com a equipe</strong> de serviceiros.</li>
+                <li>🎥 A abertura da bag é <strong className="text-white">gravada</strong> e o vídeo é enviado diretamente para o seu WhatsApp.</li>
+                <li>💰 Após a venda do item principal, <strong className="text-emerald-300">50% do valor é transferido em Rubini Coins</strong> para você.</li>
+              </ul>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** "Como funciona o Service" — seção preservada do formulário original. */
+function HowItWorks() {
+  return (
+    <div>
+      <SectionTitle emoji="⚙️" accent="bg-sky-500/15 border border-sky-500/30">Como funciona o Service</SectionTitle>
+
+      <div className="space-y-2.5 text-xs text-slate-300 leading-relaxed">
+        <p className="flex items-start gap-2">
+          <span className="flex-shrink-0">⏳</span>
+          <span>O cliente é <strong className="text-white">incluído automaticamente na fila de espera</strong>. Assim que houver uma PT disponível, entraremos em contato via WhatsApp informando o horário agendado para a realização do service.</span>
+        </p>
+        <p className="flex items-start gap-2">
+          <span className="flex-shrink-0">⏱️</span>
+          <span>O service possui <strong className="text-white">duração média entre 2 e 4 horas</strong>, podendo variar de acordo com o level dos personagens, composição e desempenho da PT.</span>
+        </p>
+        <p className="flex items-start gap-2">
+          <span className="flex-shrink-0">👥</span>
+          <span>Nossa equipe é formada por <strong className="text-white">jogadores experientes</strong> e preparados para realizar o serviço com o máximo de segurança, eficiência e profissionalismo.</span>
+        </p>
+        <p className="flex items-start gap-2">
+          <span className="flex-shrink-0">🛡️</span>
+          <span>Como em qualquer atividade online, podem ocorrer situações imprevistas durante a execução do service, como instabilidades do jogo, desconexões, quedas de energia, problemas de internet ou outros fatores externos.</span>
+        </p>
+        <p className="flex items-start gap-2">
+          <span className="flex-shrink-0">💀</span>
+          <span>Embora esse tipo de ocorrência seja incomum, <strong className="text-rose-300">eventuais mortes não geram reembolso ou compensação</strong>, independentemente da causa. Nosso compromisso é sempre minimizar riscos e concluir o serviço da forma mais segura possível.</span>
+        </p>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================================
 // Componente principal
 // ============================================================================
 type FormState = "filling" | "submitting" | "success" | "blocked";
@@ -117,13 +424,22 @@ export default function PublicServiceForm() {
   // para ter visual próprio (âmbar, informativo) em vez de tom de falha.
   const [duplicateMsg, setDuplicateMsg] = useState<string | null>(null);
 
+  // ── Etapas ────────────────────────────────────────────────────────────
+  // `step`: etapa atual; `termsAccepted`: aceite da Etapa 2 (obrigatório
+  // para prosseguir e re-checado no envio); `termsDeclined`: exibe o aviso
+  // de recusa. Trocar a Quest na Etapa 1 zera o aceite — os termos valem
+  // para a Quest escolhida, nunca "emprestados" de outra.
+  const [step, setStep] = useState<Step>(1);
+  const [termsAccepted, setTermsAccepted] = useState(false);
+  const [termsDeclined, setTermsDeclined] = useState(false);
+
   // Campos do formulário
   const [personagem, setPersonagem] = useState("");
   const [ownerName, setOwnerName] = useState("");
   const [servidor, setServidor] = useState("");
   const [level, setLevel] = useState("");
   const [voc, setVoc] = useState<Vocation>("EK");
-  const [quest, setQuest] = useState<"soulwar" | "sanguine">("soulwar");
+  const [quest, setQuest] = useState<PublicQuest | null>(null);
   const [whatsCountry, setWhatsCountry] = useState("55");
   const [whatsArea, setWhatsArea] = useState("");
   const [whatsNumber, setWhatsNumber] = useState("");
@@ -261,15 +577,91 @@ export default function PublicServiceForm() {
     return () => clearInterval(interval);
   }, [formState, blockedUntil]);
 
-  function validate(): boolean {
+  // Ao trocar de etapa, rolar para o topo do conteúdo (mobile: evita o
+  // cliente "cair" no meio da etapa seguinte).
+  useEffect(() => {
+    try { window.scrollTo({ top: 0, behavior: "smooth" }); } catch {}
+  }, [step]);
+
+  // ── Validações por etapa ─────────────────────────────────────────────────
+  // Cada etapa valida SOMENTE os próprios campos ao avançar; `validate()`
+  // (abaixo) revalida TUDO no envio final — nenhuma etapa pulada escapa.
+  const parsedLevel = parseInt(level || "0", 10) || 0;
+  const levelBlock = quest ? publicLevelBlockReason(quest, voc, parsedLevel) : "Escolha a Quest na primeira etapa";
+
+  function stepErrors(s: Step): Record<string, string> {
     const errors: Record<string, string> = {};
-    if (!personagem.trim()) errors.personagem = "Informe o nome do personagem";
-    if (!ownerName.trim()) errors.ownerName = "Informe o seu nome";
-    if (!servidor.trim()) errors.servidor = "Informe o servidor";
-    if (!whatsArea.trim() || !whatsNumber.trim()) errors.whats = "Informe o WhatsApp completo para contato";
-    if (!payment) errors.payment = "Selecione a forma de pagamento";
-    setFieldErrors(errors);
-    return Object.keys(errors).length === 0;
+    if (s === 1 && !quest) errors.quest = "Escolha a Quest para continuar";
+    if (s === 2 && !termsAccepted) errors.terms = "É necessário aceitar os termos para prosseguir";
+    if (s === 3) {
+      if (!ownerName.trim()) errors.ownerName = "Informe o seu nome";
+      if (!whatsArea.trim() || !whatsNumber.trim()) errors.whats = "Informe o WhatsApp completo para contato";
+    }
+    if (s === 4 && !payment) errors.payment = "Selecione a forma de pagamento";
+    if (s === 5) {
+      if (!personagem.trim()) errors.personagem = "Informe o nome do personagem";
+      if (!servidor.trim()) errors.servidor = "Informe o servidor";
+    }
+    if (s === 6 && levelBlock) errors.level = levelBlock;
+    return errors;
+  }
+
+  // Validação COMPLETA (envio): união das validações de todas as etapas.
+  // Retorna também a PRIMEIRA etapa com pendência, para levar o cliente
+  // direto até ela — nada é enviado com etapa inválida.
+  function validateAll(): { ok: boolean; firstInvalidStep: Step | null; errors: Record<string, string> } {
+    const all: Record<string, string> = {};
+    let firstInvalid: Step | null = null;
+    for (const s of [1, 2, 3, 4, 5, 6] as Step[]) {
+      const errs = stepErrors(s);
+      if (Object.keys(errs).length > 0 && firstInvalid === null) firstInvalid = s;
+      Object.assign(all, errs);
+    }
+    setFieldErrors(all);
+    return { ok: firstInvalid === null, firstInvalidStep: firstInvalid, errors: all };
+  }
+
+  function goToStep(target: Step) {
+    setFieldErrors({});
+    setStep(target);
+  }
+
+  function goNext() {
+    const errs = stepErrors(step);
+    if (Object.keys(errs).length > 0) {
+      setFieldErrors(errs);
+      return;
+    }
+    setFieldErrors({});
+    if (step < 6) setStep((step + 1) as Step);
+  }
+
+  function goBack() {
+    setFieldErrors({});
+    if (step > 1) setStep((step - 1) as Step);
+  }
+
+  function chooseQuest(q: PublicQuest) {
+    if (quest !== q) {
+      // Termos valem PARA A QUEST escolhida: trocar de Quest exige novo aceite.
+      setTermsAccepted(false);
+      setTermsDeclined(false);
+    }
+    setQuest(q);
+    setFieldErrors({});
+    setStep(2);
+  }
+
+  function acceptTerms() {
+    setTermsAccepted(true);
+    setTermsDeclined(false);
+    setFieldErrors({});
+    setStep(3);
+  }
+
+  function declineTerms() {
+    setTermsAccepted(false);
+    setTermsDeclined(true);
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -285,7 +677,22 @@ export default function PublicServiceForm() {
       return;
     }
 
-    if (!validate()) return;
+    // Validação completa — qualquer pendência leva o cliente à etapa dela.
+    const result = validateAll();
+    if (!result.ok) {
+      if (result.firstInvalidStep) setStep(result.firstInvalidStep);
+      return;
+    }
+
+    // ── GATE FINAL (lógica de cadastro, não só interface) ────────────────
+    // Mesmo que a interface seja contornada, NADA é gravado sem Quest
+    // escolhida, termos aceitos e level dentro do mínimo da combinação
+    // Quest + Vocação (fonte única: utils/publicServiceLevels).
+    const levelNum = parseInt(level || "0", 10) || 0;
+    if (!quest || !termsAccepted || publicLevelBlockReason(quest, voc, levelNum)) {
+      setStep(!quest ? 1 : !termsAccepted ? 2 : 6);
+      return;
+    }
 
     setFormState("submitting");
 
@@ -321,7 +728,7 @@ export default function PublicServiceForm() {
         ownerName: ownerName.trim(),
         servidor: servidor.trim(),
         voc,
-        level: parseInt(level || "0", 10) || 0,
+        level: levelNum,
         valorCombinado: 0, // será negociado pela equipe
         dataAdicionado: todayISO(),
         notes: publicNotes,
@@ -448,7 +855,10 @@ export default function PublicServiceForm() {
     setServidor("");
     setLevel("");
     setVoc("EK");
-    setQuest("soulwar");
+    setQuest(null);
+    setStep(1);
+    setTermsAccepted(false);
+    setTermsDeclined(false);
     setWhatsArea("");
     setWhatsNumber("");
     setPayment("");
@@ -464,6 +874,59 @@ export default function PublicServiceForm() {
 
   const inputCls = "w-full bg-[var(--th-n-panel)] border border-white/10 focus:border-cyan-500/60 rounded-xl px-4 py-3 text-white text-sm focus:outline-none placeholder-slate-600 transition-colors";
   const labelCls = "block text-[11px] font-bold uppercase tracking-widest text-slate-400 mb-2";
+  const navBackCls = "inline-flex items-center gap-1.5 px-5 py-3 rounded-xl border border-white/10 bg-white/[0.03] text-slate-300 hover:bg-white/[0.07] hover:text-white text-sm font-bold transition-colors cursor-pointer";
+  const navNextCls = "psf-submit inline-flex items-center justify-center gap-2 px-7 py-3 rounded-xl text-sm font-black tracking-wide text-black bg-gradient-to-r from-cyan-400 to-sky-500 hover:from-cyan-300 hover:to-sky-400 shadow-lg shadow-cyan-500/25 hover:shadow-cyan-500/40 transition-all duration-300 cursor-pointer hover:scale-[1.02] active:scale-[0.98]";
+
+  const questLabel = quest ? PUBLIC_QUEST_LABEL[quest] : "";
+  const questEmoji = quest === "sanguine" ? "🩸" : "⚔️";
+
+  // ── Stepper (indicador de etapas) ────────────────────────────────────────
+  // Etapas anteriores são clicáveis (voltar sem perder dados); as seguintes
+  // só pelos botões "Continuar" — que validam a etapa atual.
+  function renderStepper() {
+    return (
+      <div className="mb-6">
+        <div className="flex items-center justify-between gap-1">
+          {( [1, 2, 3, 4, 5, 6] as Step[]).map((s, idx) => {
+            const done = s < step;
+            const current = s === step;
+            return (
+              <div key={s} className={`flex items-center ${idx < 5 ? "flex-1" : ""}`}>
+                <button
+                  type="button"
+                  onClick={() => { if (done) goToStep(s); }}
+                  disabled={!done}
+                  title={`Etapa ${s}: ${STEP_LABELS[s]}`}
+                  className={`flex flex-col items-center gap-1 flex-shrink-0 ${done ? "cursor-pointer" : "cursor-default"}`}
+                >
+                  <span
+                    className={`w-8 h-8 rounded-full flex items-center justify-center text-[11px] font-black border-2 transition-all ${
+                      current
+                        ? "border-cyan-400 bg-cyan-500/20 text-cyan-300 shadow-lg shadow-cyan-500/20 scale-110"
+                        : done
+                          ? "border-emerald-500/60 bg-emerald-500/15 text-emerald-400 hover:bg-emerald-500/25"
+                          : "border-white/10 bg-white/[0.03] text-slate-600"
+                    }`}
+                  >
+                    {done ? <Check size={14} /> : s}
+                  </span>
+                  <span className={`hidden sm:block text-[9px] font-bold uppercase tracking-wider ${current ? "text-cyan-300" : done ? "text-emerald-400/80" : "text-slate-600"}`}>
+                    {STEP_LABELS[s]}
+                  </span>
+                </button>
+                {idx < 5 && (
+                  <div className={`flex-1 h-0.5 mx-1 sm:mx-2 rounded-full transition-colors ${s < step ? "bg-emerald-500/50" : "bg-white/10"}`} />
+                )}
+              </div>
+            );
+          })}
+        </div>
+        <div className="sm:hidden text-center mt-2 text-[11px] font-bold uppercase tracking-widest text-cyan-300">
+          Etapa {step} de 6 — {STEP_LABELS[step]}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="public-service-form min-h-screen w-full text-slate-200 font-sans relative overflow-x-hidden">
@@ -502,203 +965,8 @@ export default function PublicServiceForm() {
         </div>
       </header>
 
-      {/* pt-24: compensa a altura do header fixo para o conteúdo não ficar escondido */}
+      {/* pt-28: compensa a altura do header fixo para o conteúdo não ficar escondido */}
       <div className="relative z-10 w-full max-w-3xl mx-auto px-3 sm:px-6 pt-28 pb-12">
-        {/* ===== QUADRO: INFORMAÇÕES SOBRE O SERVICE ===== */}
-        <div className="psf-quadro bg-[var(--th-n-elev)] border border-amber-500/50 rounded-3xl shadow-2xl mb-8" style={{ "--psf-quadro-accent": "#f59e0b" } as CSSProperties}>
-          {/* Título do quadro */}
-          <div className="psf-quadro-header bg-gradient-to-r from-amber-500/10 via-amber-500/15 to-amber-500/10 border-b border-amber-500/20 px-7 py-5 flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-amber-500 to-orange-600 flex items-center justify-center flex-shrink-0">
-              <Swords size={20} className="text-black" />
-            </div>
-            <div>
-              <h2 className="text-base font-black text-amber-300 tracking-wide uppercase">Informações sobre o Service</h2>
-              <p className="text-[11px] text-slate-500">Leia com atenção antes de solicitar</p>
-            </div>
-          </div>
-
-          <div className="psf-quadro-inner px-4 py-6 sm:p-7 space-y-6">
-            {/* ===== LEVEL MÍNIMO EXIGIDO ===== */}
-            <div>
-              <h3 className="flex items-center gap-2 text-sm font-black text-white uppercase tracking-wider mb-4">
-                <span className="w-7 h-7 rounded-lg bg-rose-500/15 border border-rose-500/30 flex items-center justify-center text-sm">📊</span>
-                Level Mínimo Exigido
-              </h3>
-
-              <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
-                {/* Sorcerer */}
-                <div className="psf-voc bg-[var(--th-n-panel)] border rounded-2xl p-3 text-center" style={{ "--voc-color": VOC_COLORS.MS } as CSSProperties}>
-                  <div className="psf-voc-letter text-base font-black tracking-wider mb-0.5" style={{ color: VOC_COLORS.MS }}>MS</div>
-                  <div className="text-[9px] text-slate-500 uppercase tracking-wider mb-1.5">Sorcerer</div>
-                  <div className="psf-voc-badge inline-flex items-center px-2 py-0.5 rounded-full text-xs font-black tabular-nums border" style={{ color: VOC_COLORS.MS, borderColor: `${VOC_COLORS.MS}44`, backgroundColor: `${VOC_COLORS.MS}11` }}>400+</div>
-                </div>
-                {/* Druid */}
-                <div className="psf-voc bg-[var(--th-n-panel)] border rounded-2xl p-3 text-center" style={{ "--voc-color": VOC_COLORS.ED } as CSSProperties}>
-                  <div className="psf-voc-letter text-base font-black tracking-wider mb-0.5" style={{ color: VOC_COLORS.ED }}>ED</div>
-                  <div className="text-[9px] text-slate-500 uppercase tracking-wider mb-1.5">Druid</div>
-                  <div className="psf-voc-badge inline-flex items-center px-2 py-0.5 rounded-full text-xs font-black tabular-nums border" style={{ color: VOC_COLORS.ED, borderColor: `${VOC_COLORS.ED}44`, backgroundColor: `${VOC_COLORS.ED}11` }}>400+</div>
-                </div>
-                {/* Knight */}
-                <div className="psf-voc bg-[var(--th-n-panel)] border rounded-2xl p-3 text-center" style={{ "--voc-color": VOC_COLORS.EK } as CSSProperties}>
-                  <div className="psf-voc-letter text-base font-black tracking-wider mb-0.5" style={{ color: VOC_COLORS.EK }}>EK</div>
-                  <div className="text-[9px] text-slate-500 uppercase tracking-wider mb-1.5">Knight</div>
-                  <div className="psf-voc-badge inline-flex items-center px-2 py-0.5 rounded-full text-xs font-black tabular-nums border" style={{ color: VOC_COLORS.EK, borderColor: `${VOC_COLORS.EK}44`, backgroundColor: `${VOC_COLORS.EK}11` }}>550+</div>
-                </div>
-                {/* Paladin */}
-                <div className="psf-voc bg-[var(--th-n-panel)] border rounded-2xl p-3 text-center" style={{ "--voc-color": VOC_COLORS.RP } as CSSProperties}>
-                  <div className="psf-voc-letter text-base font-black tracking-wider mb-0.5" style={{ color: VOC_COLORS.RP }}>RP</div>
-                  <div className="text-[9px] text-slate-500 uppercase tracking-wider mb-1.5">Paladin</div>
-                  <div className="psf-voc-badge inline-flex items-center px-2 py-0.5 rounded-full text-xs font-black tabular-nums border" style={{ color: VOC_COLORS.RP, borderColor: `${VOC_COLORS.RP}44`, backgroundColor: `${VOC_COLORS.RP}11` }}>500+</div>
-                </div>
-                {/* Monk */}
-                <div className="psf-voc bg-[var(--th-n-panel)] border rounded-2xl p-3 text-center col-span-2 sm:col-span-1" style={{ "--voc-color": VOC_COLORS.MK } as CSSProperties}>
-                  <div className="psf-voc-letter text-base font-black tracking-wider mb-0.5" style={{ color: VOC_COLORS.MK }}>MK</div>
-                  <div className="text-[9px] text-slate-500 uppercase tracking-wider mb-1.5">Monk</div>
-                  <div className="psf-voc-badge inline-flex items-center px-2 py-0.5 rounded-full text-xs font-black tabular-nums border" style={{ color: VOC_COLORS.MK, borderColor: `${VOC_COLORS.MK}44`, backgroundColor: `${VOC_COLORS.MK}11` }}>550+</div>
-                </div>
-              </div>
-            </div>
-
-            {/* Divisor */}
-            <div className="h-px bg-gradient-to-r from-transparent via-white/10 to-transparent" />
-
-            {/* ===== FORMAS DE PAGAMENTO ===== */}
-            <div>
-              <h3 className="flex items-center gap-2 text-sm font-black text-white uppercase tracking-wider mb-4">
-                <span className="w-7 h-7 rounded-lg bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-sm">💰</span>
-                Formas de Pagamento
-              </h3>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                {/* Service Padrão */}
-                <div className="psf-card bg-[var(--th-n-panel)] border border-sky-500/20 rounded-2xl p-4 space-y-2" style={{ "--psf-accent": "#38bdf8" } as CSSProperties}>
-                  <div className="flex items-center gap-2 text-sky-300 font-bold text-sm">
-                    <span>💎</span> Service Padrão
-                  </div>
-                  <ul className="text-xs text-slate-300 space-y-1.5 leading-relaxed">
-                    <li className="flex items-start gap-1.5">
-                      <span className="text-sky-400 mt-0.5">•</span>
-                      <span><strong className="text-white">1k Rubini Coins</strong> + 10kk de refil</span>
-                    </li>
-                    <li className="text-center text-slate-500 text-[10px] font-bold uppercase">ou</li>
-                    <li className="flex items-start gap-1.5">
-                      <span className="text-sky-400 mt-0.5">•</span>
-                      <span><strong className="text-white">Pix R$ 91,00</strong> + 10kk de refil</span>
-                    </li>
-                  </ul>
-                </div>
-
-                {/* Service 50/50 */}
-                <div className="psf-card bg-[var(--th-n-panel)] border border-violet-500/20 rounded-2xl p-4 space-y-2" style={{ "--psf-accent": "#a78bfa" } as CSSProperties}>
-                  <div className="flex items-center gap-2 text-violet-300 font-bold text-sm">
-                    <span>⚖️</span> Service 50/50
-                  </div>
-                  <ul className="text-xs text-slate-300 space-y-1.5 leading-relaxed">
-                    <li className="flex items-start gap-1.5">
-                      <span className="text-violet-400 mt-0.5">•</span>
-                      <span>O cliente paga apenas <strong className="text-white">250 Rubini Coins</strong> + 10kk de refil.</span>
-                    </li>
-                    <li className="flex items-start gap-1.5">
-                      <span className="text-violet-400 mt-0.5">•</span>
-                      <span>Após a venda do item principal, o valor arrecadado é <strong className="text-white">dividido igualmente</strong> entre o cliente e o serviceiro.</span>
-                    </li>
-                  </ul>
-                </div>
-              </div>
-            </div>
-
-            {/* Divisor */}
-            <div className="h-px bg-gradient-to-r from-transparent via-white/10 to-transparent" />
-
-            {/* ===== DROPS E RECOMPENSAS ===== */}
-            <div>
-              <h3 className="flex items-center gap-2 text-sm font-black text-white uppercase tracking-wider mb-4">
-                <span className="w-7 h-7 rounded-lg bg-amber-500/15 border border-amber-500/30 flex items-center justify-center text-sm">🎁</span>
-                Drops e Recompensas
-              </h3>
-
-              <div className="space-y-3">
-                {/* No Service Padrão */}
-                <div className="psf-card bg-[var(--th-n-panel)] border border-white/5 rounded-2xl p-4 space-y-2.5" style={{ "--psf-accent": "#38bdf8" } as CSSProperties}>
-                  <div className="flex items-center gap-2 text-sky-300 font-bold text-xs uppercase tracking-wider">
-                    <span>💎</span> No Service Padrão
-                  </div>
-                  <p className="text-xs text-slate-300 leading-relaxed">
-                    • Deixamos seu personagem pronto para abrir a reward e receber sua recompensa.
-                  </p>
-                  <div className="bg-amber-500/5 border border-amber-500/20 rounded-xl px-3.5 py-3 space-y-1.5">
-                    <p className="text-xs text-slate-300 leading-relaxed">
-                      🏆 <strong className="text-amber-300">Todos os baús de loot dos bosses pertencem ao cliente</strong> e permanecem na reward, com exceção dos <strong className="text-yellow-400">drops amarelos</strong>, como:
-                    </p>
-                    <ul className="text-[11px] text-slate-400 space-y-0.5 pl-4">
-                      <li>• Bag You Desire</li>
-                      <li>• The Skull of a Beast</li>
-                      <li>• Spectral Horseshoes</li>
-                      <li>• Entre outros itens de categoria amarela.</li>
-                    </ul>
-                    <p className="text-[11px] text-slate-400 leading-relaxed">
-                      🤝 Esses itens são compartilhados entre a equipe responsável pelo service.
-                    </p>
-                  </div>
-                </div>
-
-                {/* No Service 50/50 */}
-                <div className="psf-card bg-[var(--th-n-panel)] border border-violet-500/15 rounded-2xl p-4 space-y-2" style={{ "--psf-accent": "#a78bfa" } as CSSProperties}>
-                  <div className="flex items-center gap-2 text-violet-300 font-bold text-xs uppercase tracking-wider">
-                    <span>⭐</span> No Service 50/50
-                  </div>
-                  <ul className="text-xs text-slate-300 space-y-1.5 leading-relaxed">
-                    <li>📦 Nesta modalidade, <strong className="text-white">todos os baús de loot dos bosses ficam com a equipe</strong> de serviceiros.</li>
-                    <li>🎥 A abertura da reward é <strong className="text-white">gravada</strong> e o vídeo é enviado diretamente para o seu WhatsApp.</li>
-                    <li>💰 Após a venda do item principal, <strong className="text-emerald-300">50% do valor é transferida em Rubini Coins</strong> para você.</li>
-                  </ul>
-                </div>
-              </div>
-            </div>
-
-            {/* Divisor */}
-            <div className="h-px bg-gradient-to-r from-transparent via-white/10 to-transparent" />
-
-            {/* ===== FUNCIONAMENTO DO SERVICE ===== */}
-            <div>
-              <h3 className="flex items-center gap-2 text-sm font-black text-white uppercase tracking-wider mb-4">
-                <span className="w-7 h-7 rounded-lg bg-sky-500/15 border border-sky-500/30 flex items-center justify-center text-sm">⚙️</span>
-                Como funciona o Service
-              </h3>
-
-              <div className="space-y-2.5 text-xs text-slate-300 leading-relaxed">
-                <p className="flex items-start gap-2">
-                  <span className="flex-shrink-0">⏳</span>
-                  <span>O cliente é <strong className="text-white">incluído automaticamente na fila de espera</strong>. Assim que houver uma PT disponível, entraremos em contato via WhatsApp informando o horário agendado para a realização do service.</span>
-                </p>
-                <p className="flex items-start gap-2">
-                  <span className="flex-shrink-0">⏱️</span>
-                  <span>O service possui <strong className="text-white">duração média entre 2 e 4 horas</strong>, podendo variar de acordo com o level dos personagens, composição e desempenho da PT.</span>
-                </p>
-                <p className="flex items-start gap-2">
-                  <span className="flex-shrink-0">👥</span>
-                  <span>Nossa equipe é formada por <strong className="text-white">jogadores experientes</strong> e preparados para realizar o serviço com o máximo de segurança, eficiência e profissionalismo.</span>
-                </p>
-                <p className="flex items-start gap-2">
-                  <span className="flex-shrink-0">🛡️</span>
-                  <span>Como em qualquer atividade online, podem ocorrer situações imprevistas durante a execução do service, como instabilidades do jogo, desconexões, quedas de energia, problemas de internet ou outros fatores externos.</span>
-                </p>
-                <p className="flex items-start gap-2">
-                  <span className="flex-shrink-0">💀</span>
-                  <span>Embora esse tipo de ocorrência seja incomum, <strong className="text-rose-300">eventuais mortes não geram reembolso ou compensação</strong>, independentemente da causa. Nosso compromisso é sempre minimizar riscos e concluir o serviço da forma mais segura possível.</span>
-                </p>
-              </div>
-
-              {/* Aviso de aceite */}
-              <div className="mt-4 flex items-start gap-2.5 bg-emerald-500/10 border border-emerald-500/30 rounded-xl px-4 py-3 text-xs text-emerald-200 leading-relaxed">
-                <CheckCircle2 size={16} className="flex-shrink-0 mt-0.5 text-emerald-400" />
-                <span>
-                  <strong>Ao contratar o service, o cliente declara estar ciente e de acordo com todas as condições descritas acima.</strong>
-                </span>
-              </div>
-            </div>
-          </div>
-        </div>
 
         {/* ===== ESTADO: BLOQUEADO (rate limit) ===== */}
         {formState === "blocked" && (
@@ -743,353 +1011,617 @@ export default function PublicServiceForm() {
           </div>
         )}
 
-        {/* ===== TEXTO ENTRE OS DOIS QUADROS ===== */}
+        {/* ===== FLUXO EM ETAPAS ===== */}
         {(formState === "filling" || formState === "submitting") && (
-          <div className="text-center mb-8">
-            <p className="text-slate-400 text-sm max-w-md mx-auto leading-relaxed">
-              Preencha o formulário abaixo para solicitar o service do seu personagem.
-              Nossa equipe entrará em contato pelo WhatsApp para combinar os detalhes.
-            </p>
-          </div>
-        )}
+          <form onSubmit={handleSubmit}>
+            {renderStepper()}
 
-        {/* ===== ESTADO: FORMULÁRIO ===== */}
-        {(formState === "filling" || formState === "submitting") && (
-          <form onSubmit={handleSubmit} className="psf-quadro bg-[var(--th-n-elev)] border border-cyan-500/50 rounded-3xl shadow-2xl" style={{ "--psf-quadro-accent": "#22d3ee" } as CSSProperties}>
-            {/* Banner do tipo de quest */}
-            <div className="psf-quadro-header bg-gradient-to-r from-cyan-500/10 via-cyan-500/15 to-cyan-500/10 border-b border-cyan-500/20 px-7 py-5 flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-cyan-500 to-sky-600 flex items-center justify-center flex-shrink-0">
-                <Clock size={20} className="text-black" />
+            {/* Erro geral — visível em qualquer etapa */}
+            {errorMsg && (
+              <div className="mb-5 flex items-start gap-3 bg-rose-500/10 border border-rose-500/30 rounded-xl px-4 py-3 text-sm text-rose-300">
+                <AlertTriangle size={18} className="flex-shrink-0 mt-0.5" />
+                <span>{errorMsg}</span>
               </div>
-              <div>
-                <h2 className="text-base font-black text-cyan-300 tracking-wide uppercase">Solicitar Service</h2>
-                <p className="text-[11px] text-slate-500">Todos os campos com * são obrigatórios</p>
-              </div>
-            </div>
+            )}
 
-            <div className="psf-quadro-inner px-4 py-6 sm:p-7 space-y-6">
-              {/* Erro geral */}
-              {errorMsg && (
-                <div className="flex items-start gap-3 bg-rose-500/10 border border-rose-500/30 rounded-xl px-4 py-3 text-sm text-rose-300">
-                  <AlertTriangle size={18} className="flex-shrink-0 mt-0.5" />
-                  <span>{errorMsg}</span>
+            {/* Personagem já na fila — aviso informativo (não é um erro do
+                cliente): nenhum novo registro foi criado. */}
+            {duplicateMsg && (
+              <div className="mb-5 flex items-start gap-3 bg-amber-500/10 border border-amber-500/30 rounded-xl px-4 py-3 text-sm text-amber-300">
+                <Clock size={18} className="flex-shrink-0 mt-0.5" />
+                <div>
+                  <div className="font-bold">{duplicateMsg}</div>
+                  <div className="text-[11px] text-amber-200/70 mt-1">
+                    Nossa equipe já recebeu a solicitação deste personagem e entrará em contato pelo WhatsApp.
+                  </div>
                 </div>
-              )}
+              </div>
+            )}
 
-              {/* Personagem já na fila — aviso informativo (não é um erro do
-                  cliente): nenhum novo registro foi criado. */}
-              {duplicateMsg && (
-                <div className="flex items-start gap-3 bg-amber-500/10 border border-amber-500/30 rounded-xl px-4 py-3 text-sm text-amber-300">
-                  <Clock size={18} className="flex-shrink-0 mt-0.5" />
+            {/* ============================================================
+                ETAPA 1 — BOAS-VINDAS + ESCOLHA DA QUEST
+               ============================================================ */}
+            {step === 1 && (
+              <div className="psf-quadro bg-[var(--th-n-elev)] border border-cyan-500/50 rounded-3xl shadow-2xl" style={{ "--psf-quadro-accent": "#22d3ee" } as CSSProperties}>
+                <div className="psf-quadro-header bg-gradient-to-r from-cyan-500/10 via-cyan-500/15 to-cyan-500/10 border-b border-cyan-500/20 px-7 py-5 flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-cyan-500 to-sky-600 flex items-center justify-center flex-shrink-0">
+                    <Swords size={20} className="text-black" />
+                  </div>
                   <div>
-                    <div className="font-bold">{duplicateMsg}</div>
-                    <div className="text-[11px] text-amber-200/70 mt-1">
-                      Nossa equipe já recebeu a solicitação deste personagem e entrará em contato pelo WhatsApp.
+                    <h2 className="text-base font-black text-cyan-300 tracking-wide uppercase">Bem-vindo ao nosso Service</h2>
+                    <p className="text-[11px] text-slate-500">Quests concluídas com segurança e profissionalismo</p>
+                  </div>
+                </div>
+
+                <div className="psf-quadro-inner px-4 py-6 sm:p-7 space-y-6">
+                  <p className="text-sm text-slate-300 leading-relaxed text-center max-w-lg mx-auto">
+                    Nossa equipe de <strong className="text-white">jogadores experientes</strong> realiza o
+                    service completo da Quest do seu personagem — com agendamento pelo WhatsApp,
+                    horário combinado e <strong className="text-white">pagamento flexível</strong> (Pix,
+                    Rubini Coins ou modalidade 50/50).
+                  </p>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-center">
+                    <div className="bg-white/[0.03] border border-white/5 rounded-xl px-3 py-2.5 text-[11px] text-slate-400">
+                      ⏳ Fila de espera com <strong className="text-slate-200">contato via WhatsApp</strong>
+                    </div>
+                    <div className="bg-white/[0.03] border border-white/5 rounded-xl px-3 py-2.5 text-[11px] text-slate-400">
+                      🛡️ Execução com <strong className="text-slate-200">máxima segurança</strong>
+                    </div>
+                    <div className="bg-white/[0.03] border border-white/5 rounded-xl px-3 py-2.5 text-[11px] text-slate-400">
+                      💰 Valores claros, <strong className="text-slate-200">sem surpresas</strong>
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="text-center mb-4">
+                      <h3 className="text-sm font-black text-white uppercase tracking-wider">Escolha a Quest do seu Service</h3>
+                      <p className="text-[11px] text-slate-500 mt-1">As informações, valores e requisitos das próximas etapas seguem a Quest escolhida.</p>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <button
+                        type="button"
+                        onClick={() => chooseQuest("soulwar")}
+                        style={{ "--psf-accent": "#cbd5e1" } as CSSProperties}
+                        className={`psf-choice flex flex-col items-center gap-1.5 px-4 py-6 rounded-2xl border-2 font-bold cursor-pointer tracking-wider ${
+                          quest === "soulwar"
+                            ? "border-slate-300 bg-slate-500/15 text-white shadow-lg shadow-slate-500/10 scale-[1.02]"
+                            : "border-white/10 bg-white/[0.02] text-slate-400 hover:bg-white/5 hover:border-white/20"
+                        }`}
+                      >
+                        <span className="text-3xl">⚔️</span>
+                        <span className="text-base font-black text-white">SOUL WAR</span>
+                        <span className="text-[10px] font-semibold text-slate-500 normal-case tracking-normal leading-snug text-center">
+                          Reward completa da Soul War, com seu personagem pronto para a recompensa.
+                        </span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => chooseQuest("sanguine")}
+                        style={{ "--psf-accent": "#fb7185" } as CSSProperties}
+                        className={`psf-choice flex flex-col items-center gap-1.5 px-4 py-6 rounded-2xl border-2 font-bold cursor-pointer tracking-wider ${
+                          quest === "sanguine"
+                            ? "border-rose-400 bg-rose-500/15 text-white shadow-lg shadow-rose-500/10 scale-[1.02]"
+                            : "border-white/10 bg-white/[0.02] text-slate-400 hover:bg-white/5 hover:border-white/20"
+                        }`}
+                      >
+                        <span className="text-3xl">🩸</span>
+                        <span className="text-base font-black text-white">SANGUINE</span>
+                        <span className="text-[10px] font-semibold text-slate-500 normal-case tracking-normal leading-snug text-center">
+                          Rotação da Sanguine, deixando seu personagem pronto para resgatar o item.
+                        </span>
+                      </button>
+                    </div>
+                    {fieldErrors.quest && <div className="text-[10px] text-rose-400 mt-2 text-center">{fieldErrors.quest}</div>}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* ============================================================
+                ETAPA 2 — INFORMAÇÕES DA QUEST + TERMOS
+               ============================================================ */}
+            {step === 2 && quest && (
+              <div className="psf-quadro bg-[var(--th-n-elev)] border border-amber-500/50 rounded-3xl shadow-2xl" style={{ "--psf-quadro-accent": "#f59e0b" } as CSSProperties}>
+                <div className="psf-quadro-header bg-gradient-to-r from-amber-500/10 via-amber-500/15 to-amber-500/10 border-b border-amber-500/20 px-7 py-5 flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-amber-500 to-orange-600 flex items-center justify-center flex-shrink-0">
+                    <Swords size={20} className="text-black" />
+                  </div>
+                  <div>
+                    <h2 className="text-base font-black text-amber-300 tracking-wide uppercase">Service {questEmoji} {questLabel}</h2>
+                    <p className="text-[11px] text-slate-500">Leia com atenção antes de prosseguir</p>
+                  </div>
+                </div>
+
+                <div className="psf-quadro-inner px-4 py-6 sm:p-7 space-y-6">
+                  <LevelGrid quest={quest} />
+                  <Divider />
+                  <PaymentInfoCards quest={quest} />
+                  <Divider />
+                  <DropsInfo quest={quest} />
+                  <Divider />
+                  <HowItWorks />
+
+                  {/* ===== ACEITE DOS TERMOS ===== */}
+                  <div className="bg-emerald-500/5 border border-emerald-500/25 rounded-2xl px-4 py-4 sm:px-5 space-y-3">
+                    <p className="text-xs text-emerald-200 leading-relaxed flex items-start gap-2.5">
+                      <CheckCircle2 size={16} className="flex-shrink-0 mt-0.5 text-emerald-400" />
+                      <span><strong>Ao contratar o service, o cliente declara estar ciente e de acordo com todas as condições descritas acima.</strong></span>
+                    </p>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                      <button
+                        type="button"
+                        onClick={acceptTerms}
+                        className="inline-flex items-center justify-center gap-2 px-4 py-3.5 rounded-xl border-2 border-emerald-500/60 bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 text-sm font-black tracking-wide transition-all cursor-pointer hover:scale-[1.01] active:scale-[0.99]"
+                      >
+                        <Check size={17} /> Aceito os termos
+                      </button>
+                      <button
+                        type="button"
+                        onClick={declineTerms}
+                        className="inline-flex items-center justify-center gap-2 px-4 py-3.5 rounded-xl border-2 border-white/10 bg-white/[0.02] hover:bg-rose-500/10 hover:border-rose-500/40 text-slate-400 hover:text-rose-300 text-sm font-bold tracking-wide transition-all cursor-pointer"
+                      >
+                        <XCircle size={17} /> Não aceito os termos
+                      </button>
+                    </div>
+                    {termsDeclined && (
+                      <div className="flex items-start gap-2.5 bg-rose-500/10 border border-rose-500/30 rounded-xl px-4 py-3 text-xs text-rose-300 leading-relaxed animate-in fade-in slide-in-from-top-2 duration-200">
+                        <AlertTriangle size={15} className="flex-shrink-0 mt-0.5" />
+                        <span>
+                          Sem o aceite dos termos não é possível prosseguir com a solicitação do service.
+                          Se preferir, revise as condições acima ou{" "}
+                          <a href="https://wa.me/5535999349969" target="_blank" rel="noopener noreferrer" className="underline font-bold hover:text-rose-200">fale com o nosso suporte</a>.
+                        </span>
+                      </div>
+                    )}
+                    {fieldErrors.terms && !termsDeclined && (
+                      <div className="text-[10px] text-rose-400">{fieldErrors.terms}</div>
+                    )}
+                  </div>
+
+                  {/* Navegação */}
+                  <div className="flex items-center justify-between pt-1">
+                    <button type="button" onClick={goBack} className={navBackCls}>
+                      <ChevronLeft size={16} /> Voltar
+                    </button>
+                    <div className="text-[10px] text-slate-600 text-right">
+                      Aceite os termos para continuar
                     </div>
                   </div>
                 </div>
-              )}
+              </div>
+            )}
 
-              {/* Nome do personagem + Seu nome */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
-                <div>
-                  <label className={labelCls}>Nome do Personagem *</label>
-                  <input
-                    ref={firstFieldRef}
-                    type="text"
-                    value={personagem}
-                    onChange={e => { setPersonagem(e.target.value.replace(/[^A-Za-zÀ-ÿ\s]/g, "")); if (fieldErrors.personagem) setFieldErrors(f => ({ ...f, personagem: "" })); if (duplicateMsg) setDuplicateMsg(null); }}
-                    placeholder="Ex: Sir Knight"
-                    maxLength={50}
-                    className={`${inputCls} ${fieldErrors.personagem ? "border-rose-500/60" : ""}`}
-                  />
-                  {fieldErrors.personagem && <div className="text-[10px] text-rose-400 mt-1.5">{fieldErrors.personagem}</div>}
+            {/* ============================================================
+                ETAPA 3 — CADASTRO DO CLIENTE (nome + WhatsApp)
+               ============================================================ */}
+            {step === 3 && (
+              <div className="psf-quadro bg-[var(--th-n-elev)] border border-cyan-500/50 rounded-3xl shadow-2xl" style={{ "--psf-quadro-accent": "#22d3ee" } as CSSProperties}>
+                <div className="psf-quadro-header bg-gradient-to-r from-cyan-500/10 via-cyan-500/15 to-cyan-500/10 border-b border-cyan-500/20 px-7 py-5 flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-cyan-500 to-sky-600 flex items-center justify-center flex-shrink-0">
+                    <Phone size={20} className="text-black" />
+                  </div>
+                  <div>
+                    <h2 className="text-base font-black text-cyan-300 tracking-wide uppercase">Seus dados de contato</h2>
+                    <p className="text-[11px] text-slate-500">Service {questEmoji} {questLabel} · usaremos o WhatsApp para combinar os detalhes</p>
+                  </div>
                 </div>
-                <div>
-                  <label className={labelCls}>Seu Nome *</label>
-                  <input
-                    type="text"
-                    value={ownerName}
-                    onChange={e => { setOwnerName(e.target.value.replace(/[^A-Za-zÀ-ÿ\s]/g, "")); if (fieldErrors.ownerName) setFieldErrors(f => ({ ...f, ownerName: "" })); }}
-                    placeholder="Como podemos te chamar"
-                    maxLength={50}
-                    className={`${inputCls} ${fieldErrors.ownerName ? "border-rose-500/60" : ""}`}
-                  />
-                  {fieldErrors.ownerName && <div className="text-[10px] text-rose-400 mt-1.5">{fieldErrors.ownerName}</div>}
+
+                <div className="psf-quadro-inner px-4 py-6 sm:p-7 space-y-6">
+                  <div>
+                    <label className={labelCls}>Seu Nome *</label>
+                    <input
+                      type="text"
+                      value={ownerName}
+                      onChange={e => { setOwnerName(e.target.value.replace(/[^A-Za-zÀ-ÿ\s]/g, "")); if (fieldErrors.ownerName) setFieldErrors(f => ({ ...f, ownerName: "" })); }}
+                      placeholder="Como podemos te chamar"
+                      maxLength={50}
+                      className={`${inputCls} ${fieldErrors.ownerName ? "border-rose-500/60" : ""}`}
+                    />
+                    {fieldErrors.ownerName && <div className="text-[10px] text-rose-400 mt-1.5">{fieldErrors.ownerName}</div>}
+                  </div>
+
+                  {/* WhatsApp — mesma máscara/formatação/validação do formulário original */}
+                  <div>
+                    <label className={labelCls}>
+                      <span className="inline-flex items-center gap-1.5">
+                        <Phone size={12} className="text-emerald-400" /> WhatsApp para contato *
+                      </span>
+                    </label>
+                    <div className="grid grid-cols-[70px_70px_1fr] sm:grid-cols-[80px_80px_1fr] gap-2">
+                      <div className="relative">
+                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 pointer-events-none text-sm font-bold">+</span>
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          value={whatsCountry}
+                          onChange={e => setWhatsCountry(e.target.value.replace(/\D/g, "").slice(0, 3))}
+                          placeholder="55"
+                          className={`${inputCls} pl-7 text-center tabular-nums font-mono`}
+                          maxLength={3}
+                        />
+                      </div>
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        value={whatsArea}
+                        onChange={e => { setWhatsArea(e.target.value.replace(/\D/g, "").slice(0, 3)); if (fieldErrors.whats) setFieldErrors(f => ({ ...f, whats: "" })); }}
+                        placeholder="DDD"
+                        className={`${inputCls} text-center tabular-nums font-mono ${fieldErrors.whats ? "border-rose-500/60" : ""}`}
+                        maxLength={3}
+                      />
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        value={whatsNumber}
+                        onChange={e => { setWhatsNumber(e.target.value.replace(/\D/g, "").slice(0, 11)); if (fieldErrors.whats) setFieldErrors(f => ({ ...f, whats: "" })); }}
+                        placeholder="999999999"
+                        className={`${inputCls} tabular-nums font-mono ${fieldErrors.whats ? "border-rose-500/60" : ""}`}
+                        maxLength={11}
+                      />
+                    </div>
+                    {fieldErrors.whats
+                      ? <div className="text-[10px] text-rose-400 mt-1.5">{fieldErrors.whats}</div>
+                      : <div className="text-[10px] text-slate-600 mt-1.5">Usaremos este número para combinar valor e horário do service.</div>
+                    }
+                  </div>
+
+                  {/* Navegação */}
+                  <div className="flex items-center justify-between pt-1">
+                    <button type="button" onClick={goBack} className={navBackCls}>
+                      <ChevronLeft size={16} /> Voltar
+                    </button>
+                    <button type="button" onClick={goNext} className={navNextCls}>
+                      Continuar <ChevronRight size={16} />
+                    </button>
+                  </div>
                 </div>
               </div>
+            )}
 
-              {/* Servidor + Level */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
-                <div>
-                  <label className={labelCls}>Servidor *</label>
-                  <FilterSelect
-                    selected={servidor}
-                    onSelect={(v: string) => { setServidor(v); if (fieldErrors.servidor) setFieldErrors(f => ({ ...f, servidor: "" })); if (duplicateMsg) setDuplicateMsg(null); }}
-                    options={SERVER_OPTIONS}
-                    placeholder="Selecione o servidor"
-                    searchable
-                    searchPlaceholder="Buscar servidor..."
-                    allLabel=""
-                    activeColor="cyan"
-                    className={`w-full flex items-center justify-between gap-2 px-3 py-2 rounded-md bg-[var(--th-n-elev)] border border-white/[0.07] hover:border-white/15 focus:border-cyan-500/50 focus:outline-none transition-colors text-sm ${!servidor ? "text-slate-500" : "text-slate-200"}`}
-                  />
-                  {fieldErrors.servidor && <div className="text-[10px] text-rose-400 mt-1.5">{fieldErrors.servidor}</div>}
+            {/* ============================================================
+                ETAPA 4 — FORMA DE PAGAMENTO
+               ============================================================ */}
+            {step === 4 && quest && (
+              <div className="psf-quadro bg-[var(--th-n-elev)] border border-cyan-500/50 rounded-3xl shadow-2xl" style={{ "--psf-quadro-accent": "#22d3ee" } as CSSProperties}>
+                <div className="psf-quadro-header bg-gradient-to-r from-cyan-500/10 via-cyan-500/15 to-cyan-500/10 border-b border-cyan-500/20 px-7 py-5 flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-cyan-500 to-sky-600 flex items-center justify-center flex-shrink-0">
+                    <span className="text-lg">💰</span>
+                  </div>
+                  <div>
+                    <h2 className="text-base font-black text-cyan-300 tracking-wide uppercase">Forma de pagamento</h2>
+                    <p className="text-[11px] text-slate-500">Service {questEmoji} {questLabel} · valores conforme os termos aceitos</p>
+                  </div>
                 </div>
-                <div>
-                  <label className={labelCls}>Level do Personagem</label>
-                  <input
-                    type="text"
-                    inputMode="numeric"
-                    value={level}
-                    onChange={e => setLevel(e.target.value.replace(/\D/g, "").slice(0, 5))}
-                    placeholder="Ex: 250"
-                    className={inputCls}
-                  />
-                </div>
-              </div>
 
-              {/* Vocação */}
-              <div>
-                <label className={labelCls}>Vocação *</label>
-                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2">
-                  {VOCATIONS.map(v => {
-                    const color = VOC_COLORS[v];
-                    const selected = voc === v;
-                    return (
+                <div className="psf-quadro-inner px-4 py-6 sm:p-7 space-y-6">
+                  <div>
+                    <label className={labelCls}>Forma de Pagamento *</label>
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                      {/* PIX */}
                       <button
-                        key={v}
                         type="button"
-                        onClick={() => setVoc(v)}
-                        data-selected={selected ? "true" : "false"}
-                        className="psf-voc relative flex flex-col items-center justify-center px-1 py-3.5 rounded-xl border-2 bg-white/[0.02] cursor-pointer"
-                        style={{ "--voc-color": color } as CSSProperties}
-                        title={VOC_LABEL[v]}
+                        onClick={() => { setPayment("pix"); if (fieldErrors.payment) setFieldErrors(f => ({ ...f, payment: "" })); }}
+                        style={{ "--psf-accent": "#34d399" } as CSSProperties}
+                        className={`psf-choice flex flex-col items-center justify-center px-3 py-4 rounded-xl border-2 cursor-pointer text-center ${
+                          payment === "pix"
+                            ? "border-emerald-500 bg-emerald-500/15 shadow-lg shadow-emerald-500/15 scale-[1.02]"
+                            : `bg-white/[0.02] hover:bg-white/5 ${fieldErrors.payment ? "border-rose-500/40" : "border-white/10"}`
+                        }`}
                       >
-                        <span className="text-base font-black tracking-wider" style={{ color }}>{v}</span>
-                        <span className="text-[8px] text-slate-500 mt-1 leading-tight text-center hidden sm:block">{VOC_LABEL[v]}</span>
+                        <span className={`psf-pay-title text-base font-black tracking-wider ${payment === "pix" ? "text-emerald-300" : "text-slate-300"}`}>💸 PIX</span>
+                        <span className={`psf-pay-value text-lg font-black mt-1 ${payment === "pix" ? "text-emerald-400" : "text-slate-400"}`}>R$ 91</span>
+                        <span className="psf-pay-subtitle text-[10px] font-bold mt-0.5 text-slate-500">
+                          {quest === "sanguine" ? "1ª rotação + 12kk de refil" : "+ 12kk de refil"}
+                        </span>
                       </button>
-                    );
-                  })}
+                      {/* RC */}
+                      <button
+                        type="button"
+                        onClick={() => { setPayment("rc"); if (fieldErrors.payment) setFieldErrors(f => ({ ...f, payment: "" })); }}
+                        style={{ "--psf-accent": "#fbbf24" } as CSSProperties}
+                        className={`psf-choice flex flex-col items-center justify-center px-3 py-4 rounded-xl border-2 cursor-pointer text-center ${
+                          payment === "rc"
+                            ? "border-amber-500 bg-amber-500/15 shadow-lg shadow-amber-500/15 scale-[1.02]"
+                            : `bg-white/[0.02] hover:bg-white/5 ${fieldErrors.payment ? "border-rose-500/40" : "border-white/10"}`
+                        }`}
+                      >
+                        <span className={`psf-pay-title text-base font-black tracking-wider ${payment === "rc" ? "text-amber-300" : "text-slate-300"}`}>🪙 RC</span>
+                        <span className={`psf-pay-value text-lg font-black mt-1 ${payment === "rc" ? "text-amber-400" : "text-slate-400"}`}>1 K</span>
+                        <span className="psf-pay-subtitle text-[10px] font-bold mt-0.5 text-slate-500">
+                          {quest === "sanguine" ? "1ª rotação + 12kk de refil" : "+ 12kk de refil"}
+                        </span>
+                      </button>
+                      {/* 50/50 */}
+                      <button
+                        type="button"
+                        onClick={() => { setPayment("5050"); if (fieldErrors.payment) setFieldErrors(f => ({ ...f, payment: "" })); }}
+                        style={{ "--psf-accent": "#a78bfa" } as CSSProperties}
+                        className={`psf-choice flex flex-col items-center justify-center px-3 py-4 rounded-xl border-2 cursor-pointer text-center ${
+                          payment === "5050"
+                            ? "border-violet-500 bg-violet-500/15 shadow-lg shadow-violet-500/15 scale-[1.02]"
+                            : `bg-white/[0.02] hover:bg-white/5 ${fieldErrors.payment ? "border-rose-500/40" : "border-white/10"}`
+                        }`}
+                      >
+                        <span className={`psf-pay-title text-base font-black tracking-wider ${payment === "5050" ? "text-violet-300" : "text-slate-300"}`}>⚖️ 50/50</span>
+                        <span className={`psf-pay-subtitle text-xs font-bold mt-1 ${payment === "5050" ? "text-violet-400" : "text-slate-400"}`}>
+                          {quest === "sanguine" ? "200 RC + metade do item" : "250 RC + metade do item"}
+                        </span>
+                      </button>
+                    </div>
+                    {fieldErrors.payment && <div className="text-[10px] text-rose-400 mt-1.5">{fieldErrors.payment}</div>}
+                    {payment === "5050" && (
+                      <div className="mt-3 flex items-start gap-2.5 bg-violet-500/10 border border-violet-500/30 rounded-xl px-4 py-3 text-[11px] text-violet-200 leading-relaxed animate-in fade-in slide-in-from-top-2 duration-200">
+                        <ShieldCheck size={16} className="flex-shrink-0 mt-0.5 text-violet-400" />
+                        {quest === "sanguine" ? (
+                          <span>
+                            <strong>Como funciona o 50/50 na Sanguine:</strong> você paga 200 RC + 12kk de refil na primeira rotação
+                            (+100 RC para cada próxima rotação sem drop) e recebe metade do valor da venda do item dropado.
+                            Gravamos a abertura da bag e enviamos o vídeo diretamente para o seu WhatsApp.
+                          </span>
+                        ) : (
+                          <span>
+                            <strong>Como funciona o 50/50:</strong> você paga 250 RC + e recebe metade do valor da venda do item dropado.
+                            Gravamos a abertura do baú e enviamos o vídeo diretamente para o seu WhatsApp.
+                          </span>
+                        )}
+                      </div>
+                    )}
+                    {quest === "sanguine" && (payment === "pix" || payment === "rc") && (
+                      <div className="mt-3 flex items-start gap-2.5 bg-amber-500/10 border border-amber-500/25 rounded-xl px-4 py-3 text-[11px] text-amber-200/90 leading-relaxed animate-in fade-in slide-in-from-top-2 duration-200">
+                        <AlertTriangle size={15} className="flex-shrink-0 mt-0.5 text-amber-400" />
+                        <span>
+                          <strong>Sanguine:</strong> caso não drope, cada próxima rotação custa <strong>400 Rubini Coins</strong> ou <strong>Pix R$ 37,00</strong>.
+                          Na primeira rotação, o acesso à Quest (5kk) é somado ao refil.
+                        </span>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Navegação */}
+                  <div className="flex items-center justify-between pt-1">
+                    <button type="button" onClick={goBack} className={navBackCls}>
+                      <ChevronLeft size={16} /> Voltar
+                    </button>
+                    <button type="button" onClick={goNext} className={navNextCls}>
+                      Continuar <ChevronRight size={16} />
+                    </button>
+                  </div>
                 </div>
               </div>
+            )}
 
-              {/* Quest */}
-              <div>
-                <label className={labelCls}>service para qual quest? *</label>
-                <div className="grid grid-cols-2 gap-3">
-                  <button
-                    type="button"
-                    onClick={() => setQuest("soulwar")}
-                    style={{ "--psf-accent": "#cbd5e1" } as CSSProperties}
-                    className={`psf-choice px-4 py-4 rounded-xl border-2 font-bold cursor-pointer text-sm tracking-wider ${
-                      quest === "soulwar"
-                        ? "border-slate-300 bg-slate-500/15 text-white shadow-lg shadow-slate-500/10 scale-[1.02]"
-                        : "border-white/10 bg-white/[0.02] text-slate-500 hover:bg-white/5"
-                    }`}
-                  >
-                    ⚔️ SOULWAR
-                  </button>
-                  <button
-                    type="button"
-                    disabled
-                    title="Sanguine temporariamente indisponível"
-                    className="px-4 py-4 rounded-xl border-2 border-white/5 bg-white/[0.01] text-slate-700 font-bold text-sm tracking-wider cursor-not-allowed opacity-50 relative"
-                  >
-                    🩸 SANGUINE
-                    <span className="absolute -top-2 -right-2 px-2 py-0.5 rounded-full bg-amber-500/20 border border-amber-500/40 text-amber-400 text-[8px] font-black uppercase tracking-wider">
-                      Em breve
-                    </span>
-                  </button>
+            {/* ============================================================
+                ETAPA 5 — CADASTRO DO PERSONAGEM
+               ============================================================ */}
+            {step === 5 && quest && (
+              <div className="psf-quadro bg-[var(--th-n-elev)] border border-cyan-500/50 rounded-3xl shadow-2xl" style={{ "--psf-quadro-accent": "#22d3ee" } as CSSProperties}>
+                <div className="psf-quadro-header bg-gradient-to-r from-cyan-500/10 via-cyan-500/15 to-cyan-500/10 border-b border-cyan-500/20 px-7 py-5 flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-cyan-500 to-sky-600 flex items-center justify-center flex-shrink-0">
+                    <Swords size={20} className="text-black" />
+                  </div>
+                  <div>
+                    <h2 className="text-base font-black text-cyan-300 tracking-wide uppercase">Seu personagem</h2>
+                    <p className="text-[11px] text-slate-500">Service {questEmoji} {questLabel}</p>
+                  </div>
+                </div>
+
+                <div className="psf-quadro-inner px-4 py-6 sm:p-7 space-y-6">
+                  {/* Nome do personagem */}
+                  <div>
+                    <label className={labelCls}>Nome do Personagem *</label>
+                    <input
+                      ref={firstFieldRef}
+                      type="text"
+                      value={personagem}
+                      onChange={e => { setPersonagem(e.target.value.replace(/[^A-Za-zÀ-ÿ\s]/g, "")); if (fieldErrors.personagem) setFieldErrors(f => ({ ...f, personagem: "" })); if (duplicateMsg) setDuplicateMsg(null); }}
+                      placeholder="Ex: Sir Knight"
+                      maxLength={50}
+                      className={`${inputCls} ${fieldErrors.personagem ? "border-rose-500/60" : ""}`}
+                    />
+                    {fieldErrors.personagem && <div className="text-[10px] text-rose-400 mt-1.5">{fieldErrors.personagem}</div>}
+                  </div>
+
+                  {/* Servidor */}
+                  <div>
+                    <label className={labelCls}>Servidor *</label>
+                    <FilterSelect
+                      selected={servidor}
+                      onSelect={(v: string) => { setServidor(v); if (fieldErrors.servidor) setFieldErrors(f => ({ ...f, servidor: "" })); if (duplicateMsg) setDuplicateMsg(null); }}
+                      options={SERVER_OPTIONS}
+                      placeholder="Selecione o servidor"
+                      searchable
+                      searchPlaceholder="Buscar servidor..."
+                      allLabel=""
+                      activeColor="cyan"
+                      className={`w-full flex items-center justify-between gap-2 px-3 py-2 rounded-md bg-[var(--th-n-elev)] border border-white/[0.07] hover:border-white/15 focus:border-cyan-500/50 focus:outline-none transition-colors text-sm ${!servidor ? "text-slate-500" : "text-slate-200"}`}
+                    />
+                    {fieldErrors.servidor && <div className="text-[10px] text-rose-400 mt-1.5">{fieldErrors.servidor}</div>}
+                  </div>
+
+                  {/* Vocação */}
+                  <div>
+                    <label className={labelCls}>Vocação *</label>
+                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2">
+                      {VOCATIONS.map(v => {
+                        const color = VOC_COLORS[v];
+                        const selected = voc === v;
+                        return (
+                          <button
+                            key={v}
+                            type="button"
+                            onClick={() => setVoc(v)}
+                            data-selected={selected ? "true" : "false"}
+                            className="psf-voc relative flex flex-col items-center justify-center px-1 py-3.5 rounded-xl border-2 bg-white/[0.02] cursor-pointer"
+                            style={{ "--voc-color": color } as CSSProperties}
+                            title={VOC_LABEL[v]}
+                          >
+                            <span className="text-base font-black tracking-wider" style={{ color }}>{v}</span>
+                            <span className="text-[8px] text-slate-500 mt-1 leading-tight text-center hidden sm:block">{VOC_LABEL[v]}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <div className="text-[10px] text-slate-600 mt-1.5">
+                      Level mínimo para {questLabel} com {voc}: <strong className="text-slate-400">{publicMinLevelFor(quest, voc)}</strong>
+                    </div>
+                  </div>
+
+                  {/* Navegação */}
+                  <div className="flex items-center justify-between pt-1">
+                    <button type="button" onClick={goBack} className={navBackCls}>
+                      <ChevronLeft size={16} /> Voltar
+                    </button>
+                    <button type="button" onClick={goNext} className={navNextCls}>
+                      Continuar <ChevronRight size={16} />
+                    </button>
+                  </div>
                 </div>
               </div>
+            )}
 
-              {/* WhatsApp */}
-              <div>
-                <label className={labelCls}>
-                  <span className="inline-flex items-center gap-1.5">
-                    <Phone size={12} className="text-emerald-400" /> WhatsApp para contato *
-                  </span>
-                </label>
-                <div className="grid grid-cols-[70px_70px_1fr] sm:grid-cols-[80px_80px_1fr] gap-2">
-                  <div className="relative">
-                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 pointer-events-none text-sm font-bold">+</span>
+            {/* ============================================================
+                ETAPA 6 — LEVEL + CADASTRO
+               ============================================================ */}
+            {step === 6 && quest && (
+              <div className="psf-quadro bg-[var(--th-n-elev)] border border-cyan-500/50 rounded-3xl shadow-2xl" style={{ "--psf-quadro-accent": "#22d3ee" } as CSSProperties}>
+                <div className="psf-quadro-header bg-gradient-to-r from-cyan-500/10 via-cyan-500/15 to-cyan-500/10 border-b border-cyan-500/20 px-7 py-5 flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-cyan-500 to-sky-600 flex items-center justify-center flex-shrink-0">
+                    <Clock size={20} className="text-black" />
+                  </div>
+                  <div>
+                    <h2 className="text-base font-black text-cyan-300 tracking-wide uppercase">Level e confirmação</h2>
+                    <p className="text-[11px] text-slate-500">Service {questEmoji} {questLabel} · {personagem || "personagem"} ({voc})</p>
+                  </div>
+                </div>
+
+                <div className="psf-quadro-inner px-4 py-6 sm:p-7 space-y-6">
+                  {/* Requisito da combinação Quest + Vocação */}
+                  <div className="flex items-center gap-3 bg-white/[0.03] border border-white/10 rounded-2xl px-4 py-3">
+                    <span className="text-xl flex-shrink-0">📊</span>
+                    <div className="text-xs text-slate-300 leading-relaxed">
+                      <strong className="text-white">{questLabel}</strong> com <strong style={{ color: VOC_COLORS[voc] }}>{voc}</strong> ({VOC_LABEL[voc]}) exige
+                      level mínimo <strong className="text-amber-300 text-sm tabular-nums">{publicMinLevelFor(quest, voc)}</strong>.
+                    </div>
+                  </div>
+
+                  {/* Level */}
+                  <div>
+                    <label className={labelCls}>Level do Personagem *</label>
                     <input
                       type="text"
                       inputMode="numeric"
-                      value={whatsCountry}
-                      onChange={e => setWhatsCountry(e.target.value.replace(/\D/g, "").slice(0, 3))}
-                      placeholder="55"
-                      className={`${inputCls} pl-7 text-center tabular-nums font-mono`}
-                      maxLength={3}
+                      value={level}
+                      onChange={e => { setLevel(e.target.value.replace(/\D/g, "").slice(0, 5)); if (fieldErrors.level) setFieldErrors(f => ({ ...f, level: "" })); }}
+                      placeholder={`Ex: ${publicMinLevelFor(quest, voc)}`}
+                      className={`${inputCls} ${fieldErrors.level || (parsedLevel > 0 && levelBlock) ? "border-rose-500/60" : parsedLevel > 0 && !levelBlock ? "border-emerald-500/50" : ""}`}
                     />
+                    {/* Feedback imediato do requisito — a MESMA regra bloqueia o envio */}
+                    {parsedLevel > 0 && levelBlock && (
+                      <div className="mt-2 flex items-start gap-2 bg-rose-500/10 border border-rose-500/30 rounded-xl px-3.5 py-2.5 text-[11px] text-rose-300 leading-relaxed">
+                        <AlertTriangle size={14} className="flex-shrink-0 mt-0.5" />
+                        <span>{levelBlock}</span>
+                      </div>
+                    )}
+                    {parsedLevel > 0 && !levelBlock && (
+                      <div className="mt-2 flex items-center gap-2 text-[11px] text-emerald-400">
+                        <CheckCircle2 size={14} /> Level atende ao requisito da Quest.
+                      </div>
+                    )}
+                    {fieldErrors.level && parsedLevel <= 0 && <div className="text-[10px] text-rose-400 mt-1.5">{fieldErrors.level}</div>}
                   </div>
-                  <input
-                    type="text"
-                    inputMode="numeric"
-                    value={whatsArea}
-                    onChange={e => { setWhatsArea(e.target.value.replace(/\D/g, "").slice(0, 3)); if (fieldErrors.whats) setFieldErrors(f => ({ ...f, whats: "" })); }}
-                    placeholder="DDD"
-                    className={`${inputCls} text-center tabular-nums font-mono ${fieldErrors.whats ? "border-rose-500/60" : ""}`}
-                    maxLength={3}
-                  />
-                  <input
-                    type="text"
-                    inputMode="numeric"
-                    value={whatsNumber}
-                    onChange={e => { setWhatsNumber(e.target.value.replace(/\D/g, "").slice(0, 11)); if (fieldErrors.whats) setFieldErrors(f => ({ ...f, whats: "" })); }}
-                    placeholder="999999999"
-                    className={`${inputCls} tabular-nums font-mono ${fieldErrors.whats ? "border-rose-500/60" : ""}`}
-                    maxLength={11}
-                  />
-                </div>
-                {fieldErrors.whats
-                  ? <div className="text-[10px] text-rose-400 mt-1.5">{fieldErrors.whats}</div>
-                  : <div className="text-[10px] text-slate-600 mt-1.5">Usaremos este número para combinar valor e horário do service.</div>
-                }
-              </div>
-              {/* Serviceiro — três apresentações possíveis:
-                    • LINK EXCLUSIVO resolvido → seletor OCULTO; um cartão
-                      informativo mostra o atendente já definido pelo link
-                      (o cliente não pode alterar o vínculo);
-                    • link exclusivo INVÁLIDO → aviso discreto + seletor
-                      normal (fallback seguro, nunca associa "no chute");
-                    • acesso normal (#/servico) → seletor de sempre. */}
-              {lockedTarget ? (
-                <div>
-                  <label className={labelCls}>Serviceiro</label>
-                  <div className="flex items-center gap-3 rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-4 py-3">
-                    <ShieldCheck size={18} className="flex-shrink-0 text-emerald-400" />
-                    <div className="min-w-0">
-                      <div className="text-sm font-black text-emerald-300 truncate">{lockedTarget.nome}</div>
-                      <div className="text-[10px] text-slate-500">Atendente definido por este link exclusivo — seu pedido será enviado diretamente a ele.</div>
+
+                  {/* Serviceiro — funcionalidade preservada do formulário original:
+                        • LINK EXCLUSIVO resolvido → seletor OCULTO; cartão fixo;
+                        • link exclusivo INVÁLIDO → aviso + seletor normal;
+                        • acesso normal (#/servico) → seletor de sempre. */}
+                  {lockedTarget ? (
+                    <div>
+                      <label className={labelCls}>Serviceiro</label>
+                      <div className="flex items-center gap-3 rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-4 py-3">
+                        <ShieldCheck size={18} className="flex-shrink-0 text-emerald-400" />
+                        <div className="min-w-0">
+                          <div className="text-sm font-black text-emerald-300 truncate">{lockedTarget.nome}</div>
+                          <div className="text-[10px] text-slate-500">Atendente definido por este link exclusivo — seu pedido será enviado diretamente a ele.</div>
+                        </div>
+                      </div>
                     </div>
-                  </div>
-                </div>
-              ) : (
-                <div>
-                  <label className={labelCls}>Serviceiro</label>
-                  {lockedLinkInvalid && (
-                    <div className="mb-2 flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-300">
-                      <AlertTriangle size={14} className="flex-shrink-0 mt-0.5" />
-                      <span>O link utilizado não corresponde a um atendente ativo. Selecione o serviceiro abaixo ou deixe "Qualquer um".</span>
+                  ) : (
+                    <div>
+                      <label className={labelCls}>Serviceiro</label>
+                      {lockedLinkInvalid && (
+                        <div className="mb-2 flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-300">
+                          <AlertTriangle size={14} className="flex-shrink-0 mt-0.5" />
+                          <span>O link utilizado não corresponde a um atendente ativo. Selecione o serviceiro abaixo ou deixe "Qualquer um".</span>
+                        </div>
+                      )}
+                      <FilterSelect
+                        selected={serviceiro}
+                        onSelect={(v: string) => setServiceiro(v)}
+                        options={eligibleServiceiros.map(u => u.nome).sort((a, b) => a.localeCompare(b, "pt-BR", { sensitivity: "base" }))}
+                        placeholder="Selecione serviceiro"
+                        searchable
+                        searchPlaceholder="Buscar serviceiro..."
+                        allLabel="Qualquer um"
+                        allValue="Qualquer um"
+                        activeColor="cyan"
+                        className={`w-full flex items-center justify-between gap-2 px-3 py-2 rounded-md bg-[var(--th-n-elev)] border border-white/[0.07] hover:border-white/15 focus:border-cyan-500/50 focus:outline-none transition-colors text-sm ${!serviceiro ? "text-slate-500" : "text-slate-200"}`}
+                      />
+                      <div className="text-[10px] text-slate-600 mt-1.5">Deixe "Qualquer um" para qualquer serviceiro disponível, ou selecione um específico.</div>
                     </div>
                   )}
-                  <FilterSelect
-                    selected={serviceiro}
-                    onSelect={(v: string) => setServiceiro(v)}
-                    options={eligibleServiceiros.map(u => u.nome).sort((a, b) => a.localeCompare(b, "pt-BR", { sensitivity: "base" }))}
-                    placeholder="Selecione serviceiro"
-                    searchable
-                    searchPlaceholder="Buscar serviceiro..."
-                    allLabel="Qualquer um"
-                    allValue="Qualquer um"
-                    activeColor="cyan"
-                    className={`w-full flex items-center justify-between gap-2 px-3 py-2 rounded-md bg-[var(--th-n-elev)] border border-white/[0.07] hover:border-white/15 focus:border-cyan-500/50 focus:outline-none transition-colors text-sm ${!serviceiro ? "text-slate-500" : "text-slate-200"}`}
-                  />
-                  <div className="text-[10px] text-slate-600 mt-1.5">Deixe "Qualquer um" para qualquer serviceiro disponível, ou selecione um específico.</div>
-                </div>
-              )}
 
-              {/* Pagamento */}
-              <div>
-                <label className={labelCls}>Forma de Pagamento *</label>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                  {/* PIX */}
-                  <button
-                    type="button"
-                    onClick={() => { setPayment("pix"); if (fieldErrors.payment) setFieldErrors(f => ({ ...f, payment: "" })); }}
-                    style={{ "--psf-accent": "#34d399" } as CSSProperties}
-                    className={`psf-choice flex flex-col items-center justify-center px-3 py-4 rounded-xl border-2 cursor-pointer text-center ${
-                      payment === "pix"
-                        ? "border-emerald-500 bg-emerald-500/15 shadow-lg shadow-emerald-500/15 scale-[1.02]"
-                        : `bg-white/[0.02] hover:bg-white/5 ${fieldErrors.payment ? "border-rose-500/40" : "border-white/10"}`
-                    }`}
-                  >
-                    <span className={`psf-pay-title text-base font-black tracking-wider ${payment === "pix" ? "text-emerald-300" : "text-slate-300"}`}>💸 PIX</span>
-                    <span className={`psf-pay-value text-lg font-black mt-1 ${payment === "pix" ? "text-emerald-400" : "text-slate-400"}`}>R$ 91</span>
-                  </button>
-                  {/* RC */}
-                  <button
-                    type="button"
-                    onClick={() => { setPayment("rc"); if (fieldErrors.payment) setFieldErrors(f => ({ ...f, payment: "" })); }}
-                    style={{ "--psf-accent": "#fbbf24" } as CSSProperties}
-                    className={`psf-choice flex flex-col items-center justify-center px-3 py-4 rounded-xl border-2 cursor-pointer text-center ${
-                      payment === "rc"
-                        ? "border-amber-500 bg-amber-500/15 shadow-lg shadow-amber-500/15 scale-[1.02]"
-                        : `bg-white/[0.02] hover:bg-white/5 ${fieldErrors.payment ? "border-rose-500/40" : "border-white/10"}`
-                    }`}
-                  >
-                    <span className={`psf-pay-title text-base font-black tracking-wider ${payment === "rc" ? "text-amber-300" : "text-slate-300"}`}>🪙 RC</span>
-                    <span className={`psf-pay-value text-lg font-black mt-1 ${payment === "rc" ? "text-amber-400" : "text-slate-400"}`}>1 K</span>
-                  </button>
-                  {/* 50/50 */}
-                  <button
-                    type="button"
-                    onClick={() => { setPayment("5050"); if (fieldErrors.payment) setFieldErrors(f => ({ ...f, payment: "" })); }}
-                    style={{ "--psf-accent": "#a78bfa" } as CSSProperties}
-                    className={`psf-choice flex flex-col items-center justify-center px-3 py-4 rounded-xl border-2 cursor-pointer text-center ${
-                      payment === "5050"
-                        ? "border-violet-500 bg-violet-500/15 shadow-lg shadow-violet-500/15 scale-[1.02]"
-                        : `bg-white/[0.02] hover:bg-white/5 ${fieldErrors.payment ? "border-rose-500/40" : "border-white/10"}`
-                    }`}
-                  >
-                    <span className={`psf-pay-title text-base font-black tracking-wider ${payment === "5050" ? "text-violet-300" : "text-slate-300"}`}>⚖️ 50/50</span>
-                    <span className={`psf-pay-subtitle text-xs font-bold mt-1 ${payment === "5050" ? "text-violet-400" : "text-slate-400"}`}>250 RC + metade do item</span>
-                  </button>
-                </div>
-                {fieldErrors.payment && <div className="text-[10px] text-rose-400 mt-1.5">{fieldErrors.payment}</div>}
-                {payment === "5050" && (
-                  <div className="mt-3 flex items-start gap-2.5 bg-violet-500/10 border border-violet-500/30 rounded-xl px-4 py-3 text-[11px] text-violet-200 leading-relaxed animate-in fade-in slide-in-from-top-2 duration-200">
-                    <ShieldCheck size={16} className="flex-shrink-0 mt-0.5 text-violet-400" />
-                    <span>
-                      <strong>Como funciona o 50/50:</strong> você paga 250 RC + e recebe metade do valor da venda do item dropado.
-                      Gravamos a abertura do baú e enviamos o vídeo diretamente para o seu WhatsApp.
-                    </span>
+                  {/* Anotações */}
+                  <div>
+                    <label className={labelCls}>Observações (opcional)</label>
+                    <textarea
+                      value={notes}
+                      onChange={e => setNotes(e.target.value.slice(0, 300))}
+                      rows={3}
+                      placeholder="Alguma informação adicional que devemos saber..."
+                      className={`${inputCls} resize-none`}
+                      maxLength={300}
+                    />
+                    <div className="text-right text-[10px] text-slate-600 mt-1">{notes.length}/300</div>
                   </div>
-                )}
-              </div>
-              {/* Anotações */}
-              <div>
-                <label className={labelCls}>Observações (opcional)</label>
-                <textarea
-                  value={notes}
-                  onChange={e => setNotes(e.target.value.slice(0, 300))}
-                  rows={3}
-                  placeholder="Alguma informação adicional que devemos saber..."
-                  className={`${inputCls} resize-none`}
-                  maxLength={300}
-                />
-                <div className="text-right text-[10px] text-slate-600 mt-1">{notes.length}/300</div>
-              </div>
 
-              {/* Botão enviar */}
-              <button
-                type="submit"
-                disabled={formState === "submitting"}
-                className="psf-submit w-full py-4 rounded-2xl text-base font-black tracking-wide text-black bg-gradient-to-r from-cyan-400 to-sky-500 hover:from-cyan-300 hover:to-sky-400 shadow-xl shadow-cyan-500/25 hover:shadow-cyan-500/40 transition-all duration-300 cursor-pointer flex items-center justify-center gap-2.5 hover:scale-[1.015] active:scale-[0.985] disabled:opacity-60 disabled:cursor-not-allowed disabled:hover:scale-100"
-              >
-                {formState === "submitting" ? (
-                  <>
-                    <div className="w-5 h-5 rounded-full border-2 border-black/40 border-t-black animate-spin" />
-                    Enviando...
-                  </>
-                ) : (
-                  <>
-                    <Save size={19} /> Enviar Solicitação
-                  </>
-                )}
-              </button>
+                  {/* Botão cadastrar */}
+                  <button
+                    type="submit"
+                    disabled={formState === "submitting" || !!levelBlock}
+                    title={levelBlock || undefined}
+                    className="psf-submit w-full py-4 rounded-2xl text-base font-black tracking-wide text-black bg-gradient-to-r from-cyan-400 to-sky-500 hover:from-cyan-300 hover:to-sky-400 shadow-xl shadow-cyan-500/25 hover:shadow-cyan-500/40 transition-all duration-300 cursor-pointer flex items-center justify-center gap-2.5 hover:scale-[1.015] active:scale-[0.985] disabled:opacity-60 disabled:cursor-not-allowed disabled:hover:scale-100"
+                  >
+                    {formState === "submitting" ? (
+                      <>
+                        <div className="w-5 h-5 rounded-full border-2 border-black/40 border-t-black animate-spin" />
+                        Enviando...
+                      </>
+                    ) : (
+                      <>
+                        <Save size={19} /> Cadastrar Personagem
+                      </>
+                    )}
+                  </button>
 
-              {/* Selo de segurança */}
-              <div className="flex items-center justify-center gap-2 text-[10px] text-slate-600 pt-1">
-                <ShieldCheck size={13} className="text-emerald-500/60" />
-                {RECAPTCHA_SITE_KEY
-                  ? <span>Protegido por reCAPTCHA · Google <a href="https://policies.google.com/privacy" target="_blank" rel="noopener noreferrer" className="underline hover:text-slate-400">Privacidade</a> · <a href="https://policies.google.com/terms" target="_blank" rel="noopener noreferrer" className="underline hover:text-slate-400">Termos</a></span>
-                  : <span>Conexão segura · Seus dados são usados apenas para contato</span>
-                }
+                  {/* Navegação (voltar) */}
+                  <div className="flex items-center justify-start">
+                    <button type="button" onClick={goBack} className={navBackCls}>
+                      <ChevronLeft size={16} /> Voltar
+                    </button>
+                  </div>
+
+                  {/* Selo de segurança */}
+                  <div className="flex items-center justify-center gap-2 text-[10px] text-slate-600 pt-1">
+                    <ShieldCheck size={13} className="text-emerald-500/60" />
+                    {RECAPTCHA_SITE_KEY
+                      ? <span>Protegido por reCAPTCHA · Google <a href="https://policies.google.com/privacy" target="_blank" rel="noopener noreferrer" className="underline hover:text-slate-400">Privacidade</a> · <a href="https://policies.google.com/terms" target="_blank" rel="noopener noreferrer" className="underline hover:text-slate-400">Termos</a></span>
+                      : <span>Conexão segura · Seus dados são usados apenas para contato</span>
+                    }
+                  </div>
+                </div>
               </div>
-            </div>
+            )}
           </form>
         )}
 
