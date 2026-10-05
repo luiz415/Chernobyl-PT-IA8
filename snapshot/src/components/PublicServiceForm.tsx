@@ -173,7 +173,7 @@ function LevelGrid({ quest }: { quest: PublicQuest }) {
           return (
             <div
               key={v}
-              className={`psf-voc bg-[var(--th-n-panel)] border rounded-2xl p-3 text-center ${idx === LEVEL_CARD_ORDER.length - 1 ? "col-span-2 sm:col-span-1" : ""}`}
+              className={`psf-voc bg-black/30 border rounded-2xl p-3 text-center ${idx === LEVEL_CARD_ORDER.length - 1 ? "col-span-2 sm:col-span-1" : ""}`}
               style={{ "--voc-color": color } as CSSProperties}
             >
               <div className="psf-voc-letter text-base font-black tracking-wider mb-0.5" style={{ color }}>{v}</div>
@@ -194,8 +194,11 @@ function PaymentInfoCards({ quest }: { quest: PublicQuest }) {
       <SectionTitle emoji="💰" accent="bg-emerald-500/15 border border-emerald-500/30">Formas de Pagamento</SectionTitle>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-        {/* Service Padrão */}
-        <div className="psf-card bg-[var(--th-n-panel)] border border-sky-500/20 rounded-2xl p-4 space-y-2" style={{ "--psf-accent": "#38bdf8" } as CSSProperties}>
+        {/* Service Padrão — RECOMENDADO: a opção mais vantajosa p/ o cliente */}
+        <div className="psf-card relative bg-black/30 border border-sky-500/20 rounded-2xl p-4 pt-5 space-y-2" style={{ "--psf-accent": "#38bdf8" } as CSSProperties}>
+          <span className="absolute -top-2.5 right-3 inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-gradient-to-r from-amber-400 to-yellow-500 text-black text-[9px] font-black uppercase tracking-wider shadow-lg shadow-amber-500/30">
+            ⭐ Recomendado
+          </span>
           <div className="flex items-center gap-2 text-sky-300 font-bold text-sm">
             <span>💎</span> Service Padrão
           </div>
@@ -241,15 +244,12 @@ function PaymentInfoCards({ quest }: { quest: PublicQuest }) {
                   </li>
                 </ul>
               </div>
-              <p className="text-[11px] text-amber-300/90 leading-relaxed bg-amber-500/5 border border-amber-500/20 rounded-lg px-2.5 py-2">
-                * O valor de refil não inclui o acesso à Quest, que custa <strong className="text-amber-200">5kk</strong>. Esse valor deve ser somado ao refil caso seja a <strong className="text-amber-200">primeira rotação</strong> do personagem.
-              </p>
             </div>
           )}
         </div>
 
         {/* Service 50/50 */}
-        <div className="psf-card bg-[var(--th-n-panel)] border border-violet-500/20 rounded-2xl p-4 space-y-2" style={{ "--psf-accent": "#a78bfa" } as CSSProperties}>
+        <div className="psf-card bg-black/30 border border-violet-500/20 rounded-2xl p-4 space-y-2" style={{ "--psf-accent": "#a78bfa" } as CSSProperties}>
           <div className="flex items-center gap-2 text-violet-300 font-bold text-sm">
             <span>⚖️</span> Service 50/50
           </div>
@@ -282,6 +282,16 @@ function PaymentInfoCards({ quest }: { quest: PublicQuest }) {
           )}
         </div>
       </div>
+
+      {/* Nota do ACESSO (somente Sanguine) — fora dos cards de propósito:
+          vale para OS DOIS formatos, Service Padrão e Service 50/50. */}
+      {quest === "sanguine" && (
+        <p className="mt-3 text-[11px] text-amber-300/90 leading-relaxed bg-amber-500/10 border border-amber-500/25 rounded-xl px-3.5 py-2.5">
+          * O valor de refil não inclui o acesso à Quest, que custa <strong className="text-amber-200">5kk</strong>. Esse
+          valor deve ser somado ao refil caso seja a <strong className="text-amber-200">primeira rotação</strong> do
+          personagem — <strong className="text-amber-200">válido para o Service Padrão e para o Service 50/50</strong>.
+        </p>
+      )}
     </div>
   );
 }
@@ -299,7 +309,7 @@ function DropsInfo({ quest }: { quest: PublicQuest }) {
         {quest === "soulwar" ? (
           <>
             {/* No Service Padrão — conteúdo original preservado */}
-            <div className="psf-card bg-[var(--th-n-panel)] border border-white/5 rounded-2xl p-4 space-y-2.5" style={{ "--psf-accent": "#38bdf8" } as CSSProperties}>
+            <div className="psf-card bg-black/30 border border-white/5 rounded-2xl p-4 space-y-2.5" style={{ "--psf-accent": "#38bdf8" } as CSSProperties}>
               <div className="flex items-center gap-2 text-sky-300 font-bold text-xs uppercase tracking-wider">
                 <span>💎</span> No Service Padrão
               </div>
@@ -308,13 +318,12 @@ function DropsInfo({ quest }: { quest: PublicQuest }) {
               </p>
               <div className="bg-amber-500/5 border border-amber-500/20 rounded-xl px-3.5 py-3 space-y-1.5">
                 <p className="text-xs text-slate-300 leading-relaxed">
-                  🏆 <strong className="text-amber-300">Todos os baús de loot dos bosses pertencem ao cliente</strong> e permanecem na reward, com exceção dos <strong className="text-yellow-400">drops amarelos</strong>, como:
+                  🏆 <strong className="text-amber-300">Todos os baús de loot dos bosses pertencem ao cliente</strong> e permanecem na reward, com exceção de <strong className="text-yellow-400">três itens</strong>:
                 </p>
                 <ul className="text-[11px] text-slate-400 space-y-0.5 pl-4">
                   <li>• Bag You Desire</li>
                   <li>• The Skull of a Beast</li>
                   <li>• Spectral Horseshoes</li>
-                  <li>• Entre outros itens de categoria amarela.</li>
                 </ul>
                 <p className="text-[11px] text-slate-400 leading-relaxed">
                   🤝 Esses itens são compartilhados entre a equipe responsável pelo service.
@@ -323,7 +332,7 @@ function DropsInfo({ quest }: { quest: PublicQuest }) {
             </div>
 
             {/* No Service 50/50 — conteúdo original preservado */}
-            <div className="psf-card bg-[var(--th-n-panel)] border border-violet-500/15 rounded-2xl p-4 space-y-2" style={{ "--psf-accent": "#a78bfa" } as CSSProperties}>
+            <div className="psf-card bg-black/30 border border-violet-500/15 rounded-2xl p-4 space-y-2" style={{ "--psf-accent": "#a78bfa" } as CSSProperties}>
               <div className="flex items-center gap-2 text-violet-300 font-bold text-xs uppercase tracking-wider">
                 <span>⭐</span> No Service 50/50
               </div>
@@ -337,7 +346,7 @@ function DropsInfo({ quest }: { quest: PublicQuest }) {
         ) : (
           <>
             {/* No Service Padrão — Sanguine */}
-            <div className="psf-card bg-[var(--th-n-panel)] border border-white/5 rounded-2xl p-4 space-y-2.5" style={{ "--psf-accent": "#38bdf8" } as CSSProperties}>
+            <div className="psf-card bg-black/30 border border-white/5 rounded-2xl p-4 space-y-2.5" style={{ "--psf-accent": "#38bdf8" } as CSSProperties}>
               <div className="flex items-center gap-2 text-sky-300 font-bold text-xs uppercase tracking-wider">
                 <span>💎</span> No Service Padrão
               </div>
@@ -359,7 +368,7 @@ function DropsInfo({ quest }: { quest: PublicQuest }) {
             </div>
 
             {/* No Service 50/50 — Sanguine */}
-            <div className="psf-card bg-[var(--th-n-panel)] border border-violet-500/15 rounded-2xl p-4 space-y-2" style={{ "--psf-accent": "#a78bfa" } as CSSProperties}>
+            <div className="psf-card bg-black/30 border border-violet-500/15 rounded-2xl p-4 space-y-2" style={{ "--psf-accent": "#a78bfa" } as CSSProperties}>
               <div className="flex items-center gap-2 text-violet-300 font-bold text-xs uppercase tracking-wider">
                 <span>⭐</span> No Service 50/50
               </div>
@@ -376,8 +385,12 @@ function DropsInfo({ quest }: { quest: PublicQuest }) {
   );
 }
 
-/** "Como funciona o Service" — seção preservada do formulário original. */
-function HowItWorks() {
+/**
+ * "Como funciona o Service" — seção preservada do formulário original.
+ * Duração média por Quest: Soul War mantém 2 a 4 horas; Sanguine, 1 a 2
+ * horas (uma rotação é mais curta que a Soul War completa).
+ */
+function HowItWorks({ quest }: { quest: PublicQuest }) {
   return (
     <div>
       <SectionTitle emoji="⚙️" accent="bg-sky-500/15 border border-sky-500/30">Como funciona o Service</SectionTitle>
@@ -389,7 +402,7 @@ function HowItWorks() {
         </p>
         <p className="flex items-start gap-2">
           <span className="flex-shrink-0">⏱️</span>
-          <span>O service possui <strong className="text-white">duração média entre 2 e 4 horas</strong>, podendo variar de acordo com o level dos personagens, composição e desempenho da PT.</span>
+          <span>O service possui <strong className="text-white">duração média entre {quest === "sanguine" ? "1 e 2 horas" : "2 e 4 horas"}</strong>, podendo variar de acordo com o level dos personagens, composição e desempenho da PT.</span>
         </p>
         <p className="flex items-start gap-2">
           <span className="flex-shrink-0">👥</span>
@@ -872,9 +885,13 @@ export default function PublicServiceForm() {
     setFormState("filling");
   }
 
-  const inputCls = "w-full bg-[var(--th-n-panel)] border border-white/10 focus:border-cyan-500/60 rounded-xl px-4 py-3 text-white text-sm focus:outline-none placeholder-slate-600 transition-colors";
+  // CONTRASTE: os quadros das etapas usam um tom MAIS CLARO que o fundo da
+// página (color-mix com o tema), e os campos preenchíveis são bem mais
+// ESCUROS que o quadro, com borda nítida — fica evidente onde clicar e
+// digitar, em desktop e mobile.
+const inputCls = "w-full bg-black/60 border border-white/20 hover:border-white/30 focus:border-cyan-400/80 rounded-xl px-4 py-3 text-white text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500/20 placeholder-slate-500 transition-colors";
   const labelCls = "block text-[11px] font-bold uppercase tracking-widest text-slate-400 mb-2";
-  const navBackCls = "inline-flex items-center gap-1.5 px-5 py-3 rounded-xl border border-white/10 bg-white/[0.03] text-slate-300 hover:bg-white/[0.07] hover:text-white text-sm font-bold transition-colors cursor-pointer";
+  const navBackCls = "inline-flex items-center gap-1.5 px-5 py-3 rounded-xl border border-white/20 bg-white/[0.06] text-slate-300 hover:bg-white/[0.07] hover:text-white text-sm font-bold transition-colors cursor-pointer";
   const navNextCls = "psf-submit inline-flex items-center justify-center gap-2 px-7 py-3 rounded-xl text-sm font-black tracking-wide text-black bg-gradient-to-r from-cyan-400 to-sky-500 hover:from-cyan-300 hover:to-sky-400 shadow-lg shadow-cyan-500/25 hover:shadow-cyan-500/40 transition-all duration-300 cursor-pointer hover:scale-[1.02] active:scale-[0.98]";
 
   const questLabel = quest ? PUBLIC_QUEST_LABEL[quest] : "";
@@ -970,7 +987,7 @@ export default function PublicServiceForm() {
 
         {/* ===== ESTADO: BLOQUEADO (rate limit) ===== */}
         {formState === "blocked" && (
-          <div className="bg-[var(--th-n-elev)] border border-amber-500/30 rounded-3xl shadow-2xl p-10 text-center space-y-5">
+          <div className="bg-[color-mix(in_oklab,var(--th-n-elev)_92%,white)] border border-amber-500/30 rounded-3xl shadow-2xl p-10 text-center space-y-5">
             <div className="w-20 h-20 rounded-2xl bg-amber-500/10 border border-amber-500/40 flex items-center justify-center mx-auto">
               <Timer size={36} className="text-amber-400" />
             </div>
@@ -989,7 +1006,7 @@ export default function PublicServiceForm() {
 
         {/* ===== ESTADO: SUCESSO ===== */}
         {formState === "success" && (
-          <div className="bg-[var(--th-n-elev)] border border-emerald-500/30 rounded-3xl shadow-2xl p-10 text-center space-y-5">
+          <div className="bg-[color-mix(in_oklab,var(--th-n-elev)_92%,white)] border border-emerald-500/30 rounded-3xl shadow-2xl p-10 text-center space-y-5">
             <div className="w-20 h-20 rounded-full bg-emerald-500/15 border border-emerald-500/50 flex items-center justify-center mx-auto animate-in zoom-in duration-300">
               <CheckCircle2 size={40} className="text-emerald-400" />
             </div>
@@ -1042,7 +1059,7 @@ export default function PublicServiceForm() {
                 ETAPA 1 — BOAS-VINDAS + ESCOLHA DA QUEST
                ============================================================ */}
             {step === 1 && (
-              <div className="psf-quadro bg-[var(--th-n-elev)] border border-cyan-500/50 rounded-3xl shadow-2xl" style={{ "--psf-quadro-accent": "#22d3ee" } as CSSProperties}>
+              <div className="psf-quadro bg-[color-mix(in_oklab,var(--th-n-elev)_92%,white)] border border-cyan-500/50 rounded-3xl shadow-2xl" style={{ "--psf-quadro-accent": "#22d3ee" } as CSSProperties}>
                 <div className="psf-quadro-header bg-gradient-to-r from-cyan-500/10 via-cyan-500/15 to-cyan-500/10 border-b border-cyan-500/20 px-7 py-5 flex items-center gap-3">
                   <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-cyan-500 to-sky-600 flex items-center justify-center flex-shrink-0">
                     <Swords size={20} className="text-black" />
@@ -1053,67 +1070,98 @@ export default function PublicServiceForm() {
                   </div>
                 </div>
 
-                <div className="psf-quadro-inner px-4 py-6 sm:p-7 space-y-6">
-                  <p className="text-sm text-slate-300 leading-relaxed text-center max-w-lg mx-auto">
-                    Nossa equipe de <strong className="text-white">jogadores experientes</strong> realiza o
-                    service completo da Quest do seu personagem — com agendamento pelo WhatsApp,
-                    horário combinado e <strong className="text-white">pagamento flexível</strong> (Pix,
-                    Rubini Coins ou modalidade 50/50).
+                {/* Corpo da ETAPA 1 — primeira impressão: hero com hierarquia
+                    tipográfica, selos de confiança e os DOIS seletores de
+                    Quest como protagonistas (temas visuais distintos: aço
+                    para Soul War, rubi para Sanguine). Glows decorativos
+                    sutis, sem sobrecarregar. */}
+                <div className="psf-quadro-inner relative overflow-hidden px-4 py-7 sm:p-8 space-y-7">
+                  {/* Glows decorativos internos (não interativos) */}
+                  <div aria-hidden className="pointer-events-none absolute -top-24 -right-16 w-64 h-64 rounded-full bg-cyan-500/10 blur-[90px]" />
+                  <div aria-hidden className="pointer-events-none absolute -bottom-28 -left-20 w-72 h-72 rounded-full bg-red-600/10 blur-[100px]" />
+
+                  {/* HERO */}
+                  <div className="relative text-center space-y-3">
+                    <div className="inline-flex items-center gap-1.5 px-3.5 py-1 rounded-full border border-amber-500/40 bg-amber-500/10 text-amber-300 text-[10px] font-black uppercase tracking-[0.22em] shadow-lg shadow-amber-500/10">
+                      ⚡ Service Profissional de Quests
+                    </div>
+                    <h3 className="text-2xl sm:text-[28px] font-black tracking-tight text-white leading-tight">
+                      Sua Quest concluída por quem{" "}
+                      <span className="bg-gradient-to-r from-red-500 via-orange-400 to-yellow-400 bg-clip-text text-transparent" style={{ filter: "drop-shadow(0 0 10px color-mix(in oklab, var(--color-red-600) 35%, transparent))" }}>
+                        entende do assunto
+                      </span>
+                    </h3>
+                    <p className="text-sm text-slate-400 max-w-md mx-auto leading-relaxed">
+                      Equipe de <strong className="text-slate-200">jogadores experientes</strong>, horário agendado
+                      e <strong className="text-slate-200">pagamento flexível</strong> — Pix, Rubini Coins ou 50/50.
+                    </p>
+                  </div>
+
+                  {/* Selos de confiança */}
+                  <div className="relative grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                    <div className="flex items-center gap-3 rounded-xl border border-white/10 bg-black/30 px-3.5 py-3">
+                      <span className="w-9 h-9 rounded-lg bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-base flex-shrink-0">💬</span>
+                      <span className="text-[11px] font-bold text-slate-200 leading-snug">Contato via WhatsApp</span>
+                    </div>
+                    <div className="flex items-center gap-3 rounded-xl border border-white/10 bg-black/30 px-3.5 py-3">
+                      <span className="w-9 h-9 rounded-lg bg-sky-500/15 border border-sky-500/30 flex items-center justify-center text-base flex-shrink-0">🎥</span>
+                      <span className="text-[11px] font-bold text-slate-200 leading-snug">Tudo feito em Live, para máxima segurança</span>
+                    </div>
+                    <div className="flex items-center gap-3 rounded-xl border border-white/10 bg-black/30 px-3.5 py-3">
+                      <span className="w-9 h-9 rounded-lg bg-amber-500/15 border border-amber-500/30 flex items-center justify-center text-base flex-shrink-0">💰</span>
+                      <span className="text-[11px] font-bold text-slate-200 leading-snug">Valor justo</span>
+                    </div>
+                  </div>
+
+                  {/* Divisor com rótulo */}
+                  <div className="relative flex items-center gap-3">
+                    <div className="flex-1 h-px bg-gradient-to-r from-transparent via-white/15 to-white/20" />
+                    <span className="text-[10px] font-black uppercase tracking-[0.28em] text-slate-300">Escolha a Quest</span>
+                    <div className="flex-1 h-px bg-gradient-to-l from-transparent via-white/15 to-white/20" />
+                  </div>
+
+                  {/* Seletores de Quest — somente os nomes, temas distintos */}
+                  <div className="relative grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <button
+                      type="button"
+                      onClick={() => chooseQuest("soulwar")}
+                      style={{ "--psf-accent": "#cbd5e1" } as CSSProperties}
+                      className={`psf-choice group relative overflow-hidden flex flex-col items-center gap-2.5 px-6 py-8 rounded-2xl border-2 cursor-pointer transition-all duration-300 ${
+                        quest === "soulwar"
+                          ? "border-slate-200 bg-gradient-to-b from-slate-400/25 via-slate-500/10 to-transparent shadow-xl shadow-slate-400/15 scale-[1.02]"
+                          : "border-slate-400/30 bg-gradient-to-b from-slate-500/15 via-slate-500/5 to-transparent hover:border-slate-200/70 hover:from-slate-400/25 hover:shadow-xl hover:shadow-slate-400/10 hover:scale-[1.015] active:scale-[0.99]"
+                      }`}
+                    >
+                      <span aria-hidden className="pointer-events-none absolute -top-10 right-0 w-28 h-28 rounded-full bg-slate-200/10 blur-2xl transition-colors duration-300 group-hover:bg-slate-200/20" />
+                      <span className="text-4xl drop-shadow-[0_0_16px_rgba(203,213,225,0.45)] transition-transform duration-300 group-hover:scale-110">⚔️</span>
+                      <span className="text-lg font-black tracking-[0.14em] text-white" style={{ textShadow: "0 0 18px rgba(203,213,225,0.35)" }}>SOUL WAR</span>
+                      <span className={`inline-flex items-center gap-1 text-[10px] font-black uppercase tracking-[0.2em] transition-colors duration-300 ${quest === "soulwar" ? "text-cyan-300" : "text-slate-500 group-hover:text-cyan-300"}`}>
+                        Começar <ChevronRight size={12} />
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => chooseQuest("sanguine")}
+                      style={{ "--psf-accent": "#fb7185" } as CSSProperties}
+                      className={`psf-choice group relative overflow-hidden flex flex-col items-center gap-2.5 px-6 py-8 rounded-2xl border-2 cursor-pointer transition-all duration-300 ${
+                        quest === "sanguine"
+                          ? "border-rose-400 bg-gradient-to-b from-rose-500/25 via-rose-600/10 to-transparent shadow-xl shadow-rose-500/15 scale-[1.02]"
+                          : "border-rose-500/30 bg-gradient-to-b from-rose-600/15 via-rose-600/5 to-transparent hover:border-rose-400/80 hover:from-rose-500/25 hover:shadow-xl hover:shadow-rose-500/15 hover:scale-[1.015] active:scale-[0.99]"
+                      }`}
+                    >
+                      <span aria-hidden className="pointer-events-none absolute -top-10 right-0 w-28 h-28 rounded-full bg-rose-500/15 blur-2xl transition-colors duration-300 group-hover:bg-rose-500/25" />
+                      <span className="text-4xl drop-shadow-[0_0_16px_rgba(251,113,133,0.5)] transition-transform duration-300 group-hover:scale-110">🩸</span>
+                      <span className="text-lg font-black tracking-[0.14em] text-white" style={{ textShadow: "0 0 18px rgba(251,113,133,0.4)" }}>SANGUINE</span>
+                      <span className={`inline-flex items-center gap-1 text-[10px] font-black uppercase tracking-[0.2em] transition-colors duration-300 ${quest === "sanguine" ? "text-rose-300" : "text-slate-500 group-hover:text-rose-300"}`}>
+                        Começar <ChevronRight size={12} />
+                      </span>
+                    </button>
+                  </div>
+
+                  <p className="relative text-[11px] text-slate-500 text-center">
+                    As informações, valores e requisitos das próximas etapas seguem a Quest escolhida.
                   </p>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-center">
-                    <div className="bg-white/[0.03] border border-white/5 rounded-xl px-3 py-2.5 text-[11px] text-slate-400">
-                      ⏳ Fila de espera com <strong className="text-slate-200">contato via WhatsApp</strong>
-                    </div>
-                    <div className="bg-white/[0.03] border border-white/5 rounded-xl px-3 py-2.5 text-[11px] text-slate-400">
-                      🛡️ Execução com <strong className="text-slate-200">máxima segurança</strong>
-                    </div>
-                    <div className="bg-white/[0.03] border border-white/5 rounded-xl px-3 py-2.5 text-[11px] text-slate-400">
-                      💰 Valores claros, <strong className="text-slate-200">sem surpresas</strong>
-                    </div>
-                  </div>
-
-                  <div>
-                    <div className="text-center mb-4">
-                      <h3 className="text-sm font-black text-white uppercase tracking-wider">Escolha a Quest do seu Service</h3>
-                      <p className="text-[11px] text-slate-500 mt-1">As informações, valores e requisitos das próximas etapas seguem a Quest escolhida.</p>
-                    </div>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                      <button
-                        type="button"
-                        onClick={() => chooseQuest("soulwar")}
-                        style={{ "--psf-accent": "#cbd5e1" } as CSSProperties}
-                        className={`psf-choice flex flex-col items-center gap-1.5 px-4 py-6 rounded-2xl border-2 font-bold cursor-pointer tracking-wider ${
-                          quest === "soulwar"
-                            ? "border-slate-300 bg-slate-500/15 text-white shadow-lg shadow-slate-500/10 scale-[1.02]"
-                            : "border-white/10 bg-white/[0.02] text-slate-400 hover:bg-white/5 hover:border-white/20"
-                        }`}
-                      >
-                        <span className="text-3xl">⚔️</span>
-                        <span className="text-base font-black text-white">SOUL WAR</span>
-                        <span className="text-[10px] font-semibold text-slate-500 normal-case tracking-normal leading-snug text-center">
-                          Reward completa da Soul War, com seu personagem pronto para a recompensa.
-                        </span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => chooseQuest("sanguine")}
-                        style={{ "--psf-accent": "#fb7185" } as CSSProperties}
-                        className={`psf-choice flex flex-col items-center gap-1.5 px-4 py-6 rounded-2xl border-2 font-bold cursor-pointer tracking-wider ${
-                          quest === "sanguine"
-                            ? "border-rose-400 bg-rose-500/15 text-white shadow-lg shadow-rose-500/10 scale-[1.02]"
-                            : "border-white/10 bg-white/[0.02] text-slate-400 hover:bg-white/5 hover:border-white/20"
-                        }`}
-                      >
-                        <span className="text-3xl">🩸</span>
-                        <span className="text-base font-black text-white">SANGUINE</span>
-                        <span className="text-[10px] font-semibold text-slate-500 normal-case tracking-normal leading-snug text-center">
-                          Rotação da Sanguine, deixando seu personagem pronto para resgatar o item.
-                        </span>
-                      </button>
-                    </div>
-                    {fieldErrors.quest && <div className="text-[10px] text-rose-400 mt-2 text-center">{fieldErrors.quest}</div>}
-                  </div>
+                  {fieldErrors.quest && <div className="relative text-[10px] text-rose-400 text-center">{fieldErrors.quest}</div>}
                 </div>
               </div>
             )}
@@ -1122,7 +1170,7 @@ export default function PublicServiceForm() {
                 ETAPA 2 — INFORMAÇÕES DA QUEST + TERMOS
                ============================================================ */}
             {step === 2 && quest && (
-              <div className="psf-quadro bg-[var(--th-n-elev)] border border-amber-500/50 rounded-3xl shadow-2xl" style={{ "--psf-quadro-accent": "#f59e0b" } as CSSProperties}>
+              <div className="psf-quadro bg-[color-mix(in_oklab,var(--th-n-elev)_92%,white)] border border-amber-500/50 rounded-3xl shadow-2xl" style={{ "--psf-quadro-accent": "#f59e0b" } as CSSProperties}>
                 <div className="psf-quadro-header bg-gradient-to-r from-amber-500/10 via-amber-500/15 to-amber-500/10 border-b border-amber-500/20 px-7 py-5 flex items-center gap-3">
                   <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-amber-500 to-orange-600 flex items-center justify-center flex-shrink-0">
                     <Swords size={20} className="text-black" />
@@ -1140,7 +1188,7 @@ export default function PublicServiceForm() {
                   <Divider />
                   <DropsInfo quest={quest} />
                   <Divider />
-                  <HowItWorks />
+                  <HowItWorks quest={quest} />
 
                   {/* ===== ACEITE DOS TERMOS ===== */}
                   <div className="bg-emerald-500/5 border border-emerald-500/25 rounded-2xl px-4 py-4 sm:px-5 space-y-3">
@@ -1159,7 +1207,7 @@ export default function PublicServiceForm() {
                       <button
                         type="button"
                         onClick={declineTerms}
-                        className="inline-flex items-center justify-center gap-2 px-4 py-3.5 rounded-xl border-2 border-white/10 bg-white/[0.02] hover:bg-rose-500/10 hover:border-rose-500/40 text-slate-400 hover:text-rose-300 text-sm font-bold tracking-wide transition-all cursor-pointer"
+                        className="inline-flex items-center justify-center gap-2 px-4 py-3.5 rounded-xl border-2 border-white/15 bg-white/[0.05] hover:bg-rose-500/10 hover:border-rose-500/40 text-slate-400 hover:text-rose-300 text-sm font-bold tracking-wide transition-all cursor-pointer"
                       >
                         <XCircle size={17} /> Não aceito os termos
                       </button>
@@ -1196,7 +1244,7 @@ export default function PublicServiceForm() {
                 ETAPA 3 — CADASTRO DO CLIENTE (nome + WhatsApp)
                ============================================================ */}
             {step === 3 && (
-              <div className="psf-quadro bg-[var(--th-n-elev)] border border-cyan-500/50 rounded-3xl shadow-2xl" style={{ "--psf-quadro-accent": "#22d3ee" } as CSSProperties}>
+              <div className="psf-quadro bg-[color-mix(in_oklab,var(--th-n-elev)_92%,white)] border border-cyan-500/50 rounded-3xl shadow-2xl" style={{ "--psf-quadro-accent": "#22d3ee" } as CSSProperties}>
                 <div className="psf-quadro-header bg-gradient-to-r from-cyan-500/10 via-cyan-500/15 to-cyan-500/10 border-b border-cyan-500/20 px-7 py-5 flex items-center gap-3">
                   <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-cyan-500 to-sky-600 flex items-center justify-center flex-shrink-0">
                     <Phone size={20} className="text-black" />
@@ -1283,7 +1331,7 @@ export default function PublicServiceForm() {
                 ETAPA 4 — FORMA DE PAGAMENTO
                ============================================================ */}
             {step === 4 && quest && (
-              <div className="psf-quadro bg-[var(--th-n-elev)] border border-cyan-500/50 rounded-3xl shadow-2xl" style={{ "--psf-quadro-accent": "#22d3ee" } as CSSProperties}>
+              <div className="psf-quadro bg-[color-mix(in_oklab,var(--th-n-elev)_92%,white)] border border-cyan-500/50 rounded-3xl shadow-2xl" style={{ "--psf-quadro-accent": "#22d3ee" } as CSSProperties}>
                 <div className="psf-quadro-header bg-gradient-to-r from-cyan-500/10 via-cyan-500/15 to-cyan-500/10 border-b border-cyan-500/20 px-7 py-5 flex items-center gap-3">
                   <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-cyan-500 to-sky-600 flex items-center justify-center flex-shrink-0">
                     <span className="text-lg">💰</span>
@@ -1303,12 +1351,15 @@ export default function PublicServiceForm() {
                         type="button"
                         onClick={() => { setPayment("pix"); if (fieldErrors.payment) setFieldErrors(f => ({ ...f, payment: "" })); }}
                         style={{ "--psf-accent": "#34d399" } as CSSProperties}
-                        className={`psf-choice flex flex-col items-center justify-center px-3 py-4 rounded-xl border-2 cursor-pointer text-center ${
+                        className={`psf-choice relative flex flex-col items-center justify-center px-3 pt-5 pb-4 rounded-xl border-2 cursor-pointer text-center ${
                           payment === "pix"
                             ? "border-emerald-500 bg-emerald-500/15 shadow-lg shadow-emerald-500/15 scale-[1.02]"
-                            : `bg-white/[0.02] hover:bg-white/5 ${fieldErrors.payment ? "border-rose-500/40" : "border-white/10"}`
+                            : `bg-white/[0.05] hover:bg-white/10 ${fieldErrors.payment ? "border-rose-500/40" : "border-white/15"}`
                         }`}
                       >
+                        <span className="absolute -top-2.5 left-1/2 -translate-x-1/2 inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-gradient-to-r from-amber-400 to-yellow-500 text-black text-[9px] font-black uppercase tracking-wider shadow-lg shadow-amber-500/30 whitespace-nowrap">
+                          ⭐ Recomendado
+                        </span>
                         <span className={`psf-pay-title text-base font-black tracking-wider ${payment === "pix" ? "text-emerald-300" : "text-slate-300"}`}>💸 PIX</span>
                         <span className={`psf-pay-value text-lg font-black mt-1 ${payment === "pix" ? "text-emerald-400" : "text-slate-400"}`}>R$ 91</span>
                         <span className="psf-pay-subtitle text-[10px] font-bold mt-0.5 text-slate-500">
@@ -1320,12 +1371,15 @@ export default function PublicServiceForm() {
                         type="button"
                         onClick={() => { setPayment("rc"); if (fieldErrors.payment) setFieldErrors(f => ({ ...f, payment: "" })); }}
                         style={{ "--psf-accent": "#fbbf24" } as CSSProperties}
-                        className={`psf-choice flex flex-col items-center justify-center px-3 py-4 rounded-xl border-2 cursor-pointer text-center ${
+                        className={`psf-choice relative flex flex-col items-center justify-center px-3 pt-5 pb-4 rounded-xl border-2 cursor-pointer text-center ${
                           payment === "rc"
                             ? "border-amber-500 bg-amber-500/15 shadow-lg shadow-amber-500/15 scale-[1.02]"
-                            : `bg-white/[0.02] hover:bg-white/5 ${fieldErrors.payment ? "border-rose-500/40" : "border-white/10"}`
+                            : `bg-white/[0.05] hover:bg-white/10 ${fieldErrors.payment ? "border-rose-500/40" : "border-white/15"}`
                         }`}
                       >
+                        <span className="absolute -top-2.5 left-1/2 -translate-x-1/2 inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-gradient-to-r from-amber-400 to-yellow-500 text-black text-[9px] font-black uppercase tracking-wider shadow-lg shadow-amber-500/30 whitespace-nowrap">
+                          ⭐ Recomendado
+                        </span>
                         <span className={`psf-pay-title text-base font-black tracking-wider ${payment === "rc" ? "text-amber-300" : "text-slate-300"}`}>🪙 RC</span>
                         <span className={`psf-pay-value text-lg font-black mt-1 ${payment === "rc" ? "text-amber-400" : "text-slate-400"}`}>1 K</span>
                         <span className="psf-pay-subtitle text-[10px] font-bold mt-0.5 text-slate-500">
@@ -1340,7 +1394,7 @@ export default function PublicServiceForm() {
                         className={`psf-choice flex flex-col items-center justify-center px-3 py-4 rounded-xl border-2 cursor-pointer text-center ${
                           payment === "5050"
                             ? "border-violet-500 bg-violet-500/15 shadow-lg shadow-violet-500/15 scale-[1.02]"
-                            : `bg-white/[0.02] hover:bg-white/5 ${fieldErrors.payment ? "border-rose-500/40" : "border-white/10"}`
+                            : `bg-white/[0.05] hover:bg-white/10 ${fieldErrors.payment ? "border-rose-500/40" : "border-white/15"}`
                         }`}
                       >
                         <span className={`psf-pay-title text-base font-black tracking-wider ${payment === "5050" ? "text-violet-300" : "text-slate-300"}`}>⚖️ 50/50</span>
@@ -1395,7 +1449,7 @@ export default function PublicServiceForm() {
                 ETAPA 5 — CADASTRO DO PERSONAGEM
                ============================================================ */}
             {step === 5 && quest && (
-              <div className="psf-quadro bg-[var(--th-n-elev)] border border-cyan-500/50 rounded-3xl shadow-2xl" style={{ "--psf-quadro-accent": "#22d3ee" } as CSSProperties}>
+              <div className="psf-quadro bg-[color-mix(in_oklab,var(--th-n-elev)_92%,white)] border border-cyan-500/50 rounded-3xl shadow-2xl" style={{ "--psf-quadro-accent": "#22d3ee" } as CSSProperties}>
                 <div className="psf-quadro-header bg-gradient-to-r from-cyan-500/10 via-cyan-500/15 to-cyan-500/10 border-b border-cyan-500/20 px-7 py-5 flex items-center gap-3">
                   <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-cyan-500 to-sky-600 flex items-center justify-center flex-shrink-0">
                     <Swords size={20} className="text-black" />
@@ -1434,7 +1488,7 @@ export default function PublicServiceForm() {
                       searchPlaceholder="Buscar servidor..."
                       allLabel=""
                       activeColor="cyan"
-                      className={`w-full flex items-center justify-between gap-2 px-3 py-2 rounded-md bg-[var(--th-n-elev)] border border-white/[0.07] hover:border-white/15 focus:border-cyan-500/50 focus:outline-none transition-colors text-sm ${!servidor ? "text-slate-500" : "text-slate-200"}`}
+                      className={`w-full flex items-center justify-between gap-2 px-3 py-2 rounded-md bg-black/60 border border-white/20 hover:border-white/35 focus:border-cyan-400/80 focus:outline-none transition-colors text-sm ${!servidor ? "text-slate-500" : "text-slate-200"}`}
                     />
                     {fieldErrors.servidor && <div className="text-[10px] text-rose-400 mt-1.5">{fieldErrors.servidor}</div>}
                   </div>
@@ -1452,7 +1506,7 @@ export default function PublicServiceForm() {
                             type="button"
                             onClick={() => setVoc(v)}
                             data-selected={selected ? "true" : "false"}
-                            className="psf-voc relative flex flex-col items-center justify-center px-1 py-3.5 rounded-xl border-2 bg-white/[0.02] cursor-pointer"
+                            className="psf-voc relative flex flex-col items-center justify-center px-1 py-3.5 rounded-xl border-2 bg-white/[0.05] cursor-pointer"
                             style={{ "--voc-color": color } as CSSProperties}
                             title={VOC_LABEL[v]}
                           >
@@ -1484,7 +1538,7 @@ export default function PublicServiceForm() {
                 ETAPA 6 — LEVEL + CADASTRO
                ============================================================ */}
             {step === 6 && quest && (
-              <div className="psf-quadro bg-[var(--th-n-elev)] border border-cyan-500/50 rounded-3xl shadow-2xl" style={{ "--psf-quadro-accent": "#22d3ee" } as CSSProperties}>
+              <div className="psf-quadro bg-[color-mix(in_oklab,var(--th-n-elev)_92%,white)] border border-cyan-500/50 rounded-3xl shadow-2xl" style={{ "--psf-quadro-accent": "#22d3ee" } as CSSProperties}>
                 <div className="psf-quadro-header bg-gradient-to-r from-cyan-500/10 via-cyan-500/15 to-cyan-500/10 border-b border-cyan-500/20 px-7 py-5 flex items-center gap-3">
                   <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-cyan-500 to-sky-600 flex items-center justify-center flex-shrink-0">
                     <Clock size={20} className="text-black" />
@@ -1565,7 +1619,7 @@ export default function PublicServiceForm() {
                         allLabel="Qualquer um"
                         allValue="Qualquer um"
                         activeColor="cyan"
-                        className={`w-full flex items-center justify-between gap-2 px-3 py-2 rounded-md bg-[var(--th-n-elev)] border border-white/[0.07] hover:border-white/15 focus:border-cyan-500/50 focus:outline-none transition-colors text-sm ${!serviceiro ? "text-slate-500" : "text-slate-200"}`}
+                        className={`w-full flex items-center justify-between gap-2 px-3 py-2 rounded-md bg-black/60 border border-white/20 hover:border-white/35 focus:border-cyan-400/80 focus:outline-none transition-colors text-sm ${!serviceiro ? "text-slate-500" : "text-slate-200"}`}
                       />
                       <div className="text-[10px] text-slate-600 mt-1.5">Deixe "Qualquer um" para qualquer serviceiro disponível, ou selecione um específico.</div>
                     </div>
