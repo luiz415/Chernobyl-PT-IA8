@@ -682,6 +682,9 @@ export default function CharTable({ characters, activeParties = [], readOnly, sh
         const locked = lockedQuestFinancialIds.has(c.id);
         const canEditInline = !readOnly && !locked && !!onCharacterInlineChange;
         const rot = normalizeSgRot(c.sgRot);
+        // VERDE: o personagem DROPOU o item nesta rotação (Drop? = Sim
+        // registrou `sgDropRot`); vermelho = rotação normal, sem drop.
+        const droppedHere = typeof c.sgDropRot === "number" && normalizeSgRot(c.sgDropRot) === rot;
         const cooldownOn = isSgCooldownActive(c.sgBakraCooldownUntil, sgNowTick);
         const cooldownBadge = cooldownOn && (
           <span
@@ -714,10 +717,13 @@ export default function CharTable({ characters, activeParties = [], readOnly, sh
           );
         }
 
-        const rotLabel = <span className="font-bold text-rose-300 text-[11px] tabular-nums">{rot}ª Rot</span>;
+        const rotTitle = droppedHere
+          ? `Dropou o item na ${rot}ª rotação da Sanguine`
+          : `Rotação atual da Sanguine: ${rot}ª`;
+        const rotLabel = <span className={`font-bold text-[11px] tabular-nums ${droppedHere ? "text-emerald-400" : "text-rose-300"}`}>{rot}ª Rot</span>;
         if (!canEditInline) {
           return (
-            <span className="inline-flex items-center justify-center gap-1" title={`Rotação atual da Sanguine: ${rot}ª`}>
+            <span className="inline-flex items-center justify-center gap-1" title={rotTitle}>
               {rotLabel}
               {cooldownBadge}
             </span>
@@ -734,7 +740,7 @@ export default function CharTable({ characters, activeParties = [], readOnly, sh
                 setSgRotEdit({ id: c.id, value: String(rot) });
               }}
               className="inline-flex items-center justify-center px-1 py-0.5 rounded-md border border-transparent hover:border-rose-500/40 hover:bg-rose-500/10 cursor-pointer transition-all"
-              title={`Rotação atual da Sanguine: ${rot}ª — clique para editar manualmente`}
+              title={`${rotTitle} — clique para editar manualmente`}
             >
               {rotLabel}
             </button>

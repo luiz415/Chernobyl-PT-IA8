@@ -268,13 +268,16 @@ export const materializePartySettlement = onDocumentUpdated(
         updatedAt: FieldValue.serverTimestamp(),
       }, { merge: true });
 
-      // Após a Quest, só Líder e beneficiários da divisão continuam na PT
-      // operacional. Os demais já possuem histórico privado e deixam de manter
-      // listener da PT ativa ao receberem o snapshot removido da query.
+      // Após a Quest, a PT em "Aguardando Pagamento" permanece VISÍVEL para
+      // TODOS os integrantes (líder, donos e jogadores de slots,
+      // beneficiários): `members` recebe o roster completo de participantes.
+      // As permissões de EDIÇÃO não mudam — liquidação/finalização seguem
+      // exclusivas de Líder/Boss (Security Rules). `viewerUids` continua
+      // restrito ao settlement financeiro (Líder + beneficiários da divisão).
       const lifecyclePatch: Record<string, unknown> = {
         settlementRevision: revision,
-        members: settlement.viewerUids,
-        invitedUsers: after.visibility === "private" ? settlement.viewerUids : [],
+        members: participantIds,
+        invitedUsers: after.visibility === "private" ? participantIds : [],
       };
       if (after.questFinalizedAt === 0 || String(record(event.data?.after.data()).lifecycleStatus || "") !== "quest_finalized") {
         lifecyclePatch.lifecycleStatus = "quest_finalized";

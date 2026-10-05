@@ -50,6 +50,11 @@ export interface LifecycleSlot {
    * bloqueio aplicado pelo frontend.
    */
   sgDrop?: boolean;
+  /**
+   * SANGUINE: rotação-base IMUTÁVEL do personagem congelada pelo cliente na
+   * CONCLUSÃO da Quest (snapshot histórico; >= 1 quando presente).
+   */
+  sgRotBase?: number;
 }
 
 export interface LifecycleParty {
@@ -209,6 +214,8 @@ export interface SanitizedPartyArchive {
     isService: boolean;
     /** SANGUINE: resposta "Drop?" preservada no arquivo (fidelidade do histórico/Att Chars). */
     sgDrop?: boolean;
+    /** SANGUINE: rotação-base congelada na conclusão, preservada no arquivo. */
+    sgRotBase?: number;
   }>;
   totals: PartySettlementProjection["totals"];
 }
@@ -342,6 +349,10 @@ function slotFromRaw(id: string, rawSlot: UnknownRecord, rawSnapshot: UnknownRec
     isService: rawSlot.isService === true,
     // Tri-state preservado: só boolean explícito vale como resposta.
     sgDrop: rawSlot.sgDrop === true ? true : rawSlot.sgDrop === false ? false : undefined,
+    // Rotação-base congelada na conclusão: só inteiro >= 1 explícito.
+    sgRotBase: Number.isInteger(rawSlot.sgRotBase) && (rawSlot.sgRotBase as number) >= 1
+      ? (rawSlot.sgRotBase as number)
+      : undefined,
   };
 }
 
@@ -604,6 +615,9 @@ export function buildSanitizedPartyArchive(
     // SANGUINE: a resposta "Drop?" entra no arquivo sanitizado apenas quando
     // definida (tri-state preservado; SW/GB nunca têm o campo).
     ...(slot.sgDrop === undefined ? {} : { sgDrop: slot.sgDrop }),
+    // Rotação-base congelada na conclusão: preservada para o Att Chars
+    // calcular o alvo com o MESMO snapshot imutável após a finalização.
+    ...(slot.sgRotBase === undefined ? {} : { sgRotBase: slot.sgRotBase }),
   }]));
   const memberSnapshots = Object.fromEntries(party.slots.map(slot => [slot.id, {
     id: slot.id,

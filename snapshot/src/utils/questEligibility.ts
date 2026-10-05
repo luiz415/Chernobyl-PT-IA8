@@ -80,6 +80,9 @@ export function serviceQuestEligible(service: WaitingService, questFilter: Quest
  */
 export function partyBlocksQuest(party: PartyTab, targetQuest: PtType | "all"): boolean {
   if (party.archived) return false;
+  // Quest CONCLUÍDA: compromisso cumprido — a PT (mesmo aguardando
+  // pagamento) não ocupa mais o personagem para novas Quests.
+  if (party.questConcluida) return false;
   const partyQuest = party.ptType;
   if (partyQuest !== "soulwar" && partyQuest !== "sanguine" && partyQuest !== "crypt") return true;
   if (targetQuest === "all") return true;

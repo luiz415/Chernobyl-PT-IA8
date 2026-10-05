@@ -1291,8 +1291,35 @@ export default function App() {
   // compartilhado (ou sido vendido) depois de entrar na PT. O doc do dono não é
   // apagado quando um personagem sai; apenas o array `characters` encolhe.
   // ============================================================================
+  // ──────────────────────────────────────────────────────────────────────────
+  // SANGUINE — limpeza do marcador "provavelmente já realizou" do PRÓPRIO
+  // usuário quando a evidência diz o contrário (Drop? = NÃO → a SG continua
+  // disponível). Remove o marcador do estado local e do próprio documento
+  // `sharedCharacters/{uid}` (escrita do dono — sempre permitida). Cobre
+  // marcadores LEGADOS gravados pela conclusão de PTs antigas, que faziam o
+  // aviso aparecer indevidamente para personagens que NÃO droparam.
+  // ──────────────────────────────────────────────────────────────────────────
+  function clearOwnSanguineMarker(charId: string) {
+    if (probableMarkers[charId]?.sanguine !== true) return; // nada a limpar — zero writes
+    setProbableMarkers(prev => {
+      if (prev[charId]?.sanguine !== true) return prev;
+      const next = { ...prev };
+      const marker = { ...next[charId] };
+      delete (marker as any).sanguine;
+      if (!marker.soulwar && !marker.sanguine && !marker.crypt) delete next[charId];
+      else next[charId] = marker;
+      try { localStorage.setItem("cloud_cache_probableMarkers", JSON.stringify(next)); } catch {}
+      return next;
+    });
+    if (!isSimulation && db && currentUser?.uid) {
+      updateDoc(doc(db, "sharedCharacters", currentUser.uid), {
+        [`probableMarkers.${charId}.sanguine`]: null, // null remove o campo
+      }).catch(() => {});
+    }
+  }
+
   function applyOwnIncomingPartyProfit(
-    incomingProfit: Record<string, Record<string, { questType: string; lucro?: number; sgDrop?: boolean; sgRot?: number; sgCooldownUntil?: number }>>,
+    incomingProfit: Record<string, Record<string, { questType: string; lucro?: number; sgDrop?: boolean; sgRot?: number; sgCooldownUntil?: number; sgDropRot?: number }>>,
   ) {
     try {
       if (!incomingProfit || Object.keys(incomingProfit).length === 0) return;
@@ -1351,6 +1378,16 @@ export default function App() {
         });
         if (!changed) return prev;
         return { ...prev, characters: nextChars };
+      });
+
+      // Drop? = NÃO transportado: a SG continua disponível — remove o
+      // marcador "provavelmente já realizou" (incl. legados), que não deve
+      // aparecer para quem não dropou.
+      Object.values(incomingProfit).forEach(byParty => {
+        Object.entries(byParty || {}).forEach(([charId, entry]) => {
+          const target = sanguineTargetFromTransport(entry);
+          if (target?.sanguine === true) clearOwnSanguineMarker(charId);
+        });
       });
 
       // Limpa o campo `partyProfit` do próprio documento (escrita do dono,
@@ -1783,6 +1820,9 @@ export default function App() {
           if (target.sgBakraCooldownUntil !== null) {
             updates[`partyProfit.${party.id}.${charId}.sgCooldownUntil`] = target.sgBakraCooldownUntil;
           }
+          if (target.sgDropRot !== null) {
+            updates[`partyProfit.${party.id}.${charId}.sgDropRot`] = target.sgDropRot;
+          }
         }
       }
 
@@ -1801,6 +1841,7 @@ export default function App() {
                 sgDrop: answer,
                 sgRot: target.sgRot,
                 ...(target.sgBakraCooldownUntil !== null ? { sgCooldownUntil: target.sgBakraCooldownUntil } : {}),
+                ...(target.sgDropRot !== null ? { sgDropRot: target.sgDropRot } : {}),
               },
             },
           };
@@ -1874,16 +1915,24 @@ export default function App() {
       (pt.selectedIds || []).forEach(charId => {
         const sgDrop = pt.slotData?.[charId]?.sgDrop;
         if (typeof sgDrop !== "boolean") return;
-        const key = `${pt.id}|${charId}|${sgDrop ? "y" : "n"}`;
-        if (applied[key]) return;
         const character = data.characters.find(c => c.id === charId);
         if (!character) return; // não é meu / transporte via sharedCharacters cobre
+        // Drop? = NÃO: a SG continua disponível — remove o marcador
+        // "provavelmente já realizou" (incl. legados de PTs antigas), que
+        // não deve aparecer para quem não dropou. Fora do gate `applied`:
+        // a limpeza interna é barata (só escreve quando o marcador existe).
+        if (sgDrop === false) clearOwnSanguineMarker(charId);
+        // Chave "y2": versão com `sgDropRot` — respostas Sim já aplicadas na
+        // versão anterior são reaplicadas UMA vez (alvo absoluto idempotente)
+        // para registrar a rotação do drop.
+        const key = `${pt.id}|${charId}|${sgDrop ? "y2" : "n"}`;
+        if (applied[key]) return;
         const target = computeSanguineOutcome(sgDrop, sanguineSlotBaseRot(pt, charId), conclusionAt);
         const updated = applySanguineOutcomeToCharacter(character, target);
         if (updated) {
           setData(current => ({
             ...current,
-            characters: current.characters.map(c => c.id === charId ? { ...c, sanguine: target.sanguine, sgRot: target.sgRot, ...(target.sgBakraCooldownUntil !== null ? { sgBakraCooldownUntil: target.sgBakraCooldownUntil } : {}) } : c),
+            characters: current.characters.map(c => c.id === charId ? { ...c, sanguine: target.sanguine, sgRot: target.sgRot, ...(target.sgBakraCooldownUntil !== null ? { sgBakraCooldownUntil: target.sgBakraCooldownUntil } : {}), ...(target.sgDropRot !== null ? { sgDropRot: target.sgDropRot } : {}) } : c),
           }));
         }
         applied[key] = Date.now();
@@ -3215,7 +3264,7 @@ export default function App() {
     opts: { visibility: "public" | "private"; horarioTimestamp?: number },
   ) {
     if (!currentUser || selectedIds.length === 0) return;
-    const slotSeed: Record<string, { owner: string; ownerUid: string; player: string; playerUid?: string }> = {};
+    const slotSeed: Record<string, { owner: string; ownerUid: string; player: string; playerUid?: string; sgRotPlanned?: number }> = {};
     const invited = new Set<string>([currentUser.uid]);
     selectedIds.forEach(id => {
       const slot = sourceParty.slotData?.[id];
@@ -3227,6 +3276,13 @@ export default function App() {
         ownerUid,
         player: slot?.player || owner,
         playerUid: slot?.playerUid || ownerUid || undefined,
+        // ROTAÇÃO PLANEJADA da nova PT: a rotação-base IMUTÁVEL congelada na
+        // conclusão da PT de origem + 1 (Drop? = Não avança a rotação). A
+        // nova PT já NASCE com a rotação correta, mesmo que o personagem
+        // vivo do dono (offline) ainda não tenha refletido o resultado — o
+        // personagem importado da lista de disponíveis segue sendo a fonte
+        // da verdade (a exibição usa o MAIOR entre os dois).
+        sgRotPlanned: sanguineSlotBaseRot(sourceParty, id) + 1,
       };
       if (ownerUid) invited.add(ownerUid);
     });
@@ -3242,7 +3298,7 @@ export default function App() {
     );
   }
 
-  async function createParty(_name: string, ptType?: "soulwar" | "sanguine" | "crypt", horarioTimestamp?: number, visibility?: "public" | "private", invitedUsers?: string[], servidor?: string, suggestedIds?: string[], slotSeed?: Record<string, { owner: string; ownerUid: string; player: string; playerUid?: string }>) {
+  async function createParty(_name: string, ptType?: "soulwar" | "sanguine" | "crypt", horarioTimestamp?: number, visibility?: "public" | "private", invitedUsers?: string[], servidor?: string, suggestedIds?: string[], slotSeed?: Record<string, { owner: string; ownerUid: string; player: string; playerUid?: string; sgRotPlanned?: number }>) {
     if (!currentUser) return;
     if (globalSettings.publicPartiesEnabled === false && (visibility || "public") === "public") {
       customAlert("A criação de PTs públicas está temporariamente pausada pelo administrador.", "PT Pública pausada");
@@ -3360,6 +3416,10 @@ export default function App() {
           // Marca origem Service (mesma flag que o fluxo manual grava), para
           // que as funções que dependem de DONO/JOGADOR tratem corretamente.
           ...(wt ? { isService: true } : {}),
+          // SANGUINE — "Próxima Rotação": rotação PLANEJADA do personagem
+          // nesta PT (rotação-alvo congelada da PT de origem + 1). Permite à
+          // nova PT nascer com a Rot SG correta mesmo com o dono offline.
+          ...(typeof slotSeed?.[charId]?.sgRotPlanned === "number" ? { sgRotPlanned: slotSeed[charId].sgRotPlanned } : {}),
         };
 
         if (ownerUidVal) membersSet.add(ownerUidVal);
@@ -3563,18 +3623,20 @@ export default function App() {
         || (displayUserName && slot?.player && String(slot.player).toLowerCase() === displayUserName.toLowerCase()));
     if (currentUser.uid && editorIsParticipant && (!isPostQuestSettlement || currentUser.uid === leader)) memberUids.add(currentUser.uid);
     (partyToSave.members || []).forEach(uid => { if (uid) memberUids.add(uid); });
-    // Antes da Quest, DONOS e JOGADORES entram no roster da PT (auto-reparo:
-    // qualquer salvamento cura PTs legadas cujo JOGADOR — p. ex. serviceiro
-    // de um Service — nunca foi gravado em `members`, sem o qual ele não vê a
-    // PT nem passa pelas Security Rules). Depois da Quest, a Function mantém
-    // somente Líder/beneficiários no settlement para encerrar listeners de
-    // participantes fora da divisão.
-    if (!isPostQuestSettlement) {
+    // DONOS e JOGADORES entram no roster da PT em QUALQUER estágio
+    // (auto-reparo: qualquer salvamento cura PTs cujo JOGADOR — p. ex.
+    // serviceiro de um Service — nunca foi gravado em `members`, sem o qual
+    // ele não vê a PT nem passa pelas Security Rules). Vale TAMBÉM depois da
+    // Quest: a PT em "Aguardando Pagamento" permanece visível para TODOS os
+    // integrantes (a Function de settlement grava o mesmo roster completo);
+    // as permissões de edição/liquidação continuam exclusivas de Líder/Boss.
+    {
       (partyToSave.selectedIds || []).forEach(id => {
         const ch = availableCharactersForParty.find(c => c.id === id) || partyToSave.memberSnapshots?.[id];
         if (ch?.ownerUid) memberUids.add(ch.ownerUid);
       });
       Object.values(partyToSave.slotData || {}).forEach((slot: any) => {
+        if (slot?.ownerUid) memberUids.add(slot.ownerUid);
         if (slot?.playerUid) {
           memberUids.add(slot.playerUid);
         } else if (slot?.player) {
@@ -3747,6 +3809,9 @@ export default function App() {
             if (typeof sgMap[id].sgCooldownUntil === "number") {
               updates[`partyProfit.${party.id}.${id}.sgCooldownUntil`] = sgMap[id].sgCooldownUntil;
             }
+            if (typeof sgMap[id].sgDropRot === "number") {
+              updates[`partyProfit.${party.id}.${id}.sgDropRot`] = sgMap[id].sgDropRot;
+            }
           }
         });
 
@@ -3836,12 +3901,17 @@ export default function App() {
     if (leader) memberUids.add(leader);
     if (currentUser.uid && (!isPostQuestSettlement || currentUser.uid === leader)) memberUids.add(currentUser.uid);
     (updated.members || []).forEach(uid => { if (uid) memberUids.add(uid); });
-    if (!isPostQuestSettlement) {
-      (updated.selectedIds || []).forEach(id => {
-        const ch = availableCharactersForParty.find(c => c.id === id) || updated.memberSnapshots?.[id];
-        if (ch?.ownerUid) memberUids.add(ch.ownerUid);
-      });
-    }
+    // DONOS e JOGADORES sempre no roster — inclusive pós-Quest: a PT em
+    // "Aguardando Pagamento" fica visível para TODOS os integrantes
+    // (permissões de edição/liquidação inalteradas — Líder/Boss).
+    (updated.selectedIds || []).forEach(id => {
+      const ch = availableCharactersForParty.find(c => c.id === id) || updated.memberSnapshots?.[id];
+      if (ch?.ownerUid) memberUids.add(ch.ownerUid);
+    });
+    Object.values(updated.slotData || {}).forEach((slot: any) => {
+      if (slot?.ownerUid) memberUids.add(slot.ownerUid);
+      if (slot?.playerUid) memberUids.add(slot.playerUid);
+    });
 
     try {
       setIsSyncing(true);
@@ -3932,12 +4002,17 @@ export default function App() {
     if (currentUser.uid && (!isPostQuestSettlement || currentUser.uid === leader)) memberUids.add(currentUser.uid);
     (party.members || []).forEach(uid => { if (uid) memberUids.add(uid); });
 
-    if (!isPostQuestSettlement) {
-      (party.selectedIds || []).forEach(id => {
-        const ch = availableCharactersForParty.find(c => c.id === id) || party.memberSnapshots?.[id];
-        if (ch?.ownerUid) memberUids.add(ch.ownerUid);
-      });
-    }
+    // DONOS e JOGADORES sempre no roster — inclusive pós-Quest: a PT em
+    // "Aguardando Pagamento" fica visível para TODOS os integrantes
+    // (permissões de edição/liquidação inalteradas — Líder/Boss).
+    (party.selectedIds || []).forEach(id => {
+      const ch = availableCharactersForParty.find(c => c.id === id) || party.memberSnapshots?.[id];
+      if (ch?.ownerUid) memberUids.add(ch.ownerUid);
+    });
+    Object.values(party.slotData || {}).forEach((slot: any) => {
+      if (slot?.ownerUid) memberUids.add(slot.ownerUid);
+      if (slot?.playerUid) memberUids.add(slot.playerUid);
+    });
 
     try {
       setIsSyncing(true);
@@ -4058,6 +4133,7 @@ export default function App() {
             patch.sanguine = target.sanguine;
             patch.sgRot = target.sgRot;
             if (target.sgBakraCooldownUntil !== null) patch.sgBakraCooldownUntil = target.sgBakraCooldownUntil;
+            if (target.sgDropRot !== null) patch.sgDropRot = target.sgDropRot;
           }
         } else {
           // SW/GB: a conclusão da Quest continua sendo marcada exatamente como antes.

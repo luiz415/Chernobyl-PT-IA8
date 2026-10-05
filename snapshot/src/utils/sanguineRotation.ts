@@ -50,6 +50,12 @@ export interface SanguineOutcomeTarget {
    * personagem NÃO é alterado (não-destrutivo).
    */
   sgBakraCooldownUntil: number | null;
+  /**
+   * Rotação em que o DROP ocorreu (Drop=Sim): registrada no personagem para
+   * as colunas "Rot SG" exibirem a rotação em VERDE. `null` quando a
+   * resposta não registra drop (Drop=Não) — valor existente não é alterado.
+   */
+  sgDropRot: number | null;
 }
 
 /**
@@ -63,14 +69,16 @@ export interface SanguineOutcomeTarget {
 export function computeSanguineOutcome(sgDrop: boolean, baseRot: unknown, conclusionAt: number): SanguineOutcomeTarget {
   const rot = normalizeSgRot(baseRot);
   if (sgDrop) {
-    // Dropou: SG realizada; rotação mantida (decisão de negócio confirmada).
-    return { sanguine: false, sgRot: rot, sgBakraCooldownUntil: null };
+    // Dropou: SG realizada; rotação mantida (decisão de negócio confirmada)
+    // e REGISTRADA como a rotação do drop (exibição em verde).
+    return { sanguine: false, sgRot: rot, sgBakraCooldownUntil: null, sgDropRot: rot };
   }
   const base = Number.isFinite(conclusionAt) && conclusionAt > 0 ? conclusionAt : 0;
   return {
     sanguine: true,
     sgRot: rot + 1,
     sgBakraCooldownUntil: base > 0 ? base + SG_BAKRA_COOLDOWN_MS : null,
+    sgDropRot: null,
   };
 }
 
@@ -80,11 +88,68 @@ export function isConcludedSanguineParty(party: Pick<PartyTab, "ptType" | "quest
 }
 
 /**
- * Rotação-base de um slot: a rotação do personagem congelada no snapshot da
- * conclusão. Snapshots antigos/externos sem o campo contam como 1ª rotação.
+ * Rotação-base de um slot: o SNAPSHOT IMUTÁVEL congelado na CONCLUSÃO da
+ * Quest. Prioridade: `slot.sgRotBase` (gravado explicitamente na conclusão —
+ * sobrevive inclusive ao arquivo sanitizado da finalização) → `sgRot` do
+ * memberSnapshot → rotação planejada da PT ("Próxima Rotação") → 1ª.
+ * A contabilização posterior NUNCA depende do `sgRot` atual do personagem,
+ * que pode ser alterado por outros fluxos depois da conclusão.
  */
 export function sanguineSlotBaseRot(party: PartyTab, charId: string): number {
-  return normalizeSgRot(party.memberSnapshots?.[charId]?.sgRot);
+  const slot = party.slotData?.[charId];
+  if (typeof slot?.sgRotBase === "number" && slot.sgRotBase >= 1) return normalizeSgRot(slot.sgRotBase);
+  const snapRot = party.memberSnapshots?.[charId]?.sgRot;
+  if (typeof snapRot === "number" && snapRot >= 1) return normalizeSgRot(snapRot);
+  if (typeof slot?.sgRotPlanned === "number" && slot.sgRotPlanned >= 1) return normalizeSgRot(slot.sgRotPlanned);
+  return 1;
+}
+
+/**
+ * Rotação do personagem NO CONTEXTO de uma PT Sanguine:
+ *   • PT concluída → a rotação CONGELADA na conclusão (histórico imutável);
+ *   • PT em aberto → a rotação em que o personagem ENTRARÁ: o personagem
+ *     vivo (fonte da verdade — "Meus Personagens"/compartilhados) ou, se o
+ *     dono ainda não refletiu o resultado da PT anterior, a rotação
+ *     PLANEJADA gravada na criação via "Próxima Rotação" (a maior vale).
+ */
+export function sanguineRotationInParty(party: PartyTab, charId: string, liveChar?: Character | null): number {
+  if (party.ptType !== "sanguine") return 1;
+  if (party.questConcluida) return sanguineSlotBaseRot(party, charId);
+  const slot = party.slotData?.[charId];
+  const live = liveChar?.sgRot ?? party.memberSnapshots?.[charId]?.sgRot;
+  const planned = slot?.sgRotPlanned;
+  return Math.max(normalizeSgRot(live), typeof planned === "number" ? normalizeSgRot(planned) : 1);
+}
+
+/**
+ * CONFLITO "personagem em outra PT" — regra por Quest + Rotação.
+ *
+ * O personagem presente em `otherParty` só conta como conflito para
+ * `currentParty` quando:
+ *   • a outra PT ainda NÃO foi concluída (concluída = compromisso cumprido);
+ *   • as duas PTs são da MESMA Quest (quests diferentes nunca conflitam
+ *     entre si quando ambas estão definidas);
+ *   • e, sendo ambas Sanguine, o personagem está na MESMA rotação nas duas
+ *     (1ª rotação numa PT e 2ª noutra = sequência legítima, sem conflito).
+ * PT sem Quest definida mantém o comportamento conservador (conflita).
+ */
+export function partiesConflictForCharacter(
+  currentParty: PartyTab,
+  otherParty: PartyTab,
+  charId: string,
+  liveChar?: Character | null,
+): boolean {
+  if (otherParty.archived || otherParty.questConcluida) return false;
+  const currentQuest = currentParty.ptType;
+  const otherQuest = otherParty.ptType;
+  // Quests definidas e DIFERENTES: sem conflito.
+  if (currentQuest && otherQuest && currentQuest !== otherQuest) return false;
+  // Ambas Sanguine: conflito somente na MESMA rotação.
+  if (currentQuest === "sanguine" && otherQuest === "sanguine") {
+    return sanguineRotationInParty(currentParty, charId, liveChar)
+      === sanguineRotationInParty(otherParty, charId, liveChar);
+  }
+  return true;
 }
 
 /**
@@ -114,12 +179,16 @@ export function applySanguineOutcomeToCharacter(character: Character, target: Sa
   const currentRot = normalizeSgRot(character.sgRot);
   const cooldownChanged = target.sgBakraCooldownUntil !== null
     && (character.sgBakraCooldownUntil || 0) !== target.sgBakraCooldownUntil;
+  const dropRotChanged = target.sgDropRot !== null
+    && (character.sgDropRot || 0) !== target.sgDropRot;
   const changed = character.sanguine !== target.sanguine
     || currentRot !== target.sgRot
-    || cooldownChanged;
+    || cooldownChanged
+    || dropRotChanged;
   if (!changed) return null;
   const next: Character = { ...character, sanguine: target.sanguine, sgRot: target.sgRot };
   if (target.sgBakraCooldownUntil !== null) next.sgBakraCooldownUntil = target.sgBakraCooldownUntil;
+  if (target.sgDropRot !== null) next.sgDropRot = target.sgDropRot;
   return next;
 }
 
@@ -160,6 +229,8 @@ export interface SanguineTransportEntry {
   sgRot: number;
   /** Omitido quando a resposta não define cooldown (Drop=Sim). */
   sgCooldownUntil?: number;
+  /** Rotação em que o drop ocorreu — omitido quando Drop=Não. */
+  sgDropRot?: number;
 }
 
 /** Monta o mapa de transporte (charId → entrada SG) de uma PT concluída. */
@@ -170,6 +241,7 @@ export function collectSanguineTransportMap(party: PartyTab): Record<string, San
     const sgDrop = party.slotData?.[charId]?.sgDrop === true;
     const entry: SanguineTransportEntry = { questType: "sanguine", sgDrop, sgRot: target.sgRot };
     if (target.sgBakraCooldownUntil !== null) entry.sgCooldownUntil = target.sgBakraCooldownUntil;
+    if (target.sgDropRot !== null) entry.sgDropRot = target.sgDropRot;
     result[charId] = entry;
   });
   return result;
@@ -185,10 +257,12 @@ export function sanguineTargetFromTransport(entry: unknown): SanguineOutcomeTarg
   const raw = entry as Record<string, unknown>;
   if (raw.questType !== "sanguine" || typeof raw.sgDrop !== "boolean") return null;
   const cooldown = typeof raw.sgCooldownUntil === "number" && raw.sgCooldownUntil > 0 ? raw.sgCooldownUntil : null;
+  const dropRot = typeof raw.sgDropRot === "number" && raw.sgDropRot >= 1 ? normalizeSgRot(raw.sgDropRot) : null;
   return {
     sanguine: !raw.sgDrop,
     sgRot: normalizeSgRot(raw.sgRot),
     sgBakraCooldownUntil: cooldown,
+    sgDropRot: dropRot,
   };
 }
 

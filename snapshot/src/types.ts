@@ -104,6 +104,13 @@ export interface Character {
    */
   sgBakraCooldownUntil?: number;
   /**
+   * ROTAÇÃO EM QUE O DROP OCORREU (Drop? = Sim). Quando igual a `sgRot`, as
+   * colunas "Rot SG" exibem a rotação em VERDE — o personagem dropou o item
+   * naquela rotação. Persistido e sincronizado pelos mesmos caminhos dos
+   * demais campos do personagem (userCharacters/sharedCharacters/transporte).
+   */
+  sgDropRot?: number;
+  /**
    * Identidade da conta (`ownerUid + nome normalizado`), usada para saber se
    * dois personagens são da MESMA conta real. Existe porque `account` guarda
    * apenas o nome escolhido pelo usuário — "1"/"Main" se repetem entre pessoas
@@ -326,6 +333,20 @@ export interface PartySlotData {
    * Exclusivo de PTs Sanguine; SW/GB nunca gravam este campo.
    */
   sgDrop?: boolean;
+  /**
+   * SANGUINE — rotação do personagem CONGELADA na CONCLUSÃO da Quest
+   * (snapshot imutável). Fonte prioritária de toda contabilização posterior
+   * (Drop=Sim registra esta rotação; Drop=Não avança a partir dela), para
+   * que alterações futuras em `Character.sgRot` não distorçam o histórico.
+   */
+  sgRotBase?: number;
+  /**
+   * SANGUINE — rotação PLANEJADA do personagem nesta PT, gravada na criação
+   * via "Próxima Rotação" (= rotação-alvo da PT anterior). Fallback de
+   * exibição/congelamento enquanto o personagem vivo do dono (fonte da
+   * verdade) ainda não refletiu o resultado da PT anterior (dono offline).
+   */
+  sgRotPlanned?: number;
 }
 
 export type PtType = "soulwar" | "sanguine" | "crypt";

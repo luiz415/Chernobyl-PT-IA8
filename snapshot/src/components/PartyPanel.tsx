@@ -5,7 +5,7 @@ import { ACQUISITION_ACCEPT_EVENT, clearPendingAcquisitionAccept, peekPendingAcq
 import ConfirmModal from "./ConfirmModal";
 import PausePartyModal from "./PausePartyModal";
 import NextRotationModal from "./NextRotationModal";
-import { describeSgCooldown, formatSgCooldownRemaining, isSgCooldownActive, normalizeSgRot } from "../utils/sanguineRotation";
+import { describeSgCooldown, formatSgCooldownRemaining, isSgCooldownActive, partiesConflictForCharacter, sanguineRotationInParty } from "../utils/sanguineRotation";
 import {
   cooldownRemainingMs,
   findQuestBoss,
@@ -1570,7 +1570,22 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
     const partyWithResolvedUids = withResolvedSlotUids(party);
     // 2) Snapshot de TODOS os participantes, no estado em que estão agora.
     const memberSnapshots = buildMemberSnapshotsForArchive(partyWithResolvedUids);
-    const partyWithSnapshot: PartyTab = { ...partyWithResolvedUids, memberSnapshots };
+    let partyWithSnapshot: PartyTab = { ...partyWithResolvedUids, memberSnapshots };
+    // 3) SANGUINE: congela em cada slot a rotação-base IMUTÁVEL
+    //    (`sgRotBase`) do personagem NESTE momento — personagem vivo (fonte
+    //    da verdade) ou a rotação planejada da PT ("Próxima Rotação"), a
+    //    maior. Toda contabilização posterior (Drop?=Sim/Não, Att Chars,
+    //    transporte) parte deste valor, imune a alterações futuras do
+    //    `sgRot` mutável do personagem.
+    if (party.ptType === "sanguine") {
+      const frozenSlotData: Record<string, ExtendedPartySlotData> = { ...((partyWithSnapshot.slotData || {}) as Record<string, ExtendedPartySlotData>) };
+      (partyWithSnapshot.selectedIds || []).forEach(id => {
+        const live = characters.find(c => c.id === id);
+        const rotBase = sanguineRotationInParty(partyWithSnapshot, id, live);
+        frozenSlotData[id] = { ...(frozenSlotData[id] || {}), sgRotBase: rotBase };
+      });
+      partyWithSnapshot = { ...partyWithSnapshot, slotData: frozenSlotData };
+    }
     const finalizedParty: PartyTab = {
       ...partyWithSnapshot,
       questConcluida: true,
@@ -1680,31 +1695,48 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
     return String(entity.account || "");
   }
 
+  // ── ⚠ "EM OUTRA PT" — conflito por QUEST + ROTAÇÃO ──────────────────────
+  //
+  // O personagem só conta como "em outra PT" quando há conflito REAL com a
+  // PT atual (`partiesConflictForCharacter`, fonte única em sanguineRotation):
+  //   • PT concluída/arquivada nunca conflita (compromisso cumprido);
+  //   • Quests definidas e DIFERENTES não conflitam entre si;
+  //   • ambas Sanguine: conflito apenas na MESMA rotação do personagem
+  //     (1ª rotação numa PT + 2ª rotação noutra = sequência legítima);
+  //   • PT sem Quest definida mantém o comportamento conservador.
   const idsInOtherParties = useMemo(() => {
     const set = new Set<string>();
-    allParties.forEach(p => { if (p.id === party.id) return; p.selectedIds.forEach(id => set.add(id)); });
+    allParties.forEach(p => {
+      if (p.id === party.id) return;
+      p.selectedIds.forEach(id => {
+        if (set.has(id)) return;
+        const live = characters.find(c => c.id === id);
+        if (partiesConflictForCharacter(party, p, id, live)) set.add(id);
+      });
+    });
     return set;
-  }, [allParties, party.id]);
+  }, [allParties, party, characters]);
 
   // ── TOOLTIP DO ⚠ "EM OUTRA PT" (nome da PT + Quest) ─────────────────────
   //
-  // Mesma fonte e a mesma varredura do `idsInOtherParties` acima: as PT's já
+  // Mesma fonte e o MESMO critério do `idsInOtherParties` acima: as PT's já
   // estão em memória (`allParties`, mantidas vivas pelo listener do
   // Firestore), então o tooltip não custa NENHUMA leitura adicional — e uma
   // Cloud Function só agregaria consumo: o cliente já possui nome e quest de
-  // toda PT capaz de acionar o ⚠. Como flag e tooltip derivam da mesma lista,
-  // um nunca contradiz o outro.
+  // toda PT capaz de acionar o ⚠. Como flag e tooltip derivam da mesma lista
+  // e regra, um nunca contradiz o outro.
   const otherPartiesInfoById = useMemo(() => {
     const map = new Map<string, OtherPartyInfo[]>();
     allParties.forEach(p => {
       if (p.id === party.id) return;
       p.selectedIds.forEach(id => {
+        const live = characters.find(c => c.id === id);
+        if (!partiesConflictForCharacter(party, p, id, live)) return;
         const info: OtherPartyInfo = {
           name: String(p.name || "").trim() || "PT sem nome",
           questLabel: p.ptType === "sanguine" ? "Sanguine" : p.ptType === "soulwar" ? "Soul War" : p.ptType === "crypt" ? "Graveborn" : "Quest não definida",
-          // PT arquivada (histórico) continua acionando o ⚠ como hoje; a nota
-          // só esclarece o estado, para o nome não parecer uma PT ativa.
-          statusNote: p.archived ? (p.questFalha ? "falhou" : "finalizada") : undefined,
+          // Quest falhou mas a PT segue ativa: nota esclarece o estado.
+          statusNote: p.questFalha ? "falhou" : undefined,
         };
         const list = map.get(id);
         if (list) list.push(info);
@@ -1712,7 +1744,7 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
       });
     });
     return map;
-  }, [allParties, party.id]);
+  }, [allParties, party, characters]);
   const otherPartiesInfoFor = useCallback(
     (characterId: string) => otherPartiesInfoById.get(characterId),
     [otherPartiesInfoById],
@@ -4273,15 +4305,21 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
                     <td className="px-2 py-0.5 text-center whitespace-nowrap"><span className="font-bold" style={{ color: VOC_COLORS[voc!] }}>{voc}</span></td>
                     <td className="px-2 py-0.5 text-center tabular-nums whitespace-nowrap">{lvl}</td>
                     {isSanguinePT && (() => {
-                      // ROT SG — rotação ATUAL do personagem neste slot.
-                      // Pós-conclusão usa o snapshot CONGELADO (histórico fiel);
-                      // antes da conclusão, o personagem vivo (lista atual).
+                      // ROT SG — rotação do personagem neste slot.
+                      // Pós-conclusão: snapshot IMUTÁVEL congelado na conclusão
+                      // (slot.sgRotBase → memberSnapshot); antes da conclusão:
+                      // personagem vivo (fonte da verdade) ou a rotação
+                      // PLANEJADA da PT ("Próxima Rotação") — a maior vale.
+                      // Tudo centralizado em `sanguineRotationInParty`.
                       const snapChar = party.memberSnapshots?.[id];
                       const liveChar = slot.type === "char" ? slot.char : undefined;
-                      const rotSource = questState === "post_complete"
-                        ? (snapChar?.sgRot ?? liveChar?.sgRot)
-                        : (liveChar?.sgRot ?? snapChar?.sgRot);
-                      const rot = normalizeSgRot(rotSource);
+                      const rot = sanguineRotationInParty(party, id, liveChar);
+                      // VERDE: o personagem DROPOU o item nesta rotação —
+                      // pós-conclusão pela resposta Drop?=Sim desta PT;
+                      // pré-conclusão pelo registro vivo `sgDropRot`.
+                      const dropped = questState === "post_complete"
+                        ? d.sgDrop === true
+                        : (liveChar?.sgDropRot ?? snapChar?.sgDropRot) === rot;
                       // Cooldown do Bakragore: prioriza o personagem VIVO (o
                       // snapshot congela antes de a resposta Drop? existir).
                       const cooldownUntil = liveChar?.sgBakraCooldownUntil || snapChar?.sgBakraCooldownUntil || 0;
@@ -4289,7 +4327,10 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
                       return (
                         <td className="px-1 py-0.5 text-center whitespace-nowrap">
                           <span className="inline-flex items-center justify-center gap-1">
-                            <span className="text-[11px] font-bold text-rose-300 tabular-nums" title={`Rotação atual da Sanguine: ${rot}ª`}>{rot}ª</span>
+                            <span
+                              className={`text-[11px] font-bold tabular-nums ${dropped ? "text-emerald-400" : "text-rose-300"}`}
+                              title={dropped ? `Dropou o item na ${rot}ª rotação da Sanguine` : `Rotação atual da Sanguine: ${rot}ª`}
+                            >{rot}ª</span>
                             {cooldownOn && (
                               <span
                                 className="inline-flex items-center gap-0.5 px-1 py-0.5 rounded border border-amber-500/30 bg-amber-500/10 text-amber-300 text-[9px] font-bold tabular-nums"
@@ -4832,29 +4873,48 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
                         personagens Drop? = Não pré-selecionados e cria uma
                         nova PT Sanguine pelo fluxo normal. Exclusivo do
                         líder, após a conclusão da Quest. */}
-                    {isSanguinePT && questState === "post_complete" && !party.questFalha && (
+                    {isSanguinePT && questState === "post_complete" && !party.questFalha && (() => {
+                      // GATE: "Próxima Rotação" exige a coluna Drop?
+                      // respondida para TODOS os participantes — sem isso não
+                      // há como saber quem segue para a próxima rotação.
+                      const sgPendingIds = allMemberIds.filter(mid => typeof getSD(mid).sgDrop !== "boolean");
+                      const sgPendingBlock = sgPendingIds.length > 0;
+                      return (
                       <button
                         type="button"
-                        disabled={!isLeaderPT}
+                        disabled={!isLeaderPT || sgPendingBlock}
                         onClick={() => {
+                          if (sgPendingIds.length > 0) {
+                            const names = sgPendingIds.map(mid => party.memberSnapshots?.[mid]?.personagem || getSD(mid).owner || mid);
+                            customAlert(
+                              `A coluna "Drop?" está sem resposta para: ${names.join(", ")}. Responda Sim ou Não para todos os personagens antes de criar a próxima rotação.`,
+                              "Próxima Rotação",
+                            );
+                            return;
+                          }
                           const candidates = allMemberIds.filter(mid => getSD(mid).sgDrop === false);
                           if (candidates.length === 0) {
-                            customAlert("Nenhum personagem com Drop? = Não nesta PT. Responda a coluna Drop? antes de criar a próxima rotação.", "Próxima Rotação");
+                            customAlert("Nenhum personagem com Drop? = Não nesta PT. Todos droparam o item — não há próxima rotação a criar.", "Próxima Rotação");
                             return;
                           }
                           setShowNextRotation(true);
                         }}
                         className={`inline-flex items-center gap-1 px-2 py-1 rounded-md border text-[10px] font-bold transition-colors whitespace-nowrap relative z-40 ${
-                          !isLeaderPT
+                          !isLeaderPT || sgPendingBlock
                             ? "opacity-40 cursor-not-allowed border-white/10 bg-white/5 text-slate-500"
                             : "bg-rose-500/10 text-rose-300 hover:bg-rose-500/20 border-rose-500/40 cursor-pointer"
                         }`}
-                        title={!isLeaderPT ? "Apenas o líder da PT pode criar a próxima rotação" : "Criar a PT da próxima rotação com os personagens que não droparam o item"}
+                        title={!isLeaderPT
+                          ? "Apenas o líder da PT pode criar a próxima rotação"
+                          : sgPendingBlock
+                            ? `Responda a coluna "Drop?" (Sim/Não) de todos os personagens antes de criar a próxima rotação. Pendentes: ${sgPendingIds.map(mid => party.memberSnapshots?.[mid]?.personagem || getSD(mid).owner || mid).join(", ")}`
+                            : "Criar a PT da próxima rotação com os personagens que não droparam o item"}
                       >
                         <RotateCw size={11} />
                         PRÓXIMA ROTAÇÃO
                       </button>
-                    )}
+                      );
+                    })()}
                   </div>
                 </td>
                 <td colSpan={isSanguinePT ? 5 : 4} className="px-2 py-1 text-center text-sm font-black uppercase tracking-wider whitespace-nowrap bg-gradient-to-l from-amber-500/10 to-transparent text-amber-300 border-l border-amber-500/20">⚡ TOTAL:</td>
