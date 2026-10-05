@@ -87,11 +87,13 @@ export interface Character {
   soulwarDone?: boolean;
   sanguineDone?: boolean;
   /**
-   * ROT SG — rotação ATUAL da Sanguine deste personagem. `1` = primeira
-   * rotação (padrão para personagens sem o campo — legado). Incrementa
-   * quando uma rotação termina SEM drop do item (Drop? = Não na PT Sanguine
-   * concluída); Drop? = Sim (SG realizada) MANTÉM o valor. Editável
-   * manualmente em Meus Personagens (coluna "Rot SG").
+   * ROT SG — quantidade de ROTAÇÕES CONCLUÍDAS da Sanguine por este
+   * personagem. `0`/ausente = nunca registrou rotação (Meus Personagens
+   * exibe "-"); concluir uma rotação (Drop? respondido Sim OU Não na PT
+   * Sanguine concluída) registra a contagem. A rotação que o personagem
+   * fará numa PT é SEMPRE `sgRot + 1` (exibida no Party Panel). Editável
+   * manualmente (coluna "Rot SG" inline, modal do personagem e célula da
+   * PT para o próprio dono).
    */
   sgRot?: number;
   /**
@@ -104,10 +106,11 @@ export interface Character {
    */
   sgBakraCooldownUntil?: number;
   /**
-   * ROTAÇÃO EM QUE O DROP OCORREU (Drop? = Sim). Quando igual a `sgRot`, as
-   * colunas "Rot SG" exibem a rotação em VERDE — o personagem dropou o item
-   * naquela rotação. Persistido e sincronizado pelos mesmos caminhos dos
-   * demais campos do personagem (userCharacters/sharedCharacters/transporte).
+   * ROTAÇÃO EM QUE O DROP OCORREU (Drop? = Sim) — resultado da ÚLTIMA
+   * rotação: quando igual a `sgRot`, as colunas "Rot SG" exibem a rotação em
+   * VERDE (houve drop); diferente/ausente = VERMELHO (sem drop, outra
+   * rotação será necessária). Persistido e sincronizado pelos mesmos caminhos
+   * dos demais campos (userCharacters/sharedCharacters/transporte).
    */
   sgDropRot?: number;
   /**

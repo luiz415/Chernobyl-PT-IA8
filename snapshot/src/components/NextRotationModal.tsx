@@ -4,6 +4,7 @@ import { X, RotateCw, Clock, Lock, Globe } from "lucide-react";
 import type { PartyTab } from "../types";
 import { VOC_COLORS } from "../types";
 import { SG_BAKRA_COOLDOWN_MS, describeSgCooldown, normalizeSgRot, sanguineSlotBaseRot } from "../utils/sanguineRotation";
+import { parseDurationField, splitDuration } from "../utils/durationFields";
 import { toFirestoreMillis } from "../utils/firestoreTimestamp";
 
 // ============================================================================
@@ -28,28 +29,6 @@ interface Props {
   candidateIds: string[];
   onConfirm: (selectedIds: string[], opts: { visibility: "public" | "private"; horarioTimestamp?: number }) => Promise<void> | void;
   onCancel: () => void;
-}
-
-/** Decompõe uma duração (ms) em dias/horas/minutos (clamp em 0). */
-function splitDuration(ms: number): { days: number; hours: number; mins: number } {
-  const total = Math.max(0, Math.ceil(ms / 60_000)); // minutos restantes (arredonda p/ cima)
-  const days = Math.floor(total / (24 * 60));
-  const hours = Math.floor((total % (24 * 60)) / 60);
-  const mins = total % 60;
-  return { days, hours, mins };
-}
-
-/**
- * Valida um campo do cooldown manual: inteiro dentro de [min, max].
- * Campo vazio é INVÁLIDO (o usuário deve digitar 0 explicitamente) — evita
- * criar a PT com um tempo diferente do que parece estar na tela.
- */
-function parseCooldownField(value: string, min: number, max: number): number | null {
-  const trimmed = value.trim();
-  if (!/^\d+$/.test(trimmed)) return null;
-  const n = Number(trimmed);
-  if (!Number.isInteger(n) || n < min || n > max) return null;
-  return n;
 }
 
 export default function NextRotationModal({ open, party, candidateIds, onConfirm, onCancel }: Props) {
@@ -103,9 +82,9 @@ export default function NextRotationModal({ open, party, candidateIds, onConfirm
   // Validação do modo manual: cada campo precisa ser um inteiro válido no
   // intervalo (dias 0–365, horas 0–23, minutos 0–59). Combinações inválidas
   // desabilitam o Criar com mensagem clara.
-  const manualDays = parseCooldownField(cdDays, 0, 365);
-  const manualHours = parseCooldownField(cdHours, 0, 23);
-  const manualMins = parseCooldownField(cdMins, 0, 59);
+  const manualDays = parseDurationField(cdDays, 0, 365);
+  const manualHours = parseDurationField(cdHours, 0, 23);
+  const manualMins = parseDurationField(cdMins, 0, 59);
   const manualValid = manualDays !== null && manualHours !== null && manualMins !== null;
   const manualError = cooldownMode === "manual" && !manualValid
     ? (manualDays === null

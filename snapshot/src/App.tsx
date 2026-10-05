@@ -11,7 +11,7 @@ import { setGlobalDialogHandler, customAlert, customConfirm, formatRC } from "./
 import { loadData, saveData, exportCSV, exportJSON, importJSON, buildPersonalBackup, normalizeImportedBackup, saveAutoSaveHandle, loadAutoSaveHandle, loadUIState, saveUIState, saveCloseTray, saveStartWithWindows, saveLowCpuUsage, loadSharedCharsCache, saveSharedCharsCache, isSharedCharsCacheFresh, invalidateSharedCharsCache } from "./storage";
 import { canViewServiceEntry, canViewServiceForViewer, projectServiceForViewer } from "./utils/serviceVisibility";
 import { applyPartyProfitToCharacters, buildCharacterProfitPatch, computePartyProfitMap } from "./utils/partyProfit";
-import { collectSanguineTransportMap, computeSanguineOutcome, isConcludedSanguineParty, sanguineSlotBaseRot, sanguineTargetFromTransport, applySanguineOutcomeToCharacter } from "./utils/sanguineRotation";
+import { collectSanguineTransportMap, completedSgRotations, computeSanguineOutcome, isConcludedSanguineParty, sanguineSlotBaseRot, sanguineTargetFromTransport, applySanguineOutcomeToCharacter } from "./utils/sanguineRotation";
 import { calculateAcquiredQuestDrops, calculateAcquiredQuestProfit, cancelCharacterAcquisitionPreApproval, confirmCharacterAcquisitionPayment, confirmCharacterAcquisitionSalePayout, createCharacterAcquisition, getCharacterAcquisition, isPaymentConfirmed, subscribeCharacterAcquisitionBuyerDetails, subscribeCharacterAcquisitions, updateCharacterAcquisitionLifecycle, upsertCharacterAcquisitionBuyerDetails } from "./services/characterAcquisitionService";
 import { toFirestoreMillis } from "./utils/firestoreTimestamp";
 import { getPersonalPartyHistoryEntry, readPersonalPartyHistoryCache, requestPartyFinalization, subscribePersonalPartyHistory } from "./services/partyHistoryService";
@@ -1333,10 +1333,12 @@ export default function App() {
           let lucro = 0;
           // SANGUINE: a mesma entrada pode transportar também o ALVO do fluxo
           // Drop?/rotação/cooldown (campos SG) — com ou sem lucro.
+          // `for...of` (sem closure) para o TypeScript rastrear o narrowing
+          // de `sgTarget` ao usá-lo logo abaixo.
           let sgTarget: ReturnType<typeof sanguineTargetFromTransport> = null;
-          Object.values(incomingProfit).forEach(byParty => {
+          for (const byParty of Object.values(incomingProfit)) {
             const entry = byParty?.[char.id];
-            if (!entry) return;
+            if (!entry) continue;
             if ((entry.lucro || 0) > 0) {
               questType = entry.questType;
               lucro = entry.lucro || 0;
@@ -1347,10 +1349,13 @@ export default function App() {
               sgTarget = target;
               applied = true;
             }
-          });
+          }
           if (!applied) return char;
           let next = char;
-          if (sgTarget) {
+          // Mesma guarda anti-regressão da reconciliação local: o alvo só é
+          // imposto enquanto o personagem ainda não registrou a rotação
+          // transportada — edição manual posterior nunca é desfeita.
+          if (sgTarget && completedSgRotations(next.sgRot) < sgTarget.sgRot) {
             const reconciled = applySanguineOutcomeToCharacter(next, sgTarget);
             if (reconciled) {
               next = reconciled;
@@ -1922,18 +1927,29 @@ export default function App() {
         // não deve aparecer para quem não dropou. Fora do gate `applied`:
         // a limpeza interna é barata (só escreve quando o marcador existe).
         if (sgDrop === false) clearOwnSanguineMarker(charId);
-        // Chave "y2": versão com `sgDropRot` — respostas Sim já aplicadas na
-        // versão anterior são reaplicadas UMA vez (alvo absoluto idempotente)
-        // para registrar a rotação do drop.
-        const key = `${pt.id}|${charId}|${sgDrop ? "y2" : "n"}`;
+        // Chaves "y3"/"n2": versão com a semântica "sgRot = rotações
+        // CONCLUÍDAS" — resultados já aplicados na versão anterior são
+        // reconciliados UMA vez para a contagem nova (alvo absoluto
+        // idempotente).
+        const key = `${pt.id}|${charId}|${sgDrop ? "y3" : "n2"}`;
         if (applied[key]) return;
         const target = computeSanguineOutcome(sgDrop, sanguineSlotBaseRot(pt, charId), conclusionAt);
-        const updated = applySanguineOutcomeToCharacter(character, target);
-        if (updated) {
-          setData(current => ({
-            ...current,
-            characters: current.characters.map(c => c.id === charId ? { ...c, sanguine: target.sanguine, sgRot: target.sgRot, ...(target.sgBakraCooldownUntil !== null ? { sgBakraCooldownUntil: target.sgBakraCooldownUntil } : {}), ...(target.sgDropRot !== null ? { sgDropRot: target.sgDropRot } : {}) } : c),
-          }));
+        // GUARDA ANTI-REGRESSÃO: o alvo só é imposto enquanto o personagem
+        // ainda NÃO registrou a rotação desta PT (`concluídas < rotação da
+        // PT`). Personagem já no alvo — ou AJUSTADO MANUALMENTE depois (em
+        // Meus Personagens/modal/célula da PT, inclusive noutro dispositivo,
+        // onde esta chave local não existe) — nunca é sobrescrito: a edição
+        // manual prevalece. Era a causa de "editar a rotação não funciona":
+        // sem a chave local, este efeito reimpunha o alvo antigo.
+        const alreadyCounted = completedSgRotations(character.sgRot) >= target.sgRot;
+        if (!alreadyCounted) {
+          const updated = applySanguineOutcomeToCharacter(character, target);
+          if (updated) {
+            setData(current => ({
+              ...current,
+              characters: current.characters.map(c => c.id === charId ? { ...c, sanguine: target.sanguine, sgRot: target.sgRot, ...(target.sgBakraCooldownUntil !== null ? { sgBakraCooldownUntil: target.sgBakraCooldownUntil } : {}), ...(target.sgDropRot !== null ? { sgDropRot: target.sgDropRot } : {}) } : c),
+            }));
+          }
         }
         applied[key] = Date.now();
         dirty = true;
@@ -4121,8 +4137,9 @@ export default function App() {
         if (questType === "sanguine") {
           // SANGUINE (fluxo reformulado): a conclusão NÃO marca mais a SG como
           // realizada para todos. O resultado é POR PERSONAGEM, pela resposta
-          // "Drop?" do slot: Sim → realizada; Não → disponível + rotação +1 +
-          // cooldown 72h do Bakragore. SEM resposta → disponibilidade intocada.
+          // "Drop?" do slot: a rotação feita entra na contagem (Sim e Não);
+          // Sim → realizada (+ rotação do drop); Não → disponível + cooldown
+          // 72h do Bakragore. SEM resposta → disponibilidade intocada.
           const sgDrop = (ptDoc as PartyTab).slotData?.[c.id]?.sgDrop;
           if (typeof sgDrop === "boolean") {
             const target = computeSanguineOutcome(
@@ -4130,10 +4147,15 @@ export default function App() {
               sanguineSlotBaseRot(ptDoc as PartyTab, c.id),
               toFirestoreMillis((ptDoc as PartyTab).questFinalizedAt),
             );
-            patch.sanguine = target.sanguine;
-            patch.sgRot = target.sgRot;
-            if (target.sgBakraCooldownUntil !== null) patch.sgBakraCooldownUntil = target.sgBakraCooldownUntil;
-            if (target.sgDropRot !== null) patch.sgDropRot = target.sgDropRot;
+            // Guarda anti-regressão (mesma da reconciliação): se o personagem
+            // já registrou esta rotação — incl. ajuste MANUAL do usuário —,
+            // o Att Chars não a reimpõe.
+            if (completedSgRotations(c.sgRot) < target.sgRot) {
+              patch.sanguine = target.sanguine;
+              patch.sgRot = target.sgRot;
+              if (target.sgBakraCooldownUntil !== null) patch.sgBakraCooldownUntil = target.sgBakraCooldownUntil;
+              if (target.sgDropRot !== null) patch.sgDropRot = target.sgDropRot;
+            }
           }
         } else {
           // SW/GB: a conclusão da Quest continua sendo marcada exatamente como antes.
@@ -5657,6 +5679,7 @@ export default function App() {
             onCancelCharacterAcquisitionPreApproval={demoData ? undefined : cancelCharacterAcquisitionPreApprovalFromParty}
             onSanguineDropAnswered={demoData ? undefined : syncSanguineAnswerForOwner}
             onCreateNextRotation={demoData ? undefined : handleCreateNextRotation}
+            onOwnCharacterInlineChange={demoData ? undefined : handleCharacterInlineChange}
             publicPartiesEnabled={globalSettings.publicPartiesEnabled}
             onTabChange={() => {
               // Ao abrir a aba "Gerenciador de PT's": carrega PTs públicas e personagens

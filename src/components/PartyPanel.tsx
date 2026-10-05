@@ -5,7 +5,7 @@ import { ACQUISITION_ACCEPT_EVENT, clearPendingAcquisitionAccept, peekPendingAcq
 import ConfirmModal from "./ConfirmModal";
 import PausePartyModal from "./PausePartyModal";
 import NextRotationModal from "./NextRotationModal";
-import { describeSgCooldown, formatSgCooldownRemaining, isSgCooldownActive, partiesConflictForCharacter, sanguineRotationInParty } from "../utils/sanguineRotation";
+import { completedSgRotations, describeSgCooldown, formatSgCooldownRemaining, isSgCooldownActive, partiesConflictForCharacter, sanguineRotationInParty } from "../utils/sanguineRotation";
 import {
   cooldownRemainingMs,
   findQuestBoss,
@@ -139,6 +139,13 @@ interface Props {
     selectedIds: string[],
     opts: { visibility: "public" | "private"; horarioTimestamp?: number },
   ) => Promise<void> | void;
+  /**
+   * SANGUINE — edição discreta da rotação do PRÓPRIO personagem pela célula
+   * "Rot SG" da PT. Grava pelo MESMO caminho da edição inline de Meus
+   * Personagens (handleCharacterInlineChange no App) — fonte única de
+   * verdade; a tabela de personagens reflete imediatamente.
+   */
+  onOwnCharacterInlineChange?: (character: Character) => void;
 }
 
 type SortDir = "asc" | "desc" | null;
@@ -693,7 +700,7 @@ function formatWhatsDisplay(service: WaitingService): string {
   return `+${country} ${area} ${number}`.trim();
 }
 
-export default function PartyPanel({ party, characters, waitingList, allParties, userName, onUpdate, onPersistPartyNow, onDelete, onSaveParty, onRequestFinalization, onRefresh, characterAcquisitions = [], onCreateCharacterAcquisition, onConfirmCharacterAcquisitionPayment, onCancelCharacterAcquisitionPreApproval, onSanguineDropAnswered, onCreateNextRotation }: Props) {
+export default function PartyPanel({ party, characters, waitingList, allParties, userName, onUpdate, onPersistPartyNow, onDelete, onSaveParty, onRequestFinalization, onRefresh, characterAcquisitions = [], onCreateCharacterAcquisition, onConfirmCharacterAcquisitionPayment, onCancelCharacterAcquisitionPreApproval, onSanguineDropAnswered, onCreateNextRotation, onOwnCharacterInlineChange }: Props) {
   const { currentUser, userProfile, allUsers, acceptedFriendUids } = useAuth();
   const [showAddCustom, setShowAddCustom] = useState(false);
   // Estado `showSuggestModal` removido junto com o botão "Sugerir PT" — esse
@@ -1978,6 +1985,31 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
     const timer = window.setInterval(() => setSgNowTick(Date.now()), 30_000);
     return () => window.clearInterval(timer);
   }, [isSanguinePT]);
+
+  // SANGUINE — edição discreta da rotação exibida na célula "Rot SG" da PT
+  // (apenas o DONO do personagem, antes da conclusão). O valor digitado é a
+  // ROTAÇÃO QUE O PERSONAGEM FARÁ nesta PT (>= 1); o personagem é gravado
+  // com `rotação - 1` rotações concluídas (regra: PT mostra registradas + 1).
+  const [sgRotCellEdit, setSgRotCellEdit] = useState<{ id: string; value: string } | null>(null);
+
+  function commitSgRotCellEdit(id: string, liveChar: Character | undefined) {
+    if (!sgRotCellEdit || sgRotCellEdit.id !== id) return;
+    const parsed = parseInt(sgRotCellEdit.value, 10);
+    setSgRotCellEdit(null);
+    if (!liveChar || !onOwnCharacterInlineChange) return;
+    if (!Number.isFinite(parsed) || parsed < 1) return; // rotação na PT: mínimo 1ª
+    const completed = parsed - 1; // registradas em Meus Personagens
+    const slot = (party.slotData?.[id] || {}) as ExtendedPartySlotData;
+    if (completedSgRotations(liveChar.sgRot) !== completed) {
+      onOwnCharacterInlineChange({ ...liveChar, sgRot: completed });
+    }
+    // A rotação PLANEJADA do slot (PT criada via "Próxima Rotação") cede à
+    // edição explícita do dono — sem isso o `max(vivo+1, planejada)` seguraria
+    // o valor antigo na tela.
+    if (typeof slot.sgRotPlanned === "number" && slot.sgRotPlanned !== parsed) {
+      setSD(id, { sgRotPlanned: parsed });
+    }
+  }
 
   const canAnswerSgDrop = (id: string): boolean => {
     if (!isSanguinePT || questState !== "post_complete") return false;
@@ -4314,23 +4346,64 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
                       const snapChar = party.memberSnapshots?.[id];
                       const liveChar = slot.type === "char" ? slot.char : undefined;
                       const rot = sanguineRotationInParty(party, id, liveChar);
-                      // VERDE: o personagem DROPOU o item nesta rotação —
-                      // pós-conclusão pela resposta Drop?=Sim desta PT;
-                      // pré-conclusão pelo registro vivo `sgDropRot`.
-                      const dropped = questState === "post_complete"
-                        ? d.sgDrop === true
-                        : (liveChar?.sgDropRot ?? snapChar?.sgDropRot) === rot;
+                      // VERDE somente pós-conclusão com Drop?=Sim (o drop
+                      // ocorreu NESTA rotação). Antes da conclusão a célula
+                      // mostra a rotação que o personagem FARÁ (registradas
+                      // + 1) — sem dados da rotação, conta como sem drop
+                      // (VERMELHO).
+                      const dropped = questState === "post_complete" && d.sgDrop === true;
                       // Cooldown do Bakragore: prioriza o personagem VIVO (o
                       // snapshot congela antes de a resposta Drop? existir).
                       const cooldownUntil = liveChar?.sgBakraCooldownUntil || snapChar?.sgBakraCooldownUntil || 0;
                       const cooldownOn = isSgCooldownActive(cooldownUntil, sgNowTick);
+                      // Edição discreta: só o DONO do personagem (vivo na
+                      // lista), antes da conclusão da Quest.
+                      const canEditRot = questState !== "post_complete"
+                        && !!liveChar
+                        && !!currentUser?.uid
+                        && liveChar.ownerUid === currentUser.uid
+                        && !!onOwnCharacterInlineChange;
+                      const rotEl = sgRotCellEdit?.id === id && canEditRot ? (
+                        <input
+                          type="number"
+                          min={1}
+                          autoFocus
+                          value={sgRotCellEdit.value}
+                          onChange={e => setSgRotCellEdit({ id, value: e.target.value })}
+                          onBlur={() => commitSgRotCellEdit(id, liveChar)}
+                          onKeyDown={e => {
+                            if (e.key === "Enter") commitSgRotCellEdit(id, liveChar);
+                            if (e.key === "Escape") setSgRotCellEdit(null);
+                          }}
+                          onMouseDown={e => e.stopPropagation()}
+                          onClick={e => e.stopPropagation()}
+                          className="w-10 bg-black/70 border border-rose-500/50 rounded px-1 py-0.5 text-[11px] text-center text-rose-200 focus:outline-none tabular-nums"
+                          title="Rotação que o personagem fará nesta PT (Enter salva, Esc cancela)"
+                        />
+                      ) : canEditRot ? (
+                        <button
+                          type="button"
+                          onMouseDown={e => e.stopPropagation()}
+                          onClick={e => { e.stopPropagation(); setSgRotCellEdit({ id, value: String(rot) }); }}
+                          className="inline-flex items-center justify-center px-1 py-0.5 rounded border border-transparent hover:border-rose-500/40 hover:bg-rose-500/10 cursor-pointer transition-all text-[11px] font-bold tabular-nums text-rose-300"
+                          title={`Rotação que o personagem fará nesta PT: ${rot}ª (registradas + 1) — clique para ajustar`}
+                        >
+                          {rot}ª
+                        </button>
+                      ) : (
+                        <span
+                          className={`text-[11px] font-bold tabular-nums ${dropped ? "text-emerald-400" : "text-rose-300"}`}
+                          title={dropped
+                            ? `Dropou o item na ${rot}ª rotação da Sanguine`
+                            : questState === "post_complete"
+                              ? `${rot}ª rotação realizada nesta PT — sem drop`
+                              : `Rotação que o personagem fará nesta PT: ${rot}ª (registradas + 1)`}
+                        >{rot}ª</span>
+                      );
                       return (
                         <td className="px-1 py-0.5 text-center whitespace-nowrap">
                           <span className="inline-flex items-center justify-center gap-1">
-                            <span
-                              className={`text-[11px] font-bold tabular-nums ${dropped ? "text-emerald-400" : "text-rose-300"}`}
-                              title={dropped ? `Dropou o item na ${rot}ª rotação da Sanguine` : `Rotação atual da Sanguine: ${rot}ª`}
-                            >{rot}ª</span>
+                            {rotEl}
                             {cooldownOn && (
                               <span
                                 className="inline-flex items-center gap-0.5 px-1 py-0.5 rounded border border-amber-500/30 bg-amber-500/10 text-amber-300 text-[9px] font-bold tabular-nums"

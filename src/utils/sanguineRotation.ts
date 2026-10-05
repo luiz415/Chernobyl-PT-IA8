@@ -6,13 +6,20 @@ import { toFirestoreMillis } from "./firestoreTimestamp";
 // ----------------------------------------------------------------------------
 // Regras do fluxo reformulado da Quest Sanguine:
 //
-//   • Cada personagem tem uma ROTAÇÃO ATUAL (`Character.sgRot`, 1 = primeira).
+//   • `Character.sgRot` = quantidade de ROTAÇÕES CONCLUÍDAS (0/ausente =
+//     nunca registrou rotação → "Meus Personagens" exibe "-").
+//   • `Character.sgDropRot` = rotação em que o DROP ocorreu (resultado da
+//     última rotação): igual a `sgRot` → última rotação teve drop (VERDE);
+//     diferente/ausente → sem drop (VERMELHO, precisa de outra rotação).
+//   • No Party Panel, a coluna "Rot SG" mostra a rotação que o personagem
+//     FARÁ naquela PT: SEMPRE `rotações concluídas + 1`.
 //   • A conclusão da PT NÃO altera a disponibilidade da SG de ninguém — o
 //     resultado é informado POR PERSONAGEM na coluna "Drop?" do PartyPanel.
-//   • Drop? = SIM  → SG realizada (sanguine=false); a rotação MANTÉM o valor.
-//   • Drop? = NÃO  → SG continua disponível (sanguine=true); a rotação avança
-//     (+1) e o Bakragore entra em cooldown de 72h contados da CONCLUSÃO da
-//     Quest (timestamp absoluto — confiável entre dispositivos e fusos).
+//   • Drop? = SIM ou NÃO → a rotação feita na PT entra na contagem
+//     (`sgRot = rotação da PT`); SIM registra `sgDropRot` e marca a SG como
+//     realizada; NÃO mantém a SG disponível e liga o cooldown de 72h do
+//     Bakragore contado da CONCLUSÃO da Quest (timestamp absoluto —
+//     confiável entre dispositivos e fusos).
 //
 // Este módulo é PURO (sem Firebase/React): todo cálculo de alvo (`target`) é
 // determinístico — f(resposta, rotação-base congelada na conclusão, momento da
@@ -30,7 +37,7 @@ import { toFirestoreMillis } from "./firestoreTimestamp";
 /** Cooldown do boss Bakragore após a conclusão da rotação: 72 horas. */
 export const SG_BAKRA_COOLDOWN_MS = 72 * 60 * 60 * 1000;
 
-/** Normaliza a rotação: inteiro >= 1; ausente/invalido = 1 (primeira). */
+/** Normaliza uma ROTAÇÃO DE PT (1-based): inteiro >= 1; ausente/inválido = 1. */
 export function normalizeSgRot(value: unknown): number {
   const num = typeof value === "number" ? value : Number(value);
   if (!Number.isFinite(num)) return 1;
@@ -38,11 +45,29 @@ export function normalizeSgRot(value: unknown): number {
   return int >= 1 ? int : 1;
 }
 
+/**
+ * ROTAÇÕES CONCLUÍDAS de um personagem (`Character.sgRot`): inteiro >= 0.
+ * 0/ausente = o personagem NUNCA teve uma rotação registrada ("Meus
+ * Personagens" exibe "-"). A rotação que ele fará numa PT é SEMPRE
+ * `concluídas + 1` — essa distinção (quantidade realizada × rotação da PT)
+ * é a base de toda a exibição/contabilização.
+ */
+export function completedSgRotations(value: unknown): number {
+  const num = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(num)) return 0;
+  const int = Math.floor(num);
+  return int >= 0 ? int : 0;
+}
+
 /** Alvo ABSOLUTO de reconciliação de um personagem após a resposta "Drop?". */
 export interface SanguineOutcomeTarget {
   /** Disponibilidade resultante da SG (true = disponível). */
   sanguine: boolean;
-  /** Rotação resultante (Drop=Sim mantém; Drop=Não avança +1). */
+  /**
+   * ROTAÇÕES CONCLUÍDAS resultantes (`Character.sgRot`): a rotação feita na
+   * PT entra na contagem COM ou SEM drop — concluir a Nª rotação deixa o
+   * personagem com N rotações registradas.
+   */
   sgRot: number;
   /**
    * Fim do cooldown do Bakragore (epoch ms) quando Drop=Não; `null` quando a
@@ -61,22 +86,28 @@ export interface SanguineOutcomeTarget {
 /**
  * Calcula o alvo determinístico de um personagem a partir da resposta Drop?.
  *
- * @param sgDrop       resposta da coluna "Drop?" (true = dropou).
- * @param baseRot      rotação do personagem CONGELADA na conclusão da Quest
- *                     (memberSnapshots) — base fixa torna o cálculo idempotente.
- * @param conclusionAt epoch ms da conclusão da Quest (`questFinalizedAt`).
+ * @param sgDrop        resposta da coluna "Drop?" (true = dropou).
+ * @param partyRotation rotação FEITA nesta PT (1-based), CONGELADA na
+ *                      conclusão da Quest (`slot.sgRotBase`) — base fixa
+ *                      torna o cálculo idempotente.
+ * @param conclusionAt  epoch ms da conclusão da Quest (`questFinalizedAt`).
+ *
+ * Em AMBAS as respostas o personagem termina com `sgRot = partyRotation`
+ * rotações concluídas (a rotação foi realizada — o que muda é o resultado):
+ *   • Drop=Sim → SG realizada; `sgDropRot` registra a rotação do drop
+ *     (exibição em VERDE enquanto for a última rotação);
+ *   • Drop=Não → SG continua disponível (próxima rotação necessária —
+ *     exibição em VERMELHO) + cooldown de 72h do Bakragore.
  */
-export function computeSanguineOutcome(sgDrop: boolean, baseRot: unknown, conclusionAt: number): SanguineOutcomeTarget {
-  const rot = normalizeSgRot(baseRot);
+export function computeSanguineOutcome(sgDrop: boolean, partyRotation: unknown, conclusionAt: number): SanguineOutcomeTarget {
+  const rot = normalizeSgRot(partyRotation);
   if (sgDrop) {
-    // Dropou: SG realizada; rotação mantida (decisão de negócio confirmada)
-    // e REGISTRADA como a rotação do drop (exibição em verde).
     return { sanguine: false, sgRot: rot, sgBakraCooldownUntil: null, sgDropRot: rot };
   }
   const base = Number.isFinite(conclusionAt) && conclusionAt > 0 ? conclusionAt : 0;
   return {
     sanguine: true,
-    sgRot: rot + 1,
+    sgRot: rot,
     sgBakraCooldownUntil: base > 0 ? base + SG_BAKRA_COOLDOWN_MS : null,
     sgDropRot: null,
   };
@@ -88,10 +119,11 @@ export function isConcludedSanguineParty(party: Pick<PartyTab, "ptType" | "quest
 }
 
 /**
- * Rotação-base de um slot: o SNAPSHOT IMUTÁVEL congelado na CONCLUSÃO da
- * Quest. Prioridade: `slot.sgRotBase` (gravado explicitamente na conclusão —
- * sobrevive inclusive ao arquivo sanitizado da finalização) → `sgRot` do
- * memberSnapshot → rotação planejada da PT ("Próxima Rotação") → 1ª.
+ * Rotação FEITA na PT (1-based): o SNAPSHOT IMUTÁVEL congelado na CONCLUSÃO
+ * da Quest. Prioridade: `slot.sgRotBase` (gravado explicitamente na
+ * conclusão — sobrevive inclusive ao arquivo sanitizado da finalização) →
+ * `sgRot` do memberSnapshot (legado 1-based de PTs antigas sem `sgRotBase`)
+ * → rotação planejada da PT ("Próxima Rotação") → 1ª.
  * A contabilização posterior NUNCA depende do `sgRot` atual do personagem,
  * que pode ser alterado por outros fluxos depois da conclusão.
  */
@@ -116,9 +148,11 @@ export function sanguineRotationInParty(party: PartyTab, charId: string, liveCha
   if (party.ptType !== "sanguine") return 1;
   if (party.questConcluida) return sanguineSlotBaseRot(party, charId);
   const slot = party.slotData?.[charId];
-  const live = liveChar?.sgRot ?? party.memberSnapshots?.[charId]?.sgRot;
+  // Rotação que o personagem FARÁ nesta PT = rotações CONCLUÍDAS registradas
+  // em "Meus Personagens" + 1 (sem registro = 1ª rotação).
+  const completed = completedSgRotations(liveChar?.sgRot ?? party.memberSnapshots?.[charId]?.sgRot);
   const planned = slot?.sgRotPlanned;
-  return Math.max(normalizeSgRot(live), typeof planned === "number" ? normalizeSgRot(planned) : 1);
+  return Math.max(completed + 1, typeof planned === "number" ? normalizeSgRot(planned) : 1);
 }
 
 /**
@@ -176,7 +210,7 @@ export function collectSanguineOutcomes(party: PartyTab): Record<string, Sanguin
  * existente (de uma rotação anterior) é preservado.
  */
 export function applySanguineOutcomeToCharacter(character: Character, target: SanguineOutcomeTarget): Character | null {
-  const currentRot = normalizeSgRot(character.sgRot);
+  const currentRot = completedSgRotations(character.sgRot);
   const cooldownChanged = target.sgBakraCooldownUntil !== null
     && (character.sgBakraCooldownUntil || 0) !== target.sgBakraCooldownUntil;
   const dropRotChanged = target.sgDropRot !== null

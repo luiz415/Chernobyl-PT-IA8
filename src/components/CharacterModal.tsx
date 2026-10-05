@@ -465,6 +465,79 @@ export default function CharacterModal({ open, initial, accounts, servers, onSav
             </div>
           </div>
 
+          {/* SANGUINE — ROT SG: quantidade de rotações JÁ REALIZADAS (0 =
+              nenhuma → tabela exibe "-") + resultado da ÚLTIMA rotação
+              (Dropou = verde / Sem drop = vermelho). Mesmos campos da
+              edição inline da tabela (`sgRot`/`sgDropRot`) — nenhuma
+              segunda fonte de verdade. */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2 border-t border-red-900/20">
+            <div>
+              <label className="block text-[10px] font-bold uppercase tracking-wider text-red-400/80 mb-1.5" title="Quantas rotações de Sanguine este personagem já concluiu (0 = nenhuma)">
+                Rot SG (Rotações Realizadas)
+              </label>
+              <input
+                type="text"
+                inputMode="numeric"
+                value={!data.sgRot || data.sgRot <= 0 ? "" : Math.floor(data.sgRot)}
+                onChange={(e) => {
+                  const n = parseInt(e.target.value.replace(/[^\d]/g, ""), 10);
+                  const rot = Number.isFinite(n) && n > 0 ? n : 0;
+                  setData((d) => {
+                    const prevRot = d.sgRot && d.sgRot > 0 ? Math.floor(d.sgRot) : 0;
+                    // Coerência do resultado da última rotação: se estava
+                    // marcado "dropou na última" (sgDropRot === rot anterior),
+                    // o resultado acompanha a nova contagem; 0 limpa.
+                    const keptDrop = prevRot >= 1 && d.sgDropRot === prevRot;
+                    return { ...d, sgRot: rot, sgDropRot: rot >= 1 && keptDrop ? rot : undefined };
+                  });
+                }}
+                placeholder="-"
+                className="w-full bg-black/40 border border-red-900/30 rounded-lg px-3 py-2 text-sm text-left tabular-nums text-slate-300 font-medium focus:outline-none focus:border-red-700/50 placeholder-slate-600 transition-colors"
+              />
+            </div>
+
+            <div>
+              <label className="block text-[10px] font-bold uppercase tracking-wider text-red-400/80 mb-1.5" title="Resultado da última rotação realizada: com drop a rotação aparece em verde; sem drop, em vermelho (outra rotação será necessária)">
+                Última Rotação Teve Drop?
+              </label>
+              <div className={`grid grid-cols-2 gap-1 h-[38px] ${!data.sgRot || data.sgRot <= 0 ? "opacity-40" : ""}`}>
+                <button
+                  type="button"
+                  disabled={!data.sgRot || data.sgRot <= 0}
+                  onClick={() => setData((d) => ({ ...d, sgDropRot: d.sgRot && d.sgRot > 0 ? Math.floor(d.sgRot) : undefined }))}
+                  className={`rounded-lg border text-xs font-bold transition-all ${!data.sgRot || data.sgRot <= 0 ? "cursor-not-allowed" : "cursor-pointer"} ${
+                    !!data.sgRot && data.sgRot > 0 && data.sgDropRot === Math.floor(data.sgRot)
+                      ? "border-emerald-500/50 bg-emerald-500/20 text-emerald-300 shadow-sm"
+                      : "border-red-900/30 bg-black/20 text-slate-500 hover:bg-red-900/20 hover:text-slate-300"
+                  }`}
+                  title="O item dropou na última rotação (Rot SG em verde)"
+                >
+                  SIM
+                </button>
+                <button
+                  type="button"
+                  disabled={!data.sgRot || data.sgRot <= 0}
+                  onClick={() => setData((d) => ({ ...d, sgDropRot: undefined }))}
+                  className={`rounded-lg border text-xs font-bold transition-all ${!data.sgRot || data.sgRot <= 0 ? "cursor-not-allowed" : "cursor-pointer"} ${
+                    !!data.sgRot && data.sgRot > 0 && data.sgDropRot !== Math.floor(data.sgRot)
+                      ? "border-rose-500/50 bg-rose-500/20 text-rose-300 shadow-sm"
+                      : "border-red-900/30 bg-black/20 text-slate-500 hover:bg-red-900/20 hover:text-slate-300"
+                  }`}
+                  title="Sem drop na última rotação (Rot SG em vermelho — outra rotação será necessária)"
+                >
+                  NÃO
+                </button>
+              </div>
+            </div>
+
+            <div className="flex items-end">
+              <p className="text-[10px] leading-snug text-slate-500 pb-1">
+                0/vazio = nenhuma rotação registrada ("-"). Na PT, o personagem entra sempre na rotação seguinte
+                (registradas + 1).
+              </p>
+            </div>
+          </div>
+
           <div className="grid grid-cols-1 md:grid-cols-5 gap-4 pt-2 border-t border-red-900/20">
             <div>
               <label className="block text-[10px] font-bold uppercase tracking-wider text-red-400/80 mb-1.5" title="Custo de compra ou investimento">
