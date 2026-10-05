@@ -23,6 +23,19 @@ import { PUBLIC_QUEST_LABEL, publicMinLevelFor, publicLevelBlockReason } from ".
 // Deixe vazio ("") para desativar o reCAPTCHA (não recomendado em produção)
 const RECAPTCHA_SITE_KEY = "6LdW02ItAAAAAELunQmYCRGrr2qD-c0Dn-5kIMNO";
 
+// ============================================================================
+// PAUSA TEMPORÁRIA DA SOUL WAR
+// ============================================================================
+// A opção continua VISÍVEL na Etapa 1, mas não pode ser selecionada; um
+// tooltip explica o motivo (hover no desktop, toque no mobile). O bloqueio
+// também vale na lógica de envio (handleSubmit) — não é só visual.
+// PARA REATIVAR O SERVICE DE SOUL WAR: basta mudar a flag para false.
+const SOULWAR_PAUSED = true;
+const SOULWAR_PAUSED_TITLE = "Service temporariamente indisponível:";
+const SOULWAR_PAUSED_MESSAGE =
+  "pausamos temporariamente o Service de Soul War até que a Quest e os valores dos itens " +
+  "estejam estabilizados. As mudanças recentes tornaram o Service extremamente cansativo e arriscado.";
+
 // Rate limiting
 const MAX_SUBMISSIONS = 2;            // máximo de envios...
 const WINDOW_MS = 10 * 60 * 200;     // ...dentro desta janela (2 minutos)
@@ -127,7 +140,7 @@ const STEP_LABELS: Record<Step, string> = {
   3: "Seus Dados",
   4: "Pagamento",
   5: "Personagem",
-  6: "Level",
+  6: "Finalização",
 };
 
 // Rótulo curto das vocações nos cards de level mínimo (mesmo padrão visual
@@ -445,6 +458,10 @@ export default function PublicServiceForm() {
   const [step, setStep] = useState<Step>(1);
   const [termsAccepted, setTermsAccepted] = useState(false);
   const [termsDeclined, setTermsDeclined] = useState(false);
+  // Tooltip da Soul War pausada: no desktop aparece no hover (CSS); no
+  // mobile o toque alterna este estado (auto-oculta depois de alguns
+  // segundos para não ficar preso na tela).
+  const [swNotice, setSwNotice] = useState(false);
 
   // Campos do formulário
   const [personagem, setPersonagem] = useState("");
@@ -460,7 +477,10 @@ export default function PublicServiceForm() {
   const [notes, setNotes] = useState("");
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [serviceiro, setServiceiro] = useState("Qualquer um");
-  const [eligibleServiceiros, setEligibleServiceiros] = useState<Array<{ uid: string; nome: string }>>([]);
+  // `twitchChannel`: link de streaming que o serviceiro JÁ cadastra no app
+  // (TwitchModal → users/{uid}.twitchChannel). Capturado na MESMA leitura da
+  // lista de elegíveis — nenhuma consulta extra para a etapa Finalização.
+  const [eligibleServiceiros, setEligibleServiceiros] = useState<Array<{ uid: string; nome: string; twitchChannel?: string }>>([]);
 
   // ── LINK EXCLUSIVO (#/servico/{id}) ────────────────────────────────────
   // Identificador capturado da URL uma única vez na montagem. A resolução
@@ -497,7 +517,7 @@ export default function PublicServiceForm() {
                 const role = getEffectiveUserRole(u);
                 return u.status === "aprovado" && (role === "Boss" || (role === "VIP" && u.serviceiro === true));
               })
-              .map((u: any) => ({ uid: u.uid, nome: u.nome || u.email || "Anônimo" }))
+              .map((u: any) => ({ uid: u.uid, nome: u.nome || u.email || "Anônimo", twitchChannel: typeof u.twitchChannel === "string" ? u.twitchChannel.trim() : "" }))
           );
         } catch { if (!cancelled) setEligibleServiceiros([]); }
         if (!cancelled) setEligiblesLoaded(true);
@@ -519,12 +539,12 @@ export default function PublicServiceForm() {
         const q = query(collection(db, "users"), where("status", "==", "aprovado"));
         const snap = await getDocs(q);
         if (cancelled) return;
-        const list: Array<{ uid: string; nome: string }> = [];
+        const list: Array<{ uid: string; nome: string; twitchChannel?: string }> = [];
         snap.forEach(d => {
           const data = d.data();
           const role = getEffectiveUserRole(data);
           if (role === "Boss" || (role === "VIP" && data.serviceiro === true)) {
-            list.push({ uid: d.id, nome: data.nome || "Anônimo" });
+            list.push({ uid: d.id, nome: data.nome || "Anônimo", twitchChannel: typeof data.twitchChannel === "string" ? data.twitchChannel.trim() : "" });
           }
         });
         setEligibleServiceiros(list);
@@ -596,6 +616,13 @@ export default function PublicServiceForm() {
     try { window.scrollTo({ top: 0, behavior: "smooth" }); } catch {}
   }, [step]);
 
+  // Tooltip da Soul War aberto por toque: some sozinho após 8s.
+  useEffect(() => {
+    if (!swNotice) return;
+    const timer = window.setTimeout(() => setSwNotice(false), 8000);
+    return () => window.clearTimeout(timer);
+  }, [swNotice]);
+
   // ── Validações por etapa ─────────────────────────────────────────────────
   // Cada etapa valida SOMENTE os próprios campos ao avançar; `validate()`
   // (abaixo) revalida TUDO no envio final — nenhuma etapa pulada escapa.
@@ -604,7 +631,7 @@ export default function PublicServiceForm() {
 
   function stepErrors(s: Step): Record<string, string> {
     const errors: Record<string, string> = {};
-    if (s === 1 && !quest) errors.quest = "Escolha a Quest para continuar";
+    if (s === 1 && (!quest || (SOULWAR_PAUSED && quest === "soulwar"))) errors.quest = "Escolha a Quest para continuar";
     if (s === 2 && !termsAccepted) errors.terms = "É necessário aceitar os termos para prosseguir";
     if (s === 3) {
       if (!ownerName.trim()) errors.ownerName = "Informe o seu nome";
@@ -655,6 +682,12 @@ export default function PublicServiceForm() {
   }
 
   function chooseQuest(q: PublicQuest) {
+    // Soul War pausada: nunca seleciona (o botão pausado nem chama esta
+    // função; guarda defensiva para qualquer outro caminho).
+    if (SOULWAR_PAUSED && q === "soulwar") {
+      setSwNotice(true);
+      return;
+    }
     if (quest !== q) {
       // Termos valem PARA A QUEST escolhida: trocar de Quest exige novo aceite.
       setTermsAccepted(false);
@@ -702,8 +735,8 @@ export default function PublicServiceForm() {
     // escolhida, termos aceitos e level dentro do mínimo da combinação
     // Quest + Vocação (fonte única: utils/publicServiceLevels).
     const levelNum = parseInt(level || "0", 10) || 0;
-    if (!quest || !termsAccepted || publicLevelBlockReason(quest, voc, levelNum)) {
-      setStep(!quest ? 1 : !termsAccepted ? 2 : 6);
+    if (!quest || (SOULWAR_PAUSED && quest === "soulwar") || !termsAccepted || publicLevelBlockReason(quest, voc, levelNum)) {
+      setStep(!quest || (SOULWAR_PAUSED && quest === "soulwar") ? 1 : !termsAccepted ? 2 : 6);
       return;
     }
 
@@ -897,6 +930,21 @@ const inputCls = "w-full bg-black/60 border border-white/20 hover:border-white/3
   const questLabel = quest ? PUBLIC_QUEST_LABEL[quest] : "";
   const questEmoji = quest === "sanguine" ? "🩸" : "⚔️";
 
+  // ── STREAMING do serviceiro-alvo (etapa Finalização) ───────────────────
+  // Usa o link que o serviceiro JÁ cadastrou no aplicativo (TwitchModal →
+  // users/{uid}.twitchChannel), lido junto com a lista de elegíveis. Só é
+  // exibido quando o formulário tem um serviceiro DEFINIDO (link exclusivo
+  // ou seleção manual) E ele possui link cadastrado — sem área vazia e sem
+  // informação fictícia para "Qualquer um".
+  const streamTarget = lockedTarget
+    ? eligibleServiceiros.find(u => u.uid === lockedTarget.uid)
+    : (serviceiro && serviceiro !== "Qualquer um"
+        ? eligibleServiceiros.find(u => u.nome.trim().toLowerCase() === serviceiro.trim().toLowerCase())
+        : undefined);
+  const streamRaw = (streamTarget?.twitchChannel || "").trim();
+  const streamHref = streamRaw ? (/^https?:\/\//i.test(streamRaw) ? streamRaw : `https://${streamRaw}`) : "";
+  const streamDisplay = streamHref.replace(/^https?:\/\/(www\.)?/i, "").replace(/\/+$/, "");
+
   // ── Stepper (indicador de etapas) ────────────────────────────────────────
   // Etapas anteriores são clicáveis (voltar sem perder dados); as seguintes
   // só pelos botões "Continuar" — que validam a etapa atual.
@@ -932,7 +980,7 @@ const inputCls = "w-full bg-black/60 border border-white/20 hover:border-white/3
                   </span>
                 </button>
                 {idx < 5 && (
-                  <div className={`flex-1 h-0.5 mx-1 sm:mx-2 rounded-full transition-colors ${s < step ? "bg-emerald-500/50" : "bg-white/10"}`} />
+                  <div className={`flex-1 h-0.5 mx-1 sm:mx-2 rounded-full transition-colors duration-500 ${s < step ? "bg-gradient-to-r from-emerald-500/60 to-cyan-500/50" : "bg-white/10"}`} />
                 )}
               </div>
             );
@@ -1055,11 +1103,16 @@ const inputCls = "w-full bg-black/60 border border-white/20 hover:border-white/3
               </div>
             )}
 
+            {/* Wrapper com key={step}: remonta a cada troca de etapa e
+                aplica entrada suave (fade + deslize) — refinamento visual
+                sem custo de desempenho. */}
+            <div key={step} className="animate-in fade-in slide-in-from-bottom-3 duration-300">
+
             {/* ============================================================
                 ETAPA 1 — BOAS-VINDAS + ESCOLHA DA QUEST
                ============================================================ */}
             {step === 1 && (
-              <div className="psf-quadro bg-[color-mix(in_oklab,var(--th-n-elev)_92%,white)] border border-cyan-500/50 rounded-3xl shadow-2xl" style={{ "--psf-quadro-accent": "#22d3ee" } as CSSProperties}>
+              <div className="psf-quadro bg-[color-mix(in_oklab,var(--th-n-elev)_92%,white)] border border-cyan-500/50 rounded-3xl shadow-2xl ring-1 ring-white/[0.06]" style={{ "--psf-quadro-accent": "#22d3ee" } as CSSProperties}>
                 <div className="psf-quadro-header bg-gradient-to-r from-cyan-500/10 via-cyan-500/15 to-cyan-500/10 border-b border-cyan-500/20 px-7 py-5 flex items-center gap-3">
                   <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-cyan-500 to-sky-600 flex items-center justify-center flex-shrink-0">
                     <Swords size={20} className="text-black" />
@@ -1099,15 +1152,15 @@ const inputCls = "w-full bg-black/60 border border-white/20 hover:border-white/3
 
                   {/* Selos de confiança */}
                   <div className="relative grid grid-cols-1 sm:grid-cols-3 gap-2.5">
-                    <div className="flex items-center gap-3 rounded-xl border border-white/10 bg-black/30 px-3.5 py-3">
+                    <div className="flex items-center gap-3 rounded-xl border border-white/10 bg-black/30 px-3.5 py-3 transition-colors duration-300 hover:border-white/20 hover:bg-black/40">
                       <span className="w-9 h-9 rounded-lg bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-base flex-shrink-0">💬</span>
                       <span className="text-[11px] font-bold text-slate-200 leading-snug">Contato via WhatsApp</span>
                     </div>
-                    <div className="flex items-center gap-3 rounded-xl border border-white/10 bg-black/30 px-3.5 py-3">
+                    <div className="flex items-center gap-3 rounded-xl border border-white/10 bg-black/30 px-3.5 py-3 transition-colors duration-300 hover:border-white/20 hover:bg-black/40">
                       <span className="w-9 h-9 rounded-lg bg-sky-500/15 border border-sky-500/30 flex items-center justify-center text-base flex-shrink-0">🎥</span>
                       <span className="text-[11px] font-bold text-slate-200 leading-snug">Tudo feito em Live, para máxima segurança</span>
                     </div>
-                    <div className="flex items-center gap-3 rounded-xl border border-white/10 bg-black/30 px-3.5 py-3">
+                    <div className="flex items-center gap-3 rounded-xl border border-white/10 bg-black/30 px-3.5 py-3 transition-colors duration-300 hover:border-white/20 hover:bg-black/40">
                       <span className="w-9 h-9 rounded-lg bg-amber-500/15 border border-amber-500/30 flex items-center justify-center text-base flex-shrink-0">💰</span>
                       <span className="text-[11px] font-bold text-slate-200 leading-snug">Valor justo</span>
                     </div>
@@ -1122,23 +1175,55 @@ const inputCls = "w-full bg-black/60 border border-white/20 hover:border-white/3
 
                   {/* Seletores de Quest — somente os nomes, temas distintos */}
                   <div className="relative grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <button
-                      type="button"
-                      onClick={() => chooseQuest("soulwar")}
-                      style={{ "--psf-accent": "#cbd5e1" } as CSSProperties}
-                      className={`psf-choice group relative overflow-hidden flex flex-col items-center gap-2.5 px-6 py-8 rounded-2xl border-2 cursor-pointer transition-all duration-300 ${
-                        quest === "soulwar"
-                          ? "border-slate-200 bg-gradient-to-b from-slate-400/25 via-slate-500/10 to-transparent shadow-xl shadow-slate-400/15 scale-[1.02]"
-                          : "border-slate-400/30 bg-gradient-to-b from-slate-500/15 via-slate-500/5 to-transparent hover:border-slate-200/70 hover:from-slate-400/25 hover:shadow-xl hover:shadow-slate-400/10 hover:scale-[1.015] active:scale-[0.99]"
-                      }`}
-                    >
-                      <span aria-hidden className="pointer-events-none absolute -top-10 right-0 w-28 h-28 rounded-full bg-slate-200/10 blur-2xl transition-colors duration-300 group-hover:bg-slate-200/20" />
-                      <span className="text-4xl drop-shadow-[0_0_16px_rgba(203,213,225,0.45)] transition-transform duration-300 group-hover:scale-110">⚔️</span>
-                      <span className="text-lg font-black tracking-[0.14em] text-white" style={{ textShadow: "0 0 18px rgba(203,213,225,0.35)" }}>SOUL WAR</span>
-                      <span className={`inline-flex items-center gap-1 text-[10px] font-black uppercase tracking-[0.2em] transition-colors duration-300 ${quest === "soulwar" ? "text-cyan-300" : "text-slate-500 group-hover:text-cyan-300"}`}>
-                        Começar <ChevronRight size={12} />
-                      </span>
-                    </button>
+                    {SOULWAR_PAUSED ? (
+                      /* SOUL WAR PAUSADA — visível, não selecionável. Tooltip
+                         no hover (desktop) e no toque (mobile, com auto-
+                         ocultar). Para reativar: SOULWAR_PAUSED = false. */
+                      <div className="relative group">
+                        <button
+                          type="button"
+                          aria-disabled="true"
+                          onClick={() => setSwNotice(v => !v)}
+                          className="relative overflow-hidden flex flex-col items-center gap-2.5 px-6 py-8 rounded-2xl border-2 w-full cursor-not-allowed border-slate-500/25 bg-gradient-to-b from-slate-600/10 via-slate-600/[0.04] to-transparent saturate-50 opacity-80 transition-all duration-300"
+                          title={`${SOULWAR_PAUSED_TITLE} ${SOULWAR_PAUSED_MESSAGE}`}
+                        >
+                          <span className="absolute top-2.5 right-2.5 inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-500/15 border border-amber-500/40 text-amber-300 text-[8px] font-black uppercase tracking-widest">⏸ Em pausa</span>
+                          <span className="text-4xl grayscale opacity-70">⚔️</span>
+                          <span className="text-lg font-black tracking-[0.14em] text-slate-400">SOUL WAR</span>
+                          <span className="inline-flex items-center gap-1 text-[10px] font-black uppercase tracking-[0.2em] text-slate-600">
+                            Indisponível
+                          </span>
+                        </button>
+                        {/* Tooltip elegante — hover (sm+) ou toque (estado) */}
+                        <div className={`absolute left-1/2 -translate-x-1/2 bottom-[calc(100%+10px)] z-20 w-[320px] max-w-[88vw] transition-all duration-200 ease-out ${swNotice ? "opacity-100 translate-y-0" : "opacity-0 translate-y-1 pointer-events-none sm:group-hover:opacity-100 sm:group-hover:translate-y-0"}`}>
+                          <div className="relative rounded-xl border border-amber-500/40 bg-[color-mix(in_oklab,var(--th-n-elev)_85%,white)] shadow-2xl shadow-black/70 ring-1 ring-black/40 px-4 py-3 text-left">
+                            <p className="text-[11px] leading-relaxed text-slate-300">
+                              <strong className="text-amber-300">⏸ {SOULWAR_PAUSED_TITLE}</strong>{" "}
+                              {SOULWAR_PAUSED_MESSAGE}
+                            </p>
+                            <span aria-hidden className="absolute left-1/2 -translate-x-1/2 top-full w-0 h-0 border-x-8 border-x-transparent border-t-8 border-t-amber-500/40" />
+                          </div>
+                        </div>
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => chooseQuest("soulwar")}
+                        style={{ "--psf-accent": "#cbd5e1" } as CSSProperties}
+                        className={`psf-choice group relative overflow-hidden flex flex-col items-center gap-2.5 px-6 py-8 rounded-2xl border-2 cursor-pointer transition-all duration-300 ${
+                          quest === "soulwar"
+                            ? "border-slate-200 bg-gradient-to-b from-slate-400/25 via-slate-500/10 to-transparent shadow-xl shadow-slate-400/15 scale-[1.02]"
+                            : "border-slate-400/30 bg-gradient-to-b from-slate-500/15 via-slate-500/5 to-transparent hover:border-slate-200/70 hover:from-slate-400/25 hover:shadow-xl hover:shadow-slate-400/10 hover:scale-[1.015] active:scale-[0.99]"
+                        }`}
+                      >
+                        <span aria-hidden className="pointer-events-none absolute -top-10 right-0 w-28 h-28 rounded-full bg-slate-200/10 blur-2xl transition-colors duration-300 group-hover:bg-slate-200/20" />
+                        <span className="text-4xl drop-shadow-[0_0_16px_rgba(203,213,225,0.45)] transition-transform duration-300 group-hover:scale-110">⚔️</span>
+                        <span className="text-lg font-black tracking-[0.14em] text-white" style={{ textShadow: "0 0 18px rgba(203,213,225,0.35)" }}>SOUL WAR</span>
+                        <span className={`inline-flex items-center gap-1 text-[10px] font-black uppercase tracking-[0.2em] transition-colors duration-300 ${quest === "soulwar" ? "text-cyan-300" : "text-slate-500 group-hover:text-cyan-300"}`}>
+                          Começar <ChevronRight size={12} />
+                        </span>
+                      </button>
+                    )}
                     <button
                       type="button"
                       onClick={() => chooseQuest("sanguine")}
@@ -1170,7 +1255,7 @@ const inputCls = "w-full bg-black/60 border border-white/20 hover:border-white/3
                 ETAPA 2 — INFORMAÇÕES DA QUEST + TERMOS
                ============================================================ */}
             {step === 2 && quest && (
-              <div className="psf-quadro bg-[color-mix(in_oklab,var(--th-n-elev)_92%,white)] border border-amber-500/50 rounded-3xl shadow-2xl" style={{ "--psf-quadro-accent": "#f59e0b" } as CSSProperties}>
+              <div className="psf-quadro bg-[color-mix(in_oklab,var(--th-n-elev)_92%,white)] border border-amber-500/50 rounded-3xl shadow-2xl ring-1 ring-white/[0.06]" style={{ "--psf-quadro-accent": "#f59e0b" } as CSSProperties}>
                 <div className="psf-quadro-header bg-gradient-to-r from-amber-500/10 via-amber-500/15 to-amber-500/10 border-b border-amber-500/20 px-7 py-5 flex items-center gap-3">
                   <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-amber-500 to-orange-600 flex items-center justify-center flex-shrink-0">
                     <Swords size={20} className="text-black" />
@@ -1244,7 +1329,7 @@ const inputCls = "w-full bg-black/60 border border-white/20 hover:border-white/3
                 ETAPA 3 — CADASTRO DO CLIENTE (nome + WhatsApp)
                ============================================================ */}
             {step === 3 && (
-              <div className="psf-quadro bg-[color-mix(in_oklab,var(--th-n-elev)_92%,white)] border border-cyan-500/50 rounded-3xl shadow-2xl" style={{ "--psf-quadro-accent": "#22d3ee" } as CSSProperties}>
+              <div className="psf-quadro bg-[color-mix(in_oklab,var(--th-n-elev)_92%,white)] border border-cyan-500/50 rounded-3xl shadow-2xl ring-1 ring-white/[0.06]" style={{ "--psf-quadro-accent": "#22d3ee" } as CSSProperties}>
                 <div className="psf-quadro-header bg-gradient-to-r from-cyan-500/10 via-cyan-500/15 to-cyan-500/10 border-b border-cyan-500/20 px-7 py-5 flex items-center gap-3">
                   <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-cyan-500 to-sky-600 flex items-center justify-center flex-shrink-0">
                     <Phone size={20} className="text-black" />
@@ -1331,7 +1416,7 @@ const inputCls = "w-full bg-black/60 border border-white/20 hover:border-white/3
                 ETAPA 4 — FORMA DE PAGAMENTO
                ============================================================ */}
             {step === 4 && quest && (
-              <div className="psf-quadro bg-[color-mix(in_oklab,var(--th-n-elev)_92%,white)] border border-cyan-500/50 rounded-3xl shadow-2xl" style={{ "--psf-quadro-accent": "#22d3ee" } as CSSProperties}>
+              <div className="psf-quadro bg-[color-mix(in_oklab,var(--th-n-elev)_92%,white)] border border-cyan-500/50 rounded-3xl shadow-2xl ring-1 ring-white/[0.06]" style={{ "--psf-quadro-accent": "#22d3ee" } as CSSProperties}>
                 <div className="psf-quadro-header bg-gradient-to-r from-cyan-500/10 via-cyan-500/15 to-cyan-500/10 border-b border-cyan-500/20 px-7 py-5 flex items-center gap-3">
                   <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-cyan-500 to-sky-600 flex items-center justify-center flex-shrink-0">
                     <span className="text-lg">💰</span>
@@ -1449,7 +1534,7 @@ const inputCls = "w-full bg-black/60 border border-white/20 hover:border-white/3
                 ETAPA 5 — CADASTRO DO PERSONAGEM
                ============================================================ */}
             {step === 5 && quest && (
-              <div className="psf-quadro bg-[color-mix(in_oklab,var(--th-n-elev)_92%,white)] border border-cyan-500/50 rounded-3xl shadow-2xl" style={{ "--psf-quadro-accent": "#22d3ee" } as CSSProperties}>
+              <div className="psf-quadro bg-[color-mix(in_oklab,var(--th-n-elev)_92%,white)] border border-cyan-500/50 rounded-3xl shadow-2xl ring-1 ring-white/[0.06]" style={{ "--psf-quadro-accent": "#22d3ee" } as CSSProperties}>
                 <div className="psf-quadro-header bg-gradient-to-r from-cyan-500/10 via-cyan-500/15 to-cyan-500/10 border-b border-cyan-500/20 px-7 py-5 flex items-center gap-3">
                   <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-cyan-500 to-sky-600 flex items-center justify-center flex-shrink-0">
                     <Swords size={20} className="text-black" />
@@ -1538,13 +1623,13 @@ const inputCls = "w-full bg-black/60 border border-white/20 hover:border-white/3
                 ETAPA 6 — LEVEL + CADASTRO
                ============================================================ */}
             {step === 6 && quest && (
-              <div className="psf-quadro bg-[color-mix(in_oklab,var(--th-n-elev)_92%,white)] border border-cyan-500/50 rounded-3xl shadow-2xl" style={{ "--psf-quadro-accent": "#22d3ee" } as CSSProperties}>
+              <div className="psf-quadro bg-[color-mix(in_oklab,var(--th-n-elev)_92%,white)] border border-cyan-500/50 rounded-3xl shadow-2xl ring-1 ring-white/[0.06]" style={{ "--psf-quadro-accent": "#22d3ee" } as CSSProperties}>
                 <div className="psf-quadro-header bg-gradient-to-r from-cyan-500/10 via-cyan-500/15 to-cyan-500/10 border-b border-cyan-500/20 px-7 py-5 flex items-center gap-3">
                   <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-cyan-500 to-sky-600 flex items-center justify-center flex-shrink-0">
                     <Clock size={20} className="text-black" />
                   </div>
                   <div>
-                    <h2 className="text-base font-black text-cyan-300 tracking-wide uppercase">Level e confirmação</h2>
+                    <h2 className="text-base font-black text-cyan-300 tracking-wide uppercase">Finalização</h2>
                     <p className="text-[11px] text-slate-500">Service {questEmoji} {questLabel} · {personagem || "personagem"} ({voc})</p>
                   </div>
                 </div>
@@ -1625,6 +1710,43 @@ const inputCls = "w-full bg-black/60 border border-white/20 hover:border-white/3
                     </div>
                   )}
 
+                  {/* ACOMPANHE AO VIVO — exibido SOMENTE quando o serviceiro
+                      definido (link exclusivo ou seleção manual) possui link
+                      de streaming cadastrado no app (users.twitchChannel).
+                      Sem link cadastrado, nada é renderizado. */}
+                  {streamHref && streamTarget && (
+                    <div className="relative overflow-hidden rounded-2xl border border-violet-500/40 bg-gradient-to-br from-violet-600/15 via-fuchsia-600/[0.07] to-transparent px-4 py-4 sm:px-5 animate-in fade-in slide-in-from-top-2 duration-300">
+                      <span aria-hidden className="pointer-events-none absolute -top-12 -right-8 w-36 h-36 rounded-full bg-violet-500/15 blur-2xl" />
+                      <div className="relative flex items-start gap-3.5">
+                        <span className="w-10 h-10 rounded-xl bg-violet-500/20 border border-violet-500/40 flex items-center justify-center text-lg flex-shrink-0">🎥</span>
+                        <div className="min-w-0 space-y-2">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="text-sm font-black text-violet-200">Acompanhe seu Service AO VIVO</span>
+                            <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-red-500/15 border border-red-500/40 text-red-300 text-[9px] font-black uppercase tracking-wider">
+                              <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" /> Live
+                            </span>
+                          </div>
+                          <p className="text-[11px] text-slate-300 leading-relaxed">
+                            O service é realizado <strong className="text-white">em Live</strong> — você pode assistir
+                            à execução em tempo real. Entre no canal de{" "}
+                            <strong className="text-violet-200">{streamTarget.nome}</strong>, acompanhe tudo de perto
+                            e aproveite para <strong className="text-white">seguir o canal</strong>!
+                          </p>
+                          <a
+                            href={streamHref}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-2 px-4 py-2 rounded-xl border border-violet-500/50 bg-violet-500/15 hover:bg-violet-500/25 text-violet-200 hover:text-white text-[11px] font-black tracking-wide transition-all duration-300 hover:scale-[1.02] active:scale-[0.98]"
+                          >
+                            🔴 Assistir e seguir o canal
+                            <span className="hidden sm:inline text-[9px] font-bold text-violet-300/70 normal-case">{streamDisplay}</span>
+                            <ChevronRight size={12} />
+                          </a>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
                   {/* Anotações */}
                   <div>
                     <label className={labelCls}>Observações (opcional)</label>
@@ -1676,6 +1798,8 @@ const inputCls = "w-full bg-black/60 border border-white/20 hover:border-white/3
                 </div>
               </div>
             )}
+
+            </div>
           </form>
         )}
 
