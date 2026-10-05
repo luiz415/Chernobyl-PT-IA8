@@ -85,6 +85,13 @@ export default function CharacterModal({ open, initial, accounts, servers, onSav
   const [previousValue, setPreviousValue] = useState<number | null>(null);
   const [focusedField, setFocusedField] = useState<"account" | "valorPago" | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+  // SANGUINE — modal de edição manual do cooldown do Bakragore. A alteração
+  // fica no RASCUNHO (`data.sgBakraCooldownUntil`) e só persiste no Salvar,
+  // como qualquer outro campo do modal; `0` remove o cooldown (undefined).
+  // IMPORTANTE: declarado AQUI, junto dos demais hooks e ANTES do retorno
+  // condicional `if (!open) return null;` — um hook após esse retorno muda a
+  // quantidade de hooks entre renders e derruba o React ao abrir o modal.
+  const [sgCooldownOpen, setSgCooldownOpen] = useState(false);
 
   // O modal usa limite de viewport e rolagem interna compartilhados; não
   // reduz campos via scale em telas menores ou zoom alto.
@@ -93,6 +100,9 @@ export default function CharacterModal({ open, initial, accounts, servers, onSav
     if (open) {
       setFocusedField(null);
       setIsSaving(false);
+      // Garante que o submodal de cooldown nunca "reabra sozinho" caso o
+      // modal do personagem tenha sido fechado com ele aberto.
+      setSgCooldownOpen(false);
       if (initial) {
         setData({ ...initial });
         if (initial.taxaAplicada != null && initial.valorVendaOriginal != null) {
@@ -244,10 +254,8 @@ export default function CharacterModal({ open, initial, accounts, servers, onSav
     setTaxApplied(true);
   }
 
-  // SANGUINE — modal de edição manual do cooldown do Bakragore. A alteração
-  // fica no RASCUNHO (`data.sgBakraCooldownUntil`) e só persiste no Salvar,
-  // como qualquer outro campo do modal; `0` remove o cooldown (undefined).
-  const [sgCooldownOpen, setSgCooldownOpen] = useState(false);
+  // SANGUINE — instante de referência do contador do campo "Cooldown
+  // Bakragore" (não é hook; recalculado a cada render do modal aberto).
   const sgNowMs = Date.now();
 
   const saleStatus = getSaleStatus(data);
