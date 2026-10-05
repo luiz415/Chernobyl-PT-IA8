@@ -79,11 +79,11 @@ interface Props {
     opts: { visibility: "public" | "private"; horarioTimestamp?: number },
   ) => Promise<void> | void;
   /**
-   * SANGUINE: edição discreta da rotação do PRÓPRIO personagem na célula
-   * "Rot SG" da PT — mesma persistência da edição inline de Meus Personagens
-   * (handleCharacterInlineChange do App). Repassado ao PartyPanel.
+   * SANGUINE: ajuste da rotação do PRÓPRIO personagem pelo modal da célula
+   * "Rot SG" da PT — patch MÍNIMO por id aplicado pelo App somente nos
+   * campos de rotação do personagem vivo. Repassado ao PartyPanel.
    */
-  onOwnCharacterInlineChange?: (character: Character) => void;
+  onOwnCharacterSgRotChange?: (characterId: string, completedRotations: number) => void;
   // Chamado pelo PartyManager ao montar (aba "PT's" ativa).
   // O App.tsx usa este callback para buscar PTs públicas via getDocs()
   // de forma sob demanda, em vez de manter um listener contínuo.
@@ -227,7 +227,7 @@ function formatStageCardDuration(ms: number): string {
   return `${h}h${m}m`;
 }
 
-export default function PartyManager({ parties, characters, waitingList, userName, onUpdate, onPersistPartyNow, onDelete, onCreate, onSaveParty, activePt, setActivePt, minimized, setMinimized, onPaymentMarked, onNotifyMembers, onRequestFinalization, onRefresh, characterAcquisitions = [], onCreateCharacterAcquisition, onConfirmCharacterAcquisitionPayment, onCancelCharacterAcquisitionPreApproval, onSanguineDropAnswered, onCreateNextRotation, onOwnCharacterInlineChange, onTabChange, publicPartiesEnabled = true }: Props) {
+export default function PartyManager({ parties, characters, waitingList, userName, onUpdate, onPersistPartyNow, onDelete, onCreate, onSaveParty, activePt, setActivePt, minimized, setMinimized, onPaymentMarked, onNotifyMembers, onRequestFinalization, onRefresh, characterAcquisitions = [], onCreateCharacterAcquisition, onConfirmCharacterAcquisitionPayment, onCancelCharacterAcquisitionPreApproval, onSanguineDropAnswered, onCreateNextRotation, onOwnCharacterSgRotChange, onTabChange, publicPartiesEnabled = true }: Props) {
   const { currentUser, userProfile, allUsers, acceptedFriendUids } = useAuth();
   const isNormalUser = userProfile?.role === "Normal";
   const tabsContainerRef = useRef<HTMLDivElement>(null);
@@ -1460,7 +1460,7 @@ export default function PartyManager({ parties, characters, waitingList, userNam
                 onCancelCharacterAcquisitionPreApproval={onCancelCharacterAcquisitionPreApproval}
                 onSanguineDropAnswered={onSanguineDropAnswered}
                 onCreateNextRotation={onCreateNextRotation}
-                onOwnCharacterInlineChange={onOwnCharacterInlineChange}
+                onOwnCharacterSgRotChange={onOwnCharacterSgRotChange}
               />
             );
           })()

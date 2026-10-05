@@ -3,6 +3,8 @@ import { X, Save, Swords, Ban, Percent, Search, Check, ChevronDown, Link2, Lock 
 import type { Character } from "../types";
 import { VOCATIONS, VOC_COLORS, todayISO } from "../types";
 import { SERVER_OPTIONS, normalizeServerName } from "../constants/servers";
+import { describeSgCooldown, formatSgCooldownRemaining, isSgCooldownActive } from "../utils/sanguineRotation";
+import SgCooldownModal from "./SgCooldownModal";
 
 interface Props {
   open: boolean;
@@ -241,6 +243,12 @@ export default function CharacterModal({ open, initial, accounts, servers, onSav
     }));
     setTaxApplied(true);
   }
+
+  // SANGUINE — modal de edição manual do cooldown do Bakragore. A alteração
+  // fica no RASCUNHO (`data.sgBakraCooldownUntil`) e só persiste no Salvar,
+  // como qualquer outro campo do modal; `0` remove o cooldown (undefined).
+  const [sgCooldownOpen, setSgCooldownOpen] = useState(false);
+  const sgNowMs = Date.now();
 
   const saleStatus = getSaleStatus(data);
   const questFinancialLockTitle = "Bloqueado: Drop e Lucro desta Quest pertencem ao comprador da negociação.";
@@ -530,12 +538,28 @@ export default function CharacterModal({ open, initial, accounts, servers, onSav
               </div>
             </div>
 
-            <div className="flex items-end">
-              <p className="text-[10px] leading-snug text-slate-500 pb-1">
-                0/vazio = nenhuma rotação registrada ("-"). Na PT, o personagem entra sempre na rotação seguinte
-                (registradas + 1).
-              </p>
+            <div>
+              <label className="block text-[10px] font-bold uppercase tracking-wider text-red-400/80 mb-1.5" title="Cooldown do Bakragore (boss final da Sanguine) — clique para ajustar manualmente o tempo restante; a tabela exibe apenas o contador quando ativo">
+                Cooldown Bakragore
+              </label>
+              <button
+                type="button"
+                onClick={() => setSgCooldownOpen(true)}
+                className="w-full h-[38px] bg-black/40 border border-red-900/30 rounded-lg px-3 text-xs font-bold text-left transition-colors cursor-pointer hover:border-amber-500/40 hover:bg-amber-500/5"
+                title={isSgCooldownActive(data.sgBakraCooldownUntil, sgNowMs)
+                  ? `${describeSgCooldown(data.sgBakraCooldownUntil!)} — clique para ajustar`
+                  : "Sem cooldown ativo — clique para definir manualmente"}
+              >
+                {isSgCooldownActive(data.sgBakraCooldownUntil, sgNowMs)
+                  ? <span className="text-amber-300 tabular-nums">⏳ {formatSgCooldownRemaining(data.sgBakraCooldownUntil!, sgNowMs)}</span>
+                  : <span className="text-slate-500">—</span>}
+              </button>
             </div>
+
+            <p className="md:col-span-3 text-[10px] leading-snug text-slate-500">
+              0/vazio = nenhuma rotação registrada ("-"). Na PT, o personagem entra sempre na rotação seguinte
+              (registradas + 1).
+            </p>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-5 gap-4 pt-2 border-t border-red-900/20">
@@ -816,6 +840,22 @@ export default function CharacterModal({ open, initial, accounts, servers, onSav
           </button>
         </div>
       </form>
+
+      {/* SANGUINE — edição manual do cooldown do Bakragore (aberto pelo campo
+          "Cooldown Bakragore" do bloco SG). Grava no RASCUNHO do modal; a
+          persistência acontece no Salvar, junto com os demais campos. */}
+      {sgCooldownOpen && (
+        <SgCooldownModal
+          open
+          characterName={data.personagem || "Personagem"}
+          currentUntil={data.sgBakraCooldownUntil}
+          onCancel={() => setSgCooldownOpen(false)}
+          onSave={(untilMs) => {
+            setData(d => ({ ...d, sgBakraCooldownUntil: untilMs === 0 ? undefined : untilMs }));
+            setSgCooldownOpen(false);
+          }}
+        />
+      )}
     </div>
   );
 }

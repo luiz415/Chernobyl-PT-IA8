@@ -6,7 +6,6 @@ import ItemSoldModal from "./ItemSoldModal";
 import { FilterMulti, FilterToggle, FilterNumber, FilterInline, type ToggleState } from "./FilterTypes";
 import { serverLabel } from "../constants/servers";
 import { completedSgRotations, describeSgCooldown, formatSgCooldownRemaining, isSgCooldownActive } from "../utils/sanguineRotation";
-import SgCooldownModal from "./SgCooldownModal";
 
 type NumericOp = "gte" | "lte";
 type BooleanFilter = "Sim" | "Não" | "À Venda" | "";
@@ -369,29 +368,16 @@ export default function CharTable({ characters, activeParties = [], readOnly, sh
   // novo alvo; clique em qualquer área externa cancela sem salvar.
   const [questConfirm, setQuestConfirm] = useState<{ id: string; quest: "soulwar" | "sanguine" | "crypt" } | null>(null);
 
-  // ── ROT SG — edição inline + contador do cooldown do Bakragore ──────────
-  // `sgRotEdit`: personagem com o campo numérico aberto (null = nenhum).
+  // ── ROT SG — contador do cooldown do Bakragore (somente exibição) ───────
   // `sgNowTick`: relógio discreto do contador regressivo (30s — o contador
   // exibe horas/minutos; quando expira, some sozinho no próximo tique).
-  const [sgRotEdit, setSgRotEdit] = useState<{ id: string; value: string } | null>(null);
+  // A EDIÇÃO da rotação e do cooldown acontece exclusivamente pelo modal de
+  // edição do personagem (CharacterModal) — nenhum controle na tabela.
   const [sgNowTick, setSgNowTick] = useState(() => Date.now());
   useEffect(() => {
     const timer = window.setInterval(() => setSgNowTick(Date.now()), 30_000);
     return () => window.clearInterval(timer);
   }, []);
-
-  // Alvo do modal de cooldown do Bakragore (id do personagem; null = fechado).
-  const [sgCooldownTarget, setSgCooldownTarget] = useState<string | null>(null);
-
-  function commitSgRotEdit(c: Character) {
-    if (!sgRotEdit || sgRotEdit.id !== c.id) return;
-    const parsed = parseInt(sgRotEdit.value, 10);
-    setSgRotEdit(null);
-    // Rotações CONCLUÍDAS: 0 é válido ("-" = nenhuma registrada).
-    if (!Number.isFinite(parsed) || parsed < 0) return; // valor inválido: não salva
-    if (parsed === completedSgRotations(c.sgRot)) return; // sem mudança: nenhum write
-    onCharacterInlineChange?.({ ...c, sgRot: parsed });
-  }
 
   // Cancelamento natural: mousedown em qualquer lugar FORA do botão armado
   // (os botões interrompem a propagação do próprio mousedown) desarma a
@@ -677,101 +663,40 @@ export default function CharTable({ characters, activeParties = [], readOnly, sh
       render: (c) => renderQuestAvailabilityCell(c, "sanguine"),
     },
     {
-      // ROT SG — rotações CONCLUÍDAS da Sanguine: 0/ausente exibe "-"
-      // (nenhuma rotação registrada); N >= 1 exibe "Nª Rot" em VERDE quando a
-      // última rotação teve drop (`sgDropRot === sgRot`) ou VERMELHO quando
-      // não (outra rotação será necessária). Editável inline (0 = limpar);
-      // o ⏳ abre o modal de edição manual do cooldown do Bakragore.
+      // ROT SG — rotações CONCLUÍDAS da Sanguine (SOMENTE exibição): 0/
+      // ausente exibe "-" (nenhuma rotação registrada); N >= 1 exibe
+      // "Nª Rot" em VERDE quando a última rotação teve drop (`sgDropRot ===
+      // sgRot`) ou VERMELHO quando não (outra rotação será necessária).
+      // Cooldown ativo do Bakragore: apenas o tempo restante, discreto —
+      // sem cooldown, nada é exibido. A edição (rotação e cooldown) ocorre
+      // exclusivamente pelo modal de edição do personagem.
       key: "sgRot", label: "Rot SG", align: "center",
       get: (c) => completedSgRotations(c.sgRot),
       render: (c) => {
-        const locked = lockedQuestFinancialIds.has(c.id);
-        const canEditInline = !readOnly && !locked && !!onCharacterInlineChange;
         const rot = completedSgRotations(c.sgRot);
         // VERDE: a ÚLTIMA rotação concluída teve drop do item.
         const droppedHere = rot >= 1 && typeof c.sgDropRot === "number" && completedSgRotations(c.sgDropRot) === rot;
         const cooldownOn = isSgCooldownActive(c.sgBakraCooldownUntil, sgNowTick);
-        // ⏳ sempre presente quando editável: com cooldown ativo mostra o
-        // contador; sem cooldown, um relógio discreto. Clique abre o modal
-        // de edição manual (dias/horas/minutos restantes).
         const cooldownBadge = cooldownOn ? (
-          <button
-            type="button"
-            disabled={!canEditInline}
-            onMouseDown={(e) => e.stopPropagation()}
-            onDoubleClick={(e) => e.stopPropagation()}
-            onClick={(e) => { e.stopPropagation(); if (canEditInline) setSgCooldownTarget(c.id); }}
-            className={`inline-flex items-center gap-0.5 px-1 py-0.5 rounded border border-amber-500/30 bg-amber-500/10 text-amber-300 text-[9px] font-bold tabular-nums ${canEditInline ? "cursor-pointer hover:bg-amber-500/20" : "cursor-default"}`}
-            title={`${describeSgCooldown(c.sgBakraCooldownUntil!)}${canEditInline ? " — clique para ajustar manualmente" : ""}`}
+          <span
+            className="inline-flex items-center gap-0.5 px-1 py-0.5 rounded border border-amber-500/30 bg-amber-500/10 text-amber-300 text-[9px] font-bold tabular-nums"
+            title={describeSgCooldown(c.sgBakraCooldownUntil!)}
           >
             ⏳ {formatSgCooldownRemaining(c.sgBakraCooldownUntil!, sgNowTick)}
-          </button>
-        ) : canEditInline ? (
-          <button
-            type="button"
-            onMouseDown={(e) => e.stopPropagation()}
-            onDoubleClick={(e) => e.stopPropagation()}
-            onClick={(e) => { e.stopPropagation(); setSgCooldownTarget(c.id); }}
-            className="inline-flex items-center px-0.5 py-0.5 rounded text-[9px] text-slate-600 hover:text-amber-300 hover:bg-amber-500/10 cursor-pointer transition-colors"
-            title="Definir manualmente o cooldown do Bakragore (boss final da Sanguine)"
-          >
-            ⏳
-          </button>
+          </span>
         ) : null;
 
-        if (sgRotEdit?.id === c.id && canEditInline) {
-          return (
-            <input
-              type="number"
-              min={0}
-              autoFocus
-              value={sgRotEdit.value}
-              onChange={(e) => setSgRotEdit({ id: c.id, value: e.target.value })}
-              onBlur={() => commitSgRotEdit(c)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") commitSgRotEdit(c);
-                if (e.key === "Escape") setSgRotEdit(null);
-              }}
-              onMouseDown={(e) => e.stopPropagation()}
-              onClick={(e) => e.stopPropagation()}
-              onDoubleClick={(e) => e.stopPropagation()}
-              className="w-12 bg-black/70 border border-rose-500/50 rounded px-1 py-0.5 text-[11px] text-center text-rose-200 focus:outline-none tabular-nums"
-              title="Rotações da Sanguine já realizadas (0 = nenhuma; Enter salva, Esc cancela)"
-            />
-          );
-        }
-
         const rotTitle = rot === 0
-          ? "Nenhuma rotação de Sanguine registrada"
+          ? "Nenhuma rotação de Sanguine registrada — edite pelo modal do personagem"
           : droppedHere
             ? `Dropou o item na ${rot}ª rotação da Sanguine (última realizada)`
             : `${rot}ª rotação realizada SEM drop — será necessária outra rotação`;
         const rotLabel = rot === 0
           ? <span className="font-bold text-[11px] text-slate-500">-</span>
           : <span className={`font-bold text-[11px] tabular-nums ${droppedHere ? "text-emerald-400" : "text-rose-300"}`}>{rot}ª Rot</span>;
-        if (!canEditInline) {
-          return (
-            <span className="inline-flex items-center justify-center gap-1" title={rotTitle}>
-              {rotLabel}
-              {cooldownBadge}
-            </span>
-          );
-        }
         return (
-          <span className="inline-flex items-center justify-center gap-1">
-            <button
-              type="button"
-              onMouseDown={(e) => e.stopPropagation()}
-              onDoubleClick={(e) => e.stopPropagation()}
-              onClick={(e) => {
-                e.stopPropagation();
-                setSgRotEdit({ id: c.id, value: String(rot) });
-              }}
-              className="inline-flex items-center justify-center px-1 py-0.5 rounded-md border border-transparent hover:border-rose-500/40 hover:bg-rose-500/10 cursor-pointer transition-all"
-              title={`${rotTitle} — clique para editar manualmente`}
-            >
-              {rotLabel}
-            </button>
+          <span className="inline-flex items-center justify-center gap-1" title={rotTitle}>
+            {rotLabel}
             {cooldownBadge}
           </span>
         );
@@ -1785,26 +1710,6 @@ export default function CharTable({ characters, activeParties = [], readOnly, sh
         );
       })()}
 
-      {/* SANGUINE — edição manual do cooldown do Bakragore (aberto pelo ⏳
-          da coluna Rot SG). Salva pelo MESMO caminho da edição inline
-          (onCharacterInlineChange): persiste, sincroniza entre dispositivos
-          e o contador reflete imediatamente. `0` remove o cooldown. */}
-      {sgCooldownTarget && (() => {
-        const target = characters.find(ch => ch.id === sgCooldownTarget);
-        if (!target) return null;
-        return (
-          <SgCooldownModal
-            open
-            characterName={target.personagem}
-            currentUntil={target.sgBakraCooldownUntil}
-            onCancel={() => setSgCooldownTarget(null)}
-            onSave={(untilMs) => {
-              onCharacterInlineChange?.({ ...target, sgBakraCooldownUntil: untilMs });
-              setSgCooldownTarget(null);
-            }}
-          />
-        );
-      })()}
     </div>
   );
 }

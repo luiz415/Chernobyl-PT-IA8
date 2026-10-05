@@ -5064,6 +5064,31 @@ export default function App() {
     }));
   }
 
+  /**
+   * SANGUINE — ajuste da rotação do PRÓPRIO personagem a partir do modal da
+   * célula "Rot SG" do Party Panel. PATCH MÍNIMO: localiza o personagem VIVO
+   * em Meus Personagens pelo id e altera SOMENTE `sgRot` (+ `sgDropRot` por
+   * coerência — mesma regra do modal do personagem: se a última rotação
+   * estava marcada como "dropou", o resultado acompanha a nova contagem).
+   * Dados cadastrais (Account/código/nome/valores) NUNCA são tocados — e
+   * nenhum objeto vindo do contexto da PT (snapshot com Account mascarada)
+   * chega até aqui.
+   */
+  function handleOwnCharacterSgRotChange(characterId: string, completedRotations: number) {
+    if (negotiatedOriginalCharacterIds.has(characterId)) return;
+    const completed = Number.isInteger(completedRotations) && completedRotations >= 0 ? completedRotations : 0;
+    setData(d => ({
+      ...d,
+      characters: d.characters.map(c => {
+        if (c.id !== characterId) return c;
+        const prevRot = c.sgRot && c.sgRot > 0 ? Math.floor(c.sgRot) : 0;
+        if (prevRot === completed) return c;
+        const keptDrop = prevRot >= 1 && c.sgDropRot === prevRot;
+        return { ...c, sgRot: completed, sgDropRot: completed >= 1 && keptDrop ? completed : undefined };
+      }),
+    }));
+  }
+
   function handleCharacterInlineChange(updated: Character) {
     // O dono original mantém o Character, mas Drop/Lucro da Quest transferida
     // pertencem ao adquirente. A guarda protege também contra chamadas fora da UI.
@@ -5679,7 +5704,7 @@ export default function App() {
             onCancelCharacterAcquisitionPreApproval={demoData ? undefined : cancelCharacterAcquisitionPreApprovalFromParty}
             onSanguineDropAnswered={demoData ? undefined : syncSanguineAnswerForOwner}
             onCreateNextRotation={demoData ? undefined : handleCreateNextRotation}
-            onOwnCharacterInlineChange={demoData ? undefined : handleCharacterInlineChange}
+            onOwnCharacterSgRotChange={demoData ? undefined : handleOwnCharacterSgRotChange}
             publicPartiesEnabled={globalSettings.publicPartiesEnabled}
             onTabChange={() => {
               // Ao abrir a aba "Gerenciador de PT's": carrega PTs públicas e personagens

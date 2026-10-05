@@ -5,6 +5,7 @@ import { ACQUISITION_ACCEPT_EVENT, clearPendingAcquisitionAccept, peekPendingAcq
 import ConfirmModal from "./ConfirmModal";
 import PausePartyModal from "./PausePartyModal";
 import NextRotationModal from "./NextRotationModal";
+import SgRotationModal from "./SgRotationModal";
 import { completedSgRotations, describeSgCooldown, formatSgCooldownRemaining, isSgCooldownActive, partiesConflictForCharacter, sanguineRotationInParty } from "../utils/sanguineRotation";
 import {
   cooldownRemainingMs,
@@ -140,12 +141,14 @@ interface Props {
     opts: { visibility: "public" | "private"; horarioTimestamp?: number },
   ) => Promise<void> | void;
   /**
-   * SANGUINE — edição discreta da rotação do PRÓPRIO personagem pela célula
-   * "Rot SG" da PT. Grava pelo MESMO caminho da edição inline de Meus
-   * Personagens (handleCharacterInlineChange no App) — fonte única de
-   * verdade; a tabela de personagens reflete imediatamente.
+   * SANGUINE — ajuste da rotação do PRÓPRIO personagem pelo modal da célula
+   * "Rot SG" da PT. PATCH MÍNIMO por id: o App localiza o personagem VIVO em
+   * Meus Personagens e altera SOMENTE a contagem de rotações (+ coerência do
+   * resultado da última rotação). NUNCA recebe um objeto Character vindo do
+   * contexto da PT — o snapshot da PT carrega a Account MASCARADA e dados
+   * congelados, e espalhá-lo sobre o personagem corrompia o cadastro.
    */
-  onOwnCharacterInlineChange?: (character: Character) => void;
+  onOwnCharacterSgRotChange?: (characterId: string, completedRotations: number) => void;
 }
 
 type SortDir = "asc" | "desc" | null;
@@ -700,7 +703,7 @@ function formatWhatsDisplay(service: WaitingService): string {
   return `+${country} ${area} ${number}`.trim();
 }
 
-export default function PartyPanel({ party, characters, waitingList, allParties, userName, onUpdate, onPersistPartyNow, onDelete, onSaveParty, onRequestFinalization, onRefresh, characterAcquisitions = [], onCreateCharacterAcquisition, onConfirmCharacterAcquisitionPayment, onCancelCharacterAcquisitionPreApproval, onSanguineDropAnswered, onCreateNextRotation, onOwnCharacterInlineChange }: Props) {
+export default function PartyPanel({ party, characters, waitingList, allParties, userName, onUpdate, onPersistPartyNow, onDelete, onSaveParty, onRequestFinalization, onRefresh, characterAcquisitions = [], onCreateCharacterAcquisition, onConfirmCharacterAcquisitionPayment, onCancelCharacterAcquisitionPreApproval, onSanguineDropAnswered, onCreateNextRotation, onOwnCharacterSgRotChange }: Props) {
   const { currentUser, userProfile, allUsers, acceptedFriendUids } = useAuth();
   const [showAddCustom, setShowAddCustom] = useState(false);
   // Estado `showSuggestModal` removido junto com o botão "Sugerir PT" — esse
@@ -1986,28 +1989,25 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
     return () => window.clearInterval(timer);
   }, [isSanguinePT]);
 
-  // SANGUINE — edição discreta da rotação exibida na célula "Rot SG" da PT
-  // (apenas o DONO do personagem, antes da conclusão). O valor digitado é a
-  // ROTAÇÃO QUE O PERSONAGEM FARÁ nesta PT (>= 1); o personagem é gravado
-  // com `rotação - 1` rotações concluídas (regra: PT mostra registradas + 1).
-  const [sgRotCellEdit, setSgRotCellEdit] = useState<{ id: string; value: string } | null>(null);
+  // SANGUINE — edição da rotação pela célula "Rot SG" da PT via MODAL
+  // próprio (apenas o DONO do personagem, antes da conclusão). O modal
+  // devolve a quantidade de rotações CONCLUÍDAS (rotação da PT - 1); a
+  // gravação é um PATCH MÍNIMO por id no App (`onOwnCharacterSgRotChange`)
+  // sobre o personagem VIVO de Meus Personagens — nenhum dado cadastral
+  // (Account/código/nome) é tocado e nada do contexto da PT vaza para fora.
+  const [sgRotModalId, setSgRotModalId] = useState<string | null>(null);
 
-  function commitSgRotCellEdit(id: string, liveChar: Character | undefined) {
-    if (!sgRotCellEdit || sgRotCellEdit.id !== id) return;
-    const parsed = parseInt(sgRotCellEdit.value, 10);
-    setSgRotCellEdit(null);
-    if (!liveChar || !onOwnCharacterInlineChange) return;
-    if (!Number.isFinite(parsed) || parsed < 1) return; // rotação na PT: mínimo 1ª
-    const completed = parsed - 1; // registradas em Meus Personagens
-    const slot = (party.slotData?.[id] || {}) as ExtendedPartySlotData;
-    if (completedSgRotations(liveChar.sgRot) !== completed) {
-      onOwnCharacterInlineChange({ ...liveChar, sgRot: completed });
-    }
+  function confirmSgRotModal(id: string, completedRotations: number) {
+    setSgRotModalId(null);
+    if (!onOwnCharacterSgRotChange) return;
+    onOwnCharacterSgRotChange(id, completedRotations);
     // A rotação PLANEJADA do slot (PT criada via "Próxima Rotação") cede à
     // edição explícita do dono — sem isso o `max(vivo+1, planejada)` seguraria
     // o valor antigo na tela.
-    if (typeof slot.sgRotPlanned === "number" && slot.sgRotPlanned !== parsed) {
-      setSD(id, { sgRotPlanned: parsed });
+    const slot = (party.slotData?.[id] || {}) as ExtendedPartySlotData;
+    const partyRotation = completedRotations + 1;
+    if (typeof slot.sgRotPlanned === "number" && slot.sgRotPlanned !== partyRotation) {
+      setSD(id, { sgRotPlanned: partyRotation });
     }
   }
 
@@ -4340,11 +4340,14 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
                       // ROT SG — rotação do personagem neste slot.
                       // Pós-conclusão: snapshot IMUTÁVEL congelado na conclusão
                       // (slot.sgRotBase → memberSnapshot); antes da conclusão:
-                      // personagem vivo (fonte da verdade) ou a rotação
-                      // PLANEJADA da PT ("Próxima Rotação") — a maior vale.
-                      // Tudo centralizado em `sanguineRotationInParty`.
+                      // o personagem VIVO de Meus Personagens/compartilhados
+                      // (`characters` — NÃO `slot.char`, que é o snapshot da
+                      // PT com Account mascarada e rotação congelada na
+                      // inclusão) ou a rotação PLANEJADA da PT ("Próxima
+                      // Rotação") — a maior vale. Tudo centralizado em
+                      // `sanguineRotationInParty`.
                       const snapChar = party.memberSnapshots?.[id];
-                      const liveChar = slot.type === "char" ? slot.char : undefined;
+                      const liveChar = characters.find(c => c.id === id);
                       const rot = sanguineRotationInParty(party, id, liveChar);
                       // VERDE somente pós-conclusão com Drop?=Sim (o drop
                       // ocorreu NESTA rotação). Antes da conclusão a célula
@@ -4356,35 +4359,18 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
                       // snapshot congela antes de a resposta Drop? existir).
                       const cooldownUntil = liveChar?.sgBakraCooldownUntil || snapChar?.sgBakraCooldownUntil || 0;
                       const cooldownOn = isSgCooldownActive(cooldownUntil, sgNowTick);
-                      // Edição discreta: só o DONO do personagem (vivo na
-                      // lista), antes da conclusão da Quest.
+                      // Edição via MODAL próprio: só o DONO do personagem
+                      // (vivo na lista), antes da conclusão da Quest.
                       const canEditRot = questState !== "post_complete"
                         && !!liveChar
                         && !!currentUser?.uid
                         && liveChar.ownerUid === currentUser.uid
-                        && !!onOwnCharacterInlineChange;
-                      const rotEl = sgRotCellEdit?.id === id && canEditRot ? (
-                        <input
-                          type="number"
-                          min={1}
-                          autoFocus
-                          value={sgRotCellEdit.value}
-                          onChange={e => setSgRotCellEdit({ id, value: e.target.value })}
-                          onBlur={() => commitSgRotCellEdit(id, liveChar)}
-                          onKeyDown={e => {
-                            if (e.key === "Enter") commitSgRotCellEdit(id, liveChar);
-                            if (e.key === "Escape") setSgRotCellEdit(null);
-                          }}
-                          onMouseDown={e => e.stopPropagation()}
-                          onClick={e => e.stopPropagation()}
-                          className="w-10 bg-black/70 border border-rose-500/50 rounded px-1 py-0.5 text-[11px] text-center text-rose-200 focus:outline-none tabular-nums"
-                          title="Rotação que o personagem fará nesta PT (Enter salva, Esc cancela)"
-                        />
-                      ) : canEditRot ? (
+                        && !!onOwnCharacterSgRotChange;
+                      const rotEl = canEditRot ? (
                         <button
                           type="button"
                           onMouseDown={e => e.stopPropagation()}
-                          onClick={e => { e.stopPropagation(); setSgRotCellEdit({ id, value: String(rot) }); }}
+                          onClick={e => { e.stopPropagation(); setSgRotModalId(id); }}
                           className="inline-flex items-center justify-center px-1 py-0.5 rounded border border-transparent hover:border-rose-500/40 hover:bg-rose-500/10 cursor-pointer transition-all text-[11px] font-bold tabular-nums text-rose-300"
                           title={`Rotação que o personagem fará nesta PT: ${rot}ª (registradas + 1) — clique para ajustar`}
                         >
@@ -5147,6 +5133,25 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
           onCancel={() => setShowNextRotation(false)}
         />
       )}
+
+      {/* SANGUINE — modal de edição da rotação do PRÓPRIO personagem (célula
+          "Rot SG" da PT). Mostra a rotação cadastrada em Meus Personagens e
+          a rotação desta PT (cadastrada + 1); a confirmação grava um patch
+          MÍNIMO no App — nenhum dado cadastral do personagem é tocado. */}
+      {sgRotModalId && (() => {
+        const liveChar = characters.find(c => c.id === sgRotModalId);
+        if (!liveChar) return null;
+        return (
+          <SgRotationModal
+            open
+            characterName={liveChar.personagem}
+            registeredRotations={completedSgRotations(liveChar.sgRot)}
+            partyRotation={sanguineRotationInParty(party, sgRotModalId, liveChar)}
+            onConfirm={(completedRotations) => confirmSgRotModal(sgRotModalId, completedRotations)}
+            onCancel={() => setSgRotModalId(null)}
+          />
+        );
+      })()}
 
       {/* SuggestPartyModal removido: o botão "Sugerir PT" foi movido para o
           PartyManager e agora cria uma NOVA PT a partir da sugestão, em vez
