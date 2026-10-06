@@ -1703,6 +1703,38 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
   // EMBUTIDOS na lista oficial (demais usuários) — os dois têm exatamente o
   // que o modal exibe (Item encontrado | Tier | QTD | Total).
   const [questsItemsDetailResult, setQuestsItemsDetailResult] = useState<QuestsItemsDetailView | null>(null);
+  // COPIAR NOME DO ITEM (modal "Ver") — MESMO padrão do copiar nome de
+  // personagem usado no app (CharTable/AvailableCharacter): clique no nome
+  // copia SOMENTE o nome e exibe o Check verde por 1,5s. Nada além do nome
+  // vai para a área de transferência; nenhuma outra ação do modal muda.
+  const [copiedQuestsViewItemKey, setCopiedQuestsViewItemKey] = useState<string | null>(null);
+  useEffect(() => { setCopiedQuestsViewItemKey(null); }, [questsItemsDetailResult]);
+  async function copyQuestsViewItemName(name: string, key: string) {
+    const text = String(name || "").trim();
+    if (!text) return;
+    const markCopied = () => {
+      setCopiedQuestsViewItemKey(key);
+      window.setTimeout(() => setCopiedQuestsViewItemKey(current => (current === key ? null : current)), 1500);
+    };
+    try {
+      await navigator.clipboard.writeText(text);
+      markCopied();
+    } catch {
+      // Fallback (mobile/contexto sem clipboard API) — mesmo mecanismo do
+      // copiar nome de personagem em AvailableCharacter.
+      const area = document.createElement("textarea");
+      area.value = text;
+      area.style.position = "fixed";
+      area.style.opacity = "0";
+      area.style.pointerEvents = "none";
+      document.body.appendChild(area);
+      area.focus();
+      area.select();
+      document.execCommand("copy");
+      document.body.removeChild(area);
+      markCopied();
+    }
+  }
   // ── Personalização LOCAL do "Ver" (Coin/itens/Ouro → RC) ─────────────────
   // Overrides por usuário/dispositivo (localStorage) — ver comentário do tipo
   // QuestsViewOverride. Nenhuma gravação no Firestore, nenhuma consulta nova.
@@ -5378,7 +5410,19 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
                     const overridden = Math.abs(itemKk - Number(match.totalKk || 0)) > 0.0001;
                     return (
                     <tr key={`${match.foundName}-${index}`} className="border-b border-[var(--th-line)]/25">
-                      <td className="px-1.5 py-1.5 text-left font-bold text-slate-100">{match.foundName}</td>
+                      <td className="px-1.5 py-1.5 text-left">
+                        {/* Nome do item = botão de copiar (mesmo padrão do
+                            nome de personagem): copia SOMENTE o nome. */}
+                        <button
+                          type="button"
+                          onClick={() => copyQuestsViewItemName(match.foundName, key)}
+                          className="max-w-full rounded px-0.5 py-0.5 inline-flex items-center gap-1 min-w-0 cursor-pointer hover:bg-white/5 transition-colors text-left"
+                          title="Clique para copiar o nome do item"
+                        >
+                          <span className="font-bold text-slate-100 truncate">{match.foundName}</span>
+                          {copiedQuestsViewItemKey === key && <Check size={12} className="text-emerald-400 flex-shrink-0" />}
+                        </button>
+                      </td>
                       <td className="px-1.5 py-1.5 text-center font-mono">
                         {match.tier > 0
                           ? <span className="text-fuchsia-300 font-bold" title={`+${match.tier * 30}% sobre o valor base`}>{match.tier}</span>
