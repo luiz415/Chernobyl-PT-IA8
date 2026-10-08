@@ -36,6 +36,9 @@ import {
 //     SEPARADAS (RC e Pix em cada caso);
 //   • level mínimo POR VOCAÇÃO de cada Quest — exibido no formulário e
 //     usado na validação do cadastro do personagem;
+//   • habilitar/desabilitar o SERVICE 50/50 — desabilitado, a modalidade
+//     some do formulário (quadros dos Termos e opção de pagamento) nas
+//     DUAS quests; independente das demais configurações;
 //   • servidores atendidos — os não selecionados continuam aparecendo no
 //     formulário como "Nome (Indisponível)", sem poderem ser escolhidos.
 //
@@ -283,6 +286,9 @@ export default function ServiceFormConfigModal({ open, onClose }: Props) {
   // Habilitação das quests
   const [swEnabled, setSwEnabled] = useState(true);
   const [sgEnabled, setSgEnabled] = useState(true);
+  // Habilitação do Service 50/50 (modalidade de pagamento) — independente
+  // das quests, valores, levels e servidores.
+  const [ffEnabled, setFfEnabled] = useState(true);
   // Motivos da indisponibilidade (opcionais; exibidos com a Quest desabilitada)
   const [swReason, setSwReason] = useState("");
   const [sgReason, setSgReason] = useState("");
@@ -309,6 +315,7 @@ export default function ServiceFormConfigModal({ open, onClose }: Props) {
   function applyResolved(cfg: ResolvedServiceFormConfig) {
     setSwEnabled(cfg.soulwarEnabled);
     setSgEnabled(cfg.sanguineEnabled);
+    setFfEnabled(cfg.fiftyFiftyEnabled);
     setSwReason(cfg.soulwarDisabledReason);
     setSgReason(cfg.sanguineDisabledReason);
     setSwRc(String(cfg.swRc));
@@ -433,6 +440,7 @@ export default function ServiceFormConfigModal({ open, onClose }: Props) {
     const cfg: ServiceFormConfig = {
       soulwarEnabled: swEnabled,
       sanguineEnabled: sgEnabled,
+      fiftyFiftyEnabled: ffEnabled,
       soulwarDisabledReason: swReason.trim().slice(0, MAX_DISABLED_REASON_LEN),
       sanguineDisabledReason: sgReason.trim().slice(0, MAX_DISABLED_REASON_LEN),
       swRc: rcOr(swRc, d.swRc),
@@ -629,6 +637,34 @@ export default function ServiceFormConfigModal({ open, onClose }: Props) {
                       <span>Com as duas quests desabilitadas, o seu formulário não aceitará novos cadastros até você reativar pelo menos uma.</span>
                     </div>
                   )}
+
+                  {/* ── SERVICE 50/50 (modalidade de pagamento) ──
+                      Independente das quests, valores, levels e servidores:
+                      desabilitado, a modalidade some do formulário (quadros
+                      da etapa de Termos e opção da etapa de Pagamento) nas
+                      duas quests. PIX e RC continuam normais. */}
+                  <div className={`rounded-2xl border p-4 space-y-3 transition-colors ${ffEnabled ? "border-violet-500/30 bg-violet-500/[0.06]" : "border-white/10 bg-white/[0.03]"}`}>
+                    <div className="flex items-center justify-between gap-3 flex-wrap">
+                      <div className="flex items-center gap-2">
+                        <span className={`text-xl ${ffEnabled ? "" : "grayscale opacity-60"}`}>⚖️</span>
+                        <span className={`text-sm font-black tracking-wider ${ffEnabled ? "text-violet-200" : "text-slate-500"}`}>SERVICE 50/50</span>
+                      </div>
+                      <Toggle on={ffEnabled} onChange={() => { setFfEnabled(v => !v); if (error) setError(""); }} label="o Service 50/50" />
+                    </div>
+                    {ffEnabled ? (
+                      <p className="text-[10px] text-slate-500 leading-relaxed">
+                        A modalidade <span className="text-slate-300 font-semibold">Service 50/50</span> aparece normalmente no seu
+                        formulário: quadros na etapa de Termos e opção na etapa de Pagamento (funcionamento atual, com os valores
+                        institucionais fixos).
+                      </p>
+                    ) : (
+                      <p className="text-[10px] text-amber-400/80 leading-relaxed">
+                        O Service 50/50 <strong>não será apresentado</strong> no seu formulário (Soul War e Sanguine):
+                        os quadros da etapa de Termos e a opção da etapa de Pagamento ficam ocultos. PIX e Rubini Coins
+                        continuam disponíveis normalmente.
+                      </p>
+                    )}
+                  </div>
 
                   {/* ── SERVIDORES ATENDIDOS ── */}
                   <div className="rounded-2xl border border-cyan-500/25 bg-cyan-500/[0.05] p-4 space-y-3">

@@ -13,6 +13,9 @@
 //     formulário usa o aviso genérico padrão;
 //   • definir os valores de cada Quest (Sanguine com valor da 1ª rotação e
 //     de cada rotação posterior SEPARADOS);
+//   • habilitar/desabilitar o SERVICE 50/50 — desabilitado, a modalidade
+//     SOME do formulário (quadros da etapa de Termos e opção de pagamento),
+//     nas DUAS quests; independente das demais configurações;
 //   • definir o LEVEL MÍNIMO por vocação de cada Quest — exibido no
 //     formulário e usado na validação do cadastro do personagem;
 //   • escolher quais servidores atende — os demais continuam VISÍVEIS no
@@ -43,6 +46,12 @@ export interface ServiceFormConfig {
   soulwarEnabled?: boolean;
   /** Service de Sanguine oferecido? (ausente = sim) */
   sanguineEnabled?: boolean;
+  /**
+   * Service 50/50 oferecido? (ausente = sim) Desabilitado, a modalidade é
+   * ocultada do formulário nas duas quests (Termos e Pagamento) e deixa de
+   * ser aceita como forma de pagamento. Independente das demais opções.
+   */
+  fiftyFiftyEnabled?: boolean;
   /** Motivo (opcional) da Soul War desabilitada — tooltip do formulário. */
   soulwarDisabledReason?: string;
   /** Motivo (opcional) da Sanguine desabilitada — tooltip do formulário. */
@@ -74,6 +83,8 @@ export interface ServiceFormConfig {
 export interface ResolvedServiceFormConfig {
   soulwarEnabled: boolean;
   sanguineEnabled: boolean;
+  /** Service 50/50 oferecido? false = modalidade oculta no formulário. */
+  fiftyFiftyEnabled: boolean;
   /** "" = sem motivo informado (o formulário usa o aviso genérico). */
   soulwarDisabledReason: string;
   /** "" = sem motivo informado (o formulário usa o aviso genérico). */
@@ -105,6 +116,7 @@ function defaultMinLevels(): Record<PublicQuest, Record<Vocation, number>> {
 export const SERVICE_FORM_CONFIG_DEFAULTS: ResolvedServiceFormConfig = {
   soulwarEnabled: true,
   sanguineEnabled: true,
+  fiftyFiftyEnabled: true,
   soulwarDisabledReason: "",
   sanguineDisabledReason: "",
   swRc: 1000,
@@ -206,6 +218,7 @@ export function resolveServiceFormConfig(raw: unknown): ResolvedServiceFormConfi
   return {
     soulwarEnabled: cfg.soulwarEnabled !== false,
     sanguineEnabled: cfg.sanguineEnabled !== false,
+    fiftyFiftyEnabled: cfg.fiftyFiftyEnabled !== false,
     soulwarDisabledReason: sanitizeReason(cfg.soulwarDisabledReason),
     sanguineDisabledReason: sanitizeReason(cfg.sanguineDisabledReason),
     swRc: sanitizeRc(cfg.swRc, d.swRc),

@@ -229,13 +229,18 @@ function LevelGrid({ quest, cfg }: { quest: PublicQuest; cfg: ResolvedServiceFor
  * exclusivo; no formulário geral são os padrões, que reproduzem os textos
  * originais). Os valores do 50/50, refil e acesso são institucionais e
  * permanecem FIXOS de propósito.
+ *
+ * SERVICE 50/50 DESABILITADO (`cfg.fiftyFiftyEnabled === false`, modal
+ * "Configurar Meu Formulário"): o card inteiro é OCULTADO e o card do
+ * Service Padrão passa a ocupar a largura total (grade de 1 coluna — sem
+ * espaço vazio); a nota do acesso da Sanguine deixa de mencionar o 50/50.
  */
 function PaymentInfoCards({ quest, cfg }: { quest: PublicQuest; cfg: ResolvedServiceFormConfig }) {
   return (
     <div>
       <SectionTitle emoji="💰" accent="bg-emerald-500/15 border border-emerald-500/30">Formas de Pagamento</SectionTitle>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+      <div className={`grid grid-cols-1 gap-3 ${cfg.fiftyFiftyEnabled ? "sm:grid-cols-2" : ""}`}>
         {/* Service Padrão — RECOMENDADO: a opção mais vantajosa p/ o cliente */}
         <div className="psf-card relative bg-black/30 border border-sky-500/20 rounded-2xl p-4 pt-5 space-y-2" style={{ "--psf-accent": "#38bdf8" } as CSSProperties}>
           <span className="absolute -top-2.5 right-3 inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-gradient-to-r from-amber-400 to-yellow-500 text-black text-[9px] font-black uppercase tracking-wider shadow-lg shadow-amber-500/30">
@@ -290,7 +295,8 @@ function PaymentInfoCards({ quest, cfg }: { quest: PublicQuest; cfg: ResolvedSer
           )}
         </div>
 
-        {/* Service 50/50 */}
+        {/* Service 50/50 — oculto por completo quando desabilitado no modal */}
+        {cfg.fiftyFiftyEnabled && (
         <div className="psf-card bg-black/30 border border-violet-500/20 rounded-2xl p-4 space-y-2" style={{ "--psf-accent": "#a78bfa" } as CSSProperties}>
           <div className="flex items-center gap-2 text-violet-300 font-bold text-sm">
             <span>⚖️</span> Service 50/50
@@ -323,15 +329,20 @@ function PaymentInfoCards({ quest, cfg }: { quest: PublicQuest; cfg: ResolvedSer
             </ul>
           )}
         </div>
+        )}
       </div>
 
       {/* Nota do ACESSO (somente Sanguine) — fora dos cards de propósito:
-          vale para OS DOIS formatos, Service Padrão e Service 50/50. */}
+          vale para OS DOIS formatos, Service Padrão e Service 50/50. Com o
+          50/50 desabilitado, a menção a ele é omitida (a modalidade não
+          aparece em NENHUM ponto do formulário). */}
       {quest === "sanguine" && (
         <p className="mt-3 text-[11px] text-amber-300/90 leading-relaxed bg-amber-500/10 border border-amber-500/25 rounded-xl px-3.5 py-2.5">
           * O valor de refil não inclui o acesso à Quest, que custa <strong className="text-amber-200">5kk</strong>. Esse
           valor deve ser somado ao refil caso seja a <strong className="text-amber-200">primeira rotação</strong> do
-          personagem — <strong className="text-amber-200">válido para o Service Padrão e para o Service 50/50</strong>.
+          personagem{cfg.fiftyFiftyEnabled ? (
+            <> — <strong className="text-amber-200">válido para o Service Padrão e para o Service 50/50</strong></>
+          ) : null}.
         </p>
       )}
     </div>
@@ -341,8 +352,12 @@ function PaymentInfoCards({ quest, cfg }: { quest: PublicQuest; cfg: ResolvedSer
 /**
  * Drops e Recompensas — Soul War mantém EXATAMENTE o conteúdo original;
  * Sanguine tem a apresentação específica da Quest.
+ *
+ * `show5050`: com o Service 50/50 desabilitado no modal "Configurar Meu
+ * Formulário", o quadro "No Service 50/50" é ocultado por completo nas duas
+ * quests (o quadro do Service Padrão permanece, sem espaço vazio).
  */
-function DropsInfo({ quest }: { quest: PublicQuest }) {
+function DropsInfo({ quest, show5050 }: { quest: PublicQuest; show5050: boolean }) {
   return (
     <div>
       <SectionTitle emoji="🎁" accent="bg-amber-500/15 border border-amber-500/30">Drops e Recompensas</SectionTitle>
@@ -373,7 +388,9 @@ function DropsInfo({ quest }: { quest: PublicQuest }) {
               </div>
             </div>
 
-            {/* No Service 50/50 — conteúdo original preservado */}
+            {/* No Service 50/50 — conteúdo original preservado; oculto por
+                completo quando a modalidade está desabilitada */}
+            {show5050 && (
             <div className="psf-card bg-black/30 border border-violet-500/15 rounded-2xl p-4 space-y-2" style={{ "--psf-accent": "#a78bfa" } as CSSProperties}>
               <div className="flex items-center gap-2 text-violet-300 font-bold text-xs uppercase tracking-wider">
                 <span>⭐</span> No Service 50/50
@@ -384,6 +401,7 @@ function DropsInfo({ quest }: { quest: PublicQuest }) {
                 <li>💰 Após a venda do item principal, <strong className="text-emerald-300">50% do valor é transferida em Rubini Coins</strong> para você.</li>
               </ul>
             </div>
+            )}
           </>
         ) : (
           <>
@@ -409,7 +427,9 @@ function DropsInfo({ quest }: { quest: PublicQuest }) {
               </div>
             </div>
 
-            {/* No Service 50/50 — Sanguine */}
+            {/* No Service 50/50 — Sanguine; oculto por completo quando a
+                modalidade está desabilitada */}
+            {show5050 && (
             <div className="psf-card bg-black/30 border border-violet-500/15 rounded-2xl p-4 space-y-2" style={{ "--psf-accent": "#a78bfa" } as CSSProperties}>
               <div className="flex items-center gap-2 text-violet-300 font-bold text-xs uppercase tracking-wider">
                 <span>⭐</span> No Service 50/50
@@ -420,6 +440,7 @@ function DropsInfo({ quest }: { quest: PublicQuest }) {
                 <li>💰 Após a venda do item principal, <strong className="text-emerald-300">50% do valor é transferido em Rubini Coins</strong> para você.</li>
               </ul>
             </div>
+            )}
           </>
         )}
       </div>
@@ -723,7 +744,10 @@ export default function PublicServiceForm() {
       if (!ownerName.trim()) errors.ownerName = "Informe o seu nome";
       if (!whatsArea.trim() || !whatsNumber.trim()) errors.whats = "Informe o WhatsApp completo para contato";
     }
-    if (s === 4 && !payment) errors.payment = "Selecione a forma de pagamento";
+    // Pagamento: além de obrigatório, o 50/50 só é aceito quando a
+    // modalidade está HABILITADA na configuração do dono — defesa na lógica
+    // (validada também no envio final), não só a ocultação visual do botão.
+    if (s === 4 && (!payment || (payment === "5050" && !ownerCfg.fiftyFiftyEnabled))) errors.payment = "Selecione a forma de pagamento";
     if (s === 5) {
       if (!personagem.trim()) errors.personagem = "Informe o nome do personagem";
       if (!servidor.trim()) errors.servidor = "Informe o servidor";
@@ -1241,7 +1265,7 @@ const inputCls = "w-full bg-black/60 border border-white/20 hover:border-white/3
                     </h3>
                     <p className="text-sm text-slate-400 max-w-md mx-auto leading-relaxed">
                       Equipe de <strong className="text-slate-200">jogadores experientes</strong>, horário agendado
-                      e <strong className="text-slate-200">pagamento flexível</strong> — Pix, Rubini Coins ou 50/50.
+                      e <strong className="text-slate-200">pagamento flexível</strong> — {ownerCfg.fiftyFiftyEnabled ? "Pix, Rubini Coins ou 50/50" : "Pix ou Rubini Coins"}.
                     </p>
                   </div>
 
@@ -1402,7 +1426,7 @@ const inputCls = "w-full bg-black/60 border border-white/20 hover:border-white/3
                   <Divider />
                   <PaymentInfoCards quest={quest} cfg={ownerCfg} />
                   <Divider />
-                  <DropsInfo quest={quest} />
+                  <DropsInfo quest={quest} show5050={ownerCfg.fiftyFiftyEnabled} />
                   <Divider />
                   <HowItWorks quest={quest} />
 
@@ -1561,7 +1585,10 @@ const inputCls = "w-full bg-black/60 border border-white/20 hover:border-white/3
                 <div className="psf-quadro-inner px-4 py-6 sm:p-7 space-y-6">
                   <div>
                     <label className={labelCls}>Forma de Pagamento *</label>
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    {/* Com o Service 50/50 desabilitado no modal "Configurar
+                        Meu Formulário", a opção SOME e a grade passa a ter 2
+                        colunas (PIX e RC preenchem o espaço — sem buraco). */}
+                    <div className={`grid grid-cols-1 gap-3 ${ownerCfg.fiftyFiftyEnabled ? "sm:grid-cols-3" : "sm:grid-cols-2"}`}>
                       {/* PIX */}
                       <button
                         type="button"
@@ -1602,7 +1629,8 @@ const inputCls = "w-full bg-black/60 border border-white/20 hover:border-white/3
                           {quest === "sanguine" ? "1ª rotação + 12kk de refil" : "+ 12kk de refil"}
                         </span>
                       </button>
-                      {/* 50/50 */}
+                      {/* 50/50 — oculto por completo quando desabilitado */}
+                      {ownerCfg.fiftyFiftyEnabled && (
                       <button
                         type="button"
                         onClick={() => { setPayment("5050"); if (fieldErrors.payment) setFieldErrors(f => ({ ...f, payment: "" })); }}
@@ -1618,9 +1646,10 @@ const inputCls = "w-full bg-black/60 border border-white/20 hover:border-white/3
                           {quest === "sanguine" ? "200 RC + metade do item" : "250 RC + metade do item"}
                         </span>
                       </button>
+                      )}
                     </div>
                     {fieldErrors.payment && <div className="text-[10px] text-rose-400 mt-1.5">{fieldErrors.payment}</div>}
-                    {payment === "5050" && (
+                    {ownerCfg.fiftyFiftyEnabled && payment === "5050" && (
                       <div className="mt-3 flex items-start gap-2.5 bg-violet-500/10 border border-violet-500/30 rounded-xl px-4 py-3 text-[11px] text-violet-200 leading-relaxed animate-in fade-in slide-in-from-top-2 duration-200">
                         <ShieldCheck size={16} className="flex-shrink-0 mt-0.5 text-violet-400" />
                         {quest === "sanguine" ? (
