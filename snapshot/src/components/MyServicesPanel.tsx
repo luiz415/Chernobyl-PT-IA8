@@ -17,7 +17,8 @@ import VipAccessButton from "./VipAccessButton";
 import MyServiceModal, { type MyServiceSavePayload } from "./MyServiceModal";
 import ServiceValueModal from "./ServiceValueModal";
 import ConfirmModal from "./ConfirmModal";
-import ServiceFormLinkButton, { ExclusiveServiceFormLinkButton } from "./ServiceFormLinkButton";
+import { ExclusiveServiceFormLinkButton } from "./ServiceFormLinkButton";
+import { ServiceFormConfigButton } from "./ServiceFormConfigModal";
 import WhatsappMessagePicker from "./WhatsappMessagePicker";
 import WhatsappTemplateModal from "./WhatsappTemplateModal";
 import FirstMessageMarker from "./FirstMessageMarker";
@@ -1302,20 +1303,22 @@ export default function MyServicesPanel({
           </button>
         </div>
 
-        {/* Lado direito: total (leitura) + links do formulário público.
-            O botão genérico é o MESMO componente usado na aba "Services" —
-            mesmo estilo, ícone, link e feedback, sem duplicar a lógica de
-            cópia. O botão "Copiar Link do Meu Formulário Pessoal" (com pulso
-            na borda) copia o link EXCLUSIVO
-            do usuário (#/servico/{slug}): cadastros por ele chegam direto
-            para o dono do link, sem o cliente escolher o Serviceiro (o
-            próprio componente só renderiza para elegíveis). */}
+        {/* Lado direito: total (leitura) + ações do formulário público
+            INDIVIDUAL. O botão "Copiar Link do Meu Formulário Pessoal" (com
+            pulso na borda) copia o link EXCLUSIVO do usuário
+            (#/servico/{slug}): cadastros por ele chegam direto para o dono
+            do link, sem o cliente escolher o Serviceiro. O botão "Configurar
+            Meu Formulário" abre o modal de personalização desse link (quests
+            habilitadas, valores e servidores atendidos). Ambos só renderizam
+            para elegíveis — o chamador não duplica a regra de acesso. O
+            antigo botão do formulário GERAL foi removido daqui de propósito
+            (a aba "Services" mantém a cópia inline própria). */}
         <div className="flex flex-shrink-0 items-center gap-2">
           <span className="hidden sm:inline text-[10px] font-bold uppercase tracking-wider text-slate-500 whitespace-nowrap">
             Total realizado: <span className="text-emerald-400 font-mono">{formatRC(totalRealizado)}</span>
           </span>
           <ExclusiveServiceFormLinkButton />
-          <ServiceFormLinkButton />
+          <ServiceFormConfigButton />
         </div>
       </div>
 

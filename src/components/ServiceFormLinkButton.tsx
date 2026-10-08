@@ -1,20 +1,14 @@
-import { ExternalLink, Link2 } from "lucide-react";
+import { Link2 } from "lucide-react";
 import { useMemo } from "react";
 import { customAlert } from "../types";
 import { useAuth } from "../context/AuthContext";
 import { getEffectiveUserRole } from "../utils/vipAccess";
-import { buildExclusiveServiceFormUrl, PUBLIC_SERVICE_FORM_BASE_URL, type ServiceFormTarget } from "../utils/serviceFormSlug";
+import { buildExclusiveServiceFormUrl, type ServiceFormTarget } from "../utils/serviceFormSlug";
 
 // ============================================================================
-// BOTÕES DE LINK DO FORMULÁRIO DE SERVICES
+// BOTÃO DE LINK DO FORMULÁRIO DE SERVICES
 //
-// Dois botões, mesma lógica de cópia (extraída em `copyLinkToClipboard`):
-//
-//   • ServiceFormLinkButton — link do formulário PÚBLICO geral (#/servico),
-//     comportamento original preservado (usado em "Meus Services"; a aba
-//     "Services" tem uma cópia inline própria).
-//
-//   • ExclusiveServiceFormLinkButton — NOVO: gera e copia o link EXCLUSIVO
+//   • ExclusiveServiceFormLinkButton — gera e copia o link EXCLUSIVO
 //     do usuário logado (#/servico/{slug}). Qualquer cadastro feito por esse
 //     link é direcionado automaticamente a ele, sem o cliente escolher (nem
 //     ver) o campo Serviceiro. Renderizado apenas para elegíveis (Boss ou
@@ -22,13 +16,16 @@ import { buildExclusiveServiceFormUrl, PUBLIC_SERVICE_FORM_BASE_URL, type Servic
 //     formulário público e as regras do Firestore usam para aceitar o
 //     destinatário; a validação real de segurança é do backend.
 //
+// O antigo botão "Copiar Link Formulário Geral" (ServiceFormLinkButton) foi
+// REMOVIDO de "Meus Services" a pedido — o link geral continua existindo
+// (a aba "Services" mantém a própria cópia inline); aqui ficou somente o
+// botão do link exclusivo, cuja configuração é feita pelo modal
+// "Configurar Meu Formulário" (ServiceFormConfigModal).
+//
 // A cópia tenta a Clipboard API e, se ela falhar (navegador antigo ou
 // contexto sem permissão), recorre ao `execCommand`. Falhando os dois, o
 // link é mostrado para cópia manual em vez de o clique não fazer nada.
 // ============================================================================
-
-/** Endereço do formulário público. Fonte única para os dois painéis. */
-export const PUBLIC_SERVICE_FORM_URL = PUBLIC_SERVICE_FORM_BASE_URL;
 
 /** Copia `url` com os mesmos fallbacks do botão original. */
 async function copyLinkToClipboard(url: string): Promise<boolean> {
@@ -61,25 +58,6 @@ async function copyLinkToClipboard(url: string): Promise<boolean> {
     }
   }
   return copied;
-}
-
-export default function ServiceFormLinkButton() {
-  return (
-    <button
-      onClick={async () => {
-        const formUrl = PUBLIC_SERVICE_FORM_URL;
-        const copied = await copyLinkToClipboard(formUrl);
-        if (copied) {
-          customAlert("Link do formulário copiado! Envie para o cliente preencher.", "Link Copiado");
-        } else {
-          customAlert(`Não foi possível copiar automaticamente. Copie manualmente:\n\n${formUrl}`, "Copiar Link");
-        }
-      }}
-      className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/50 text-amber-400 transition-colors whitespace-nowrap"
-    >
-      <ExternalLink size={14} /> Copiar Link Formulário Geral
-    </button>
-  );
 }
 
 /**

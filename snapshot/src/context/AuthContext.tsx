@@ -31,6 +31,7 @@ import {
 import FirestoreUsageBlockModal from "../components/FirestoreUsageBlockModal";
 import { getEffectiveUserRole, getVipExpirationMillis, getVipRemainingDays, VIP_DAY_MS } from "../utils/vipAccess";
 import { getPresenceGovernance, subscribePresenceGovernance } from "../utils/presenceGovernance";
+import type { ServiceFormConfig } from "../utils/serviceFormConfig";
 import { getIdleGovernance, subscribeIdleGovernance } from "../utils/idleGovernance";
 // --- Types ---
 export type UserRole = "Boss" | "VIP" | "Normal";
@@ -71,6 +72,16 @@ export interface UserProfile {
      */
     defaultsVersion?: number;
   };
+  /**
+   * Configuração do formulário público INDIVIDUAL do serviceiro (link
+   * exclusivo #/servico/{slug}): quests habilitadas, valores por quest e
+   * servidores atendidos. Gravada pelo próprio usuário via modal
+   * "Configurar Meu Formulário" (as regras já permitem campos fora de
+   * role/status) e lida pelo PublicServiceForm no MESMO carregamento da
+   * lista de elegíveis — zero leituras extras. Fonte única do formato:
+   * src/utils/serviceFormConfig.ts.
+   */
+  serviceFormConfig?: ServiceFormConfig;
 }
 export interface AuthNotification {
   id: string;

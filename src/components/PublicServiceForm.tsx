@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import type { CSSProperties } from "react";
 import publicFormBgUrl from "../assets/public-form-bg.jpg";
 import { Clock, Save, CheckCircle2, AlertTriangle, MessageCircle, Swords, ShieldCheck, Timer, Phone, ChevronLeft, ChevronRight, Check, XCircle } from "lucide-react";
@@ -15,6 +15,17 @@ import { DUPLICATE_SERVICE_MESSAGE, createWithQueueGuard } from "../services/ser
 import { getServiceFormIdFromLocation, resolveServiceFormTarget } from "../utils/serviceFormSlug";
 import type { PublicQuest } from "../utils/publicServiceLevels";
 import { PUBLIC_QUEST_LABEL, publicMinLevelFor, publicLevelBlockReason } from "../utils/publicServiceLevels";
+import {
+  SERVICE_FORM_CONFIG_DEFAULTS,
+  UNAVAILABLE_SERVER_SUFFIX,
+  resolveServiceFormConfig,
+  isServerAttended,
+  formatConfigRcLong,
+  formatConfigRcCard,
+  formatConfigPixLong,
+  formatConfigPixCard,
+  type ResolvedServiceFormConfig,
+} from "../utils/serviceFormConfig";
 
 // ============================================================================
 // CONFIGURAÇÕES — PREENCHA ANTES DE PUBLICAR
@@ -35,6 +46,14 @@ const SOULWAR_PAUSED_TITLE = "Service temporariamente indisponível:";
 const SOULWAR_PAUSED_MESSAGE =
   "pausamos temporariamente o Service de Soul War até que a Quest e os valores dos itens " +
   "estejam estabilizados. As mudanças recentes tornaram o Service extremamente cansativo e arriscado.";
+
+// Quest desabilitada PELO DONO do link exclusivo (users/{uid}.serviceFormConfig,
+// modal "Configurar Meu Formulário"). O bloqueio GLOBAL acima (SOULWAR_PAUSED)
+// sempre prevalece sobre a configuração individual.
+const OWNER_DISABLED_TITLE = "Service indisponível neste formulário:";
+function ownerDisabledMessage(questName: string): string {
+  return `este serviceiro não está oferecendo o Service de ${questName} no momento.`;
+}
 
 // Rate limiting
 const MAX_SUBMISSIONS = 2;            // máximo de envios...
@@ -200,8 +219,14 @@ function LevelGrid({ quest }: { quest: PublicQuest }) {
   );
 }
 
-/** Formas de Pagamento — cards 💎 Padrão / ⚖️ 50/50 com os valores da Quest. */
-function PaymentInfoCards({ quest }: { quest: PublicQuest }) {
+/**
+ * Formas de Pagamento — cards 💎 Padrão / ⚖️ 50/50 com os valores da Quest.
+ * Os valores do Service PADRÃO vêm de `cfg` (configuração do dono do link
+ * exclusivo; no formulário geral são os padrões, que reproduzem os textos
+ * originais). Os valores do 50/50, refil e acesso são institucionais e
+ * permanecem FIXOS de propósito.
+ */
+function PaymentInfoCards({ quest, cfg }: { quest: PublicQuest; cfg: ResolvedServiceFormConfig }) {
   return (
     <div>
       <SectionTitle emoji="💰" accent="bg-emerald-500/15 border border-emerald-500/30">Formas de Pagamento</SectionTitle>
@@ -219,12 +244,12 @@ function PaymentInfoCards({ quest }: { quest: PublicQuest }) {
             <ul className="text-xs text-slate-300 space-y-1.5 leading-relaxed">
               <li className="flex items-start gap-1.5">
                 <span className="text-sky-400 mt-0.5">•</span>
-                <span><strong className="text-white">1k Rubini Coins</strong> + 12kk de refil</span>
+                <span><strong className="text-white">{formatConfigRcLong(cfg.swRc)} Rubini Coins</strong> + 12kk de refil</span>
               </li>
               <li className="text-center text-slate-500 text-[10px] font-bold uppercase">ou</li>
               <li className="flex items-start gap-1.5">
                 <span className="text-sky-400 mt-0.5">•</span>
-                <span><strong className="text-white">Pix R$ 91,00</strong> + 12kk de refil</span>
+                <span><strong className="text-white">Pix {formatConfigPixLong(cfg.swPix)}</strong> + 12kk de refil</span>
               </li>
             </ul>
           ) : (
@@ -234,12 +259,12 @@ function PaymentInfoCards({ quest }: { quest: PublicQuest }) {
                 <ul className="text-xs text-slate-300 space-y-1.5 leading-relaxed">
                   <li className="flex items-start gap-1.5">
                     <span className="text-sky-400 mt-0.5">•</span>
-                    <span><strong className="text-white">1k Rubini Coins</strong> + 12kk de refil</span>
+                    <span><strong className="text-white">{formatConfigRcLong(cfg.sgFirstRc)} Rubini Coins</strong> + 12kk de refil</span>
                   </li>
                   <li className="text-center text-slate-500 text-[10px] font-bold uppercase">ou</li>
                   <li className="flex items-start gap-1.5">
                     <span className="text-sky-400 mt-0.5">•</span>
-                    <span><strong className="text-white">Pix R$ 91,00</strong> + 12kk de refil</span>
+                    <span><strong className="text-white">Pix {formatConfigPixLong(cfg.sgFirstPix)}</strong> + 12kk de refil</span>
                   </li>
                 </ul>
               </div>
@@ -248,12 +273,12 @@ function PaymentInfoCards({ quest }: { quest: PublicQuest }) {
                 <ul className="text-xs text-slate-300 space-y-1.5 leading-relaxed">
                   <li className="flex items-start gap-1.5">
                     <span className="text-sky-400 mt-0.5">•</span>
-                    <span><strong className="text-white">400 Rubini Coins</strong></span>
+                    <span><strong className="text-white">{formatConfigRcLong(cfg.sgExtraRc)} Rubini Coins</strong></span>
                   </li>
                   <li className="text-center text-slate-500 text-[10px] font-bold uppercase">ou</li>
                   <li className="flex items-start gap-1.5">
                     <span className="text-sky-400 mt-0.5">•</span>
-                    <span><strong className="text-white">Pix R$ 37,00</strong></span>
+                    <span><strong className="text-white">Pix {formatConfigPixLong(cfg.sgExtraPix)}</strong></span>
                   </li>
                 </ul>
               </div>
@@ -462,6 +487,8 @@ export default function PublicServiceForm() {
   // mobile o toque alterna este estado (auto-oculta depois de alguns
   // segundos para não ficar preso na tela).
   const [swNotice, setSwNotice] = useState(false);
+  // Tooltip análogo para a Sanguine desabilitada pelo dono do link exclusivo.
+  const [sgNotice, setSgNotice] = useState(false);
 
   // Campos do formulário
   const [personagem, setPersonagem] = useState("");
@@ -483,7 +510,7 @@ export default function PublicServiceForm() {
   // `twitchChannel`: link de streaming que o serviceiro JÁ cadastra no app
   // (TwitchModal → users/{uid}.twitchChannel). Capturado na MESMA leitura da
   // lista de elegíveis — nenhuma consulta extra para a etapa Finalização.
-  const [eligibleServiceiros, setEligibleServiceiros] = useState<Array<{ uid: string; nome: string; twitchChannel?: string }>>([]);
+  const [eligibleServiceiros, setEligibleServiceiros] = useState<Array<{ uid: string; nome: string; twitchChannel?: string; serviceFormConfig?: unknown }>>([]);
 
   // ── LINK EXCLUSIVO (#/servico/{id}) ────────────────────────────────────
   // Identificador capturado da URL uma única vez na montagem. A resolução
@@ -520,7 +547,7 @@ export default function PublicServiceForm() {
                 const role = getEffectiveUserRole(u);
                 return u.status === "aprovado" && (role === "Boss" || (role === "VIP" && u.serviceiro === true));
               })
-              .map((u: any) => ({ uid: u.uid, nome: u.nome || u.email || "Anônimo", twitchChannel: typeof u.twitchChannel === "string" ? u.twitchChannel.trim() : "" }))
+              .map((u: any) => ({ uid: u.uid, nome: u.nome || u.email || "Anônimo", twitchChannel: typeof u.twitchChannel === "string" ? u.twitchChannel.trim() : "", serviceFormConfig: u.serviceFormConfig }))
           );
         } catch { if (!cancelled) setEligibleServiceiros([]); }
         if (!cancelled) setEligiblesLoaded(true);
@@ -542,12 +569,12 @@ export default function PublicServiceForm() {
         const q = query(collection(db, "users"), where("status", "==", "aprovado"));
         const snap = await getDocs(q);
         if (cancelled) return;
-        const list: Array<{ uid: string; nome: string; twitchChannel?: string }> = [];
+        const list: Array<{ uid: string; nome: string; twitchChannel?: string; serviceFormConfig?: unknown }> = [];
         snap.forEach(d => {
           const data = d.data();
           const role = getEffectiveUserRole(data);
           if (role === "Boss" || (role === "VIP" && data.serviceiro === true)) {
-            list.push({ uid: d.id, nome: data.nome || "Anônimo", twitchChannel: typeof data.twitchChannel === "string" ? data.twitchChannel.trim() : "" });
+            list.push({ uid: d.id, nome: data.nome || "Anônimo", twitchChannel: typeof data.twitchChannel === "string" ? data.twitchChannel.trim() : "", serviceFormConfig: data.serviceFormConfig });
           }
         });
         setEligibleServiceiros(list);
@@ -581,6 +608,41 @@ export default function PublicServiceForm() {
       setLockedLinkInvalid(true);
     }
   }, [exclusiveId, eligiblesLoaded, eligibleServiceiros]);
+
+  // ── CONFIGURAÇÃO INDIVIDUAL DO FORMULÁRIO (link exclusivo) ──────────────
+  // Aplica `users/{uid}.serviceFormConfig` do DONO do link (quests
+  // habilitadas, valores e servidores atendidos) — gravada pelo modal
+  // "Configurar Meu Formulário" e lida AQUI do MESMO carregamento da lista
+  // de elegíveis (zero leituras extras). O formulário GERAL (sem
+  // lockedTarget) usa sempre os padrões, que reproduzem os textos originais.
+  const ownerCfg = useMemo<ResolvedServiceFormConfig>(() => {
+    if (!lockedTarget) return SERVICE_FORM_CONFIG_DEFAULTS;
+    const owner = eligibleServiceiros.find(u => u.uid === lockedTarget.uid);
+    return resolveServiceFormConfig(owner?.serviceFormConfig);
+  }, [lockedTarget, eligibleServiceiros]);
+
+  // Bloqueios por Quest: a pausa GLOBAL da Soul War prevalece sobre a
+  // configuração individual; a Sanguine só bloqueia por decisão do dono.
+  const swBlocked = SOULWAR_PAUSED || !ownerCfg.soulwarEnabled;
+  const sgBlocked = !ownerCfg.sanguineEnabled;
+  const swBlockTitle = SOULWAR_PAUSED ? SOULWAR_PAUSED_TITLE : OWNER_DISABLED_TITLE;
+  const swBlockMessage = SOULWAR_PAUSED ? SOULWAR_PAUSED_MESSAGE : ownerDisabledMessage("Soul War");
+  const sgBlockTitle = OWNER_DISABLED_TITLE;
+  const sgBlockMessage = ownerDisabledMessage("Sanguine");
+  /** A Quest está bloqueada neste formulário? (gate único de UI e envio) */
+  function isQuestBlocked(q: PublicQuest | ""): boolean {
+    if (q === "soulwar") return swBlocked;
+    if (q === "sanguine") return sgBlocked;
+    return false;
+  }
+
+  // Opções do seletor de servidor: TODOS os servidores continuam visíveis;
+  // os não atendidos pelo dono do link ganham o sufixo "(Indisponível)" e
+  // não podem ser selecionados.
+  const serverSelectOptions = useMemo(
+    () => SERVER_OPTIONS.map(s => (isServerAttended(ownerCfg, s) ? s : `${s}${UNAVAILABLE_SERVER_SUFFIX}`)),
+    [ownerCfg]
+  );
 
   // Carregar reCAPTCHA ao montar
   useEffect(() => {
@@ -626,6 +688,13 @@ export default function PublicServiceForm() {
     return () => window.clearTimeout(timer);
   }, [swNotice]);
 
+  // Tooltip da Sanguine desabilitada (mesmo comportamento do da Soul War).
+  useEffect(() => {
+    if (!sgNotice) return;
+    const timer = window.setTimeout(() => setSgNotice(false), 8000);
+    return () => window.clearTimeout(timer);
+  }, [sgNotice]);
+
   // ── Validações por etapa ─────────────────────────────────────────────────
   // Cada etapa valida SOMENTE os próprios campos ao avançar; `validate()`
   // (abaixo) revalida TUDO no envio final — nenhuma etapa pulada escapa.
@@ -638,7 +707,7 @@ export default function PublicServiceForm() {
 
   function stepErrors(s: Step): Record<string, string> {
     const errors: Record<string, string> = {};
-    if (s === 1 && (!quest || (SOULWAR_PAUSED && quest === "soulwar"))) errors.quest = "Escolha a Quest para continuar";
+    if (s === 1 && (!quest || isQuestBlocked(quest))) errors.quest = "Escolha a Quest para continuar";
     if (s === 2 && !termsAccepted) errors.terms = "É necessário aceitar os termos para prosseguir";
     if (s === 3) {
       if (!ownerName.trim()) errors.ownerName = "Informe o seu nome";
@@ -648,6 +717,9 @@ export default function PublicServiceForm() {
     if (s === 5) {
       if (!personagem.trim()) errors.personagem = "Informe o nome do personagem";
       if (!servidor.trim()) errors.servidor = "Informe o servidor";
+      // Defesa extra: mesmo que a seleção tenha acontecido antes de a
+      // configuração do dono carregar, servidor não atendido não passa.
+      else if (!isServerAttended(ownerCfg, servidor)) errors.servidor = "Este serviceiro não atende este servidor. Escolha um servidor disponível.";
       if (!voc) errors.voc = "Escolha a vocação do personagem";
     }
     if (s === 6 && levelBlock) errors.level = levelBlock;
@@ -690,10 +762,15 @@ export default function PublicServiceForm() {
   }
 
   function chooseQuest(q: PublicQuest) {
-    // Soul War pausada: nunca seleciona (o botão pausado nem chama esta
-    // função; guarda defensiva para qualquer outro caminho).
-    if (SOULWAR_PAUSED && q === "soulwar") {
+    // Quest bloqueada (pausa global OU desabilitada pelo dono do link):
+    // nunca seleciona (o botão bloqueado nem chama esta função; guarda
+    // defensiva para qualquer outro caminho).
+    if (q === "soulwar" && swBlocked) {
       setSwNotice(true);
+      return;
+    }
+    if (q === "sanguine" && sgBlocked) {
+      setSgNotice(true);
       return;
     }
     if (quest !== q) {
@@ -743,8 +820,8 @@ export default function PublicServiceForm() {
     // escolhida, termos aceitos e level dentro do mínimo da combinação
     // Quest + Vocação (fonte única: utils/publicServiceLevels).
     const levelNum = parseInt(level || "0", 10) || 0;
-    if (!quest || (SOULWAR_PAUSED && quest === "soulwar") || !termsAccepted || !voc || publicLevelBlockReason(quest, voc, levelNum)) {
-      setStep(!quest || (SOULWAR_PAUSED && quest === "soulwar") ? 1 : !termsAccepted ? 2 : !voc ? 5 : 6);
+    if (!quest || isQuestBlocked(quest) || !termsAccepted || !voc || publicLevelBlockReason(quest, voc, levelNum)) {
+      setStep(!quest || isQuestBlocked(quest) ? 1 : !termsAccepted ? 2 : !voc ? 5 : 6);
       return;
     }
 
@@ -1183,17 +1260,20 @@ const inputCls = "w-full bg-black/60 border border-white/20 hover:border-white/3
 
                   {/* Seletores de Quest — somente os nomes, temas distintos */}
                   <div className="relative grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    {SOULWAR_PAUSED ? (
-                      /* SOUL WAR PAUSADA — visível, não selecionável. Tooltip
+                    {swBlocked ? (
+                      /* SOUL WAR BLOQUEADA — visível, não selecionável, por
+                         pausa GLOBAL (SOULWAR_PAUSED; para reativar: flag =
+                         false) ou porque o DONO do link exclusivo desabilitou
+                         a Quest no modal "Configurar Meu Formulário". Tooltip
                          no hover (desktop) e no toque (mobile, com auto-
-                         ocultar). Para reativar: SOULWAR_PAUSED = false. */
+                         ocultar) com a mensagem do motivo. */
                       <div className="relative group">
                         <button
                           type="button"
                           aria-disabled="true"
                           onClick={() => setSwNotice(v => !v)}
                           className="relative overflow-hidden flex flex-col items-center gap-2.5 px-6 py-8 rounded-2xl border-2 w-full cursor-not-allowed border-slate-500/25 bg-gradient-to-b from-slate-600/10 via-slate-600/[0.04] to-transparent saturate-50 opacity-80 transition-all duration-300"
-                          title={`${SOULWAR_PAUSED_TITLE} ${SOULWAR_PAUSED_MESSAGE}`}
+                          title={`${swBlockTitle} ${swBlockMessage}`}
                         >
                           <span className="absolute top-2.5 right-2.5 inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-500/15 border border-amber-500/40 text-amber-300 text-[8px] font-black uppercase tracking-widest">⏸ Em pausa</span>
                           <span className="text-4xl grayscale opacity-70">⚔️</span>
@@ -1206,8 +1286,8 @@ const inputCls = "w-full bg-black/60 border border-white/20 hover:border-white/3
                         <div className={`absolute left-1/2 -translate-x-1/2 bottom-[calc(100%+10px)] z-20 w-[320px] max-w-[88vw] transition-all duration-200 ease-out ${swNotice ? "opacity-100 translate-y-0" : "opacity-0 translate-y-1 pointer-events-none sm:group-hover:opacity-100 sm:group-hover:translate-y-0"}`}>
                           <div className="relative rounded-xl border border-amber-500/40 bg-[color-mix(in_oklab,var(--th-n-elev)_85%,white)] shadow-2xl shadow-black/70 ring-1 ring-black/40 px-4 py-3 text-left">
                             <p className="text-[11px] leading-relaxed text-slate-300">
-                              <strong className="text-amber-300">⏸ {SOULWAR_PAUSED_TITLE}</strong>{" "}
-                              {SOULWAR_PAUSED_MESSAGE}
+                              <strong className="text-amber-300">⏸ {swBlockTitle}</strong>{" "}
+                              {swBlockMessage}
                             </p>
                             <span aria-hidden className="absolute left-1/2 -translate-x-1/2 top-full w-0 h-0 border-x-8 border-x-transparent border-t-8 border-t-amber-500/40" />
                           </div>
@@ -1232,23 +1312,56 @@ const inputCls = "w-full bg-black/60 border border-white/20 hover:border-white/3
                         </span>
                       </button>
                     )}
-                    <button
-                      type="button"
-                      onClick={() => chooseQuest("sanguine")}
-                      style={{ "--psf-accent": "#fb7185" } as CSSProperties}
-                      className={`psf-choice group relative overflow-hidden flex flex-col items-center gap-2.5 px-6 py-8 rounded-2xl border-2 cursor-pointer transition-all duration-300 ${
-                        quest === "sanguine"
-                          ? "border-rose-400 bg-gradient-to-b from-rose-500/25 via-rose-600/10 to-transparent shadow-xl shadow-rose-500/15 scale-[1.02]"
-                          : "border-rose-500/30 bg-gradient-to-b from-rose-600/15 via-rose-600/5 to-transparent hover:border-rose-400/80 hover:from-rose-500/25 hover:shadow-xl hover:shadow-rose-500/15 hover:scale-[1.015] active:scale-[0.99]"
-                      }`}
-                    >
-                      <span aria-hidden className="pointer-events-none absolute -top-10 right-0 w-28 h-28 rounded-full bg-rose-500/15 blur-2xl transition-colors duration-300 group-hover:bg-rose-500/25" />
-                      <span className="text-4xl drop-shadow-[0_0_16px_rgba(251,113,133,0.5)] transition-transform duration-300 group-hover:scale-110">🩸</span>
-                      <span className="text-lg font-black tracking-[0.14em] text-white" style={{ textShadow: "0 0 18px rgba(251,113,133,0.4)" }}>SANGUINE</span>
-                      <span className={`inline-flex items-center gap-1 text-[10px] font-black uppercase tracking-[0.2em] transition-colors duration-300 ${quest === "sanguine" ? "text-rose-300" : "text-slate-500 group-hover:text-rose-300"}`}>
-                        Começar <ChevronRight size={12} />
-                      </span>
-                    </button>
+                    {sgBlocked ? (
+                      /* SANGUINE DESABILITADA PELO DONO do link exclusivo
+                         (modal "Configurar Meu Formulário") — visível, não
+                         selecionável, mesma apresentação do bloqueio da
+                         Soul War. */
+                      <div className="relative group">
+                        <button
+                          type="button"
+                          aria-disabled="true"
+                          onClick={() => setSgNotice(v => !v)}
+                          className="relative overflow-hidden flex flex-col items-center gap-2.5 px-6 py-8 rounded-2xl border-2 w-full cursor-not-allowed border-slate-500/25 bg-gradient-to-b from-slate-600/10 via-slate-600/[0.04] to-transparent saturate-50 opacity-80 transition-all duration-300"
+                          title={`${sgBlockTitle} ${sgBlockMessage}`}
+                        >
+                          <span className="absolute top-2.5 right-2.5 inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-500/15 border border-amber-500/40 text-amber-300 text-[8px] font-black uppercase tracking-widest">⏸ Em pausa</span>
+                          <span className="text-4xl grayscale opacity-70">🩸</span>
+                          <span className="text-lg font-black tracking-[0.14em] text-slate-400">SANGUINE</span>
+                          <span className="inline-flex items-center gap-1 text-[10px] font-black uppercase tracking-[0.2em] text-slate-600">
+                            Indisponível
+                          </span>
+                        </button>
+                        {/* Tooltip elegante — hover (sm+) ou toque (estado) */}
+                        <div className={`absolute left-1/2 -translate-x-1/2 bottom-[calc(100%+10px)] z-20 w-[320px] max-w-[88vw] transition-all duration-200 ease-out ${sgNotice ? "opacity-100 translate-y-0" : "opacity-0 translate-y-1 pointer-events-none sm:group-hover:opacity-100 sm:group-hover:translate-y-0"}`}>
+                          <div className="relative rounded-xl border border-amber-500/40 bg-[color-mix(in_oklab,var(--th-n-elev)_85%,white)] shadow-2xl shadow-black/70 ring-1 ring-black/40 px-4 py-3 text-left">
+                            <p className="text-[11px] leading-relaxed text-slate-300">
+                              <strong className="text-amber-300">⏸ {sgBlockTitle}</strong>{" "}
+                              {sgBlockMessage}
+                            </p>
+                            <span aria-hidden className="absolute left-1/2 -translate-x-1/2 top-full w-0 h-0 border-x-8 border-x-transparent border-t-8 border-t-amber-500/40" />
+                          </div>
+                        </div>
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => chooseQuest("sanguine")}
+                        style={{ "--psf-accent": "#fb7185" } as CSSProperties}
+                        className={`psf-choice group relative overflow-hidden flex flex-col items-center gap-2.5 px-6 py-8 rounded-2xl border-2 cursor-pointer transition-all duration-300 ${
+                          quest === "sanguine"
+                            ? "border-rose-400 bg-gradient-to-b from-rose-500/25 via-rose-600/10 to-transparent shadow-xl shadow-rose-500/15 scale-[1.02]"
+                            : "border-rose-500/30 bg-gradient-to-b from-rose-600/15 via-rose-600/5 to-transparent hover:border-rose-400/80 hover:from-rose-500/25 hover:shadow-xl hover:shadow-rose-500/15 hover:scale-[1.015] active:scale-[0.99]"
+                        }`}
+                      >
+                        <span aria-hidden className="pointer-events-none absolute -top-10 right-0 w-28 h-28 rounded-full bg-rose-500/15 blur-2xl transition-colors duration-300 group-hover:bg-rose-500/25" />
+                        <span className="text-4xl drop-shadow-[0_0_16px_rgba(251,113,133,0.5)] transition-transform duration-300 group-hover:scale-110">🩸</span>
+                        <span className="text-lg font-black tracking-[0.14em] text-white" style={{ textShadow: "0 0 18px rgba(251,113,133,0.4)" }}>SANGUINE</span>
+                        <span className={`inline-flex items-center gap-1 text-[10px] font-black uppercase tracking-[0.2em] transition-colors duration-300 ${quest === "sanguine" ? "text-rose-300" : "text-slate-500 group-hover:text-rose-300"}`}>
+                          Começar <ChevronRight size={12} />
+                        </span>
+                      </button>
+                    )}
                   </div>
 
                   <p className="relative text-[11px] text-slate-500 text-center">
@@ -1277,7 +1390,7 @@ const inputCls = "w-full bg-black/60 border border-white/20 hover:border-white/3
                 <div className="psf-quadro-inner px-4 py-6 sm:p-7 space-y-6">
                   <LevelGrid quest={quest} />
                   <Divider />
-                  <PaymentInfoCards quest={quest} />
+                  <PaymentInfoCards quest={quest} cfg={ownerCfg} />
                   <Divider />
                   <DropsInfo quest={quest} />
                   <Divider />
@@ -1454,7 +1567,7 @@ const inputCls = "w-full bg-black/60 border border-white/20 hover:border-white/3
                           ⭐ Recomendado
                         </span>
                         <span className={`psf-pay-title text-base font-black tracking-wider ${payment === "pix" ? "text-emerald-300" : "text-slate-300"}`}>💸 PIX</span>
-                        <span className={`psf-pay-value text-lg font-black mt-1 ${payment === "pix" ? "text-emerald-400" : "text-slate-400"}`}>R$ 91</span>
+                        <span className={`psf-pay-value text-lg font-black mt-1 ${payment === "pix" ? "text-emerald-400" : "text-slate-400"}`}>{formatConfigPixCard(quest === "sanguine" ? ownerCfg.sgFirstPix : ownerCfg.swPix)}</span>
                         <span className="psf-pay-subtitle text-[10px] font-bold mt-0.5 text-slate-500">
                           {quest === "sanguine" ? "1ª rotação + 12kk de refil" : "+ 12kk de refil"}
                         </span>
@@ -1474,7 +1587,7 @@ const inputCls = "w-full bg-black/60 border border-white/20 hover:border-white/3
                           ⭐ Recomendado
                         </span>
                         <span className={`psf-pay-title text-base font-black tracking-wider ${payment === "rc" ? "text-amber-300" : "text-slate-300"}`}>🪙 RC</span>
-                        <span className={`psf-pay-value text-lg font-black mt-1 ${payment === "rc" ? "text-amber-400" : "text-slate-400"}`}>1 K</span>
+                        <span className={`psf-pay-value text-lg font-black mt-1 ${payment === "rc" ? "text-amber-400" : "text-slate-400"}`}>{formatConfigRcCard(quest === "sanguine" ? ownerCfg.sgFirstRc : ownerCfg.swRc)}</span>
                         <span className="psf-pay-subtitle text-[10px] font-bold mt-0.5 text-slate-500">
                           {quest === "sanguine" ? "1ª rotação + 12kk de refil" : "+ 12kk de refil"}
                         </span>
@@ -1518,7 +1631,7 @@ const inputCls = "w-full bg-black/60 border border-white/20 hover:border-white/3
                       <div className="mt-3 flex items-start gap-2.5 bg-amber-500/10 border border-amber-500/25 rounded-xl px-4 py-3 text-[11px] text-amber-200/90 leading-relaxed animate-in fade-in slide-in-from-top-2 duration-200">
                         <AlertTriangle size={15} className="flex-shrink-0 mt-0.5 text-amber-400" />
                         <span>
-                          <strong>Sanguine:</strong> caso não drope, cada próxima rotação custa <strong>400 Rubini Coins</strong> ou <strong>Pix R$ 37,00</strong>.
+                          <strong>Sanguine:</strong> caso não drope, cada próxima rotação custa <strong>{formatConfigRcLong(ownerCfg.sgExtraRc)} Rubini Coins</strong> ou <strong>Pix {formatConfigPixLong(ownerCfg.sgExtraPix)}</strong>.
                           Na primeira rotação, o acesso à Quest (5kk) é somado ao refil.
                         </span>
                       </div>
@@ -1574,8 +1687,17 @@ const inputCls = "w-full bg-black/60 border border-white/20 hover:border-white/3
                     <label className={labelCls}>Servidor *</label>
                     <FilterSelect
                       selected={servidor}
-                      onSelect={(v: string) => { setServidor(v); if (fieldErrors.servidor) setFieldErrors(f => ({ ...f, servidor: "" })); if (duplicateMsg) setDuplicateMsg(null); }}
-                      options={SERVER_OPTIONS}
+                      onSelect={(v: string) => {
+                        // Servidores não atendidos pelo dono do link ficam
+                        // VISÍVEIS com o sufixo "(Indisponível)" mas nunca
+                        // são selecionados — o clique só explica o motivo.
+                        if (v.endsWith(UNAVAILABLE_SERVER_SUFFIX)) {
+                          setFieldErrors(f => ({ ...f, servidor: "Este serviceiro não atende este servidor. Escolha um servidor disponível." }));
+                          return;
+                        }
+                        setServidor(v); if (fieldErrors.servidor) setFieldErrors(f => ({ ...f, servidor: "" })); if (duplicateMsg) setDuplicateMsg(null);
+                      }}
+                      options={serverSelectOptions}
                       placeholder="Selecione o servidor"
                       searchable
                       searchPlaceholder="Buscar servidor..."
