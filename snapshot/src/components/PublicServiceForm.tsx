@@ -14,7 +14,7 @@ import { createServiceRequest } from "../services/sharedServicesService";
 import { DUPLICATE_SERVICE_MESSAGE, createWithQueueGuard } from "../services/serviceQueueIndexService";
 import { getServiceFormIdFromLocation, resolveServiceFormTarget } from "../utils/serviceFormSlug";
 import type { PublicQuest } from "../utils/publicServiceLevels";
-import { PUBLIC_QUEST_LABEL, publicMinLevelFor, publicLevelBlockReason } from "../utils/publicServiceLevels";
+import { PUBLIC_QUEST_LABEL, publicLevelBlockReason } from "../utils/publicServiceLevels";
 import {
   SERVICE_FORM_CONFIG_DEFAULTS,
   UNAVAILABLE_SERVER_SUFFIX,
@@ -35,21 +35,20 @@ import {
 const RECAPTCHA_SITE_KEY = "6LdW02ItAAAAAELunQmYCRGrr2qD-c0Dn-5kIMNO";
 
 // ============================================================================
-// PAUSA TEMPORÁRIA DA SOUL WAR
+// DISPONIBILIDADE DAS QUESTS — SOMENTE A CONFIGURAÇÃO DO USUÁRIO DECIDE
 // ============================================================================
-// A opção continua VISÍVEL na Etapa 1, mas não pode ser selecionada; um
-// tooltip explica o motivo (hover no desktop, toque no mobile). O bloqueio
-// também vale na lógica de envio (handleSubmit) — não é só visual.
-// PARA REATIVAR O SERVICE DE SOUL WAR: basta mudar a flag para false.
-const SOULWAR_PAUSED = true;
-const SOULWAR_PAUSED_TITLE = "Service temporariamente indisponível:";
-const SOULWAR_PAUSED_MESSAGE =
-  "pausamos temporariamente o Service de Soul War até que a Quest e os valores dos itens " +
-  "estejam estabilizados. As mudanças recentes tornaram o Service extremamente cansativo e arriscado.";
-
 // Quest desabilitada PELO DONO do link exclusivo (users/{uid}.serviceFormConfig,
-// modal "Configurar Meu Formulário"). O bloqueio GLOBAL acima (SOULWAR_PAUSED)
-// sempre prevalece sobre a configuração individual.
+// modal "Configurar Meu Formulário"): continua VISÍVEL na Etapa 1, mas não
+// pode ser selecionada; um tooltip explica o motivo (hover no desktop, toque
+// no mobile) — o motivo personalizado informado no modal, ou o aviso genérico
+// abaixo quando nenhum motivo foi preenchido. O bloqueio também vale na
+// lógica de envio (handleSubmit) — não é só visual.
+//
+// O antigo bloqueio GLOBAL fixo da Soul War (flag SOULWAR_PAUSED) foi
+// REMOVIDO de propósito: a habilitação configurada pelo usuário é a ÚNICA
+// responsável pelo estado de cada Quest no formulário (habilitada no modal =
+// disponível; desabilitada no modal = bloqueada). O formulário geral, sem
+// dono, usa os padrões (todas habilitadas).
 const OWNER_DISABLED_TITLE = "Service indisponível neste formulário:";
 function ownerDisabledMessage(questName: string): string {
   return `este serviceiro não está oferecendo o Service de ${questName} no momento.`;
@@ -193,15 +192,20 @@ function Divider() {
   return <div className="h-px bg-gradient-to-r from-transparent via-white/10 to-transparent" />;
 }
 
-/** Level Mínimo Exigido — cards por vocação, valores da Quest escolhida. */
-function LevelGrid({ quest }: { quest: PublicQuest }) {
+/**
+ * Level Mínimo Exigido — cards por vocação, valores da Quest escolhida.
+ * Os mínimos vêm da configuração RESOLVIDA do dono do link (`cfg.minLevels`,
+ * personalizável no modal "Configurar Meu Formulário"); no formulário geral
+ * são os padrões (PUBLIC_MIN_LEVELS).
+ */
+function LevelGrid({ quest, cfg }: { quest: PublicQuest; cfg: ResolvedServiceFormConfig }) {
   return (
     <div>
       <SectionTitle emoji="📊" accent="bg-rose-500/15 border border-rose-500/30">Level Mínimo Exigido</SectionTitle>
       <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
         {LEVEL_CARD_ORDER.map((v, idx) => {
           const color = VOC_COLORS[v];
-          const min = publicMinLevelFor(quest, v);
+          const min = cfg.minLevels[quest][v];
           return (
             <div
               key={v}
@@ -611,7 +615,8 @@ export default function PublicServiceForm() {
 
   // ── CONFIGURAÇÃO INDIVIDUAL DO FORMULÁRIO (link exclusivo) ──────────────
   // Aplica `users/{uid}.serviceFormConfig` do DONO do link (quests
-  // habilitadas, valores e servidores atendidos) — gravada pelo modal
+  // habilitadas + motivo de indisponibilidade, valores, levels mínimos por
+  // vocação e servidores atendidos) — gravada pelo modal
   // "Configurar Meu Formulário" e lida AQUI do MESMO carregamento da lista
   // de elegíveis (zero leituras extras). O formulário GERAL (sem
   // lockedTarget) usa sempre os padrões, que reproduzem os textos originais.
@@ -621,14 +626,19 @@ export default function PublicServiceForm() {
     return resolveServiceFormConfig(owner?.serviceFormConfig);
   }, [lockedTarget, eligibleServiceiros]);
 
-  // Bloqueios por Quest: a pausa GLOBAL da Soul War prevalece sobre a
-  // configuração individual; a Sanguine só bloqueia por decisão do dono.
-  const swBlocked = SOULWAR_PAUSED || !ownerCfg.soulwarEnabled;
+  // Bloqueios por Quest: SOMENTE a configuração do dono decide (habilitada
+  // no modal = disponível; desabilitada = bloqueada). O tooltip usa o motivo
+  // personalizado informado no modal; sem motivo, o aviso genérico padrão.
+  const swBlocked = !ownerCfg.soulwarEnabled;
   const sgBlocked = !ownerCfg.sanguineEnabled;
-  const swBlockTitle = SOULWAR_PAUSED ? SOULWAR_PAUSED_TITLE : OWNER_DISABLED_TITLE;
-  const swBlockMessage = SOULWAR_PAUSED ? SOULWAR_PAUSED_MESSAGE : ownerDisabledMessage("Soul War");
+  const swBlockTitle = OWNER_DISABLED_TITLE;
+  const swBlockMessage = ownerCfg.soulwarDisabledReason || ownerDisabledMessage("Soul War");
   const sgBlockTitle = OWNER_DISABLED_TITLE;
-  const sgBlockMessage = ownerDisabledMessage("Sanguine");
+  const sgBlockMessage = ownerCfg.sanguineDisabledReason || ownerDisabledMessage("Sanguine");
+  /** Level mínimo EFETIVO (configuração do dono; padrão sem configuração). */
+  function minLevelFor(q: PublicQuest, v: Vocation): number {
+    return ownerCfg.minLevels[q][v];
+  }
   /** A Quest está bloqueada neste formulário? (gate único de UI e envio) */
   function isQuestBlocked(q: PublicQuest | ""): boolean {
     if (q === "soulwar") return swBlocked;
@@ -703,7 +713,7 @@ export default function PublicServiceForm() {
     ? "Escolha a Quest na primeira etapa"
     : !voc
       ? "Escolha a vocação na etapa anterior"
-      : publicLevelBlockReason(quest, voc, parsedLevel);
+      : publicLevelBlockReason(quest, voc, parsedLevel, minLevelFor(quest, voc));
 
   function stepErrors(s: Step): Record<string, string> {
     const errors: Record<string, string> = {};
@@ -820,7 +830,7 @@ export default function PublicServiceForm() {
     // escolhida, termos aceitos e level dentro do mínimo da combinação
     // Quest + Vocação (fonte única: utils/publicServiceLevels).
     const levelNum = parseInt(level || "0", 10) || 0;
-    if (!quest || isQuestBlocked(quest) || !termsAccepted || !voc || publicLevelBlockReason(quest, voc, levelNum)) {
+    if (!quest || isQuestBlocked(quest) || !termsAccepted || !voc || publicLevelBlockReason(quest, voc, levelNum, minLevelFor(quest, voc))) {
       setStep(!quest || isQuestBlocked(quest) ? 1 : !termsAccepted ? 2 : !voc ? 5 : 6);
       return;
     }
@@ -1261,12 +1271,12 @@ const inputCls = "w-full bg-black/60 border border-white/20 hover:border-white/3
                   {/* Seletores de Quest — somente os nomes, temas distintos */}
                   <div className="relative grid grid-cols-1 sm:grid-cols-2 gap-4">
                     {swBlocked ? (
-                      /* SOUL WAR BLOQUEADA — visível, não selecionável, por
-                         pausa GLOBAL (SOULWAR_PAUSED; para reativar: flag =
-                         false) ou porque o DONO do link exclusivo desabilitou
-                         a Quest no modal "Configurar Meu Formulário". Tooltip
-                         no hover (desktop) e no toque (mobile, com auto-
-                         ocultar) com a mensagem do motivo. */
+                      /* SOUL WAR BLOQUEADA — visível, não selecionável,
+                         porque o DONO do link exclusivo desabilitou a Quest
+                         no modal "Configurar Meu Formulário" (única fonte do
+                         bloqueio). Tooltip no hover (desktop) e no toque
+                         (mobile, com auto-ocultar) com o motivo personalizado
+                         informado no modal ou o aviso genérico. */
                       <div className="relative group">
                         <button
                           type="button"
@@ -1388,7 +1398,7 @@ const inputCls = "w-full bg-black/60 border border-white/20 hover:border-white/3
                 </div>
 
                 <div className="psf-quadro-inner px-4 py-6 sm:p-7 space-y-6">
-                  <LevelGrid quest={quest} />
+                  <LevelGrid quest={quest} cfg={ownerCfg} />
                   <Divider />
                   <PaymentInfoCards quest={quest} cfg={ownerCfg} />
                   <Divider />
@@ -1733,7 +1743,7 @@ const inputCls = "w-full bg-black/60 border border-white/20 hover:border-white/3
                     </div>
                     {voc ? (
                       <div className="text-[10px] text-slate-600 mt-1.5">
-                        Level mínimo para {questLabel} com {voc}: <strong className="text-slate-400">{publicMinLevelFor(quest, voc)}</strong>
+                        Level mínimo para {questLabel} com {voc}: <strong className="text-slate-400">{minLevelFor(quest, voc)}</strong>
                       </div>
                     ) : (
                       <div className="text-[10px] text-slate-600 mt-1.5">
@@ -1777,7 +1787,7 @@ const inputCls = "w-full bg-black/60 border border-white/20 hover:border-white/3
                     <span className="text-xl flex-shrink-0">📊</span>
                     <div className="text-xs text-slate-300 leading-relaxed">
                       <strong className="text-white">{questLabel}</strong> com <strong style={{ color: VOC_COLORS[voc] }}>{voc}</strong> ({VOC_LABEL[voc]}) exige
-                      level mínimo <strong className="text-amber-300 text-sm tabular-nums">{publicMinLevelFor(quest, voc)}</strong>.
+                      level mínimo <strong className="text-amber-300 text-sm tabular-nums">{minLevelFor(quest, voc)}</strong>.
                     </div>
                   </div>
 
@@ -1789,7 +1799,7 @@ const inputCls = "w-full bg-black/60 border border-white/20 hover:border-white/3
                       inputMode="numeric"
                       value={level}
                       onChange={e => { setLevel(e.target.value.replace(/\D/g, "").slice(0, 5)); if (fieldErrors.level) setFieldErrors(f => ({ ...f, level: "" })); }}
-                      placeholder={`Ex: ${publicMinLevelFor(quest, voc)}`}
+                      placeholder={`Ex: ${minLevelFor(quest, voc)}`}
                       className={`${inputCls} ${fieldErrors.level || (parsedLevel > 0 && levelBlock) ? "border-rose-500/60" : parsedLevel > 0 && !levelBlock ? "border-emerald-500/50" : ""}`}
                     />
                     {/* Feedback imediato do requisito — a MESMA regra bloqueia o envio */}

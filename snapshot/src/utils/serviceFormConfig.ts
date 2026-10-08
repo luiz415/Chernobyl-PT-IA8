@@ -5,9 +5,16 @@
 // (o link exclusivo #/servico/{slug}) pelo modal "Configurar Meu Formulário"
 // em Meus Services:
 //
-//   • habilitar/desabilitar os Services de Soul War e Sanguine;
+//   • habilitar/desabilitar os Services de Soul War e Sanguine — a
+//     configuração do usuário é a ÚNICA fonte desse estado no formulário
+//     (não existe mais bloqueio global fixo de Quest no código);
+//   • informar um MOTIVO opcional da indisponibilidade de cada Quest
+//     desabilitada — exibido no tooltip do formulário; sem motivo, o
+//     formulário usa o aviso genérico padrão;
 //   • definir os valores de cada Quest (Sanguine com valor da 1ª rotação e
 //     de cada rotação posterior SEPARADOS);
+//   • definir o LEVEL MÍNIMO por vocação de cada Quest — exibido no
+//     formulário e usado na validação do cadastro do personagem;
 //   • escolher quais servidores atende — os demais continuam VISÍVEIS no
 //     formulário como "Nome (Indisponível)", sem poderem ser selecionados.
 //
@@ -24,6 +31,11 @@
 // ============================================================================
 
 import { SERVER_OPTIONS, serverKey } from "../constants/servers";
+import { VOCATIONS, type Vocation } from "../types";
+import { PUBLIC_MIN_LEVELS, type PublicQuest } from "./publicServiceLevels";
+
+/** Levels mínimos por vocação como persistidos (parciais/não confiáveis). */
+export type ServiceFormMinLevels = Partial<Record<PublicQuest, Partial<Record<Vocation, number>>>>;
 
 /** Forma persistida em `users/{uid}.serviceFormConfig` (todos opcionais). */
 export interface ServiceFormConfig {
@@ -31,6 +43,15 @@ export interface ServiceFormConfig {
   soulwarEnabled?: boolean;
   /** Service de Sanguine oferecido? (ausente = sim) */
   sanguineEnabled?: boolean;
+  /** Motivo (opcional) da Soul War desabilitada — tooltip do formulário. */
+  soulwarDisabledReason?: string;
+  /** Motivo (opcional) da Sanguine desabilitada — tooltip do formulário. */
+  sanguineDisabledReason?: string;
+  /**
+   * Level mínimo por Quest + vocação exibido/validado no formulário.
+   * Parcial: combinações ausentes caem nos padrões (PUBLIC_MIN_LEVELS).
+   */
+  minLevels?: ServiceFormMinLevels;
   /** Soul War — valor em Rubini Coins. */
   swRc?: number;
   /** Soul War — valor do Pix em reais. */
@@ -53,14 +74,28 @@ export interface ServiceFormConfig {
 export interface ResolvedServiceFormConfig {
   soulwarEnabled: boolean;
   sanguineEnabled: boolean;
+  /** "" = sem motivo informado (o formulário usa o aviso genérico). */
+  soulwarDisabledReason: string;
+  /** "" = sem motivo informado (o formulário usa o aviso genérico). */
+  sanguineDisabledReason: string;
   swRc: number;
   swPix: number;
   sgFirstRc: number;
   sgFirstPix: number;
   sgExtraRc: number;
   sgExtraPix: number;
+  /** Levels mínimos COMPLETOS por Quest + vocação (saneados). */
+  minLevels: Record<PublicQuest, Record<Vocation, number>>;
   /** Sempre não-vazia; sem configuração = todos os servidores oficiais. */
   servers: string[];
+}
+
+/** Cópia profunda da tabela padrão de levels (nunca compartilhar referência). */
+function defaultMinLevels(): Record<PublicQuest, Record<Vocation, number>> {
+  return {
+    soulwar: { ...PUBLIC_MIN_LEVELS.soulwar },
+    sanguine: { ...PUBLIC_MIN_LEVELS.sanguine },
+  };
 }
 
 /**
@@ -70,12 +105,15 @@ export interface ResolvedServiceFormConfig {
 export const SERVICE_FORM_CONFIG_DEFAULTS: ResolvedServiceFormConfig = {
   soulwarEnabled: true,
   sanguineEnabled: true,
+  soulwarDisabledReason: "",
+  sanguineDisabledReason: "",
   swRc: 1000,
   swPix: 91,
   sgFirstRc: 1000,
   sgFirstPix: 91,
   sgExtraRc: 400,
   sgExtraPix: 37,
+  minLevels: defaultMinLevels(),
   servers: [...SERVER_OPTIONS],
 };
 
@@ -85,6 +123,11 @@ export const UNAVAILABLE_SERVER_SUFFIX = " (Indisponível)";
 /** Limites de sanidade — valores fora deles caem no padrão. */
 const MAX_RC = 1_000_000;
 const MAX_PIX = 100_000;
+/** Level mínimo configurável: inteiro neste intervalo; fora dele = padrão. */
+export const MIN_CONFIG_LEVEL = 1;
+export const MAX_CONFIG_LEVEL = 50_000;
+/** Tamanho máximo do motivo de indisponibilidade exibido no tooltip. */
+export const MAX_DISABLED_REASON_LEN = 300;
 
 /** RC: inteiro positivo dentro dos limites; qualquer outra coisa = fallback. */
 function sanitizeRc(value: unknown, fallback: number): number {
@@ -102,6 +145,35 @@ function sanitizePix(value: unknown, fallback: number): number {
   const rounded = Math.round(n * 100) / 100;
   if (rounded <= 0 || rounded > MAX_PIX) return fallback;
   return rounded;
+}
+
+/** Level: inteiro dentro dos limites; qualquer outra coisa = fallback. */
+function sanitizeLevel(value: unknown, fallback: number): number {
+  const n = typeof value === "number" ? value : NaN;
+  if (!Number.isFinite(n)) return fallback;
+  const rounded = Math.round(n);
+  if (rounded < MIN_CONFIG_LEVEL || rounded > MAX_CONFIG_LEVEL) return fallback;
+  return rounded;
+}
+
+/** Motivo: string aparada e limitada; qualquer outra coisa = "". */
+function sanitizeReason(value: unknown): string {
+  if (typeof value !== "string") return "";
+  return value.trim().slice(0, MAX_DISABLED_REASON_LEN);
+}
+
+/** Tabela completa de levels: por combinação, valor salvo válido ou padrão. */
+function resolveMinLevels(raw: ServiceFormMinLevels | undefined): Record<PublicQuest, Record<Vocation, number>> {
+  const out = defaultMinLevels();
+  if (!raw || typeof raw !== "object") return out;
+  (Object.keys(out) as PublicQuest[]).forEach(quest => {
+    const q = raw[quest];
+    if (!q || typeof q !== "object") return;
+    VOCATIONS.forEach(voc => {
+      out[quest][voc] = sanitizeLevel(q[voc], out[quest][voc]);
+    });
+  });
+  return out;
 }
 
 /**
@@ -134,12 +206,15 @@ export function resolveServiceFormConfig(raw: unknown): ResolvedServiceFormConfi
   return {
     soulwarEnabled: cfg.soulwarEnabled !== false,
     sanguineEnabled: cfg.sanguineEnabled !== false,
+    soulwarDisabledReason: sanitizeReason(cfg.soulwarDisabledReason),
+    sanguineDisabledReason: sanitizeReason(cfg.sanguineDisabledReason),
     swRc: sanitizeRc(cfg.swRc, d.swRc),
     swPix: sanitizePix(cfg.swPix, d.swPix),
     sgFirstRc: sanitizeRc(cfg.sgFirstRc, d.sgFirstRc),
     sgFirstPix: sanitizePix(cfg.sgFirstPix, d.sgFirstPix),
     sgExtraRc: sanitizeRc(cfg.sgExtraRc, d.sgExtraRc),
     sgExtraPix: sanitizePix(cfg.sgExtraPix, d.sgExtraPix),
+    minLevels: resolveMinLevels(cfg.minLevels),
     servers,
   };
 }

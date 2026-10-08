@@ -6,8 +6,14 @@ import { doc } from "firebase/firestore";
 import { getDoc, setDoc } from "../firebase/config";
 import { getEffectiveUserRole } from "../utils/vipAccess";
 import { SERVER_OPTIONS, serverKey } from "../constants/servers";
+import { VOCATIONS, VOC_COLORS, VOC_LABEL } from "../types";
+import type { Vocation } from "../types";
+import type { PublicQuest } from "../utils/publicServiceLevels";
 import {
   SERVICE_FORM_CONFIG_DEFAULTS,
+  MAX_DISABLED_REASON_LEN,
+  MIN_CONFIG_LEVEL,
+  MAX_CONFIG_LEVEL,
   resolveServiceFormConfig,
   formatConfigRcLong,
   formatConfigPixLong,
@@ -21,9 +27,15 @@ import {
 // Permite ao serviceiro personalizar o PRÓPRIO formulário público (o link
 // exclusivo #/servico/{slug}):
 //
-//   • habilitar/desabilitar os Services de Soul War e Sanguine;
+//   • habilitar/desabilitar os Services de Soul War e Sanguine — esta
+//     configuração é a ÚNICA fonte da disponibilidade de cada Quest no
+//     formulário (não há bloqueio fixo no código);
+//   • motivo OPCIONAL da indisponibilidade de cada Quest desabilitada —
+//     exibido no tooltip do formulário (vazio = aviso genérico);
 //   • valores de cada Quest — Sanguine com 1ª rotação e rotação posterior
 //     SEPARADAS (RC e Pix em cada caso);
+//   • level mínimo POR VOCAÇÃO de cada Quest — exibido no formulário e
+//     usado na validação do cadastro do personagem;
 //   • servidores atendidos — os não selecionados continuam aparecendo no
 //     formulário como "Nome (Indisponível)", sem poderem ser escolhidos.
 //
@@ -63,6 +75,123 @@ function parseRcInput(s: string): number {
   if (!cleaned) return NaN;
   const n = parseInt(cleaned, 10);
   return Number.isFinite(n) ? n : NaN;
+}
+
+/** Parse do input de level (inteiro). NaN quando inválido. */
+function parseLevelInput(s: string): number {
+  const cleaned = s.trim().replace(/\D/g, "");
+  if (!cleaned) return NaN;
+  const n = parseInt(cleaned, 10);
+  return Number.isFinite(n) ? n : NaN;
+}
+
+/** O texto do input é um level mínimo válido? */
+function levelInputValid(s: string): boolean {
+  const n = parseLevelInput(s);
+  return n >= MIN_CONFIG_LEVEL && n <= MAX_CONFIG_LEVEL;
+}
+
+/** Levels mínimos por vocação como strings de input. */
+type MinLevelInputs = Record<Vocation, string>;
+
+/** Converte a tabela resolvida de levels para os textos dos inputs. */
+function minLevelsToInputs(levels: Record<Vocation, number>): MinLevelInputs {
+  const out = {} as MinLevelInputs;
+  VOCATIONS.forEach(voc => { out[voc] = String(levels[voc]); });
+  return out;
+}
+
+/**
+ * Grade de inputs de LEVEL MÍNIMO por vocação (uma Quest). Os valores são
+ * exibidos no formulário público (Level Mínimo Exigido) e usados na
+ * validação do cadastro do personagem daquela Quest.
+ */
+function MinLevelsGrid({
+  idPrefix,
+  values,
+  onChange,
+  disabled,
+}: {
+  idPrefix: string;
+  values: MinLevelInputs;
+  onChange: (voc: Vocation, v: string) => void;
+  disabled: boolean;
+}) {
+  return (
+    <div>
+      <div className="text-[10px] font-black uppercase tracking-wider text-violet-400/80 mb-1.5">📊 Level mínimo no formulário (por vocação)</div>
+      <div className="grid grid-cols-3 sm:grid-cols-5 gap-1.5">
+        {VOCATIONS.map(voc => {
+          const invalid = !disabled && !levelInputValid(values[voc]);
+          return (
+            <div key={voc}>
+              <label
+                htmlFor={`${idPrefix}-min-${voc}`}
+                className="block text-[10px] font-black tracking-wider mb-1 text-center"
+                style={{ color: disabled ? undefined : VOC_COLORS[voc] }}
+                title={VOC_LABEL[voc]}
+              >
+                {voc}
+              </label>
+              <input
+                id={`${idPrefix}-min-${voc}`}
+                type="text"
+                inputMode="numeric"
+                value={values[voc]}
+                onChange={e => onChange(voc, e.target.value.replace(/\D/g, "").slice(0, 5))}
+                placeholder="Ex: 500"
+                disabled={disabled}
+                className={`w-full px-2 py-2 rounded-lg bg-black/40 border text-sm font-mono text-center tabular-nums transition-colors focus:outline-none ${
+                  disabled
+                    ? "border-white/10 text-slate-600 cursor-not-allowed"
+                    : invalid
+                      ? "border-rose-500/60 text-rose-200 focus:border-rose-400"
+                      : "border-white/15 text-slate-200 hover:border-white/30 focus:border-violet-400/70"
+                }`}
+              />
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Campo de MOTIVO da indisponibilidade — exibido somente com a Quest
+ * desabilitada. Opcional: vazio = o formulário usa o aviso genérico.
+ */
+function DisabledReasonField({
+  idPrefix,
+  value,
+  onChange,
+}: {
+  idPrefix: string;
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  return (
+    <div className="animate-in fade-in slide-in-from-top-1 duration-200">
+      <label htmlFor={`${idPrefix}-reason`} className="block text-[10px] font-black uppercase tracking-wider text-amber-400/90 mb-1">
+        💬 Motivo da indisponibilidade (opcional)
+      </label>
+      <textarea
+        id={`${idPrefix}-reason`}
+        value={value}
+        onChange={e => onChange(e.target.value.slice(0, MAX_DISABLED_REASON_LEN))}
+        rows={2}
+        maxLength={MAX_DISABLED_REASON_LEN}
+        placeholder="Ex: estou de férias até o fim do mês; volto a atender em breve..."
+        className="w-full px-3 py-2 rounded-lg bg-black/40 border border-white/15 hover:border-white/30 focus:border-amber-400/70 text-sm text-slate-200 placeholder-slate-600 transition-colors focus:outline-none resize-none"
+      />
+      <div className="flex items-center justify-between gap-2 mt-1">
+        <p className="text-[10px] text-slate-500 leading-relaxed">
+          Aparece no aviso da Quest bloqueada no seu formulário. Vazio = aviso genérico padrão.
+        </p>
+        <span className="text-[10px] text-slate-600 tabular-nums flex-shrink-0">{value.length}/{MAX_DISABLED_REASON_LEN}</span>
+      </div>
+    </div>
+  );
 }
 
 /** Switch habilitar/desabilitar no padrão visual do app. */
@@ -154,6 +283,9 @@ export default function ServiceFormConfigModal({ open, onClose }: Props) {
   // Habilitação das quests
   const [swEnabled, setSwEnabled] = useState(true);
   const [sgEnabled, setSgEnabled] = useState(true);
+  // Motivos da indisponibilidade (opcionais; exibidos com a Quest desabilitada)
+  const [swReason, setSwReason] = useState("");
+  const [sgReason, setSgReason] = useState("");
   // Valores (strings de input; parse no salvar)
   const [swRc, setSwRc] = useState("");
   const [swPix, setSwPix] = useState("");
@@ -161,6 +293,10 @@ export default function ServiceFormConfigModal({ open, onClose }: Props) {
   const [sgFirstPix, setSgFirstPix] = useState("");
   const [sgExtraRc, setSgExtraRc] = useState("");
   const [sgExtraPix, setSgExtraPix] = useState("");
+  // Levels mínimos por vocação (strings de input; parse no salvar) — cada
+  // Quest tem a PRÓPRIA grade, totalmente independente da outra.
+  const [swMinLv, setSwMinLv] = useState<MinLevelInputs>(() => minLevelsToInputs(SERVICE_FORM_CONFIG_DEFAULTS.minLevels.soulwar));
+  const [sgMinLv, setSgMinLv] = useState<MinLevelInputs>(() => minLevelsToInputs(SERVICE_FORM_CONFIG_DEFAULTS.minLevels.sanguine));
   // Servidores atendidos (chaves canônicas via serverKey)
   const [serverKeys, setServerKeys] = useState<Set<string>>(new Set());
 
@@ -173,12 +309,16 @@ export default function ServiceFormConfigModal({ open, onClose }: Props) {
   function applyResolved(cfg: ResolvedServiceFormConfig) {
     setSwEnabled(cfg.soulwarEnabled);
     setSgEnabled(cfg.sanguineEnabled);
+    setSwReason(cfg.soulwarDisabledReason);
+    setSgReason(cfg.sanguineDisabledReason);
     setSwRc(String(cfg.swRc));
     setSwPix(pixToInput(cfg.swPix));
     setSgFirstRc(String(cfg.sgFirstRc));
     setSgFirstPix(pixToInput(cfg.sgFirstPix));
     setSgExtraRc(String(cfg.sgExtraRc));
     setSgExtraPix(pixToInput(cfg.sgExtraPix));
+    setSwMinLv(minLevelsToInputs(cfg.minLevels.soulwar));
+    setSgMinLv(minLevelsToInputs(cfg.minLevels.sanguine));
     setServerKeys(new Set(cfg.servers.map(s => serverKey(s))));
   }
 
@@ -225,8 +365,10 @@ export default function ServiceFormConfigModal({ open, onClose }: Props) {
   const sgFirstPixInvalid = sgEnabled && !(parsePixInput(sgFirstPix) > 0);
   const sgExtraRcInvalid = sgEnabled && !(parseRcInput(sgExtraRc) >= 1);
   const sgExtraPixInvalid = sgEnabled && !(parsePixInput(sgExtraPix) > 0);
+  const swMinInvalid = swEnabled && VOCATIONS.some(v => !levelInputValid(swMinLv[v]));
+  const sgMinInvalid = sgEnabled && VOCATIONS.some(v => !levelInputValid(sgMinLv[v]));
   const noServers = serverKeys.size === 0;
-  const hasInvalid = swRcInvalid || swPixInvalid || sgFirstRcInvalid || sgFirstPixInvalid || sgExtraRcInvalid || sgExtraPixInvalid || noServers;
+  const hasInvalid = swRcInvalid || swPixInvalid || sgFirstRcInvalid || sgFirstPixInvalid || sgExtraRcInvalid || sgExtraPixInvalid || swMinInvalid || sgMinInvalid || noServers;
 
   // Preview dos textos exatamente como o formulário público exibirá
   const previews = useMemo(() => {
@@ -265,6 +407,10 @@ export default function ServiceFormConfigModal({ open, onClose }: Props) {
       setError("Selecione pelo menos um servidor atendido.");
       return;
     }
+    if (swMinInvalid || sgMinInvalid) {
+      setError("Preencha os levels mínimos das quests habilitadas (números maiores que zero).");
+      return;
+    }
     if (hasInvalid) {
       setError("Preencha os valores das quests habilitadas (RC e Pix maiores que zero).");
       return;
@@ -272,18 +418,33 @@ export default function ServiceFormConfigModal({ open, onClose }: Props) {
 
     // Monta a configuração completa. Campos de quest desabilitada são salvos
     // com o valor digitado se válido, senão com o padrão — nunca inválidos.
+    // Os levels mínimos de cada Quest são montados de forma INDEPENDENTE
+    // (alterar uma Quest nunca toca na configuração da outra).
     const d = SERVICE_FORM_CONFIG_DEFAULTS;
     const rcOr = (s: string, fb: number) => (parseRcInput(s) >= 1 ? parseRcInput(s) : fb);
     const pixOr = (s: string, fb: number) => (parsePixInput(s) > 0 ? parsePixInput(s) : fb);
+    const minLevelsFor = (inputs: MinLevelInputs, quest: PublicQuest): Record<Vocation, number> => {
+      const out = {} as Record<Vocation, number>;
+      VOCATIONS.forEach(voc => {
+        out[voc] = levelInputValid(inputs[voc]) ? parseLevelInput(inputs[voc]) : d.minLevels[quest][voc];
+      });
+      return out;
+    };
     const cfg: ServiceFormConfig = {
       soulwarEnabled: swEnabled,
       sanguineEnabled: sgEnabled,
+      soulwarDisabledReason: swReason.trim().slice(0, MAX_DISABLED_REASON_LEN),
+      sanguineDisabledReason: sgReason.trim().slice(0, MAX_DISABLED_REASON_LEN),
       swRc: rcOr(swRc, d.swRc),
       swPix: pixOr(swPix, d.swPix),
       sgFirstRc: rcOr(sgFirstRc, d.sgFirstRc),
       sgFirstPix: pixOr(sgFirstPix, d.sgFirstPix),
       sgExtraRc: rcOr(sgExtraRc, d.sgExtraRc),
       sgExtraPix: pixOr(sgExtraPix, d.sgExtraPix),
+      minLevels: {
+        soulwar: minLevelsFor(swMinLv, "soulwar"),
+        sanguine: minLevelsFor(sgMinLv, "sanguine"),
+      },
       servers: SERVER_OPTIONS.filter(s => serverKeys.has(serverKey(s))),
       updatedAt: Date.now(),
     };
@@ -375,15 +536,28 @@ export default function ServiceFormConfigModal({ open, onClose }: Props) {
                       invalidRc={swRcInvalid}
                       invalidPix={swPixInvalid}
                     />
+                    <MinLevelsGrid
+                      idPrefix="sfc-sw"
+                      values={swMinLv}
+                      onChange={(voc, v) => { setSwMinLv(prev => ({ ...prev, [voc]: v })); if (error) setError(""); }}
+                      disabled={!swEnabled}
+                    />
                     {swEnabled && (
                       <p className="text-[10px] text-slate-500 leading-relaxed">
                         No formulário: <span className="text-slate-300 font-semibold">{previews.sw}</span>
                       </p>
                     )}
                     {!swEnabled && (
-                      <p className="text-[10px] text-amber-400/80 leading-relaxed">
-                        A Soul War aparecerá como <strong>indisponível</strong> no seu formulário.
-                      </p>
+                      <>
+                        <p className="text-[10px] text-amber-400/80 leading-relaxed">
+                          A Soul War aparecerá como <strong>indisponível</strong> no seu formulário.
+                        </p>
+                        <DisabledReasonField
+                          idPrefix="sfc-sw"
+                          value={swReason}
+                          onChange={v => { setSwReason(v); if (error) setError(""); }}
+                        />
+                      </>
                     )}
                   </div>
 
@@ -422,6 +596,12 @@ export default function ServiceFormConfigModal({ open, onClose }: Props) {
                         invalidPix={sgExtraPixInvalid}
                       />
                     </div>
+                    <MinLevelsGrid
+                      idPrefix="sfc-sg"
+                      values={sgMinLv}
+                      onChange={(voc, v) => { setSgMinLv(prev => ({ ...prev, [voc]: v })); if (error) setError(""); }}
+                      disabled={!sgEnabled}
+                    />
                     {sgEnabled && (
                       <p className="text-[10px] text-slate-500 leading-relaxed">
                         No formulário: <span className="text-slate-300 font-semibold">{previews.sgFirst}</span>
@@ -430,9 +610,16 @@ export default function ServiceFormConfigModal({ open, onClose }: Props) {
                       </p>
                     )}
                     {!sgEnabled && (
-                      <p className="text-[10px] text-amber-400/80 leading-relaxed">
-                        A Sanguine aparecerá como <strong>indisponível</strong> no seu formulário.
-                      </p>
+                      <>
+                        <p className="text-[10px] text-amber-400/80 leading-relaxed">
+                          A Sanguine aparecerá como <strong>indisponível</strong> no seu formulário.
+                        </p>
+                        <DisabledReasonField
+                          idPrefix="sfc-sg"
+                          value={sgReason}
+                          onChange={v => { setSgReason(v); if (error) setError(""); }}
+                        />
+                      </>
                     )}
                   </div>
 
