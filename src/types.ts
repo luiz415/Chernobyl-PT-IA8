@@ -350,6 +350,17 @@ export interface PartySlotData {
    * verdade) ainda não refletiu o resultado da PT anterior (dono offline).
    */
   sgRotPlanned?: number;
+  /**
+   * SANGUINE — fim do cooldown do Bakragore (epoch ms) IMPORTADO para
+   * membros EXTERNOS ("+ Externo") na criação via "Próxima Rotação".
+   * Externos não têm `Character` vivo nem snapshot com
+   * `sgBakraCooldownUntil`, então o valor (mesma fórmula dos demais:
+   * `computeSanguineOutcome` com Drop=Não → conclusão da PT de origem +
+   * 72h) viaja no próprio slot. A célula "Rot SG" usa este campo como
+   * ÚLTIMO fallback — personagens normais continuam lendo o cooldown do
+   * personagem vivo/snapshot, exatamente como antes.
+   */
+  sgBakraCooldownUntil?: number;
 }
 
 export type PtType = "soulwar" | "sanguine" | "crypt";

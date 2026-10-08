@@ -4357,7 +4357,12 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
                       const dropped = questState === "post_complete" && d.sgDrop === true;
                       // Cooldown do Bakragore: prioriza o personagem VIVO (o
                       // snapshot congela antes de a resposta Drop? existir).
-                      const cooldownUntil = liveChar?.sgBakraCooldownUntil || snapChar?.sgBakraCooldownUntil || 0;
+                      // ÚLTIMO fallback: o cooldown IMPORTADO no próprio slot
+                      // — exclusivo de membros EXTERNOS herdados pela
+                      // "Próxima Rotação" (sem Character/snapshot); para
+                      // personagens normais o campo não existe no slot e
+                      // nada muda.
+                      const cooldownUntil = liveChar?.sgBakraCooldownUntil || snapChar?.sgBakraCooldownUntil || d.sgBakraCooldownUntil || 0;
                       const cooldownOn = isSgCooldownActive(cooldownUntil, sgNowTick);
                       // Edição via MODAL próprio: só o DONO do personagem
                       // (vivo na lista), antes da conclusão da Quest.

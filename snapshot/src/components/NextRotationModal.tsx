@@ -159,9 +159,12 @@ export default function NextRotationModal({ open, party, candidateIds, onConfirm
               {candidateIds.map(id => {
                 const snap = party.memberSnapshots?.[id];
                 const slot = party.slotData?.[id];
-                const name = snap?.personagem || slot?.owner || id;
-                const voc = snap?.voc || "";
-                const level = snap?.level || 0;
+                // Membro EXTERNO ("+ Externo"): não tem snapshot — o cadastro
+                // vive em `customMembers` (label = nome do personagem).
+                const custom = party.customMembers?.find(c => c.id === id);
+                const name = custom?.label || snap?.personagem || slot?.owner || id;
+                const voc = custom?.voc || snap?.voc || "";
+                const level = custom?.level || snap?.level || 0;
                 const nextRot = normalizeSgRot(sanguineSlotBaseRot(party, id)) + 1;
                 const isOn = selected.has(id);
                 return (

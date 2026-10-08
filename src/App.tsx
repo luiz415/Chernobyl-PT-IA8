@@ -6,7 +6,7 @@ import {
   SlidersHorizontal, ChevronDown, FileSpreadsheet, Briefcase, FileCode2
 } from "lucide-react";
 import ExoriLogo from "./components/ExoriLogo";
-import type { AppData, BazaarItemsPurchasePrefill, Character, CharacterAcquisition, CharacterAcquisitionBuyerDetails, CharacterBazaarItemsSnapshot, PartyFinalizationReason, PartyTab, PersonalPartyHistory, PtType, WaitingService, SharedService, DialogOptions, ProbableMarkersMap, Vocation } from "./types";
+import type { AppData, BazaarItemsPurchasePrefill, Character, CharacterAcquisition, CharacterAcquisitionBuyerDetails, CharacterBazaarItemsSnapshot, PartyCustomMember, PartyFinalizationReason, PartyTab, PersonalPartyHistory, PtType, WaitingService, SharedService, DialogOptions, ProbableMarkersMap, Vocation } from "./types";
 import { setGlobalDialogHandler, customAlert, customConfirm, formatRC } from "./types";
 import { loadData, saveData, exportCSV, exportJSON, importJSON, buildPersonalBackup, normalizeImportedBackup, saveAutoSaveHandle, loadAutoSaveHandle, loadUIState, saveUIState, saveCloseTray, saveStartWithWindows, saveLowCpuUsage, loadSharedCharsCache, saveSharedCharsCache, isSharedCharsCacheFresh, invalidateSharedCharsCache } from "./storage";
 import { canViewServiceEntry, canViewServiceForViewer, projectServiceForViewer } from "./utils/serviceVisibility";
@@ -14,6 +14,7 @@ import { applyPartyProfitToCharacters, buildCharacterProfitPatch, computePartyPr
 import { collectSanguineTransportMap, completedSgRotations, computeSanguineOutcome, isConcludedSanguineParty, sanguineSlotBaseRot, sanguineTargetFromTransport, applySanguineOutcomeToCharacter } from "./utils/sanguineRotation";
 import { calculateAcquiredQuestDrops, calculateAcquiredQuestProfit, cancelCharacterAcquisitionPreApproval, confirmCharacterAcquisitionPayment, confirmCharacterAcquisitionSalePayout, createCharacterAcquisition, getCharacterAcquisition, isPaymentConfirmed, subscribeCharacterAcquisitionBuyerDetails, subscribeCharacterAcquisitions, updateCharacterAcquisitionLifecycle, upsertCharacterAcquisitionBuyerDetails } from "./services/characterAcquisitionService";
 import { toFirestoreMillis } from "./utils/firestoreTimestamp";
+import { buildNextRotationSeeds, type NextRotationCustomSeed } from "./utils/nextRotationSeeds";
 import { getPersonalPartyHistoryEntry, readPersonalPartyHistoryCache, requestPartyFinalization, subscribePersonalPartyHistory } from "./services/partyHistoryService";
 import initialBgUrl from "./assets/initial-bg.png";
 import CharTable from "./components/CharTable";
@@ -3324,7 +3325,10 @@ export default function App() {
   // adicionado", visibilidade pública/privada, slotData inicial). Os
   // personagens selecionados no modal (Drop? = Não) entram como `suggestedIds`;
   // DONO/JOGADOR vêm congelados da PT de origem via `slotSeed`, para nunca
-  // cair no fallback que atribuiria o criador como dono.
+  // cair no fallback que atribuiria o criador como dono. Membros EXTERNOS
+  // ("+ Externo") viajam via `customSeed` e renascem como customMembers na
+  // nova PT — preservando Personagem (label) e Conta (rótulo de externo) em
+  // vez de virarem um selectedId irresolúvel com snapshot vazio.
   // ============================================================================
   async function handleCreateNextRotation(
     sourceParty: PartyTab,
@@ -3332,28 +3336,14 @@ export default function App() {
     opts: { visibility: "public" | "private"; horarioTimestamp?: number },
   ) {
     if (!currentUser || selectedIds.length === 0) return;
-    const slotSeed: Record<string, { owner: string; ownerUid: string; player: string; playerUid?: string; sgRotPlanned?: number }> = {};
-    const invited = new Set<string>([currentUser.uid]);
-    selectedIds.forEach(id => {
-      const slot = sourceParty.slotData?.[id];
-      const snap = sourceParty.memberSnapshots?.[id];
-      const ownerUid = slot?.ownerUid || snap?.ownerUid || "";
-      const owner = slot?.owner || snap?.ownerName || "";
-      slotSeed[id] = {
-        owner,
-        ownerUid,
-        player: slot?.player || owner,
-        playerUid: slot?.playerUid || ownerUid || undefined,
-        // ROTAÇÃO PLANEJADA da nova PT: a rotação-base IMUTÁVEL congelada na
-        // conclusão da PT de origem + 1 (Drop? = Não avança a rotação). A
-        // nova PT já NASCE com a rotação correta, mesmo que o personagem
-        // vivo do dono (offline) ainda não tenha refletido o resultado — o
-        // personagem importado da lista de disponíveis segue sendo a fonte
-        // da verdade (a exibição usa o MAIOR entre os dois).
-        sgRotPlanned: sanguineSlotBaseRot(sourceParty, id) + 1,
-      };
-      if (ownerUid) invited.add(ownerUid);
-    });
+    // Sementes da nova PT (fonte única, módulo puro): personagens normais em
+    // `normalIds`/`slotSeed` (comportamento original) e membros EXTERNOS em
+    // `customSeed` — eles renascem como customMembers na nova PT, com
+    // Personagem/Conta preservados e cooldown importado; NUNCA entram em
+    // `selectedIds` (não resolvem para Character/snapshot e viravam um
+    // participante vazio). Ver src/utils/nextRotationSeeds.ts.
+    const { normalIds, slotSeed, customSeed, ownerUids } = buildNextRotationSeeds(sourceParty, selectedIds);
+    const invited = new Set<string>([currentUser.uid, ...ownerUids]);
     await createParty(
       "",
       "sanguine",
@@ -3361,12 +3351,13 @@ export default function App() {
       opts.visibility,
       opts.visibility === "private" ? Array.from(invited) : undefined,
       sourceParty.servidor || "",
-      selectedIds,
+      normalIds,
       slotSeed,
+      customSeed,
     );
   }
 
-  async function createParty(_name: string, ptType?: "soulwar" | "sanguine" | "crypt", horarioTimestamp?: number, visibility?: "public" | "private", invitedUsers?: string[], servidor?: string, suggestedIds?: string[], slotSeed?: Record<string, { owner: string; ownerUid: string; player: string; playerUid?: string; sgRotPlanned?: number }>) {
+  async function createParty(_name: string, ptType?: "soulwar" | "sanguine" | "crypt", horarioTimestamp?: number, visibility?: "public" | "private", invitedUsers?: string[], servidor?: string, suggestedIds?: string[], slotSeed?: Record<string, { owner: string; ownerUid: string; player: string; playerUid?: string; sgRotPlanned?: number }>, customSeed?: NextRotationCustomSeed[]) {
     if (!currentUser) return;
     if (globalSettings.publicPartiesEnabled === false && (visibility || "public") === "public") {
       customAlert("A criação de PTs públicas está temporariamente pausada pelo administrador.", "PT Pública pausada");
@@ -3498,6 +3489,44 @@ export default function App() {
       if (visibility === "private") initialInvitedUsers = Array.from(invitedSet);
     }
 
+    // ============================================================================
+    // SANGUINE — "Próxima Rotação": MEMBROS EXTERNOS ("+ Externo") herdados
+    // ----------------------------------------------------------------------------
+    // Externos renascem como `customMembers` da nova PT (NUNCA em
+    // `selectedIds`: o id `cust_...` não resolve para Character/snapshot e o
+    // backfill criava um snapshot vazio — Personagem e Conta eram perdidos).
+    // O cadastro vem ÍNTEGRO da PT de origem (label = Personagem, ownerName,
+    // servidor, voc, level, flags) com o MESMO id; o slot herda DONO/JOGADOR,
+    // a rotação planejada e o cooldown do Bakragore importado (mesma fórmula
+    // dos demais personagens). Fluxos sem `customSeed` são intocados.
+    // ============================================================================
+    let initialCustomMembers: PartyCustomMember[] = [];
+    if (customSeed && customSeed.length > 0) {
+      initialCustomMembers = customSeed.map(seed => ({ ...seed.member }));
+      initialSlots = Math.max(initialSlots, 5, initialSelectedIds.length + customSeed.length);
+      if (initialMembers.length === 0) initialMembers = [currentUser.uid];
+      customSeed.forEach(seed => {
+        initialSlotData[seed.member.id] = {
+          deaths: 0,
+          drop: 0,
+          itemDropado: "",
+          itemVendido: 0,
+          player: seed.slot.player || "",
+          ...(seed.slot.playerUid ? { playerUid: seed.slot.playerUid } : {}),
+          split: false,
+          owner: seed.slot.owner || seed.member.ownerName || "",
+          notes: "",
+          pago: false,
+          dropLocked: false,
+          // Mesma flag que o "+ Externo" grava na adição manual (1 Service
+          // contabilizado ao JOGADOR escolhido quando a Quest conclui).
+          isService: true,
+          ...(typeof seed.slot.sgRotPlanned === "number" ? { sgRotPlanned: seed.slot.sgRotPlanned } : {}),
+          ...(typeof seed.slot.sgBakraCooldownUntil === "number" ? { sgBakraCooldownUntil: seed.slot.sgBakraCooldownUntil } : {}),
+        };
+      });
+    }
+
     const newParty: PartyTab = {
       id,
       name: generatedName,
@@ -3514,6 +3543,9 @@ export default function App() {
       servidor: servidor || "",
       invitedUsers: initialInvitedUsers,
       members: initialMembers,
+      // Externos herdados da "Próxima Rotação" (ausente nos demais fluxos —
+      // o JSON.parse(JSON.stringify()) abaixo descarta o undefined).
+      ...(initialCustomMembers.length > 0 ? { customMembers: initialCustomMembers } : {}),
       memberSnapshots: {},
       // `ptStartedAt: 0` explícito desde a criação: a query de PTs públicas
       // filtra `ptStartedAt == 0` (pré-Quest) — campo ausente NÃO é casado
