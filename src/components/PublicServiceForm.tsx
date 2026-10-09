@@ -17,7 +17,6 @@ import type { PublicQuest } from "../utils/publicServiceLevels";
 import { PUBLIC_QUEST_LABEL, publicLevelBlockReason } from "../utils/publicServiceLevels";
 import {
   SERVICE_FORM_CONFIG_DEFAULTS,
-  UNAVAILABLE_SERVER_SUFFIX,
   resolveServiceFormConfig,
   isServerAttended,
   formatConfigRcLong,
@@ -173,6 +172,94 @@ const VOC_SHORT: Record<Vocation, string> = {
 
 // Ordem de exibição dos cards de level mínimo (mesma do quadro original).
 const LEVEL_CARD_ORDER: Vocation[] = ["MS", "ED", "EK", "RP", "MK"];
+
+/**
+ * Seleção de SERVIDOR (Etapa 5) — grade construída a partir da configuração
+ * JÁ PERSISTIDA pelo dono do formulário (serviceFormConfig.servers, via
+ * isServerAttended — nenhuma lógica paralela e nada é alterado no banco):
+ *
+ *   • servidores ATENDIDOS primeiro, em ordem alfabética, com aparência
+ *     ativa/selecionável (identidade ciano da etapa);
+ *   • servidores NÃO atendidos ao final, em ordem alfabética, esmaecidos e
+ *     rotulados "Indisponível" — continuam VISÍVEIS (o cliente identifica o
+ *     que está temporariamente fora), nunca selecionáveis; o toque/clique
+ *     apenas explica o motivo (mesma mensagem de sempre).
+ *
+ * Quando o dono atende TODOS os servidores, os cabeçalhos de grupo somem e
+ * fica só a grade completa de opções ativas.
+ */
+function ServerPicker({
+  attended,
+  unavailable,
+  selected,
+  onSelect,
+  onSelectUnavailable,
+}: {
+  attended: string[];
+  unavailable: string[];
+  selected: string;
+  onSelect: (server: string) => void;
+  onSelectUnavailable: () => void;
+}) {
+  const hasUnavailable = unavailable.length > 0;
+  return (
+    <div className="space-y-3">
+      <div>
+        {hasUnavailable && (
+          <div className="flex items-center gap-1.5 mb-1.5 text-[9px] font-black uppercase tracking-[0.18em] text-emerald-400/90">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.8)]" />
+            Servidores atendidos
+          </div>
+        )}
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+          {attended.map(server => {
+            const sel = selected === server;
+            return (
+              <button
+                key={server}
+                type="button"
+                onClick={() => onSelect(server)}
+                aria-pressed={sel}
+                className={`flex items-center justify-center gap-1.5 px-2.5 py-2.5 rounded-xl border-2 text-xs font-bold transition-all duration-200 cursor-pointer ${
+                  sel
+                    ? "border-cyan-400 bg-cyan-500/15 text-cyan-200 shadow-lg shadow-cyan-500/15 scale-[1.02]"
+                    : "border-white/15 bg-black/40 text-slate-200 hover:border-cyan-400/60 hover:bg-cyan-500/10 hover:text-cyan-100 hover:scale-[1.01] active:scale-[0.98]"
+                }`}
+              >
+                <span className="truncate">{server}</span>
+                {sel && <Check size={13} className="flex-shrink-0 text-cyan-300" />}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {hasUnavailable && (
+        <div>
+          <div className="flex items-center gap-1.5 mb-1.5 text-[9px] font-black uppercase tracking-[0.18em] text-slate-600">
+            <span className="w-1.5 h-1.5 rounded-full bg-slate-600" />
+            Temporariamente indisponíveis
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+            {unavailable.map(server => (
+              <button
+                key={server}
+                type="button"
+                aria-disabled="true"
+                onClick={onSelectUnavailable}
+                title="Este serviceiro não atende este servidor no momento."
+                className="flex flex-col items-center justify-center px-2.5 py-1.5 rounded-xl border border-white/10 bg-white/[0.02] cursor-not-allowed saturate-50 opacity-70"
+              >
+                <span className="text-xs font-bold text-slate-500 truncate max-w-full">{server}</span>
+                <span className="text-[8px] font-black uppercase tracking-widest text-amber-500/60">⏸ Indisponível</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 // ----------------------------------------------------------------------------
 // Blocos de conteúdo da Etapa 2 — stateless, definidos FORA do componente
@@ -667,13 +754,17 @@ export default function PublicServiceForm() {
     return false;
   }
 
-  // Opções do seletor de servidor: TODOS os servidores continuam visíveis;
-  // os não atendidos pelo dono do link ganham o sufixo "(Indisponível)" e
-  // não podem ser selecionados.
-  const serverSelectOptions = useMemo(
-    () => SERVER_OPTIONS.map(s => (isServerAttended(ownerCfg, s) ? s : `${s}${UNAVAILABLE_SERVER_SUFFIX}`)),
-    [ownerCfg]
-  );
+  // Grupos do seletor de servidor (fonte: configuração persistida do dono,
+  // via isServerAttended): TODOS os servidores continuam visíveis —
+  // atendidos primeiro e não atendidos ao final, cada grupo em ordem
+  // alfabética ("Infernum 1/2/3" em ordem numérica natural).
+  const serverGroups = useMemo(() => {
+    const byName = (a: string, b: string) => a.localeCompare(b, "pt-BR", { sensitivity: "base", numeric: true });
+    return {
+      attended: SERVER_OPTIONS.filter(s => isServerAttended(ownerCfg, s)).sort(byName),
+      unavailable: SERVER_OPTIONS.filter(s => !isServerAttended(ownerCfg, s)).sort(byName),
+    };
+  }, [ownerCfg]);
 
   // Carregar reCAPTCHA ao montar
   useEffect(() => {
@@ -1721,28 +1812,23 @@ const inputCls = "w-full bg-black/60 border border-white/20 hover:border-white/3
                     {fieldErrors.personagem && <div className="text-[10px] text-rose-400 mt-1.5">{fieldErrors.personagem}</div>}
                   </div>
 
-                  {/* Servidor */}
+                  {/* Servidor — grade com a disponibilidade configurada pelo
+                      dono do formulário: atendidos primeiro (ativos), não
+                      atendidos ao final (esmaecidos, visíveis, bloqueados). */}
                   <div>
                     <label className={labelCls}>Servidor *</label>
-                    <FilterSelect
+                    <ServerPicker
+                      attended={serverGroups.attended}
+                      unavailable={serverGroups.unavailable}
                       selected={servidor}
                       onSelect={(v: string) => {
-                        // Servidores não atendidos pelo dono do link ficam
-                        // VISÍVEIS com o sufixo "(Indisponível)" mas nunca
-                        // são selecionados — o clique só explica o motivo.
-                        if (v.endsWith(UNAVAILABLE_SERVER_SUFFIX)) {
-                          setFieldErrors(f => ({ ...f, servidor: "Este serviceiro não atende este servidor. Escolha um servidor disponível." }));
-                          return;
-                        }
                         setServidor(v); if (fieldErrors.servidor) setFieldErrors(f => ({ ...f, servidor: "" })); if (duplicateMsg) setDuplicateMsg(null);
                       }}
-                      options={serverSelectOptions}
-                      placeholder="Selecione o servidor"
-                      searchable
-                      searchPlaceholder="Buscar servidor..."
-                      allLabel=""
-                      activeColor="cyan"
-                      className={`w-full flex items-center justify-between gap-2 px-3 py-2 rounded-md bg-black/60 border border-white/20 hover:border-white/35 focus:border-cyan-400/80 focus:outline-none transition-colors text-sm ${!servidor ? "text-slate-500" : "text-slate-200"}`}
+                      onSelectUnavailable={() => {
+                        // Mesma mensagem de sempre: o clique no indisponível
+                        // apenas explica o motivo, nunca seleciona.
+                        setFieldErrors(f => ({ ...f, servidor: "Este serviceiro não atende este servidor. Escolha um servidor disponível." }));
+                      }}
                     />
                     {fieldErrors.servidor && <div className="text-[10px] text-rose-400 mt-1.5">{fieldErrors.servidor}</div>}
                   </div>
