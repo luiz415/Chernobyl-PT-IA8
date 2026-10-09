@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useMemo } from "react";
 import type { CSSProperties } from "react";
 import publicFormBgUrl from "../assets/public-form-bg.jpg";
-import { Clock, Save, CheckCircle2, AlertTriangle, MessageCircle, Swords, ShieldCheck, Timer, Phone, ChevronLeft, ChevronRight, Check, XCircle } from "lucide-react";
+import { Clock, Save, CheckCircle2, AlertTriangle, MessageCircle, Swords, ShieldCheck, Timer, Phone, ChevronLeft, ChevronRight, ChevronDown, Check, XCircle } from "lucide-react";
 import type { WaitingService, Vocation } from "../types";
 import { VOCATIONS, VOC_COLORS, VOC_LABEL, todayISO } from "../types";
 import { db, auth, isSimulationMode } from "../firebase/config";
@@ -174,19 +174,21 @@ const VOC_SHORT: Record<Vocation, string> = {
 const LEVEL_CARD_ORDER: Vocation[] = ["MS", "ED", "EK", "RP", "MK"];
 
 /**
- * Seleção de SERVIDOR (Etapa 5) — grade construída a partir da configuração
- * JÁ PERSISTIDA pelo dono do formulário (serviceFormConfig.servers, via
- * isServerAttended — nenhuma lógica paralela e nada é alterado no banco):
+ * Seleção de SERVIDOR (Etapa 5) — campo no mesmo padrão visual dos demais
+ * inputs do formulário que, AO CLICAR, abre a lista de servidores construída
+ * a partir da configuração JÁ PERSISTIDA pelo dono do formulário
+ * (serviceFormConfig.servers, via isServerAttended — nenhuma lógica paralela
+ * e nada é alterado no banco):
  *
  *   • servidores ATENDIDOS primeiro, em ordem alfabética, com aparência
  *     ativa/selecionável (identidade ciano da etapa);
  *   • servidores NÃO atendidos ao final, em ordem alfabética, esmaecidos e
  *     rotulados "Indisponível" — continuam VISÍVEIS (o cliente identifica o
  *     que está temporariamente fora), nunca selecionáveis; o toque/clique
- *     apenas explica o motivo (mesma mensagem de sempre).
+ *     apenas explica o motivo (mesma mensagem de sempre) e fecha a lista.
  *
  * Quando o dono atende TODOS os servidores, os cabeçalhos de grupo somem e
- * fica só a grade completa de opções ativas.
+ * fica só a lista completa de opções ativas.
  */
 function ServerPicker({
   attended,
@@ -194,66 +196,117 @@ function ServerPicker({
   selected,
   onSelect,
   onSelectUnavailable,
+  hasError,
 }: {
   attended: string[];
   unavailable: string[];
   selected: string;
   onSelect: (server: string) => void;
   onSelectUnavailable: () => void;
+  hasError?: boolean;
 }) {
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef<HTMLDivElement>(null);
   const hasUnavailable = unavailable.length > 0;
-  return (
-    <div className="space-y-3">
-      <div>
-        {hasUnavailable && (
-          <div className="flex items-center gap-1.5 mb-1.5 text-[9px] font-black uppercase tracking-[0.18em] text-emerald-400/90">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.8)]" />
-            Servidores atendidos
-          </div>
-        )}
-        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-          {attended.map(server => {
-            const sel = selected === server;
-            return (
-              <button
-                key={server}
-                type="button"
-                onClick={() => onSelect(server)}
-                aria-pressed={sel}
-                className={`flex items-center justify-center gap-1.5 px-2.5 py-2.5 rounded-xl border-2 text-xs font-bold transition-all duration-200 cursor-pointer ${
-                  sel
-                    ? "border-cyan-400 bg-cyan-500/15 text-cyan-200 shadow-lg shadow-cyan-500/15 scale-[1.02]"
-                    : "border-white/15 bg-black/40 text-slate-200 hover:border-cyan-400/60 hover:bg-cyan-500/10 hover:text-cyan-100 hover:scale-[1.01] active:scale-[0.98]"
-                }`}
-              >
-                <span className="truncate">{server}</span>
-                {sel && <Check size={13} className="flex-shrink-0 text-cyan-300" />}
-              </button>
-            );
-          })}
-        </div>
-      </div>
 
-      {hasUnavailable && (
-        <div>
-          <div className="flex items-center gap-1.5 mb-1.5 text-[9px] font-black uppercase tracking-[0.18em] text-slate-600">
-            <span className="w-1.5 h-1.5 rounded-full bg-slate-600" />
-            Temporariamente indisponíveis
-          </div>
-          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-            {unavailable.map(server => (
-              <button
-                key={server}
-                type="button"
-                aria-disabled="true"
-                onClick={onSelectUnavailable}
-                title="Este serviceiro não atende este servidor no momento."
-                className="flex flex-col items-center justify-center px-2.5 py-1.5 rounded-xl border border-white/10 bg-white/[0.02] cursor-not-allowed saturate-50 opacity-70"
-              >
-                <span className="text-xs font-bold text-slate-500 truncate max-w-full">{server}</span>
-                <span className="text-[8px] font-black uppercase tracking-widest text-amber-500/60">⏸ Indisponível</span>
-              </button>
-            ))}
+  // Fecha ao clicar fora ou com Escape — comportamento padrão de dropdown.
+  useEffect(() => {
+    if (!open) return;
+    function handleOutside(e: MouseEvent) {
+      if (wrapRef.current?.contains(e.target as Node)) return;
+      setOpen(false);
+    }
+    function handleKey(e: KeyboardEvent) {
+      if (e.key === "Escape") setOpen(false);
+    }
+    document.addEventListener("mousedown", handleOutside);
+    document.addEventListener("keydown", handleKey);
+    return () => {
+      document.removeEventListener("mousedown", handleOutside);
+      document.removeEventListener("keydown", handleKey);
+    };
+  }, [open]);
+
+  return (
+    <div ref={wrapRef} className="relative">
+      {/* Campo-gatilho — mesmo visual dos demais inputs do formulário. */}
+      <button
+        type="button"
+        onClick={() => setOpen(prev => !prev)}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        className={`w-full flex items-center justify-between gap-2 bg-black/60 border rounded-xl px-4 py-3 text-sm text-left focus:outline-none focus:ring-2 focus:ring-cyan-500/20 transition-colors cursor-pointer ${
+          hasError
+            ? "border-rose-500/60"
+            : open
+              ? "border-cyan-400/80"
+              : "border-white/20 hover:border-white/30"
+        }`}
+      >
+        <span className={`truncate ${selected ? "text-white font-semibold" : "text-slate-500"}`}>
+          {selected || "Selecione o servidor"}
+        </span>
+        <ChevronDown size={16} className={`flex-shrink-0 transition-transform duration-200 ${open ? "rotate-180 text-cyan-300" : "text-slate-400"}`} />
+      </button>
+
+      {open && (
+        <div
+          role="listbox"
+          aria-label="Servidor"
+          className="absolute z-40 mt-2 w-full rounded-xl border border-cyan-500/30 bg-[#0a1120] shadow-2xl shadow-black/70 overflow-hidden"
+        >
+          <div className="max-h-[264px] overflow-y-auto py-1">
+            {hasUnavailable && (
+              <div className="flex items-center gap-1.5 px-3 pt-2 pb-1 text-[9px] font-black uppercase tracking-[0.18em] text-emerald-400/90">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.8)]" />
+                Servidores atendidos
+              </div>
+            )}
+            {attended.map(server => {
+              const sel = selected === server;
+              return (
+                <button
+                  key={server}
+                  type="button"
+                  role="option"
+                  aria-selected={sel}
+                  onClick={() => { onSelect(server); setOpen(false); }}
+                  className={`w-full flex items-center justify-between gap-2 px-3 py-2 text-xs font-bold text-left transition-colors cursor-pointer border-l-2 ${
+                    sel
+                      ? "border-cyan-400 bg-cyan-500/15 text-cyan-200"
+                      : "border-transparent text-slate-200 hover:bg-cyan-500/10 hover:text-cyan-100"
+                  }`}
+                >
+                  <span className="truncate">{server}</span>
+                  {sel && <Check size={13} className="flex-shrink-0 text-cyan-300" />}
+                </button>
+              );
+            })}
+
+            {hasUnavailable && (
+              <>
+                <div className="mx-3 my-1.5 h-px bg-white/10" />
+                <div className="flex items-center gap-1.5 px-3 pb-1 text-[9px] font-black uppercase tracking-[0.18em] text-slate-600">
+                  <span className="w-1.5 h-1.5 rounded-full bg-slate-600" />
+                  Temporariamente indisponíveis
+                </div>
+                {unavailable.map(server => (
+                  <button
+                    key={server}
+                    type="button"
+                    role="option"
+                    aria-selected={false}
+                    aria-disabled="true"
+                    onClick={() => { onSelectUnavailable(); setOpen(false); }}
+                    title="Este serviceiro não atende este servidor no momento."
+                    className="w-full flex items-center justify-between gap-2 px-3 py-2 text-xs font-bold text-left cursor-not-allowed saturate-50 opacity-60 border-l-2 border-transparent"
+                  >
+                    <span className="truncate text-slate-500">{server}</span>
+                    <span className="flex-shrink-0 text-[8px] font-black uppercase tracking-widest text-amber-500/60">⏸ Indisponível</span>
+                  </button>
+                ))}
+              </>
+            )}
           </div>
         </div>
       )}
@@ -1812,15 +1865,17 @@ const inputCls = "w-full bg-black/60 border border-white/20 hover:border-white/3
                     {fieldErrors.personagem && <div className="text-[10px] text-rose-400 mt-1.5">{fieldErrors.personagem}</div>}
                   </div>
 
-                  {/* Servidor — grade com a disponibilidade configurada pelo
-                      dono do formulário: atendidos primeiro (ativos), não
-                      atendidos ao final (esmaecidos, visíveis, bloqueados). */}
+                  {/* Servidor — dropdown (lista exibida só ao clicar no campo)
+                      com a disponibilidade configurada pelo dono do formulário:
+                      atendidos primeiro (ativos), não atendidos ao final
+                      (esmaecidos, visíveis, bloqueados). */}
                   <div>
                     <label className={labelCls}>Servidor *</label>
                     <ServerPicker
                       attended={serverGroups.attended}
                       unavailable={serverGroups.unavailable}
                       selected={servidor}
+                      hasError={!!fieldErrors.servidor}
                       onSelect={(v: string) => {
                         setServidor(v); if (fieldErrors.servidor) setFieldErrors(f => ({ ...f, servidor: "" })); if (duplicateMsg) setDuplicateMsg(null);
                       }}
