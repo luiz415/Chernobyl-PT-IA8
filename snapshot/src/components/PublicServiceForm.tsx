@@ -314,6 +314,27 @@ function ServerPicker({
   );
 }
 
+/**
+ * Card de Quest em estado de CARREGAMENTO (Etapa 1) — exibido enquanto a
+ * configuração efetiva do formulário (link exclusivo) ainda não foi
+ * confirmada. Nada é selecionável até a disponibilidade REAL chegar: o
+ * padrão temporário (que habilita tudo) nunca decide a seleção.
+ */
+function QuestCardLoading({ emoji, title }: { emoji: string; title: string }) {
+  return (
+    <div
+      aria-busy="true"
+      className="relative overflow-hidden flex flex-col items-center gap-2.5 px-6 py-8 rounded-2xl border-2 w-full cursor-wait border-white/10 bg-gradient-to-b from-white/[0.05] via-white/[0.02] to-transparent animate-pulse"
+    >
+      <span className="text-4xl grayscale opacity-50">{emoji}</span>
+      <span className="text-lg font-black tracking-[0.14em] text-slate-500">{title}</span>
+      <span className="inline-flex items-center gap-1 text-[10px] font-black uppercase tracking-[0.2em] text-slate-600">
+        Verificando disponibilidade…
+      </span>
+    </div>
+  );
+}
+
 // ----------------------------------------------------------------------------
 // Blocos de conteúdo da Etapa 2 — stateless, definidos FORA do componente
 // principal para não serem remontados a cada render.
@@ -787,6 +808,20 @@ export default function PublicServiceForm() {
     return resolveServiceFormConfig(owner?.serviceFormConfig);
   }, [lockedTarget, eligibleServiceiros]);
 
+  // ── CONFIGURAÇÃO CONFIRMADA? ─────────────────────────────────────────────
+  // A configuração EFETIVA do formulário só está CONFIRMADA quando:
+  //   • formulário GERAL (sem id exclusivo na URL): os padrões SÃO a
+  //     configuração real → pronta desde a montagem (comportamento idêntico
+  //     ao atual, nenhuma espera);
+  //   • link EXCLUSIVO: a lista de elegíveis terminou de carregar E a
+  //     resolução do dono foi concluída (dono encontrado OU link inválido).
+  //     Antes disso `ownerCfg` seria apenas o padrão TEMPORÁRIO — que
+  //     habilita tudo — e NUNCA pode decidir seleção/avanço de Quest.
+  // Enquanto `configReady` for false: os cards da Etapa 1 ficam em estado de
+  // carregamento (não selecionáveis), `chooseQuest` não seleciona,
+  // `stepErrors(1)` bloqueia o avanço e o gate final do envio recusa.
+  const configReady = !exclusiveId || (eligiblesLoaded && (lockedTarget !== null || lockedLinkInvalid));
+
   // Bloqueios por Quest: SOMENTE a configuração do dono decide (habilitada
   // no modal = disponível; desabilitada = bloqueada). O tooltip usa o motivo
   // personalizado informado no modal; sem motivo, o aviso genérico padrão.
@@ -870,6 +905,26 @@ export default function PublicServiceForm() {
     return () => window.clearTimeout(timer);
   }, [sgNotice]);
 
+  // ── CORREÇÃO PÓS-CARREGAMENTO DA CONFIGURAÇÃO ───────────────────────────
+  // Se por QUALQUER caminho (clique rápido antes do carregamento, evento
+  // atrasado, estado restaurado) uma Quest tiver sido selecionada e a
+  // configuração confirmada do dono revelar que ela está DESABILITADA, a
+  // seleção é desfeita NA HORA: aceite de termos zerado (valia para aquela
+  // Quest), fluxo de volta à Etapa 1 e o aviso com o motivo configurado
+  // aberto. Nada continua navegável com Quest proibida.
+  useEffect(() => {
+    if (!configReady || !quest) return;
+    const blocked = quest === "soulwar" ? swBlocked : quest === "sanguine" ? sgBlocked : false;
+    if (!blocked) return;
+    setQuest(null);
+    setTermsAccepted(false);
+    setTermsDeclined(false);
+    setFieldErrors({});
+    setStep(1);
+    if (quest === "soulwar") setSwNotice(true);
+    else setSgNotice(true);
+  }, [configReady, quest, swBlocked, sgBlocked]);
+
   // ── Validações por etapa ─────────────────────────────────────────────────
   // Cada etapa valida SOMENTE os próprios campos ao avançar; `validate()`
   // (abaixo) revalida TUDO no envio final — nenhuma etapa pulada escapa.
@@ -882,7 +937,13 @@ export default function PublicServiceForm() {
 
   function stepErrors(s: Step): Record<string, string> {
     const errors: Record<string, string> = {};
-    if (s === 1 && (!quest || isQuestBlocked(quest))) errors.quest = "Escolha a Quest para continuar";
+    // Etapa 1: além da escolha, a configuração do formulário precisa estar
+    // CONFIRMADA — os padrões temporários (que habilitam tudo) nunca validam
+    // o avanço nem o envio.
+    if (s === 1) {
+      if (!configReady) errors.quest = "Carregando as configurações do formulário — aguarde um instante.";
+      else if (!quest || isQuestBlocked(quest)) errors.quest = "Escolha a Quest para continuar";
+    }
     if (s === 2 && !termsAccepted) errors.terms = "É necessário aceitar os termos para prosseguir";
     if (s === 3) {
       if (!ownerName.trim()) errors.ownerName = "Informe o seu nome";
@@ -940,6 +1001,11 @@ export default function PublicServiceForm() {
   }
 
   function chooseQuest(q: PublicQuest) {
+    // Configuração ainda NÃO confirmada (link exclusivo carregando): nada é
+    // selecionável — os padrões temporários habilitam tudo e não podem
+    // decidir. Os cards nem chamam esta função nesse estado; guarda
+    // defensiva para cliques rápidos/eventos atrasados.
+    if (!configReady) return;
     // Quest bloqueada (pausa global OU desabilitada pelo dono do link):
     // nunca seleciona (o botão bloqueado nem chama esta função; guarda
     // defensiva para qualquer outro caminho).
@@ -998,8 +1064,8 @@ export default function PublicServiceForm() {
     // escolhida, termos aceitos e level dentro do mínimo da combinação
     // Quest + Vocação (fonte única: utils/publicServiceLevels).
     const levelNum = parseInt(level || "0", 10) || 0;
-    if (!quest || isQuestBlocked(quest) || !termsAccepted || !voc || publicLevelBlockReason(quest, voc, levelNum, minLevelFor(quest, voc))) {
-      setStep(!quest || isQuestBlocked(quest) ? 1 : !termsAccepted ? 2 : !voc ? 5 : 6);
+    if (!configReady || !quest || isQuestBlocked(quest) || !termsAccepted || !voc || publicLevelBlockReason(quest, voc, levelNum, minLevelFor(quest, voc))) {
+      setStep(!configReady || !quest || isQuestBlocked(quest) ? 1 : !termsAccepted ? 2 : !voc ? 5 : 6);
       return;
     }
 
@@ -1438,7 +1504,13 @@ const inputCls = "w-full bg-black/60 border border-white/20 hover:border-white/3
 
                   {/* Seletores de Quest — somente os nomes, temas distintos */}
                   <div className="relative grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    {swBlocked ? (
+                    {!configReady ? (
+                      /* CONFIGURAÇÃO AINDA NÃO CONFIRMADA (link exclusivo
+                         carregando): card em estado de espera — nunca
+                         selecionável. A disponibilidade REAL só é exibida
+                         (e aceita) depois que a config do dono chega. */
+                      <QuestCardLoading emoji="⚔️" title="SOUL WAR" />
+                    ) : swBlocked ? (
                       /* SOUL WAR BLOQUEADA — visível, não selecionável,
                          porque o DONO do link exclusivo desabilitou a Quest
                          no modal "Configurar Meu Formulário" (única fonte do
@@ -1490,7 +1562,10 @@ const inputCls = "w-full bg-black/60 border border-white/20 hover:border-white/3
                         </span>
                       </button>
                     )}
-                    {sgBlocked ? (
+                    {!configReady ? (
+                      /* Mesmo estado de espera da Soul War. */
+                      <QuestCardLoading emoji="🩸" title="SANGUINE" />
+                    ) : sgBlocked ? (
                       /* SANGUINE DESABILITADA PELO DONO do link exclusivo
                          (modal "Configurar Meu Formulário") — visível, não
                          selecionável, mesma apresentação do bloqueio da
