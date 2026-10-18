@@ -16,7 +16,7 @@
 
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { AlertTriangle, ArrowDown, ArrowDownUp, ArrowUp, Calculator, Check, Coins, Copy, Crown, Download, ExternalLink, Eye, FlagTriangleRight, Globe, ListChecks, Package, Pencil, Plus, RefreshCw, RotateCcw, Search, Sparkles, Square, Star, Trash2, Upload, X } from "lucide-react";
+import { AlertTriangle, ArrowDown, ArrowDownUp, ArrowUp, Calculator, Check, Coins, Copy, Crown, Download, ExternalLink, Eye, FlagTriangleRight, Globe, ListChecks, Package, Pencil, Plus, RefreshCw, RotateCcw, Save, Search, Sparkles, Square, Star, Trash2, Upload, X } from "lucide-react";
 import BazaarBrowserModal, { BAZAAR_BROWSER_KEY, BAZAAR_BROWSER_ORDER_KEY, BAZAAR_QUEST_SOURCE_KEY, BAZAAR_RETRY_BROWSERS_KEY, BAZAAR_RETRY_COUNTS_KEY, BAZAAR_SPEED_MODE_KEY, DEFAULT_BAZAAR_QUEST_SOURCE, DEFAULT_BROWSER_ORDER, normalizeBazaarQuestSource, normalizeRetryCounts } from "./BazaarBrowserModal";
 // Mesmos componentes de filtro da tabela de QUESTS (FilterTypes é a fonte
 // única — nenhuma implementação paralela) e as MESMAS classes de célula
@@ -75,7 +75,6 @@ import {
   exportWatchlistByServerJson,
   exportWatchlistJson,
   getServerWatchedItems,
-  loadItemsCoinRate,
   loadItemsInterests,
   loadItemsLastQuery,
   loadWatchedItemsByServer,
@@ -85,7 +84,6 @@ import {
   propagateWatchedItemValueToAllServers,
   repriceAllQueryResults,
   repriceQueryResultsForServerItem,
-  saveItemsCoinRate,
   saveItemsInterests,
   saveItemsLastQuery,
   saveWatchedItemsByServer,
@@ -100,6 +98,17 @@ import {
 // Fonte ÚNICA de servidores (mesma lista/normalização do restante do app):
 // as Listas de Itens agora são POR SERVIDOR, chaveadas pelo nome oficial.
 import { SERVER_OPTIONS } from "../constants/servers";
+// COTAÇÃO DO RC POR SERVIDOR — fonte única da conversão kk → RC do módulo
+// (persistida em users/{uid}.bazaarCoinRates + espelho local; sem fallback
+// e sem a taxa fixa legada). Ver utils/bazaarCoinRates.ts.
+import {
+  fetchCoinRates,
+  getServerCoinRate,
+  persistCoinRates,
+  readLocalCoinRates,
+  withServerCoinRate,
+  type BazaarCoinRates,
+} from "../utils/bazaarCoinRates";
 import { syncBazaarItemsEndingAlerts } from "../services/bazaarInterestNotificationService";
 import { useAuth } from "../context/AuthContext";
 import type { BazaarItemsPurchasePrefill } from "../types";
@@ -523,10 +532,28 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
   useEffect(() => {
     saveItemsSelectedServer(selectedServer);
   }, [selectedServer]);
-  const [coinRateText, setCoinRateText] = useState<string>(() => {
-    const rate = loadItemsCoinRate();
-    return rate > 0 ? String(rate).replace(".", ",") : "";
-  });
+  // ── COTAÇÃO DO RC POR SERVIDOR ─────────────────────────────────────────
+  // Cada servidor tem a PRÓPRIA cotação ("Coin (k)" = k por 1000 RC),
+  // persistida em `users/{uid}.bazaarCoinRates` e editada no modal "Lista
+  // de Itens" (campo por servidor) ou no modal "Ver" (servidor do
+  // personagem). Semeada do espelho local (síncrono) e sincronizada do
+  // Firestore uma vez por usuário. Servidor sem cotação → 0 → "—" (nunca
+  // herdamos taxa de outro servidor nem a taxa fixa legada).
+  const [coinRates, setCoinRates] = useState<BazaarCoinRates>(() => readLocalCoinRates(currentUid));
+  useEffect(() => {
+    let cancelled = false;
+    setCoinRates(readLocalCoinRates(currentUid));
+    void fetchCoinRates(currentUid).then(rates => { if (!cancelled) setCoinRates(rates); });
+    return () => { cancelled = true; };
+  }, [currentUid]);
+  /** Cotação do servidor (k por 1000 RC); 0 = não configurada. */
+  const rateFor = (server: string | undefined | null): number => getServerCoinRate(coinRates, server);
+  /** Grava a cotação de UM servidor (null/<=0 remove) — reflete na hora. */
+  const saveServerCoinRate = (server: string, rate: number | null) => {
+    const next = withServerCoinRate(coinRates, server, rate);
+    setCoinRates(next);
+    void persistCoinRates(currentUid, next);
+  };
   const [endUntil, setEndUntil] = useState<string>(() => getDefaultBazarEndUntil(timezoneOffsetMinutes));
   const [lastQuery, setLastQuery] = useState<BazaarItemsLastQuery | null>(() => loadItemsLastQuery());
   // "Pesquisar Item" do quadro "Última Consulta": filtro LOCAL e derivado
@@ -587,6 +614,8 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
     if (detailApplyTimerRef.current !== null) window.clearTimeout(detailApplyTimerRef.current);
     if (listApplyTimerRef.current !== null) window.clearTimeout(listApplyTimerRef.current);
     if (repriceFeedbackTimerRef.current !== null) window.clearTimeout(repriceFeedbackTimerRef.current);
+    if (listRateTimerRef.current !== null) window.clearTimeout(listRateTimerRef.current);
+    if (detailRateTimerRef.current !== null) window.clearTimeout(detailRateTimerRef.current);
   }, []);
 
   function updateTableFilters(patch: Partial<ItemsTableFilters>) {
@@ -669,6 +698,85 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
   const [detailApply, setDetailApply] = useState<number | null>(null);
   const [detailApplyDone, setDetailApplyDone] = useState<{ matchIndex: number; count: number } | null>(null);
   const detailApplyTimerRef = useRef<number | null>(null);
+  // ── TOTAL (KK) LOCAL no modal "Detalhes" ──────────────────────────────────
+  // Itens com Tier nem sempre seguem o acréscimo padrão de +30%/nível: o
+  // Boss pode AJUSTAR o Total (kk) de cada linha SÓ PARA ESTA VISUALIZAÇÃO.
+  // Estado 100% em memória (nunca localStorage/Firestore): descartado ao
+  // fechar o modal ou abrir outro personagem. O valor editado passa a valer
+  // nos cálculos LOCAIS do modal (soma dos itens + conversão RC); a Lista de
+  // Itens, a tabela principal e os dados persistidos NÃO mudam.
+  const [detailTotalEdit, setDetailTotalEdit] = useState<{ matchIndex: number; value: string } | null>(null);
+  const [detailTotalOverrides, setDetailTotalOverrides] = useState<Record<string, number>>({});
+  // ── Cotação do RC do servidor — edição no modal "Detalhes" ───────────────
+  // Edita a MESMA configuração persistente usada pela Lista de Itens
+  // (users/{uid}.bazaarCoinRates), para o servidor do personagem exibido.
+  const [detailRateEdit, setDetailRateEdit] = useState<string | null>(null);
+  const [detailRateError, setDetailRateError] = useState<string | null>(null);
+  const [detailRateSaved, setDetailRateSaved] = useState(false);
+  const detailRateTimerRef = useRef<number | null>(null);
+  /** Chave do override local de Total — índice + nome (sobrevive à reprecificação da linha). */
+  const detailTotalKey = (index: number, foundName: string) => `${index}:${foundName}`;
+  /** Limpa TODO o estado local do modal Detalhes (abertura/fechamento). */
+  const resetDetailLocalState = () => {
+    setDetailTotalEdit(null);
+    setDetailTotalOverrides({});
+    setDetailRateEdit(null);
+    setDetailRateError(null);
+    setDetailRateSaved(false);
+  };
+  /** Aplica o ajuste LOCAL de Total (kk) da linha (vazio = volta ao calculado). */
+  const saveDetailTotalEdit = (index: number, foundName: string) => {
+    if (!detailTotalEdit || detailTotalEdit.matchIndex !== index) return;
+    const text = detailTotalEdit.value.trim();
+    const key = detailTotalKey(index, foundName);
+    const parsed = text ? parseDecimalKk(text) : null;
+    setDetailTotalOverrides(prev => {
+      const next = { ...prev };
+      if (parsed !== null) next[key] = parsed;
+      else delete next[key];
+      return next;
+    });
+    setDetailTotalEdit(null);
+  };
+  /** Descarta o ajuste local de Total de uma linha (volta ao calculado). */
+  const removeDetailTotalOverride = (index: number, foundName: string) => {
+    const key = detailTotalKey(index, foundName);
+    setDetailTotalOverrides(prev => {
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
+  };
+  /** Total (kk) EFETIVO de uma linha do modal Detalhes (ajuste local > calculado). */
+  const detailEffectiveMatchKk = (index: number, match: CharacterItemMatch): number => {
+    const override = detailTotalOverrides[detailTotalKey(index, match.foundName)];
+    return override !== undefined ? override : Number(match.totalKk || 0);
+  };
+  /**
+   * Salva a cotação do SERVIDOR do personagem exibido no modal Detalhes —
+   * grava a MESMA configuração persistente da Lista de Itens
+   * (users/{uid}.bazaarCoinRates): vira a taxa de TODO o módulo para esse
+   * servidor, refletida na hora (sem nova consulta). Vazio = remover.
+   */
+  const saveDetailRate = (server: string) => {
+    if (detailRateEdit === null) return;
+    const text = detailRateEdit.trim();
+    if (!text) {
+      saveServerCoinRate(server, null);
+    } else {
+      const parsed = parseDecimalKk(text);
+      if (parsed === null) {
+        setDetailRateError("Cotação inválida — número maior que zero com até 1 casa decimal (ex.: 2,5).");
+        return;
+      }
+      saveServerCoinRate(server, parsed);
+    }
+    setDetailRateEdit(null);
+    setDetailRateError(null);
+    setDetailRateSaved(true);
+    if (detailRateTimerRef.current !== null) window.clearTimeout(detailRateTimerRef.current);
+    detailRateTimerRef.current = window.setTimeout(() => setDetailRateSaved(false), 1500);
+  };
   // Erros do fluxo "Comprado" (ex.: personagem já cadastrado) — exibidos
   // inline na própria célula, por leilão.
   const [purchaseErrors, setPurchaseErrors] = useState<Record<string, string>>({});
@@ -677,6 +785,42 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
   const [listApply, setListApply] = useState<string | null>(null);
   const [listApplyDone, setListApplyDone] = useState<{ itemId: string; count: number } | null>(null);
   const listApplyTimerRef = useRef<number | null>(null);
+  // ── Cotação do RC no modal "Lista de Itens" — campo POR SERVIDOR ─────────
+  // Texto em edição (sincronizado com o servidor selecionado), erro de
+  // validação e feedback "Salvo" (1,5s). Salvar grava SOMENTE a cotação do
+  // servidor selecionado (users/{uid}.bazaarCoinRates) — os demais
+  // servidores permanecem intactos.
+  const [listRateDraft, setListRateDraft] = useState<string>("");
+  const [listRateError, setListRateError] = useState<string | null>(null);
+  const [listRateSaved, setListRateSaved] = useState(false);
+  const listRateTimerRef = useRef<number | null>(null);
+  useEffect(() => {
+    const rate = getServerCoinRate(coinRates, selectedServer);
+    setListRateDraft(rate > 0 ? String(rate).replace(".", ",") : "");
+    setListRateError(null);
+  }, [selectedServer, coinRates, isItemsModalOpen]); // eslint-disable-line react-hooks/exhaustive-deps
+  /**
+   * Salva a cotação do SERVIDOR SELECIONADO no modal Lista de Itens.
+   * Campo vazio = REMOVER a cotação (o servidor volta a exibir "—" — nunca
+   * inventamos conversão). Valor inválido não grava nada.
+   */
+  const saveListRate = () => {
+    const text = listRateDraft.trim();
+    if (!text) {
+      saveServerCoinRate(selectedServer, null);
+    } else {
+      const parsed = parseDecimalKk(text);
+      if (parsed === null) {
+        setListRateError("Cotação inválida — use um número maior que zero com até 1 casa decimal (ex.: 2,5).");
+        return;
+      }
+      saveServerCoinRate(selectedServer, parsed);
+    }
+    setListRateError(null);
+    setListRateSaved(true);
+    if (listRateTimerRef.current !== null) window.clearTimeout(listRateTimerRef.current);
+    listRateTimerRef.current = window.setTimeout(() => setListRateSaved(false), 1500);
+  };
   // Feedback "Copiado!" (1,5s) — mesmo padrão dos demais botões de copiar do
   // aplicativo (AvailableCharacter/CharTable). Uma chave por origem da cópia.
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
@@ -687,7 +831,6 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
   // painel de quests, alimentados pelo canal de ITENS do agendador local.
   const [itemsNotifications, setItemsNotifications] = useState<ItemsLocalNotification[]>([]);
 
-  const coinRate = parseCoinRate(coinRateText);
 
   // Recarrega o interesse local quando o usuário muda (mesma chave por uid).
   useEffect(() => {
@@ -1727,11 +1870,14 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
         if (tableFilters.kkOperator === "gte" && kk < tableFilters.kkValue) return false;
         if (tableFilters.kkOperator === "lte" && kk > tableFilters.kkValue) return false;
       }
+      // Cotação do SERVIDOR deste personagem (0 = não configurada) — cada
+      // servidor usa exclusivamente a própria taxa de conversão.
+      const rowRate = rateFor(result.server);
       if (tableFilters.rcValue !== null) {
-        // RC depende da cotação atual do coin — sem cotação não há valor de
+        // RC depende da cotação do SERVIDOR — sem cotação não há valor de
         // RC exibido (coluna mostra "—"), então o filtro não elimina nada.
-        if (coinRate > 0) {
-          const rc = computeItemRC(coinRate, kk);
+        if (rowRate > 0) {
+          const rc = computeItemRC(rowRate, kk);
           if (tableFilters.rcOperator === "gte" && rc < tableFilters.rcValue) return false;
           if (tableFilters.rcOperator === "lte" && rc > tableFilters.rcValue) return false;
         }
@@ -1742,7 +1888,7 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
         // Linha sem percentual ("—": sem cotação ou sem valor do personagem)
         // é eliminada quando o filtro está ativo — não há número honesto
         // para comparar (mesmo racional do RC, que não inventa valor).
-        const pct = potentialPercent(result, coinRate);
+        const pct = potentialPercent(result, rowRate);
         if (pct === null) return false;
         if (tableFilters.potentialOperator === "gte" && pct < tableFilters.potentialValue) return false;
         if (tableFilters.potentialOperator === "lte" && pct > tableFilters.potentialValue) return false;
@@ -1774,14 +1920,18 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
       let av: string | number;
       let bv: string | number;
       if (entry.key === "rc") {
-        av = coinRate > 0 ? computeItemRC(coinRate, effectiveTotalKk(a)) : 0;
-        bv = coinRate > 0 ? computeItemRC(coinRate, effectiveTotalKk(b)) : 0;
+        // Cada linha converte com a cotação do PRÓPRIO servidor (sem
+        // cotação = 0 — fica no fundo, como quando não havia taxa).
+        const rateA = rateFor(a.server);
+        const rateB = rateFor(b.server);
+        av = rateA > 0 ? computeItemRC(rateA, effectiveTotalKk(a)) : 0;
+        bv = rateB > 0 ? computeItemRC(rateB, effectiveTotalKk(b)) : 0;
       } else if (entry.key === "potential") {
         // Ordena pelo VALOR NUMÉRICO real do percentual, nunca pela cor.
         // Sem percentual (cotação/valor ausente), empata no fundo:
         // sentinela finita — evita o NaN de (-Inf) − (-Inf) no comparador.
-        av = potentialPercent(a, coinRate) ?? -1e15;
-        bv = potentialPercent(b, coinRate) ?? -1e15;
+        av = potentialPercent(a, rateFor(a.server)) ?? -1e15;
+        bv = potentialPercent(b, rateFor(b.server)) ?? -1e15;
       } else if (entry.key === "totalKk") {
         av = effectiveTotalKk(a);
         bv = effectiveTotalKk(b);
@@ -1807,7 +1957,7 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
       });
     }
     return sorted;
-  }, [visibleResults, tableFilters, sortStack, coinRate, itemInterests, timezoneOffsetMinutes, hideEndedResults, currentUnixTs]);
+  }, [visibleResults, tableFilters, sortStack, coinRates, itemInterests, timezoneOffsetMinutes, hideEndedResults, currentUnixTs]);
 
   const hasActiveTableFilters = !!(
     tableFilters.name.trim() ||
@@ -2002,21 +2152,21 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                 />
               </label>
 
-              <label className="inline-flex items-center gap-1 text-[10px]" title="Cotação do Rubini Coin no Market: quantos k equivalem a 1000 RC. Mesma regra de conversão usada no restante do aplicativo.">
+              {/* COTAÇÃO DO RC — agora POR SERVIDOR (a RC vale diferente em
+                  cada servidor): a taxa fixa única deixou de existir. As
+                  cotações são configuradas no modal "Lista de Itens" (campo
+                  por servidor) ou no modal "Ver" de um personagem — este
+                  chip apenas informa e leva até lá. */}
+              <button
+                type="button"
+                onClick={() => setIsItemsModalOpen(true)}
+                title={`Cotação do Rubini Coin POR SERVIDOR (quantos k equivalem a 1000 RC em cada servidor). Configure na Lista de Itens — cada personagem converte com a taxa do próprio servidor. Configuradas: ${Object.keys(coinRates).length} de ${SERVER_OPTIONS.length} servidores.`}
+                className="inline-flex h-7 items-center gap-1 rounded-md border border-amber-500/30 bg-amber-500/10 px-1.5 text-[10px] font-bold text-amber-300 hover:bg-amber-500/20 transition-colors cursor-pointer"
+              >
                 <Coins size={11} className="text-amber-300" />
-                <span className="font-bold text-slate-300">Coin (k)</span>
-                <input
-                  type="text"
-                  inputMode="decimal"
-                  value={coinRateText}
-                  onChange={event => {
-                    setCoinRateText(event.target.value);
-                    saveItemsCoinRate(parseCoinRate(event.target.value));
-                  }}
-                  placeholder="90"
-                  className="h-7 w-16 rounded-md border border-[var(--th-line)]/70 bg-black/35 px-1.5 text-[10px] text-white outline-none focus:border-fuchsia-600/60"
-                />
-              </label>
+                Coin (k): por servidor
+                <span className="font-mono text-[9px] text-amber-200/80">({Object.keys(coinRates).length}/{SERVER_OPTIONS.length})</span>
+              </button>
 
               {/* ── Pesquisar Item — filtro LOCAL da lista de personagens ─────
                   Filtra dinamicamente sobre os resultados JÁ obtidos (pesquisa
@@ -2347,12 +2497,16 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                 // RC/exibição/badge derivam deste valor.
                 const effectiveKk = effectiveTotalKk(result);
                 const isManualKk = hasManualTotalKk(result);
+                // COTAÇÃO do SERVIDOR deste personagem — cada linha converte
+                // kk → RC exclusivamente com a taxa do próprio servidor
+                // (0 = não configurada → "—", nunca taxa de outro servidor).
+                const rowCoinRate = rateFor(result.server);
                 // POTENCIAL: percentual real ((itens − personagem) ÷
                 // personagem) e diferença em kk para o tooltip. Recalculado
                 // a cada render — correção manual do KK, edição de preço e
                 // "Atualizar Valores" refletem na hora.
-                const potentialPct = potentialPercent(result, coinRate);
-                const potentialDiffKk = potentialScoreKk(result, coinRate);
+                const potentialPct = potentialPercent(result, rowCoinRate);
+                const potentialDiffKk = potentialScoreKk(result, rowCoinRate);
                 // Estado do link — MESMO mecanismo do painel de quests
                 // (openedLinksState compartilhado via props).
                 const linkState = getLinkState ? getLinkState(auctionKey) : "open";
@@ -2492,7 +2646,9 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                     )}
                   </td>
                   <td className="px-2 py-1.5 text-center font-mono font-bold text-emerald-300" title={isManualKk ? "RC calculado sobre o valor corrigido manualmente" : undefined}>
-                    {coinRate > 0 ? computeItemRC(coinRate, effectiveKk).toLocaleString("de-DE") : "—"}
+                    {rowCoinRate > 0
+                      ? computeItemRC(rowCoinRate, effectiveKk).toLocaleString("de-DE")
+                      : <span title={`Sem cotação do RC configurada para ${result.server} — defina na Lista de Itens (campo "Coin (k)" do servidor)`}>—</span>}
                   </td>
                   <td className="px-2 py-1.5 text-center">
                     {/* POTENCIAL — o PERCENTUAL é o destaque principal:
@@ -2505,7 +2661,7 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                     {potentialPct !== null ? (
                       <span
                         aria-label={`Potencial: ${formatPotentialPercent(potentialPct)}`}
-                        title={`Potencial: ${formatPotentialPercent(potentialPct)} — Valor Itens ${formatKkValue(effectiveKk, "kk")}${isManualKk ? " (manual)" : ""} vs personagem ${formatKkValue(bidValueKk(result, coinRate), "kk")}${potentialDiffKk !== null ? ` (diferença ${potentialDiffKk >= 0 ? "+" : "−"}${formatKkValue(Math.abs(potentialDiffKk), "kk")})` : ""}`}
+                        title={`Potencial: ${formatPotentialPercent(potentialPct)} — Valor Itens ${formatKkValue(effectiveKk, "kk")}${isManualKk ? " (manual)" : ""} vs personagem ${formatKkValue(bidValueKk(result, rowCoinRate), "kk")}${potentialDiffKk !== null ? ` (diferença ${potentialDiffKk >= 0 ? "+" : "−"}${formatKkValue(Math.abs(potentialDiffKk), "kk")})` : ""}`}
                         className={`inline-flex items-center justify-center gap-1 rounded border px-1.5 py-0.5 font-mono text-[10px] font-black ${
                           potentialPct > 0
                             ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-300"
@@ -2609,7 +2765,7 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                           type="button"
                           onClick={() => {
                             if (markViewed) markViewed(auctionKey);
-                            setDetailResult(result); setDetailApply(null); setDetailApplyDone(null);
+                            setDetailResult(result); setDetailApply(null); setDetailApplyDone(null); resetDetailLocalState();
                           }}
                           title={viewState === "last" ? "Último personagem cujos detalhes foram abertos" : viewState === "opened" ? "Detalhes já visualizados neste dispositivo" : "Ver detalhes dos itens do personagem"}
                           className={`inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[9px] font-black transition-colors cursor-pointer ${viewClass}`}
@@ -2718,6 +2874,44 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                   })}
                 </select>
               </label>
+
+              {/* ── COTAÇÃO DO RC DESTE SERVIDOR ──────────────────────────
+                  A RC vale diferente em cada servidor: a cotação ("Coin (k)"
+                  = quantos k equivalem a 1000 RC) é INDEPENDENTE por
+                  servidor e persistida na conta (users/{uid}.bazaarCoinRates
+                  — a MESMA configuração editável no modal "Ver"). Salvar
+                  grava SÓ o servidor selecionado; todos os cálculos dele
+                  (coluna RC, Potencial, modais) refletem na hora. Campo
+                  vazio = sem cotação → o servidor exibe "—". */}
+              <div className="rounded-lg border border-amber-500/25 bg-amber-500/5 px-2.5 py-2 space-y-1">
+                <div className="flex flex-wrap items-center gap-1.5 text-[10px]">
+                  <span className="inline-flex items-center gap-1 font-black uppercase tracking-wider text-amber-300 flex-shrink-0" title={`Cotação do Rubini Coin em ${selectedServer}: quantos k equivalem a 1000 RC. Cada servidor tem a própria cotação — alterar aqui NÃO muda os demais.`}>
+                    <Coins size={11} /> Coin (k) de {selectedServer}
+                  </span>
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    value={listRateDraft}
+                    onChange={event => { setListRateDraft(sanitizeDecimalKk(event.target.value)); setListRateError(null); }}
+                    onKeyDown={event => { if (event.key === "Enter") { event.preventDefault(); saveListRate(); } }}
+                    placeholder="ex: 2,5"
+                    title={`Cotação de ${selectedServer} em k por 1000 RC (até 1 casa decimal). Enter ou Salvar grava; vazio remove a cotação (RC do servidor volta a "—").`}
+                    className="h-7 w-20 rounded-md border border-[var(--th-line)]/70 bg-black/35 px-1.5 text-[10px] font-mono text-amber-200 outline-none focus:border-amber-500/60"
+                  />
+                  <button
+                    type="button"
+                    onClick={saveListRate}
+                    className="inline-flex h-7 items-center gap-1 rounded-md border border-amber-500/40 bg-amber-500/15 px-2 text-[10px] font-black text-amber-200 hover:bg-amber-500/25 transition-colors cursor-pointer"
+                    title={`Salvar a cotação de ${selectedServer} (persistida na sua conta e usada em todos os cálculos deste servidor — os demais servidores não mudam)`}
+                  >
+                    {listRateSaved ? (<><Check size={11} strokeWidth={3} /> Salvo</>) : (<><Save size={11} /> Salvar</>)}
+                  </button>
+                  {getServerCoinRate(coinRates, selectedServer) <= 0 && (
+                    <span className="text-[9px] font-bold text-amber-300/80">Sem cotação — RC de {selectedServer} exibe "—"</span>
+                  )}
+                </div>
+                {listRateError && <p role="alert" className="text-[9px] font-medium text-rose-300">{listRateError}</p>}
+              </div>
 
               {/* Formulário: EXCLUSIVO para adicionar novos itens — a edição
                   de itens existentes é INLINE, na própria linha da lista. */}
@@ -2989,7 +3183,7 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
       {detailResult && (
         <div
           className="app-modal-overlay fixed inset-0 z-[1200] flex items-center justify-center bg-black/70 backdrop-blur-sm"
-          onMouseDown={event => { if (event.target === event.currentTarget) { setDetailResult(null); setDetailEdit(null); setDetailEditError(null); setDetailApply(null); setDetailApplyDone(null); } }}
+          onMouseDown={event => { if (event.target === event.currentTarget) { setDetailResult(null); setDetailEdit(null); setDetailEditError(null); setDetailApply(null); setDetailApplyDone(null); resetDetailLocalState(); } }}
         >
           <div className="app-modal-frame w-full max-w-xl max-h-[88vh] flex flex-col rounded-xl border border-fuchsia-500/30 bg-[var(--th-bg-raised)] shadow-2xl shadow-black/60 overflow-hidden">
             <div className="flex-shrink-0 flex items-center justify-between gap-2 px-4 py-3 border-b border-[var(--th-line)]/40">
@@ -3026,7 +3220,7 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                   );
                 })()}
               </div>
-              <button type="button" onClick={() => { setDetailResult(null); setDetailEdit(null); setDetailEditError(null); setDetailApply(null); setDetailApplyDone(null); }} className="p-1 rounded text-slate-400 hover:text-white hover:bg-white/10 transition-colors cursor-pointer flex-shrink-0" title="Fechar">
+              <button type="button" onClick={() => { setDetailResult(null); setDetailEdit(null); setDetailEditError(null); setDetailApply(null); setDetailApplyDone(null); resetDetailLocalState(); }} className="p-1 rounded text-slate-400 hover:text-white hover:bg-white/10 transition-colors cursor-pointer flex-shrink-0" title="Fechar">
                 <X size={15} />
               </button>
             </div>
@@ -3064,6 +3258,9 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                   )}
                   {detailResult.matches.map((match, index) => {
                     const isEditingMatch = detailEdit?.matchIndex === index;
+                    // Ajuste LOCAL do Total (kk) desta linha (memória apenas).
+                    const isEditingTotalMatch = detailTotalEdit?.matchIndex === index;
+                    const rowTotalOverride = detailTotalOverrides[detailTotalKey(index, match.foundName)];
                     // Chave do feedback de cópia — uma por linha do modal.
                     const detailCopyKey = `detail_item_${index}`;
                     // Confirmação/feedback do "Atualizar" — por linha.
@@ -3155,10 +3352,65 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                       </td>
                       <td className="px-1.5 py-1.5 text-center font-mono text-slate-200">{match.amount}</td>
                       <td className="px-1.5 py-1.5 text-right font-mono font-bold text-amber-200">
-                        {/* TOTAL — apenas CALCULADO (base × Tier × quantidade).
-                            Não há edição aqui: o total NUNCA alimenta a Lista
-                            de Itens nem o botão "Atualizar". */}
-                        <span title={`base ${formatKkValue(match.baseValueKk, "kk")} × (1 + 0,3 × ${match.tier}) × ${match.amount} — somente leitura`}>{formatKkValue(match.totalKk, "kk")}</span>
+                        {/* TOTAL — calculado (base × Tier × quantidade) com
+                            AJUSTE LOCAL opcional: itens com Tier nem sempre
+                            seguem o +30% padrão, então o lápis permite
+                            corrigir o Total DESTA visualização. O ajuste
+                            vive só em memória (descartado ao fechar o modal),
+                            NUNCA alimenta a Lista de Itens, o "Atualizar" ou
+                            o Firestore — apenas os cálculos locais do modal
+                            (soma do personagem + conversão RC). */}
+                        {isEditingTotalMatch ? (
+                          <span className="inline-flex items-center justify-end gap-1">
+                            <input
+                              type="text"
+                              inputMode="numeric"
+                              autoFocus
+                              value={detailTotalEdit.value}
+                              onChange={event => setDetailTotalEdit(prev => (prev ? { ...prev, value: sanitizeDecimalKk(event.target.value) } : prev))}
+                              onKeyDown={event => {
+                                if (event.key === "Enter") { event.preventDefault(); saveDetailTotalEdit(index, match.foundName); }
+                                if (event.key === "Escape") { event.preventDefault(); setDetailTotalEdit(null); }
+                              }}
+                              placeholder="Total (kk)"
+                              title={`Total (kk) ajustado de "${match.foundName}" — SOMENTE nesta visualização (até 1 casa decimal). Enter aplica, Esc cancela; vazio volta ao calculado.`}
+                              className="h-6 w-16 rounded-md border border-amber-500/60 bg-black/35 px-1.5 text-right font-mono text-[10px] text-amber-200 outline-none focus:border-amber-400"
+                            />
+                            <button type="button" onClick={() => saveDetailTotalEdit(index, match.foundName)} className="p-0.5 rounded text-emerald-300 hover:bg-emerald-500/15 transition-colors cursor-pointer" title="Aplicar o ajuste local (nada é gravado — vale só nesta visualização)">
+                              <Check size={12} strokeWidth={3} />
+                            </button>
+                            <button type="button" onClick={() => setDetailTotalEdit(null)} className="p-0.5 rounded text-slate-400 hover:text-white hover:bg-white/10 transition-colors cursor-pointer" title="Cancelar">
+                              <X size={12} />
+                            </button>
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center justify-end gap-1">
+                            {rowTotalOverride !== undefined ? (
+                              <>
+                                <span className="text-sky-300" title={`Total ajustado localmente (calculado: ${formatKkValue(match.totalKk, "kk")}) — vale só nesta visualização, descartado ao fechar o modal; nada é gravado no Firestore`}>{formatKkValue(rowTotalOverride, "kk")}</span>
+                                <span className="rounded border border-sky-500/40 bg-sky-500/15 px-1 py-px text-[7px] font-black uppercase tracking-wide text-sky-300" title="Ajuste local desta visualização — descartado ao fechar o modal">local</span>
+                                <button
+                                  type="button"
+                                  onClick={() => removeDetailTotalOverride(index, match.foundName)}
+                                  className="p-0.5 rounded text-slate-500 hover:text-amber-300 hover:bg-amber-500/10 transition-colors cursor-pointer"
+                                  title={`Descartar o ajuste local e voltar ao total calculado (${formatKkValue(match.totalKk, "kk")})`}
+                                >
+                                  <RotateCcw size={11} />
+                                </button>
+                              </>
+                            ) : (
+                              <span title={`base ${formatKkValue(match.baseValueKk, "kk")} × (1 + 0,3 × ${match.tier}) × ${match.amount}`}>{formatKkValue(match.totalKk, "kk")}</span>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => { setDetailTotalEdit({ matchIndex: index, value: String(rowTotalOverride !== undefined ? rowTotalOverride : match.totalKk).replace(".", ",") }); }}
+                              className="p-0.5 rounded text-sky-300 hover:bg-sky-500/15 transition-colors cursor-pointer"
+                              title={`Ajustar o Total (kk) de "${match.foundName}" SÓ nesta visualização (itens com Tier fora do padrão de +30%). Nada é gravado: o ajuste é descartado ao fechar o modal e não afeta outros usuários.`}
+                            >
+                              <Pencil size={10} />
+                            </button>
+                          </span>
+                        )}
                       </td>
                       <td className="px-1.5 py-1.5 text-center">
                         {/* ÚLTIMA ATUALIZAÇÃO — quando o VALOR deste item foi
@@ -3244,24 +3496,97 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                 <p role="alert" className="text-[10px] font-medium text-rose-300">{detailEditError}</p>
               )}
 
+              {(() => {
+                // ── TOTAIS DO MODAL (recalculados na hora) ────────────────
+                // Com AJUSTE LOCAL em alguma linha, o total do personagem é
+                // RECALCULADO: soma dos Totais efetivos (ajustado > calculado)
+                // + Ouro (uma única vez). Sem ajuste, mantém exatamente o
+                // total original da consulta. Nada disso é persistido.
+                const hasLocalTotals = Object.keys(detailTotalOverrides).length > 0;
+                const localSumKk = detailResult.matches.reduce((acc, m, i) => acc + detailEffectiveMatchKk(i, m), 0);
+                const displayTotalKk = hasLocalTotals
+                  ? Math.round((localSumKk + (detailResult.goldKk || 0)) * 10) / 10
+                  : detailResult.totalKk;
+                // Cotação do SERVIDOR deste personagem (mesma configuração
+                // persistente editada na Lista de Itens); 0 = não definida.
+                const detailServerRate = rateFor(detailResult.server);
+                return (
               <div className="rounded-lg border border-fuchsia-500/25 bg-fuchsia-500/5 px-3 py-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px]">
-                <span className="text-slate-300">Total do personagem: <span className="font-mono font-bold text-amber-200">{formatKkValue(detailResult.totalKk, "kk")}</span></span>
+                <span className="text-slate-300">
+                  Total do personagem: <span className="font-mono font-bold text-amber-200">{formatKkValue(displayTotalKk, "kk")}</span>
+                  {hasLocalTotals && (
+                    <span className="ml-1 rounded border border-sky-500/40 bg-sky-500/15 px-1 py-px text-[7px] font-black uppercase tracking-wide text-sky-300" title={`Recalculado com os ajustes locais de Total (original da consulta: ${formatKkValue(detailResult.totalKk, "kk")}). Os ajustes valem só nesta visualização — nada é gravado.`}>
+                      ajustes locais
+                    </span>
+                  )}
+                </span>
                 {(detailResult.goldKk || 0) > 0 && (
                   <span className="text-slate-300" title="Ouro lido na página do leilão, convertido para kk (1.000.000 gold = 1kk) e já somado ao total acima — uma única vez.">
                     Inclui Ouro: <span className="font-mono font-bold text-yellow-300">{formatKkValue(detailResult.goldKk || 0, "kk")}</span>
                   </span>
                 )}
-                {coinRate > 0 ? (
-                  <span className="text-slate-300" title={`floor((${detailResult.totalKk} / ${coinRate}) × 1000) — mesma fórmula de conversão do restante do aplicativo`}>
-                    Em RC (coin a {coinRateText}k): <span className="font-mono font-bold text-emerald-300">{computeItemRC(coinRate, detailResult.totalKk).toLocaleString("de-DE")} RC</span>
+                {/* ── CONVERSÃO RC — cotação DO SERVIDOR deste personagem ──
+                    Mesma configuração persistente da Lista de Itens
+                    (users/{uid}.bazaarCoinRates): o lápis edita AQUI a taxa
+                    do servidor e ela vira a cotação de todo o módulo para
+                    ele, na hora — sem nova consulta ao Bazaar. */}
+                {detailRateEdit !== null ? (
+                  <span className="inline-flex items-center gap-1 text-slate-300">
+                    Coin (k) de {detailResult.server}:
+                    <input
+                      type="text"
+                      inputMode="decimal"
+                      autoFocus
+                      value={detailRateEdit}
+                      onChange={event => { setDetailRateEdit(sanitizeDecimalKk(event.target.value)); setDetailRateError(null); }}
+                      onKeyDown={event => {
+                        if (event.key === "Enter") { event.preventDefault(); saveDetailRate(detailResult.server); }
+                        if (event.key === "Escape") { event.preventDefault(); setDetailRateEdit(null); setDetailRateError(null); }
+                      }}
+                      placeholder="ex: 2,5"
+                      title={`Cotação de ${detailResult.server} (k por 1000 RC, até 1 casa decimal) — a MESMA configuração da Lista de Itens. Enter salva, Esc cancela; vazio remove.`}
+                      className="h-6 w-16 rounded-md border border-amber-500/60 bg-black/35 px-1.5 text-right font-mono text-[10px] text-amber-200 outline-none focus:border-amber-400"
+                    />
+                    <button type="button" onClick={() => saveDetailRate(detailResult.server)} className="p-0.5 rounded text-emerald-300 hover:bg-emerald-500/15 transition-colors cursor-pointer" title={`Salvar a cotação de ${detailResult.server} (persistida na conta — passa a valer em todos os cálculos deste servidor)`}>
+                      <Check size={12} strokeWidth={3} />
+                    </button>
+                    <button type="button" onClick={() => { setDetailRateEdit(null); setDetailRateError(null); }} className="p-0.5 rounded text-slate-400 hover:text-white hover:bg-white/10 transition-colors cursor-pointer" title="Cancelar">
+                      <X size={12} />
+                    </button>
+                  </span>
+                ) : detailServerRate > 0 ? (
+                  <span className="inline-flex items-center gap-1 text-slate-300" title={`floor((${displayTotalKk} / ${detailServerRate}) × 1000) — mesma fórmula de conversão do restante do aplicativo, com a cotação de ${detailResult.server}`}>
+                    Em RC (coin de {detailResult.server} a {String(detailServerRate).replace(".", ",")}k): <span className="font-mono font-bold text-emerald-300">{computeItemRC(detailServerRate, displayTotalKk).toLocaleString("de-DE")} RC</span>
+                    {detailRateSaved && <span className="inline-flex items-center gap-0.5 text-[9px] font-black text-emerald-300"><Check size={10} strokeWidth={3} /> Salvo</span>}
+                    <button
+                      type="button"
+                      onClick={() => { setDetailRateEdit(String(detailServerRate).replace(".", ",")); setDetailRateError(null); }}
+                      className="p-0.5 rounded text-sky-300 hover:bg-sky-500/15 transition-colors cursor-pointer"
+                      title={`Editar a cotação do RC de ${detailResult.server} — mesma configuração da Lista de Itens; ao salvar vira a taxa deste servidor em todo o módulo`}
+                    >
+                      <Pencil size={10} />
+                    </button>
                   </span>
                 ) : (
-                  <span className="text-slate-500">Informe o valor do coin no quadro para ver a conversão em RC.</span>
+                  <span className="inline-flex items-center gap-1 text-slate-500">
+                    Sem cotação do RC para {detailResult.server} — sem conversão.
+                    <button
+                      type="button"
+                      onClick={() => { setDetailRateEdit(""); setDetailRateError(null); }}
+                      className="inline-flex items-center gap-1 rounded-md border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[9px] font-black text-amber-300 hover:bg-amber-500/20 transition-colors cursor-pointer"
+                      title={`Definir agora a cotação de ${detailResult.server} (k por 1000 RC) — mesma configuração da Lista de Itens`}
+                    >
+                      <Coins size={10} /> Definir cotação
+                    </button>
+                  </span>
                 )}
+                {detailRateError && <span role="alert" className="text-[9px] font-medium text-rose-300 basis-full">{detailRateError}</span>}
                 <span className="text-[9px] text-slate-500 basis-full">
-                  Tier: valor base × (1 + 0,3 × Tier). Conversão RC: floor((total ÷ coin) × 1000).
+                  Tier: valor base × (1 + 0,3 × Tier). Conversão RC: floor((total ÷ coin do servidor) × 1000). Ajustes de Total são locais desta visualização — descartados ao fechar.
                 </span>
               </div>
+                );
+              })()}
             </div>
           </div>
         </div>
@@ -3281,12 +3606,6 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
       />
     </div>
   );
-}
-
-/** Cotação digitada ("90" ou "2,5") -> número em k. Inválido = 0. */
-function parseCoinRate(text: string): number {
-  const value = Number(String(text || "").trim().replace(",", "."));
-  return Number.isFinite(value) && value > 0 ? value : 0;
 }
 
 /**

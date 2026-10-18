@@ -35,10 +35,14 @@ import {
   canonicalServerKey,
   collectAllWatchKeys,
   getServerWatchedItems,
-  loadItemsCoinRate,
   loadWatchedItemsByServer,
   type WatchedItem,
 } from "../utils/bazaarWatchedItems";
+// Cotação do RC POR SERVIDOR — mesma configuração persistente da guia Itens
+// (users/{uid}.bazaarCoinRates, espelhada em localStorage para leitura
+// síncrona). Cada registro ingerido congela a taxa do PRÓPRIO servidor.
+import { getServerCoinRate, readLocalCoinRates } from "../utils/bazaarCoinRates";
+import { auth } from "../firebase/config";
 import { computeItemRC } from "../utils/itemSale";
 import {
   computeStatsFromMetricDocs,
@@ -413,7 +417,10 @@ export default function BazaarStatsPanel({ isBossUser, isElectron, isOtherQueryR
       }
 
       // ── Precificação de itens (regras idênticas à guia Itens) ────────────
-      const coinRate = loadItemsCoinRate();
+      // Cotações POR SERVIDOR (espelho local da configuração persistida):
+      // cada registro converte com a taxa do PRÓPRIO servidor — servidor sem
+      // cotação fica com itemsRc=0/coinRateKk=0 (sem inventar conversão).
+      const coinRatesByServer = readLocalCoinRates(auth.currentUser?.uid);
       const watchedByServer = loadWatchedItemsByServer();
       const indexCache = new Map<string, Map<string, WatchedItem>>();
       const indexFor = (server: string) => {
@@ -430,6 +437,8 @@ export default function BazaarStatsPanel({ isBossUser, isElectron, isOtherQueryR
         .filter(raw => raw.id && raw.auctionEndTs)
         .map(raw => {
           const { matches, totalKk } = buildCharacterMatches(raw.matches || [], indexFor(raw.server));
+          // Taxa do SERVIDOR deste leilão (0 = não configurada).
+          const entryRate = getServerCoinRate(coinRatesByServer, raw.server);
           const entry: BazaarHistoryEntry = {
             id: raw.id,
             name: raw.name,
@@ -439,8 +448,8 @@ export default function BazaarStatsPanel({ isBossUser, isElectron, isOtherQueryR
             endTs: raw.auctionEndTs || 0,
             bidRc: raw.winningBid,
             itemsKk: totalKk,
-            itemsRc: coinRate > 0 && totalKk > 0 ? computeItemRC(coinRate, totalKk) : 0,
-            coinRateKk: coinRate,
+            itemsRc: entryRate > 0 && totalKk > 0 ? computeItemRC(entryRate, totalKk) : 0,
+            coinRateKk: entryRate,
             soulwar: raw.soulwarCompleted ?? null,
             sanguine: raw.sanguineCompleted ?? null,
             // GB ("The Roost of the Graveborn") — derivada pelo canal do

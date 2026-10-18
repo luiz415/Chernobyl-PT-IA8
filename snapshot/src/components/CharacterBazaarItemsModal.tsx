@@ -144,7 +144,7 @@ export default function CharacterBazaarItemsModal({ character, coinRate, onClose
                 Em RC (coin a {String(coinRate).replace(".", ",")}k): <span className="font-mono font-bold text-emerald-300">{computeItemRC(coinRate, effectiveKk).toLocaleString("de-DE")} RC</span>
               </span>
             ) : (
-              <span className="text-slate-500">Informe o valor do coin na guia Bazaar → Itens para ver a conversão em RC.</span>
+              <span className="text-slate-500">Sem cotação do RC para {snapshot.server || "este servidor"} — defina na guia Bazaar → Itens (Lista de Itens) para ver a conversão.</span>
             )}
             <span className="text-[9px] text-slate-500 basis-full">
               Tier: valor base × (1 + 0,3 × Tier). Conversão RC: floor((total ÷ coin) × 1000). Dados importados da consulta de origem — nenhuma nova consulta.

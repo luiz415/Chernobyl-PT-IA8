@@ -624,6 +624,11 @@ export function mergeWatchedLists(
   return { merged, added, updated };
 }
 
+// ── LEGADO: cotação ÚNICA do coin (taxa fixa global) ────────────────────────
+// Substituída pela cotação POR SERVIDOR (src/utils/bazaarCoinRates.ts —
+// persistida em users/{uid}.bazaarCoinRates e espelhada em localStorage).
+// Nenhum cálculo do aplicativo usa mais estas funções; os exports permanecem
+// apenas por compatibilidade (chave antiga do localStorage não é migrada).
 export function loadItemsCoinRate(): number {
   const value = Number(loadUIState<unknown>(BAZAAR_ITEMS_COIN_RATE_KEY, 0));
   return Number.isFinite(value) && value > 0 ? value : 0;

@@ -45,7 +45,6 @@ import {
   effectiveTotalKk,
   getServerWatchedItems,
   hasManualTotalKk,
-  loadItemsCoinRate,
   loadItemsLastQuery,
   loadWatchedItemsByServer,
   saveItemsLastQuery,
@@ -55,6 +54,10 @@ import {
   type RawItemMatch,
   type WatchedItem,
 } from "../utils/bazaarWatchedItems";
+// Cotação do RC POR SERVIDOR (persistida em users/{uid}.bazaarCoinRates,
+// espelhada em localStorage para leitura síncrona) — mesma configuração
+// editada na guia Itens (Lista de Itens / modal Ver).
+import { getServerCoinRate, readLocalCoinRates } from "../utils/bazaarCoinRates";
 import { computeItemRC, formatKkValue as formatKkValueBase } from "../utils/itemSale";
 
 /**
@@ -1742,8 +1745,17 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
   useEffect(() => { setQuestsViewOverrides(readQuestsViewOverrides(currentUser?.uid)); }, [currentUser?.uid]);
   // Textos em edição dos campos do modal (permitem digitação parcial "2,").
   const [questsViewInputs, setQuestsViewInputs] = useState<{ coin: string; gold: string; items: Record<string, string> }>({ coin: "", gold: "", items: {} });
-  // Cotação padrão = a mesma da guia Itens (recarregada a cada abertura do modal).
-  const questsViewDefaultCoinRate = useMemo(() => loadItemsCoinRate(), [questsItemsDetailResult]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Cotação padrão = a do SERVIDOR do personagem exibido, na configuração
+  // persistente por servidor (users/{uid}.bazaarCoinRates — a MESMA editada
+  // na Lista de Itens/modal Ver da guia Itens; lida do espelho local a cada
+  // abertura do modal, sem leitura extra). Servidor sem cotação = 0 → o
+  // campo abre vazio e o modal pede o valor (nunca inventa conversão nem
+  // usa a taxa fixa legada). O valor digitado aqui continua sendo um
+  // OVERRIDE LOCAL deste personagem — não altera a configuração persistida.
+  const questsViewDefaultCoinRate = useMemo(
+    () => getServerCoinRate(readLocalCoinRates(currentUser?.uid), questsItemsDetailResult?.server),
+    [questsItemsDetailResult] // eslint-disable-line react-hooks/exhaustive-deps
+  );
 
   const persistQuestsViewOverrides = (next: QuestsViewOverridesMap) => {
     setQuestsViewOverrides(next);
@@ -5326,8 +5338,10 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
 
             <div className="flex-1 min-h-0 overflow-auto custom-scrollbar px-4 py-3 space-y-2">
               {/* ── VALOR DO COIN — define a conversão kk → RC de TODO o modal.
-                  Pré-preenchido com a cotação da guia Itens; o valor digitado
-                  aqui é uma personalização local deste personagem. */}
+                  Pré-preenchido com a cotação persistida DO SERVIDOR deste
+                  personagem (mesma configuração da Lista de Itens; servidor
+                  sem cotação = campo vazio); o valor digitado aqui é uma
+                  personalização local deste personagem. */}
               <div className="rounded-lg border border-[var(--th-line)]/50 bg-black/25 px-3 py-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px]">
                 <label className="inline-flex items-center gap-1.5" title="Cotação do Rubini Coin no Market: quantos k equivalem a 1000 RC. Mesma regra de conversão usada no restante do aplicativo — floor(kk ÷ cotação × 1000).">
                   <span className="font-bold text-slate-300">Valor do Coin:</span>

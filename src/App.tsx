@@ -23,7 +23,10 @@ import CharacterModal from "./components/CharacterModal";
 import CharacterBazaarItemsModal from "./components/CharacterBazaarItemsModal";
 // Cotação do coin persistida pela guia Bazaar → Itens (local) — usada apenas
 // para a conversão em RC no modal de itens do personagem (Boss).
-import { loadItemsCoinRate, loadItemsLastQuery, loadItemsInterests } from "./utils/bazaarWatchedItems";
+import { loadItemsLastQuery, loadItemsInterests } from "./utils/bazaarWatchedItems";
+// Cotação do RC POR SERVIDOR (configuração persistente da guia Itens,
+// espelhada em localStorage) — substitui a antiga taxa fixa única.
+import { getServerCoinRate, readLocalCoinRates } from "./utils/bazaarCoinRates";
 import CurrencyCalculator from "./components/CurrencyCalculator";
 import ImbuementsModal from "./components/ImbuementsModal";
 import RtcImportModal from "./components/RtcImportModal";
@@ -6265,7 +6268,9 @@ export default function App() {
       {userProfile?.role === "Boss" && bazaarItemsViewCharacter && (
         <CharacterBazaarItemsModal
           character={bazaarItemsViewCharacter}
-          coinRate={loadItemsCoinRate()}
+          /* Cotação do SERVIDOR do snapshot (0 = não configurada → o modal
+             não converte) — mesma configuração por servidor da guia Itens. */
+          coinRate={getServerCoinRate(readLocalCoinRates(currentUser?.uid), bazaarItemsViewCharacter.bazaarItems?.server)}
           onClose={() => setBazaarItemsViewCharacter(null)}
         />
       )}
