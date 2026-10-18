@@ -1783,18 +1783,37 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
   // continuar na lista atual. Com uma lista carregada, qualquer chave sem
   // leilão correspondente é removida — nunca mantém configurações de
   // personagens que já saíram. Lista vazia/não hidratada não poda nada.
+  //
+  // CORREÇÃO (perda de personalizações): a poda SÓ pode rodar depois que o
+  // efeito de hidratação do mount definiu a lista REALMENTE atual. O estado
+  // `result` nasce de `readBazarCache()` (última consulta LOCAL do
+  // dispositivo, possivelmente defasada da lista oficial sincronizada) e o
+  // efeito de hidratação — declarado DEPOIS deste — é quem a substitui pela
+  // lista oficial (`readOfficialBazaarCache()`), a mesma exibida na tabela e
+  // sobre a qual o usuário editou. Sem o gate `bazaarListHydratedRef`, a
+  // poda rodava no primeiro ciclo contra a lista defasada e APAGAVA os
+  // overrides dos personagens da lista atual a cada reinício/remontagem.
+  // Também deixa de depender de `questsViewOverrides` (lia snapshot do
+  // closure e rodava a cada edição): o mapa atual vem de um ref espelho e o
+  // efeito dispara apenas quando a LISTA muda — o único evento que pode
+  // tornar uma chave obsoleta.
+  const bazaarListHydratedRef = useRef(false);
+  const questsViewOverridesRef = useRef(questsViewOverrides);
+  questsViewOverridesRef.current = questsViewOverrides;
   useEffect(() => {
     if (demoMode) return;
+    if (!bazaarListHydratedRef.current) return;
     const auctions = result?.auctions || [];
     if (auctions.length === 0) return;
     const liveKeys = new Set(auctions.map(a => getAuctionKey(a)));
-    const staleKeys = Object.keys(questsViewOverrides).filter(key => !liveKeys.has(key));
+    const current = questsViewOverridesRef.current;
+    const staleKeys = Object.keys(current).filter(key => !liveKeys.has(key));
     if (staleKeys.length === 0) return;
-    const next = { ...questsViewOverrides };
+    const next = { ...current };
     staleKeys.forEach(key => { delete next[key]; });
     persistQuestsViewOverrides(next);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [result?.auctions, demoMode, questsViewOverrides]);
+  }, [result?.auctions, demoMode]);
 
   // Abertura do modal: inicializa os textos de edição a partir da
   // personalização salva (ou dos valores automáticos da consulta).
@@ -1863,6 +1882,12 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
   }, [isInlineAccountMenuOpen]);
 
   useEffect(() => {
+    // Hidratação inicial concluída a partir daqui: a poda das
+    // personalizações do modal "Ver" (gate `bazaarListHydratedRef`) fica
+    // liberada SOMENTE após este efeito — os `setResult` abaixo disparam o
+    // re-render que a executa já contra a lista correta (oficial quando
+    // existir), nunca contra o cache local defasado do estado inicial.
+    bazaarListHydratedRef.current = true;
     // MODO DEMO: alimenta a lista com os leilões fictícios do tutorial e
     // ignora os caches reais — nada é lido nem sobrescrito. A metadata
     // fictícia (version "demo") faz o quadro "Última Consulta" e os botões
