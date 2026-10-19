@@ -975,13 +975,11 @@ function getBazaarInlinePurchaseValidationError(account: string, valorPago: stri
 // "Personagens com Itens" usa exatamente as mesmas regras. Nenhuma mudança
 // de comportamento: os corpos são idênticos aos que viviam aqui.
 
-// Consulta AUTOMÁTICA (notificação diária): horário fixo 11:00 (padrão
-// documentado do Auto-Bazaar), mas os DIAS seguem a configuração do usuário —
-// sem isso, o valor fixo de 1 dia sobrescreveria o prazo configurado no
-// modal "Filtros da Consulta" a cada execução automática.
-function getAutoBazarEndUntil(offsetMinutes: number, days: number): string {
-  return getBazarEndUntilAtConfiguredTime(offsetMinutes, normalizeEndUntilAutoDays(days), 11, 0);
-}
+// Consulta AUTOMÁTICA (notificação diária): NÃO existe mais cálculo próprio
+// de "Encerra até" — o Auto-Bazaar consulta com EXATAMENTE a configuração do
+// modal "Filtros da Consulta" (modo manual/automático, dias e horário),
+// resolvida por getCurrentConsultationFilters/resolveEffectiveEndUntil no
+// momento da execução, igual a um clique manual em "Consultar".
 
 // ============================================================================
 // MODO AUTOMÁTICO DO "ENCERRA ATÉ"
@@ -3414,13 +3412,15 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
       // Itens: já fazem parte da PRÓPRIA consulta de Quests (etapa interna
       // do handleFetchBazaar) — o antigo encadeamento Quests → Itens do
       // Auto-Bazaar foi eliminado por redundante.
+      // ── "ENCERRA ATÉ": EXATAMENTE A CONFIGURAÇÃO DO MODAL ───────────────
+      // Nenhuma sobrescrita: a consulta automática usa o MESMO caminho de um
+      // clique manual em "Consultar" (getCurrentConsultationFilters →
+      // resolveEffectiveEndUntil). Modo automático → "hoje + N dias às
+      // HH:MM" com os DIAS e o HORÁRIO configurados no modal "Filtros da
+      // Consulta" (data recalculada neste instante, nunca congelada); modo
+      // manual → a data/hora fixa escolhida pelo usuário. O antigo horário
+      // fixo 11:00 do Auto-Bazaar foi eliminado.
       handleFetchBazaar({
-        filtersOverride: {
-          // Horário fixo 11:00 (padrão do Auto-Bazaar); os DIAS seguem a
-          // configuração do modal "Filtros da Consulta" — o automático não
-          // sobrescreve o prazo configurado com 1 dia fixo.
-          endUntil: getAutoBazarEndUntil(timezoneOffsetMinutes, endUntilAutoDays),
-        },
         // Consulta iniciada automaticamente: a pré-validação de disponibilidade
         // aguarda o servidor ficar pronto (recarga a cada 1 min) em vez de
         // abortar — nenhuma ação manual é necessária.
@@ -3429,7 +3429,7 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
     }
     window.addEventListener("auto-bazaar-run-request", handleAutoBazaarRun);
     return () => window.removeEventListener("auto-bazaar-run-request", handleAutoBazaarRun);
-  }, [isBossUser, isElectron, isLoading, isCheckingDetails, isItemsQueryRunning, serverSelectionMode, selectedServers, vocationLevels, maxValue, soulwarFilter, sanguineFilter, cryptFilter, endUntil, timezoneOffsetMinutes, endUntilAutoDays]);
+  }, [isBossUser, isElectron, isLoading, isCheckingDetails, isItemsQueryRunning, serverSelectionMode, selectedServers, vocationLevels, maxValue, soulwarFilter, sanguineFilter, cryptFilter, endUntil, timezoneOffsetMinutes, endUntilMode, endUntilAutoTime, endUntilAutoDays]);
 
   function updateTableFilters(patch: Partial<BazaarTableFilters>) {
     setTableFilters(prev => ({ ...prev, ...patch }));
