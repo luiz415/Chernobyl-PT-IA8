@@ -31,9 +31,15 @@ interface BazaarSearchFiltersModalProps {
   /** Horário "HH:MM" usado pelo modo automático. */
   endUntilAutoTime: string;
   onEndUntilAutoTimeChange: (value: string) => void;
+  /** Dias até o encerramento no modo automático (inteiro 1–10; 1 = amanhã). */
+  endUntilAutoDays: number;
+  onEndUntilAutoDaysChange: (value: number) => void;
   /** Prévia já formatada da data que o modo automático usaria agora. */
   autoEndUntilPreview: string;
 }
+
+/** Opções fixas do seletor de dias (inteiros de 1 a 10). */
+const END_UNTIL_AUTO_DAYS_OPTIONS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
 
 function getVocationAbbreviation(vocation: string): string {
   const normalized = vocation.trim().toLowerCase();
@@ -70,6 +76,8 @@ export default function BazaarSearchFiltersModal({
   onEndUntilModeChange,
   endUntilAutoTime,
   onEndUntilAutoTimeChange,
+  endUntilAutoDays,
+  onEndUntilAutoDaysChange,
   autoEndUntilPreview,
 }: BazaarSearchFiltersModalProps) {
   if (!isOpen) return null;
@@ -239,9 +247,25 @@ export default function BazaarSearchFiltersModal({
                   <input type="datetime-local" value={endUntil} onChange={event => onEndUntilChange(event.target.value)} className="w-full rounded-lg border border-[var(--th-line)]/70 bg-black/35 px-3 py-2 text-xs text-white outline-none focus:border-amber-600/60 [color-scheme:dark]" />
                 ) : (
                   <>
-                    <input type="time" value={endUntilAutoTime} onChange={event => onEndUntilAutoTimeChange(event.target.value)} className="w-full rounded-lg border border-[var(--th-line)]/70 bg-black/35 px-3 py-2 text-xs text-white outline-none focus:border-amber-600/60 [color-scheme:dark]" />
+                    {/* Dias até o encerramento (1–10) + horário: combinados viram
+                        a data/hora limite ("hoje + N dias às HH:MM"). */}
+                    <div className="flex items-center gap-2">
+                      <select
+                        value={endUntilAutoDays}
+                        onChange={event => onEndUntilAutoDaysChange(Number(event.target.value))}
+                        className="rounded-lg border border-[var(--th-line)]/70 bg-black/35 px-2 py-2 text-xs text-white outline-none focus:border-amber-600/60 [color-scheme:dark] cursor-pointer"
+                        aria-label="Dias até o encerramento"
+                      >
+                        {END_UNTIL_AUTO_DAYS_OPTIONS.map(days => (
+                          <option key={days} value={days}>
+                            {days} {days === 1 ? "dia" : "dias"}
+                          </option>
+                        ))}
+                      </select>
+                      <input type="time" value={endUntilAutoTime} onChange={event => onEndUntilAutoTimeChange(event.target.value)} className="flex-1 rounded-lg border border-[var(--th-line)]/70 bg-black/35 px-3 py-2 text-xs text-white outline-none focus:border-amber-600/60 [color-scheme:dark]" />
+                    </div>
                     <p className="text-[9px] leading-snug text-amber-300/80">
-                      Automático: próximo dia às {endUntilAutoTime}
+                      Automático: {endUntilAutoDays === 1 ? "próximo dia" : `em ${endUntilAutoDays} dias`} às {endUntilAutoTime}
                     </p>
                     <p className="text-[9px] leading-snug text-slate-500">
                       Próxima consulta: até {autoEndUntilPreview}

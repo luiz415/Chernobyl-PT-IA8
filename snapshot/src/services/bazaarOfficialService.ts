@@ -222,7 +222,10 @@ function normalizeAuctionEntries(raw: unknown): StoredAuctionInterests {
 
 export interface PublishOfficialBazaarResult {
   metadata: OfficialBazaarMetadata;
-  /** true quando o documento agregado foi zerado no mesmo commit da lista. */
+  /**
+   * true quando NENHUM interesse sobreviveu à rotação (agregado recomeçou
+   * vazio no mesmo commit da lista); false quando houve preservação.
+   */
   interestsCleared: boolean;
   /**
    * Interesses PRESERVADOS pela publicação (leilões que seguem na lista
@@ -407,16 +410,22 @@ export function shouldAutoCheckBazaarInterests(): boolean {
 }
 
 /**
- * Publica a nova lista oficial e zera os interesses.
+ * Publica a nova lista oficial e ROTACIONA os interesses: entradas de
+ * leilões que CONTINUAM presentes na nova lista (mesmo `auctionId`) são
+ * preservadas; entradas de leilões ausentes são descartadas junto com a
+ * versão anterior. A associação é SEMPRE usuário (uid) + id estável do
+ * leilão — nunca nome nem posição na lista.
  *
  * A chamada só deve acontecer quando 100% da consulta terminou sem erros —
  * o chamador é responsável por essa validação.
  *
- * Como os interesses agora vivem em UM único documento, o batch tem sempre
+ * Como os interesses vivem em UM único documento, o batch tem sempre
  * exatamente 3 escritas (lista + metadados + interesses), muito abaixo do
  * limite de 500. A atomicidade é incondicional: ou os três documentos são
  * aplicados, ou nenhum é — se o commit falhar, a lista anterior E os
- * interesses anteriores permanecem intactos.
+ * interesses anteriores permanecem intactos. A preservação custa UMA única
+ * leitura extra do agregado por publicação (~1×/dia) — sem leituras por
+ * personagem.
  */
 export async function publishOfficialBazaarList(params: {
   characters: OfficialBazaarCharacter[];
@@ -480,6 +489,32 @@ export async function publishOfficialBazaarList(params: {
     ...(Number(params.itemsValuesUpdatedAtMs || 0) > 0 ? { itemsValuesUpdatedAtMs: Number(params.itemsValuesUpdatedAtMs) } : {}),
   };
 
+  // ── INTERESSES: PRESERVAÇÃO POR ID ESTÁVEL DO LEILÃO ────────────────────
+  // UMA leitura do agregado ANTES do batch (custo fixo por publicação,
+  // ~1×/dia — nunca por personagem). Entradas cujo `auctionId` continua na
+  // nova lista são mantidas exatamente como estão (uid, nome e o Timestamp
+  // `createdAt` original — a ordem dos interessados não muda); as demais
+  // morrem com a versão anterior. A chave é SEMPRE o id do leilão: um
+  // personagem "na mesma posição" ou com o mesmo nome em outro leilão NUNCA
+  // herda interesse. Se a leitura falhar, o fallback é o comportamento
+  // antigo (recomeçar vazio) — a publicação da lista nunca é bloqueada.
+  let preservedByAuction: Record<string, StoredAuctionInterests> = {};
+  try {
+    const interestsSnap = await getDoc(doc(db, INTERESTS_COLLECTION, INTERESTS_DOC_ID));
+    if (interestsSnap.exists()) {
+      const liveAuctionIds = new Set(characters.map((character) => character.id));
+      const previous = (interestsSnap.data() as AggregatedInterestsDoc)?.byAuction || {};
+      Object.entries(previous).forEach(([auctionId, rawEntries]) => {
+        if (!liveAuctionIds.has(auctionId)) return; // leilão saiu da lista → interesse morre
+        const entries = normalizeAuctionEntries(rawEntries);
+        if (Object.keys(entries).length > 0) preservedByAuction[auctionId] = entries;
+      });
+      preservedByAuction = compactByAuction(preservedByAuction);
+    }
+  } catch {
+    preservedByAuction = {};
+  }
+
   const batch = writeBatch(db);
   batch.set(doc(db, "bazaar", "current"), {
     schemaVersion: CACHE_SCHEMA_VERSION,
@@ -493,32 +528,42 @@ export async function publishOfficialBazaarList(params: {
     generatedAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
   });
-  // ── INTERESSES: NOVA CONSULTA, ESTADO INICIAL VAZIO ─────────────────────
-  // O Bazaar rotaciona a lista diariamente (~10:05): os personagens da
-  // consulta anterior deixam de existir e os interesses daquela consulta não
-  // fazem mais sentido. O agregado é recriado VAZIO já na nova versão — um
-  // `set` sem merge descarta todo o `byAuction` anterior, sem varredura e
-  // sem órfãos. Todos os usuários veem a nova lista sem interesses marcados,
-  // independente de estarem online (o documento é global). O resíduo do
-  // backend (marcadores/notificações da consulta anterior) é limpo pela
-  // Cloud Function `bazaarListCleanup`, disparada por esta publicação.
+  // ── INTERESSES: NOVA CONSULTA, ENTRADAS SOBREVIVENTES PRESERVADAS ───────
+  // O Bazaar rotaciona a lista diariamente (~10:05): leilões que saíram da
+  // lista perdem seus interesses junto com a versão anterior, mas leilões
+  // que CONTINUAM presentes (mesmo auctionId) mantêm os interessados — com o
+  // `createdAt` original, para a ordem (1º, 2º, 3º...) não mudar. O `set`
+  // sem merge regrava o documento inteiro já na nova `bazaarVersion`, sem
+  // varredura e sem órfãos (só sobrevive o que foi explicitamente
+  // preservado). O documento é global: todos os usuários veem o mesmo
+  // resultado, online ou não. O resíduo do backend (marcadores/notificações
+  // da consulta anterior) é limpo pela Cloud Function `bazaarListCleanup`,
+  // disparada por esta publicação — ela não toca o agregado de interesses.
   batch.set(doc(db, INTERESTS_COLLECTION, INTERESTS_DOC_ID), {
     bazaarVersion: version,
     updatedAtMs: generatedAtMs,
-    byAuction: {},
+    byAuction: preservedByAuction,
     updatedAt: serverTimestamp(),
   });
-  // Commit único: lista oficial + metadados + interesses zerados.
+  // Commit único: lista oficial + metadados + interesses rotacionados.
   await batch.commit();
 
   const cache = { schemaVersion: CACHE_SCHEMA_VERSION, version, metadata, characters, loadedAtMs: now() };
   saveOfficialBazaarCache(cache);
   writeNumber(METADATA_CHECK_KEY, now());
-  // Cache local reflete a nova versão vazia — dispensa releitura.
-  saveBazaarInterestsCache({ version: generatedAtMs, bazaarVersion: version, interests: {} });
+  // Cache local reflete exatamente o que foi gravado — dispensa releitura.
+  const preservedInterests = expandAggregatedInterests(
+    { bazaarVersion: version, updatedAtMs: generatedAtMs, byAuction: preservedByAuction },
+    version,
+  );
+  saveBazaarInterestsCache({ version: generatedAtMs, bazaarVersion: version, interests: preservedInterests });
   writeNumber(INTERESTS_CHECK_KEY, now());
 
-  return { metadata, interestsCleared: true, interests: {} };
+  return {
+    metadata,
+    interestsCleared: Object.keys(preservedByAuction).length === 0,
+    interests: preservedInterests,
+  };
 }
 
 /**

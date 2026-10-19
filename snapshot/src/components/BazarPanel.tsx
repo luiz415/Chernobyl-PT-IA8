@@ -642,13 +642,17 @@ interface BazarSavedFilters {
   // ── MODO DO "ENCERRA ATÉ" ─────────────────────────────────────────────────
   // "manual"     -> usa a data/hora fixa de `endUntil` (comportamento original).
   // "automatico" -> ignora `endUntil` e calcula, NO MOMENTO DA CONSULTA,
-  //                 "amanhã às HH:MM" a partir de `endUntilAutoTime`.
+  //                 "daqui a `endUntilAutoDays` dia(s) às HH:MM" a partir de
+  //                 `endUntilAutoTime` (padrão 1 dia = "amanhã", comportamento
+  //                 original).
   //
-  // A DATA nunca é persistida no modo automático — só o horário. É isso que
-  // impede o filtro de congelar num dia antigo.
+  // A DATA nunca é persistida no modo automático — só o horário e a
+  // quantidade de dias. É isso que impede o filtro de congelar num dia antigo.
   endUntilMode?: BazaarEndUntilMode;
   /** Horário do modo automático, no formato "HH:MM". */
   endUntilAutoTime?: string;
+  /** Dias à frente do modo automático (inteiro 1–10; padrão 1 = amanhã). */
+  endUntilAutoDays?: number;
 }
 
 /** Modo do campo "Encerra até". Padrão `manual` (comportamento atual). */
@@ -656,6 +660,12 @@ type BazaarEndUntilMode = "manual" | "automatico";
 
 /** Horário usado quando o modo automático é ativado sem configuração prévia. */
 const DEFAULT_END_UNTIL_AUTO_TIME = "11:00";
+
+/** Dias à frente do modo automático: padrão 1 (amanhã — comportamento original). */
+const DEFAULT_END_UNTIL_AUTO_DAYS = 1;
+/** Limites do campo "dias até o encerramento" (inteiros, inclusivos). */
+export const END_UNTIL_AUTO_DAYS_MIN = 1;
+export const END_UNTIL_AUTO_DAYS_MAX = 10;
 
 interface BazarConsultationFilters {
   serverSelectionMode: ServerSelectionMode;
@@ -965,8 +975,12 @@ function getBazaarInlinePurchaseValidationError(account: string, valorPago: stri
 // "Personagens com Itens" usa exatamente as mesmas regras. Nenhuma mudança
 // de comportamento: os corpos são idênticos aos que viviam aqui.
 
-function getAutoBazarEndUntil(offsetMinutes: number): string {
-  return getBazarEndUntilAtConfiguredTime(offsetMinutes, 1, 11, 0);
+// Consulta AUTOMÁTICA (notificação diária): horário fixo 11:00 (padrão
+// documentado do Auto-Bazaar), mas os DIAS seguem a configuração do usuário —
+// sem isso, o valor fixo de 1 dia sobrescreveria o prazo configurado no
+// modal "Filtros da Consulta" a cada execução automática.
+function getAutoBazarEndUntil(offsetMinutes: number, days: number): string {
+  return getBazarEndUntilAtConfiguredTime(offsetMinutes, normalizeEndUntilAutoDays(days), 11, 0);
 }
 
 // ============================================================================
@@ -1001,15 +1015,29 @@ function normalizeEndUntilMode(value: unknown): BazaarEndUntilMode {
 }
 
 /**
- * "Encerra até" do modo automático: SEMPRE o próximo dia, no horário dado.
- *
- * Reutiliza `getBazarEndUntilAtConfiguredTime` com `dayOffsetFromToday = 1`,
- * a mesma função que o restante do painel já usa — então o fuso configurado
- * pelo usuário é respeitado exatamente como nos demais cálculos.
+ * Valida os "dias até o encerramento" do modo automático: somente INTEIROS
+ * de 1 a 10. Qualquer valor inesperado (ausente, texto, fração, fora da
+ * faixa) volta ao padrão 1 — o comportamento original ("amanhã").
  */
-function computeAutoEndUntilFromTime(offsetMinutes: number, time: string, nowMs = Date.now()): string {
+function normalizeEndUntilAutoDays(value: unknown): number {
+  const days = Number(value);
+  if (!Number.isInteger(days)) return DEFAULT_END_UNTIL_AUTO_DAYS;
+  if (days < END_UNTIL_AUTO_DAYS_MIN || days > END_UNTIL_AUTO_DAYS_MAX) return DEFAULT_END_UNTIL_AUTO_DAYS;
+  return days;
+}
+
+/**
+ * "Encerra até" do modo automático: daqui a `days` dia(s) (1–10; 1 = amanhã,
+ * comportamento original), no horário dado.
+ *
+ * Reutiliza `getBazarEndUntilAtConfiguredTime` com `dayOffsetFromToday =
+ * days`, a mesma função que o restante do painel já usa — o fuso configurado
+ * é respeitado e a soma de dias usa `Date.UTC(ano, mês, dia + days)`, que
+ * rola viradas de mês e de ano corretamente (semântica nativa do Date).
+ */
+function computeAutoEndUntilFromTime(offsetMinutes: number, time: string, days: number, nowMs = Date.now()): string {
   const [hourText, minuteText] = normalizeEndUntilAutoTime(time).split(":");
-  return getBazarEndUntilAtConfiguredTime(offsetMinutes, 1, Number(hourText), Number(minuteText), nowMs);
+  return getBazarEndUntilAtConfiguredTime(offsetMinutes, normalizeEndUntilAutoDays(days), Number(hourText), Number(minuteText), nowMs);
 }
 
 /**
@@ -1023,11 +1051,12 @@ function resolveEffectiveEndUntil(
   mode: BazaarEndUntilMode,
   manualValue: string,
   autoTime: string,
+  autoDays: number,
   offsetMinutes: number,
   nowMs = Date.now(),
 ): string {
   return mode === "automatico"
-    ? computeAutoEndUntilFromTime(offsetMinutes, autoTime, nowMs)
+    ? computeAutoEndUntilFromTime(offsetMinutes, autoTime, autoDays, nowMs)
     : manualValue;
 }
 
@@ -1589,10 +1618,12 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
   // e exibida, mas só exclui quando o usuário escolher Disponível/Concluída).
   const [cryptFilter, setCryptFilter] = useState<QuestFilter>(() => savedFiltersRef.current.cryptFilter || "all");
   const [endUntil, setEndUntil] = useState(() => savedFiltersRef.current.endUntil || "");
-  // Modo do "Encerra até" e o horário do modo automático. Ambos persistidos;
-  // a DATA do modo automático nunca é — ela é calculada a cada consulta.
+  // Modo do "Encerra até", o horário e os DIAS (1–10) do modo automático.
+  // Todos persistidos; a DATA do modo automático nunca é — ela é calculada a
+  // cada consulta a partir de "hoje + dias" no fuso configurado.
   const [endUntilMode, setEndUntilMode] = useState<BazaarEndUntilMode>(() => normalizeEndUntilMode(savedFiltersRef.current.endUntilMode));
   const [endUntilAutoTime, setEndUntilAutoTime] = useState(() => normalizeEndUntilAutoTime(savedFiltersRef.current.endUntilAutoTime));
+  const [endUntilAutoDays, setEndUntilAutoDays] = useState(() => normalizeEndUntilAutoDays(savedFiltersRef.current.endUntilAutoDays));
   const [timezoneOffsetMinutes, setTimezoneOffsetMinutes] = useState(() => Number.isFinite(savedFiltersRef.current.timezoneOffsetMinutes) ? Number(savedFiltersRef.current.timezoneOffsetMinutes) : getDeviceTimezoneOffsetMinutes());
   // Antecedência da notificação de encerramento.
   // `applied` é o valor persistido; `draft` é o que está nas setas e só vira
@@ -1964,13 +1995,15 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
       // Precisa ser reenviado aqui: saveBazarFilters reescreve o objeto inteiro,
       // então omitir este campo apagaria a preferência já salva.
       notifyBeforeMinutes,
-      // Só o MODO e o HORÁRIO são persistidos. A data do modo automático fica
-      // deliberadamente de fora, para nunca congelar num dia antigo.
+      // Só o MODO, o HORÁRIO e os DIAS são persistidos. A data do modo
+      // automático fica deliberadamente de fora, para nunca congelar num dia
+      // antigo.
       endUntilMode,
       endUntilAutoTime,
+      endUntilAutoDays,
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [serverSelectionMode, selectedServers, vocationLevels, maxValue, soulwarFilter, sanguineFilter, cryptFilter, endUntil, timezoneOffsetMinutes, notifyBeforeMinutes, endUntilMode, endUntilAutoTime]);
+  }, [serverSelectionMode, selectedServers, vocationLevels, maxValue, soulwarFilter, sanguineFilter, cryptFilter, endUntil, timezoneOffsetMinutes, notifyBeforeMinutes, endUntilMode, endUntilAutoTime, endUntilAutoDays]);
 
   useEffect(() => {
     if (demoMode) return; // demo: nunca sobrescrever os filtros reais salvos
@@ -2507,10 +2540,11 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
       sanguineFilter,
       cryptFilter,
       // ── LIMITE DE ENCERRAMENTO RESOLVIDO AGORA ──────────────────────────
-      // No modo automático o valor é calculado NESTE INSTANTE ("amanhã às
-      // HH:MM"). Como esta função é chamada no início de cada consulta, a
-      // data nunca é reaproveitada de uma execução anterior.
-      endUntil: resolveEffectiveEndUntil(endUntilMode, endUntil, endUntilAutoTime, timezoneOffsetMinutes),
+      // No modo automático o valor é calculado NESTE INSTANTE ("daqui a N
+      // dia(s) às HH:MM", N = 1–10 configurado). Como esta função é chamada
+      // no início de cada consulta, a data nunca é reaproveitada de uma
+      // execução anterior.
+      endUntil: resolveEffectiveEndUntil(endUntilMode, endUntil, endUntilAutoTime, endUntilAutoDays, timezoneOffsetMinutes),
       timezoneOffsetMinutes,
     };
   }
@@ -3316,17 +3350,18 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
             // valores da versão anterior perde o sentido e é descartado.
             clearBazaarValueOverlay();
             setValueRefreshedAtMs(0);
-            // Etapa 6: consulta nova nasce LIMPA — o agregado foi zerado no
-            // MESMO commit da publicação (rotação diária: interesses da
-            // consulta anterior morrem no publish; cada usuário remarca).
-            setBazaarInterests({});
+            // Etapa 6: a publicação ROTACIONA os interesses no MESMO commit —
+            // leilões que continuam na lista nova preservam os interessados
+            // (uid + id estável do leilão); os demais morrem com a versão
+            // anterior. A UI exibe exatamente o que foi gravado.
+            setBazaarInterests(published.interests);
             setBazaarInterestsLoaded(true);
-            // Nova consulta publicada: o agregado global foi zerado no mesmo
-            // commit; o agendador local também recomeça vazio (a versão nova
-            // zera o registro de alertas enviados deste dispositivo).
+            // Alertas de encerramento seguem os interesses preservados da
+            // versão nova (a versão nova zera o registro de alertas enviados
+            // deste dispositivo).
             syncBazaarEndingAlerts({
               characters: finalAuctionsWithQuestDetails,
-              interestsByAuctionId: {},
+              interestsByAuctionId: published.interests,
               currentUserUid: currentUser?.uid || "",
               bazaarVersion: published.metadata.version,
             });
@@ -3381,7 +3416,10 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
       // Auto-Bazaar foi eliminado por redundante.
       handleFetchBazaar({
         filtersOverride: {
-          endUntil: getAutoBazarEndUntil(timezoneOffsetMinutes),
+          // Horário fixo 11:00 (padrão do Auto-Bazaar); os DIAS seguem a
+          // configuração do modal "Filtros da Consulta" — o automático não
+          // sobrescreve o prazo configurado com 1 dia fixo.
+          endUntil: getAutoBazarEndUntil(timezoneOffsetMinutes, endUntilAutoDays),
         },
         // Consulta iniciada automaticamente: a pré-validação de disponibilidade
         // aguarda o servidor ficar pronto (recarga a cada 1 min) em vez de
@@ -3391,7 +3429,7 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
     }
     window.addEventListener("auto-bazaar-run-request", handleAutoBazaarRun);
     return () => window.removeEventListener("auto-bazaar-run-request", handleAutoBazaarRun);
-  }, [isBossUser, isElectron, isLoading, isCheckingDetails, isItemsQueryRunning, serverSelectionMode, selectedServers, vocationLevels, maxValue, soulwarFilter, sanguineFilter, cryptFilter, endUntil, timezoneOffsetMinutes]);
+  }, [isBossUser, isElectron, isLoading, isCheckingDetails, isItemsQueryRunning, serverSelectionMode, selectedServers, vocationLevels, maxValue, soulwarFilter, sanguineFilter, cryptFilter, endUntil, timezoneOffsetMinutes, endUntilAutoDays]);
 
   function updateTableFilters(patch: Partial<BazaarTableFilters>) {
     setTableFilters(prev => ({ ...prev, ...patch }));
@@ -5668,7 +5706,9 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
         onEndUntilModeChange={setEndUntilMode}
         endUntilAutoTime={endUntilAutoTime}
         onEndUntilAutoTimeChange={value => setEndUntilAutoTime(normalizeEndUntilAutoTime(value))}
-        autoEndUntilPreview={formatEndUntilForDisplay(computeAutoEndUntilFromTime(timezoneOffsetMinutes, endUntilAutoTime))}
+        endUntilAutoDays={endUntilAutoDays}
+        onEndUntilAutoDaysChange={value => setEndUntilAutoDays(normalizeEndUntilAutoDays(value))}
+        autoEndUntilPreview={formatEndUntilForDisplay(computeAutoEndUntilFromTime(timezoneOffsetMinutes, endUntilAutoTime, endUntilAutoDays))}
       />
     </div>
   );
