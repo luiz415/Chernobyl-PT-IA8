@@ -3,8 +3,7 @@ import {
   Swords, History as HistoryIcon, BarChart3, StickyNote,
   Save, CheckCircle2, AlertTriangle, Calculator, AppWindow, Users, UserPlus, Archive, User, Clock, Sparkles,
   Lock, LockOpen, ArrowUp, ArrowDown, MessageSquareMore, Heart, Cloud, CloudCog, ShoppingBag, Bell, Trophy,
-  SlidersHorizontal, ChevronDown, FileSpreadsheet, Briefcase, FileCode2, Coins
-} from "lucide-react";
+  SlidersHorizontal, ChevronDown, FileSpreadsheet, Briefcase, FileCode2, Coins, Package } from "lucide-react";
 import ExoriLogo from "./components/ExoriLogo";
 import type { AppData, BazaarItemsPurchasePrefill, Character, CharacterAcquisition, CharacterAcquisitionBuyerDetails, CharacterBazaarItemsSnapshot, PartyCustomMember, PartyFinalizationReason, PartyTab, PersonalPartyHistory, PtType, WaitingService, SharedService, DialogOptions, ProbableMarkersMap, Vocation } from "./types";
 import { setGlobalDialogHandler, customAlert, customConfirm, formatRC } from "./types";
@@ -20,6 +19,7 @@ import initialBgUrl from "./assets/initial-bg.png";
 import CharTable from "./components/CharTable";
 import AcquiredCharactersPanel from "./components/AcquiredCharactersPanel";
 import MyItemsForSaleModal, { collectMySaleItems, countMyUnsoldSaleItems } from "./components/MyItemsForSaleModal";
+import FoundItemsModal, { collectFoundItemGroups } from "./components/FoundItemsModal";
 import CharacterModal from "./components/CharacterModal";
 import CharacterBazaarItemsModal from "./components/CharacterBazaarItemsModal";
 // Cotação do coin persistida pela guia Bazaar → Itens (local) — usada apenas
@@ -496,6 +496,10 @@ export default function App() {
   // Modal "Itens à Venda" de Meus Personagens (gerenciador centralizado dos
   // itens de Quest de todos os personagens do usuário).
   const [isMyItemsSaleOpen, setIsMyItemsSaleOpen] = useState(false);
+  // Modal "Itens Encontrados" (59ª): todos os itens do Bazaar importados na
+  // compra dos personagens, em um só lugar (EXCLUSIVO do Boss — mesma regra
+  // da coluna Itens/"Ver").
+  const [isFoundItemsOpen, setIsFoundItemsOpen] = useState(false);
 
   // Badge de "Meus Services" enquanto a aba está FECHADA (o painel não está
   // montado e não pode informar o total). Recalculado do cache local, sem
@@ -3198,6 +3202,15 @@ export default function App() {
   );
   const myUnsoldSaleItemsCount = useMemo(() => countMyUnsoldSaleItems(mySaleItems), [mySaleItems]);
 
+  // "Itens Encontrados" (59ª) — contador do botão (Boss-only): total de itens
+  // do Bazaar nos snapshots dos personagens (mesma derivação pura do modal).
+  const foundBazaarItemsCount = useMemo(
+    () => (userProfile?.role === "Boss"
+      ? collectFoundItemGroups(data.characters, negotiatedOriginalCharacterIds).reduce((sum, g) => sum + g.items.length, 0)
+      : 0),
+    [userProfile?.role, data.characters, negotiatedOriginalCharacterIds],
+  );
+
   const accounts = useMemo(
     () => Array.from(new Set(data.characters.map((c) => c.account).filter((value): value is string => typeof value === "string" && value.length > 0))).sort(),
     [data.characters]
@@ -5726,6 +5739,22 @@ export default function App() {
                 <Briefcase size={11} /> NEGOCIADOS ENTRE USUÁRIOS
                 <span className="font-bold font-mono">({demoData ? demoData.acquisitions.length : characterAcquisitions.length})</span>
               </button>
+              {/* "Itens Encontrados" (59ª): todos os itens do Bazaar
+                  importados na compra dos personagens (mesmos dados do botão
+                  "Ver"), em um só lugar — EXCLUSIVO do Boss (mesma regra da
+                  coluna Itens). Oculto no modo demo do tutorial. */}
+              {!demoData && userProfile?.role === "Boss" && (
+                <button
+                  type="button"
+                  onClick={() => setIsFoundItemsOpen(true)}
+                  className="nav-pill nav-pill--action inline-flex items-center gap-1 px-3 py-1 text-[10px] cursor-pointer whitespace-nowrap ml-auto"
+                  style={{ ["--pill-accent" as string]: "var(--color-fuchsia-500)" }}
+                  title="Consultar e gerenciar os itens encontrados em todos os seus personagens (os mesmos do botão Ver)"
+                >
+                  <Package size={11} /> ITENS ENCONTRADOS
+                  <span className="font-bold font-mono">({foundBazaarItemsCount})</span>
+                </button>
+              )}
               {/* "Itens à Venda": gerenciador centralizado dos itens de Quest
                   de TODOS os personagens do usuário (Disponíveis, Vendidos e
                   Negociados comprados). Oculto no modo demo do tutorial. */}
@@ -5733,7 +5762,7 @@ export default function App() {
                 <button
                   type="button"
                   onClick={() => setIsMyItemsSaleOpen(true)}
-                  className="nav-pill nav-pill--action inline-flex items-center gap-1 px-3 py-1 text-[10px] cursor-pointer whitespace-nowrap ml-auto"
+                  className={`nav-pill nav-pill--action inline-flex items-center gap-1 px-3 py-1 text-[10px] cursor-pointer whitespace-nowrap ${userProfile?.role === "Boss" ? "" : "ml-auto"}`}
                   style={{ ["--pill-accent" as string]: "var(--color-amber-500)" }}
                   title="Gerenciar os itens de Quest de todos os seus personagens (pendentes e vendidos)"
                 >
@@ -6348,6 +6377,18 @@ export default function App() {
           />
         );
       })()}
+      {/* "Itens Encontrados" (59ª, EXCLUSIVO do Boss): itens do Bazaar de
+          todos os personagens em um só lugar. Persistência pelo canal
+          EXISTENTE (handleCharacterInlineChange) — modal "Ver" e "Itens à
+          Venda" refletem na hora. */}
+      {isFoundItemsOpen && !demoData && userProfile?.role === "Boss" && (
+        <FoundItemsModal
+          characters={data.characters}
+          lockedQuestFinancialIds={negotiatedOriginalCharacterIds}
+          onCharacterInlineChange={handleCharacterInlineChange}
+          onClose={() => setIsFoundItemsOpen(false)}
+        />
+      )}
       {/* "Itens à Venda" de Meus Personagens — gerenciamento centralizado dos
           itens de Quest do usuário. Persistência pelos canais EXISTENTES:
           handleCharacterInlineChange (personagens, com a guarda de negociação)
