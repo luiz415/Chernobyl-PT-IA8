@@ -1,7 +1,18 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { ArrowRight, Check, Copy, Crown, HelpCircle, RotateCcw } from "lucide-react";
+import { ArrowRight, Check, Copy, Crown, Globe, HelpCircle, RotateCcw } from "lucide-react";
 import ExternalWindow from "./ExternalWindow";
 import { useAuth } from "../context/AuthContext";
+import { SERVER_OPTIONS } from "../constants/servers";
+import {
+  SERVER_COIN_RATES_EVENT,
+  coinRateText,
+  getServerCoinRate,
+  parseCoinRateInput,
+  persistCoinRates,
+  readLocalCoinRates,
+  withServerCoinRate,
+  type BazaarCoinRates,
+} from "../utils/bazaarCoinRates";
 
 interface Props {
   open: boolean;
@@ -23,6 +34,27 @@ interface ConvData {
 }
 
 const STORAGE_KEY = "tibia_calc_regra3";
+
+/** Servidor selecionado no conversor (persistido localmente — 56ª tarefa). */
+const SERVER_STORAGE_KEY = "tibia_calc_server";
+
+/** Tooltips de ajuda dos cards (um aberto por vez). */
+type HelpId = "servidor" | "tabela" | "conversor";
+
+function loadCalcServer(): string {
+  try {
+    const saved = localStorage.getItem(SERVER_STORAGE_KEY) || "";
+    return SERVER_OPTIONS.includes(saved) ? saved : "";
+  } catch {
+    return "";
+  }
+}
+
+function saveCalcServer(server: string) {
+  try {
+    localStorage.setItem(SERVER_STORAGE_KEY, server);
+  } catch {}
+}
 
 function loadCalcData(): { ref: RefData; conv: ConvData } {
   try {
@@ -100,7 +132,7 @@ export default function CurrencyCalculator({ open, onClose, focusSignal }: Props
       focusSignal={focusSignal}
       title={isNormalUser ? "Conteúdo Exclusivo" : "Conversor RC/KK/R$"}
       width={450}
-      height={525}
+      height={isNormalUser ? 525 : 645}
     >
       {isNormalUser ? <VipOnlyScreen /> : <CalculatorContent />}
     </ExternalWindow>
@@ -286,7 +318,25 @@ function CalculatorContent() {
   const [error, setError] = useState("");
   const [lastCalc, setLastCalc] = useState<"rc" | "kk" | "rs" | null>(null);
   const [copiedField, setCopiedField] = useState<"rc" | "kk" | "rs" | null>(null);
-  const [helpOpen, setHelpOpen] = useState<"tabela" | "conversor" | null>(null);
+  const [helpOpen, setHelpOpen] = useState<HelpId | null>(null);
+
+  // ── Servidor / cotação global (56ª tarefa) ────────────────────────────
+  // MESMA fonte usada pelo modal "RC Servidores" e pela Lista de Itens do
+  // Bazaar (appSettings/global.serverCoinRates, espelho local + evento).
+  const { userProfile } = useAuth();
+  const isBoss = userProfile?.role === "Boss";
+  const [server, setServer] = useState<string>(() => loadCalcServer());
+  const [rates, setRates] = useState<BazaarCoinRates>(() => readLocalCoinRates());
+  const [rateDraft, setRateDraft] = useState<string>(() => coinRateText(getServerCoinRate(readLocalCoinRates(), loadCalcServer())));
+  const [rateError, setRateError] = useState("");
+  const [rateSaved, setRateSaved] = useState(false);
+  const [rateSaving, setRateSaving] = useState(false);
+  /** Último valor IMPORTADO para o campo KK (null = nunca importou). */
+  const lastImportedKk = useRef<string | null>(null);
+  const serverRef = useRef(server);
+  const calcStateRef = useRef({ ref, conv });
+  useEffect(() => { serverRef.current = server; }, [server]);
+  useEffect(() => { calcStateRef.current = { ref, conv }; }, [ref, conv]);
 
   useEffect(() => {
     const data = loadCalcData();
@@ -311,6 +361,29 @@ function CalculatorContent() {
     saveCalcData(r, c);
   }, []);
 
+  // Cotação alterada em OUTRO lugar (RC Servidores, Lista de Itens ou outro
+  // dispositivo): atualiza a cotação exibida e, se o campo KK ainda contém
+  // EXATAMENTE o último valor importado (usuário não digitou nada ali),
+  // reimporta — nunca atropela um valor digitado manualmente.
+  useEffect(() => {
+    const refresh = () => {
+      const next = readLocalCoinRates();
+      setRates(next);
+      const srv = serverRef.current;
+      if (!srv || lastImportedKk.current === null) return;
+      const importedText = coinRateText(getServerCoinRate(next, srv));
+      const { ref: curRef, conv: curConv } = calcStateRef.current;
+      if (curRef.kk === lastImportedKk.current && importedText !== lastImportedKk.current) {
+        lastImportedKk.current = importedText;
+        const nextRef = { ...curRef, rc: "1000", kk: importedText };
+        setRef(nextRef);
+        saveCalcData(nextRef, curConv);
+      }
+    };
+    window.addEventListener(SERVER_COIN_RATES_EVENT, refresh);
+    return () => window.removeEventListener(SERVER_COIN_RATES_EVENT, refresh);
+  }, []);
+
   function updateRef(field: keyof RefData, value: string) {
     const next = { ...ref, [field]: value };
     setRef(next);
@@ -321,6 +394,73 @@ function CalculatorContent() {
     const next = { ...conv, [field]: value };
     setConv(next);
     persist(ref, next);
+  }
+
+  /**
+   * Importa a cotação do servidor para a Tabela: RC = 1000 (base da
+   * convenção do app) e KK = cotação ("k por 1000 RC"). Servidor SEM
+   * cotação → KK fica VAZIO (nunca assumimos taxa padrão nem herdamos de
+   * outro servidor); o campo R$ do usuário é preservado.
+   */
+  function importRateToTable(rate: number) {
+    const importedText = coinRateText(rate);
+    lastImportedKk.current = importedText;
+    const nextRef = { ...calcStateRef.current.ref, rc: "1000", kk: importedText };
+    setRef(nextRef);
+    persist(nextRef, calcStateRef.current.conv);
+  }
+
+  function handleServerChange(value: string) {
+    setServer(value);
+    saveCalcServer(value);
+    setRateError("");
+    setRateSaved(false);
+    if (!value) return;
+    const rate = getServerCoinRate(readLocalCoinRates(), value);
+    setRateDraft(coinRateText(rate));
+    importRateToTable(rate);
+  }
+
+  function resetServer() {
+    setServer("");
+    saveCalcServer("");
+    setRateDraft("");
+    setRateError("");
+    setRateSaved(false);
+    lastImportedKk.current = null;
+  }
+
+  /**
+   * BOSS: grava a cotação do servidor na MESMA configuração global usada
+   * pelo "RC Servidores" e pela Lista de Itens (persistCoinRates — o
+   * histórico rotaciona e todos os cálculos/telas sincronizam pelo evento).
+   * O backend (Security Rules de appSettings) garante que só o Boss grava;
+   * usuários comuns nem veem este formulário.
+   */
+  async function handleSaveRate() {
+    if (!isBoss || !server || rateSaving) return;
+    const value = parseCoinRateInput(rateDraft);
+    if (value === null) {
+      setRateError("Cotação inválida — número maior que zero com até 1 casa decimal (ex.: 2,5).");
+      return;
+    }
+    setRateError("");
+    const current = getServerCoinRate(readLocalCoinRates(), server);
+    if (value === current) {
+      importRateToTable(value); // nada mudou — apenas garante o KK importado
+      return;
+    }
+    setRateSaving(true);
+    try {
+      await persistCoinRates(withServerCoinRate(readLocalCoinRates(), server, value));
+      setRates(readLocalCoinRates());
+      setRateDraft(coinRateText(value));
+      importRateToTable(value);
+      setRateSaved(true);
+      setTimeout(() => setRateSaved(false), 2000);
+    } finally {
+      setRateSaving(false);
+    }
   }
 
   function validateRef(): { rc: number; kk: number; rs: number } | null {
@@ -439,6 +579,9 @@ function CalculatorContent() {
     }
   }
 
+  /** Cotação configurada do servidor selecionado (0 = não configurada). */
+  const selectedRate = server ? getServerCoinRate(rates, server) : 0;
+
   return (
     <div
       style={{
@@ -532,6 +675,160 @@ function CalculatorContent() {
             {error}
           </div>
         )}
+
+        {/* SERVIDOR — importa a cotação global por servidor (56ª tarefa) */}
+        <Card
+          title="Servidor"
+          onReset={resetServer}
+          helpId="servidor"
+          helpOpen={helpOpen}
+          setHelpOpen={setHelpOpen}
+          helpContent={
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "#e4e4e7", marginBottom: 2 }}>
+                Cotação por servidor
+              </div>
+              <div>
+                Selecione o servidor para importar automaticamente a cotação configurada no aplicativo
+                para a Tabela (<span style={{ color: "#fbbf24", fontWeight: 700 }}>RC</span> = 1000 e{" "}
+                <span style={{ color: "#38bdf8", fontWeight: 700 }}>KK</span> = cotação do servidor).
+              </div>
+              <div>
+                Servidor <strong>sem cotação cadastrada</strong>: o campo{" "}
+                <span style={{ color: "#38bdf8", fontWeight: 700 }}>KK</span> fica vazio — nenhuma taxa é assumida.
+              </div>
+              {isBoss && (
+                <div>
+                  Como <strong>Boss</strong>, você pode editar a cotação aqui — a alteração vale para o
+                  aplicativo inteiro (RC Servidores e Lista de Itens do Bazaar).
+                </div>
+              )}
+            </div>
+          }
+        >
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <Globe size={13} color="#38bdf8" style={{ flexShrink: 0 }} />
+              <select
+                value={server}
+                onChange={(e) => handleServerChange(e.target.value)}
+                style={{
+                  flex: 1,
+                  minWidth: 0,
+                  background: "rgba(0,0,0,0.3)",
+                  border: "1px solid color-mix(in oklab, var(--color-red-600) 45%, transparent)",
+                  borderRadius: 7,
+                  padding: "7px 8px",
+                  fontSize: 12,
+                  fontWeight: 500,
+                  color: server ? "#fff" : "#a1a1aa",
+                  outline: "none",
+                  cursor: "pointer",
+                  boxShadow: "inset 0 0 4px color-mix(in oklab, var(--color-red-600) 10%, transparent)",
+                }}
+              >
+                <option value="" style={{ background: "#18181b", color: "#a1a1aa" }}>
+                  — selecione o servidor —
+                </option>
+                {SERVER_OPTIONS.map((s) => (
+                  <option key={s} value={s} style={{ background: "#18181b", color: "#fff" }}>
+                    {s}
+                  </option>
+                ))}
+              </select>
+              {server &&
+                (selectedRate > 0 ? (
+                  <span
+                    style={{ fontSize: 11, fontWeight: 600, color: "#fbbf24", whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums", flexShrink: 0 }}
+                    title="Cotação configurada no aplicativo: k por 1000 RC"
+                  >
+                    {coinRateText(selectedRate)}k / 1000 RC
+                  </span>
+                ) : (
+                  <span style={{ fontSize: 11, fontWeight: 600, color: "#fda4af", whiteSpace: "nowrap", flexShrink: 0 }}>
+                    sem cotação configurada
+                  </span>
+                ))}
+            </div>
+            {server && !isBoss && selectedRate <= 0 && (
+              <div style={{ fontSize: 10, color: "#a1a1aa", lineHeight: 1.5 }}>
+                Nenhum valor cadastrado para este servidor — a cotação é definida pelo Boss; nenhuma taxa
+                padrão foi aplicada ao campo KK.
+              </div>
+            )}
+            {server && isBoss && (
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span style={{ fontSize: 10, fontWeight: 600, color: "#a1a1aa", textTransform: "uppercase", letterSpacing: "0.08em", whiteSpace: "nowrap" }}>
+                  Cotação (k)
+                </span>
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  value={rateDraft}
+                  onChange={(e) => {
+                    setRateDraft(sanitizeNumeric(e.target.value));
+                    setRateError("");
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      void handleSaveRate();
+                    }
+                  }}
+                  placeholder="ex.: 2,5"
+                  style={{
+                    width: 90,
+                    background: "rgba(0,0,0,0.3)",
+                    border: "1px solid color-mix(in oklab, var(--color-red-600) 45%, transparent)",
+                    borderRadius: 7,
+                    padding: "6px 8px",
+                    fontSize: 12,
+                    color: "#fff",
+                    textAlign: "center",
+                    fontVariantNumeric: "tabular-nums",
+                    fontWeight: 500,
+                    outline: "none",
+                    boxSizing: "border-box",
+                  }}
+                />
+                <button
+                  type="button"
+                  onClick={() => void handleSaveRate()}
+                  disabled={rateSaving}
+                  title="Salvar a cotação deste servidor na configuração global (RC Servidores / Lista de Itens)"
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 5,
+                    padding: "6px 10px",
+                    borderRadius: 7,
+                    fontSize: 11,
+                    fontWeight: 600,
+                    border: `1px solid ${rateSaved ? "rgba(52,211,153,0.45)" : "rgba(251,191,36,0.33)"}`,
+                    background: rateSaved ? "rgba(52,211,153,0.12)" : "rgba(251,191,36,0.1)",
+                    color: rateSaved ? "#34d399" : "#fbbf24",
+                    cursor: rateSaving ? "wait" : "pointer",
+                    whiteSpace: "nowrap",
+                    transition: "all 0.15s",
+                  }}
+                >
+                  {rateSaved ? (
+                    <>
+                      Salvo <Check size={11} strokeWidth={2.5} />
+                    </>
+                  ) : rateSaving ? (
+                    "Salvando…"
+                  ) : (
+                    "Salvar cotação"
+                  )}
+                </button>
+              </div>
+            )}
+            {server && isBoss && rateError && (
+              <div style={{ fontSize: 10, color: "#fda4af", lineHeight: 1.5 }}>{rateError}</div>
+            )}
+          </div>
+        </Card>
 
         {/* TABELA */}
         <Card
@@ -708,9 +1005,9 @@ function Card({
 }: {
   title: string;
   onReset: () => void;
-  helpId?: "tabela" | "conversor";
-  helpOpen?: "tabela" | "conversor" | null;
-  setHelpOpen?: React.Dispatch<React.SetStateAction<"tabela" | "conversor" | null>>;
+  helpId?: HelpId;
+  helpOpen?: HelpId | null;
+  setHelpOpen?: React.Dispatch<React.SetStateAction<HelpId | null>>;
   helpContent?: React.ReactNode;
   children: React.ReactNode;
 }) {

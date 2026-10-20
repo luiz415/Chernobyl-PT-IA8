@@ -4,7 +4,9 @@ import { X, Coins, Globe, Check, RotateCcw } from "lucide-react";
 import { SERVER_OPTIONS, serverKey } from "../constants/servers";
 import {
   SERVER_COIN_RATES_EVENT,
+  coinRateText,
   getServerCoinRate,
+  parseCoinRateInput,
   persistCoinRates,
   readLocalCoinRateHistory,
   readLocalCoinRates,
@@ -29,17 +31,11 @@ import {
 //   garante que apenas o Boss consegue gravar.
 // ============================================================================
 
-/** Mesma validação da cotação usada na Lista de Itens: > 0, até 1 casa. */
-function parseDecimalKk(raw: string): number | null {
-  const text = String(raw || "").trim().replace(",", ".");
-  if (!/^\d+(\.\d)?$/.test(text)) return null;
-  const value = Math.round(Number(text) * 10) / 10;
-  return Number.isFinite(value) && value > 0 ? value : null;
-}
-
-function rateText(rate: number): string {
-  return rate > 0 ? String(rate).replace(".", ",") : "";
-}
+// Validação e formatação da cotação: FONTE ÚNICA em utils/bazaarCoinRates
+// (56ª tarefa — compartilhada com o Conversor RC/KK/R$; comportamento
+// idêntico ao que era definido localmente aqui).
+const parseDecimalKk = parseCoinRateInput;
+const rateText = coinRateText;
 
 /** Data/hora da alteração (dd/mm/aaaa hh:mm) — "—" quando não registrada. */
 function historyDateText(ms: number | undefined): string {

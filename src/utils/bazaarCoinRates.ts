@@ -197,6 +197,23 @@ export function writeLocalCoinRates(rates: BazaarCoinRates): void {
 }
 
 /**
+ * VALIDAÇÃO ÚNICA do texto de cotação digitado na UI (modal "RC Servidores"
+ * e Conversor RC/KK/R$ — mesma regra da Lista de Itens): número > 0 com até
+ * 1 casa decimal (vírgula ou ponto). Retorna null quando inválido.
+ */
+export function parseCoinRateInput(raw: string): number | null {
+  const text = String(raw || "").trim().replace(",", ".");
+  if (!/^\d+(\.\d)?$/.test(text)) return null;
+  const value = Math.round(Number(text) * 10) / 10;
+  return Number.isFinite(value) && value > 0 ? value : null;
+}
+
+/** Texto pt-BR da cotação ("2,5"); vazio quando não configurada (<= 0). */
+export function coinRateText(rate: number): string {
+  return Number.isFinite(rate) && rate > 0 ? String(rate).replace(".", ",") : "";
+}
+
+/**
  * Cotação do servidor (k por 1000 RC). 0 = NÃO CONFIGURADA — o chamador
  * exibe "—"/mensagem, nunca inventa conversão (sem fallback entre
  * servidores, sem taxa fixa legada).
