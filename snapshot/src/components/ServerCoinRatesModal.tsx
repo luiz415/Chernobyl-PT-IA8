@@ -109,11 +109,6 @@ export default function ServerCoinRatesModal({ onClose }: Props) {
     [drafts, savedRates],
   );
 
-  const configuredCount = useMemo(
-    () => SERVER_OPTIONS.filter(server => getServerCoinRate(savedRates, server) > 0).length,
-    [savedRates],
-  );
-
   /** Restaura os rascunhos para os valores salvos (descarta edições). */
   const resetDrafts = () => {
     const next: Record<string, string> = {};
@@ -182,14 +177,6 @@ export default function ServerCoinRatesModal({ onClose }: Props) {
           </div>
         </div>
 
-        {/* Contexto — fonte única compartilhada */}
-        <div className="px-4 pt-2.5 flex-shrink-0">
-          <p className="text-[9px] text-slate-500 leading-snug">
-            Esta é a MESMA configuração usada pela Lista de Itens do Bazaar e por todos os cálculos kk ⇄ RC do aplicativo.
-            Campo vazio = sem cotação (os cálculos exibem “—”). <span className="text-slate-400 font-bold tabular-nums">{configuredCount}/{SERVER_OPTIONS.length}</span> configurados.
-          </p>
-        </div>
-
         {/* Lista de servidores */}
         <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3">
           <ul className="divide-y divide-white/5 rounded-xl border border-white/10 bg-white/[0.02] overflow-hidden">
@@ -207,16 +194,11 @@ export default function ServerCoinRatesModal({ onClose }: Props) {
               const prevDate = hist && hist.rate === saved ? hist.prevUpdatedAt : undefined;
               return (
                 <li key={server} className="px-3 py-1.5">
+                  {/* Linha principal: servidor + campo de edição (o valor
+                      atual aparece UMA única vez, no bloco de histórico). */}
                   <div className="flex items-center gap-2">
                     <Globe size={11} className="text-sky-400 flex-shrink-0" />
                     <span className="text-[11px] font-bold text-slate-200 truncate flex-1" title={server}>{server}</span>
-                    {saved > 0 ? (
-                      <span className="text-[9px] text-slate-500 tabular-nums flex-shrink-0" title="Cotação salva atualmente">
-                        atual: <span className="font-bold text-amber-300/90">{rateText(saved)}k</span>
-                      </span>
-                    ) : (
-                      <span className="text-[9px] text-slate-600 italic flex-shrink-0" title="Servidor sem cotação configurada — cálculos exibem “—”">não configurada</span>
-                    )}
                     <div className="relative flex-shrink-0">
                       <input
                         type="text"
@@ -236,17 +218,22 @@ export default function ServerCoinRatesModal({ onClose }: Props) {
                       <span className="absolute right-2 top-1/2 -translate-y-1/2 text-[9px] font-bold text-slate-500 select-none pointer-events-none">k</span>
                     </div>
                   </div>
-                  {/* Histórico — valor atual e anterior com as datas em que
-                      cada um foi definido ("—" quando não registrado). */}
-                  <p className="mt-0.5 pl-[19px] text-[8px] leading-snug text-slate-500 tabular-nums">
-                    <span className="uppercase tracking-wider font-bold text-slate-500/80">Atual:</span>{" "}
-                    <span className={saved > 0 ? "font-bold text-amber-300/80" : "text-slate-600"}>{saved > 0 ? `${rateText(saved)}k` : "—"}</span>
-                    {" "}<span className="text-slate-600">em</span> {historyDateText(currentDate)}
-                    <span className="text-slate-700 mx-1">·</span>
-                    <span className="uppercase tracking-wider font-bold text-slate-500/80">Anterior:</span>{" "}
-                    <span className={prevRate !== undefined && prevRate > 0 ? "font-bold text-slate-400" : "text-slate-600"}>{historyRateText(prevRate)}</span>
-                    {" "}<span className="text-slate-600">em</span> {historyDateText(prevDate)}
-                  </p>
+                  {/* Histórico — ÚNICO lugar que exibe o valor atual e o
+                      anterior, cada um com a data da sua definição ("—"
+                      quando não registrado; nada é inventado). Duas colunas
+                      alinhadas para leitura rápida. */}
+                  <div className="mt-1 pl-[19px] grid grid-cols-2 gap-x-3 text-[8px] leading-snug tabular-nums">
+                    <span className="flex items-baseline gap-1 min-w-0">
+                      <span className="uppercase tracking-wider font-bold text-slate-500/80 flex-shrink-0">Atual</span>
+                      <span className={`font-bold ${saved > 0 ? "text-amber-300/90" : "text-slate-600"}`}>{saved > 0 ? `${rateText(saved)}k` : "—"}</span>
+                      <span className="text-slate-600 truncate">{currentDate ? `· ${historyDateText(currentDate)}` : "· —"}</span>
+                    </span>
+                    <span className="flex items-baseline gap-1 min-w-0">
+                      <span className="uppercase tracking-wider font-bold text-slate-500/80 flex-shrink-0">Anterior</span>
+                      <span className={`font-bold ${prevRate !== undefined && prevRate > 0 ? "text-slate-300" : "text-slate-600"}`}>{historyRateText(prevRate)}</span>
+                      <span className="text-slate-600 truncate">{prevDate ? `· ${historyDateText(prevDate)}` : "· —"}</span>
+                    </span>
+                  </div>
                   {error && <p className="mt-0.5 pl-[19px] text-[9px] text-red-400 leading-snug">{error}</p>}
                 </li>
               );
