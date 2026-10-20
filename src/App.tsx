@@ -3,7 +3,7 @@ import {
   Swords, History as HistoryIcon, BarChart3, StickyNote,
   Save, CheckCircle2, AlertTriangle, Calculator, AppWindow, Users, UserPlus, Archive, User, Clock, Sparkles,
   Lock, LockOpen, ArrowUp, ArrowDown, MessageSquareMore, Heart, Cloud, CloudCog, ShoppingBag, Bell, Trophy,
-  SlidersHorizontal, ChevronDown, FileSpreadsheet, Briefcase, FileCode2
+  SlidersHorizontal, ChevronDown, FileSpreadsheet, Briefcase, FileCode2, Coins
 } from "lucide-react";
 import ExoriLogo from "./components/ExoriLogo";
 import type { AppData, BazaarItemsPurchasePrefill, Character, CharacterAcquisition, CharacterAcquisitionBuyerDetails, CharacterBazaarItemsSnapshot, PartyCustomMember, PartyFinalizationReason, PartyTab, PersonalPartyHistory, PtType, WaitingService, SharedService, DialogOptions, ProbableMarkersMap, Vocation } from "./types";
@@ -19,6 +19,7 @@ import { getPersonalPartyHistoryEntry, readPersonalPartyHistoryCache, requestPar
 import initialBgUrl from "./assets/initial-bg.png";
 import CharTable from "./components/CharTable";
 import AcquiredCharactersPanel from "./components/AcquiredCharactersPanel";
+import MyItemsForSaleModal, { collectMySaleItems, countMyUnsoldSaleItems } from "./components/MyItemsForSaleModal";
 import CharacterModal from "./components/CharacterModal";
 import CharacterBazaarItemsModal from "./components/CharacterBazaarItemsModal";
 // Cotação do coin persistida pela guia Bazaar → Itens (local) — usada apenas
@@ -489,6 +490,9 @@ export default function App() {
   const [tab, setTab] = useState<Tab>("ativos");
   // "DISPONÍVEIS" é o padrão ao entrar em Meus Personagens.
   const [charsView, setCharsView] = useState<CharsView>("disponiveis");
+  // Modal "Itens à Venda" de Meus Personagens (gerenciador centralizado dos
+  // itens de Quest de todos os personagens do usuário).
+  const [isMyItemsSaleOpen, setIsMyItemsSaleOpen] = useState(false);
 
   // Badge de "Meus Services" enquanto a aba está FECHADA (o painel não está
   // montado e não pode informar o total). Recalculado do cache local, sem
@@ -3171,6 +3175,15 @@ export default function App() {
   const ativos = useMemo(() => data.characters.filter((c) => !c.vendido), [data.characters]);
   const vendidos = useMemo(() => data.characters.filter((c) => c.vendido), [data.characters]);
 
+  // "Itens à Venda" de Meus Personagens — derivação pura das listas que o App
+  // já mantém vivas (nenhuma consulta nova): personagens Disponíveis+Vendidos
+  // e negociações COMPRADAS pelo usuário. O contador alimenta o badge do botão.
+  const mySaleItems = useMemo(
+    () => collectMySaleItems(data.characters, characterAcquisitions, characterAcquisitionBuyerDetails, currentUser?.uid || "", negotiatedOriginalCharacterIds),
+    [data.characters, characterAcquisitions, characterAcquisitionBuyerDetails, currentUser?.uid, negotiatedOriginalCharacterIds],
+  );
+  const myUnsoldSaleItemsCount = useMemo(() => countMyUnsoldSaleItems(mySaleItems), [mySaleItems]);
+
   const accounts = useMemo(
     () => Array.from(new Set(data.characters.map((c) => c.account).filter((value): value is string => typeof value === "string" && value.length > 0))).sort(),
     [data.characters]
@@ -5695,6 +5708,21 @@ export default function App() {
                 <Briefcase size={11} /> NEGOCIADOS ENTRE USUÁRIOS
                 <span className="font-bold font-mono">({demoData ? demoData.acquisitions.length : characterAcquisitions.length})</span>
               </button>
+              {/* "Itens à Venda": gerenciador centralizado dos itens de Quest
+                  de TODOS os personagens do usuário (Disponíveis, Vendidos e
+                  Negociados comprados). Oculto no modo demo do tutorial. */}
+              {!demoData && (
+                <button
+                  type="button"
+                  onClick={() => setIsMyItemsSaleOpen(true)}
+                  className="nav-pill nav-pill--action inline-flex items-center gap-1 px-3 py-1 text-[10px] cursor-pointer whitespace-nowrap ml-auto"
+                  style={{ ["--pill-accent" as string]: "var(--color-amber-500)" }}
+                  title="Gerenciar os itens de Quest de todos os seus personagens (pendentes e vendidos)"
+                >
+                  <Coins size={11} /> ITENS À VENDA
+                  <span className="font-bold font-mono">({myUnsoldSaleItemsCount})</span>
+                </button>
+              )}
             </div>
             <div data-tour="chars-table" className="flex-1 min-h-0 overflow-hidden">
               {/* MODO DEMO do tutorial: tabelas somente leitura com dados fictícios. */}
@@ -6272,6 +6300,22 @@ export default function App() {
              não converte) — mesma configuração por servidor da guia Itens. */
           coinRate={getServerCoinRate(readLocalCoinRates(currentUser?.uid), bazaarItemsViewCharacter.bazaarItems?.server)}
           onClose={() => setBazaarItemsViewCharacter(null)}
+        />
+      )}
+      {/* "Itens à Venda" de Meus Personagens — gerenciamento centralizado dos
+          itens de Quest do usuário. Persistência pelos canais EXISTENTES:
+          handleCharacterInlineChange (personagens, com a guarda de negociação)
+          e updateCharacterAcquisitionQuestProfit (negociados comprados). */}
+      {isMyItemsSaleOpen && !demoData && (
+        <MyItemsForSaleModal
+          characters={data.characters}
+          acquisitions={characterAcquisitions}
+          buyerDetails={characterAcquisitionBuyerDetails}
+          currentUserUid={currentUser?.uid || ""}
+          lockedQuestFinancialIds={negotiatedOriginalCharacterIds}
+          onCharacterInlineChange={handleCharacterInlineChange}
+          onUpdateQuestProfit={updateCharacterAcquisitionQuestProfit}
+          onClose={() => setIsMyItemsSaleOpen(false)}
         />
       )}
       <CurrencyCalculator open={calcOpen} onClose={() => setCalcOpen(false)} focusSignal={calcFocusSignal} />
