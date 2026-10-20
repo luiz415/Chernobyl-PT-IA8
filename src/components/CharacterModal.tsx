@@ -520,7 +520,14 @@ export default function CharacterModal({ open, initial, accounts, servers, onSav
                 <button
                   type="button"
                   disabled={!data.sgRot || data.sgRot <= 0}
-                  onClick={() => setData((d) => ({ ...d, sgDropRot: d.sgRot && d.sgRot > 0 ? Math.floor(d.sgRot) : undefined }))}
+                  // Drop? = SIM confirma a CONCLUSÃO da Sanguine → a quest é
+                  // marcada como NÃO disponível no MESMO setData (um único
+                  // estado, sem atualização duplicada; persiste no salvar,
+                  // pelo mesmo caminho de sempre). Clicar NÃO não mexe na
+                  // disponibilidade; nenhuma outra quest é tocada.
+                  onClick={() => setData((d) => (d.sgRot && d.sgRot > 0
+                    ? { ...d, sgDropRot: Math.floor(d.sgRot), sanguine: false }
+                    : { ...d, sgDropRot: undefined }))}
                   className={`rounded-lg border text-xs font-bold transition-all ${!data.sgRot || data.sgRot <= 0 ? "cursor-not-allowed" : "cursor-pointer"} ${
                     !!data.sgRot && data.sgRot > 0 && data.sgDropRot === Math.floor(data.sgRot)
                       ? "border-emerald-500/50 bg-emerald-500/20 text-emerald-300 shadow-sm"

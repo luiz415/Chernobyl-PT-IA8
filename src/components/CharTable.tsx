@@ -732,7 +732,12 @@ export default function CharTable({ characters, activeParties = [], readOnly, sh
         return (
           <ItemSelect
             value={c.itemDropadoSW || ""}
-            onChange={(val) => onCharacterInlineChange?.({ ...c, itemDropadoSW: val })}
+            // SELECIONAR um item confirma a conclusão da Soul War → a quest é
+            // marcada como NÃO disponível NO MESMO patch (uma única
+            // atualização, sem estados intermediários). Remover o item NÃO
+            // reverte a disponibilidade (ajuste manual pela célula SW).
+            // Somente a quest do próprio item é tocada.
+            onChange={(val) => onCharacterInlineChange?.({ ...c, itemDropadoSW: val, ...(val.trim() ? { soulwar: false } : {}) })}
             itemList={SOULWAR_ITEMS}
             disabled={locked}
             disabledReason="Bloqueado: o Drop SW desta Quest pertence ao comprador da negociação"
@@ -748,7 +753,9 @@ export default function CharTable({ characters, activeParties = [], readOnly, sh
         return (
           <ItemSelect
             value={c.itemDropadoSG || ""}
-            onChange={(val) => onCharacterInlineChange?.({ ...c, itemDropadoSG: val })}
+            // Mesma regra do DROP SW: selecionar item ⇒ Sanguine NÃO
+            // disponível no MESMO patch; remoção não reverte; só a SG.
+            onChange={(val) => onCharacterInlineChange?.({ ...c, itemDropadoSG: val, ...(val.trim() ? { sanguine: false } : {}) })}
             itemList={SANGUINE_ITEMS}
             disabled={locked}
             disabledReason="Bloqueado: o Drop SG desta Quest pertence ao comprador da negociação"
@@ -764,7 +771,9 @@ export default function CharTable({ characters, activeParties = [], readOnly, sh
         return (
           <ItemSelect
             value={c.itemDropadoCrypt || ""}
-            onChange={(val) => onCharacterInlineChange?.({ ...c, itemDropadoCrypt: val })}
+            // Mesma regra: selecionar item ⇒ Graveborn NÃO disponível no
+            // MESMO patch (campo interno `crypt`); remoção não reverte.
+            onChange={(val) => onCharacterInlineChange?.({ ...c, itemDropadoCrypt: val, ...(val.trim() ? { crypt: false } : {}) })}
             itemList={CRYPT_ITEMS}
             disabled={locked}
             disabledReason="Bloqueado: o Drop GB desta Quest pertence ao comprador da negociação"
