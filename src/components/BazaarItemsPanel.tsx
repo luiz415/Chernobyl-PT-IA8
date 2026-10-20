@@ -2223,9 +2223,9 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
           as ações exclusivas do cargo. Botões, handlers e condições são
           exatamente os mesmos de antes — apenas posição e cores foram
           alinhadas aos equivalentes das Quests. */}
-      <div className="rounded-lg border border-fuchsia-500/25 bg-[var(--th-n-base)]/85 px-2.5 py-1 text-[11px] text-slate-400">
-        <div className="flex flex-col gap-0.5 lg:flex-row lg:items-start lg:justify-between lg:gap-3">
-          <div className="min-w-0 flex-1 space-y-0.5">
+      <div className="rounded-lg border border-fuchsia-500/25 bg-[var(--th-n-base)]/85 px-3 py-1.5 text-[11px] text-slate-400 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
+        <div className="flex flex-col gap-1.5 lg:flex-row lg:items-start lg:justify-between lg:gap-3">
+          <div className="min-w-0 flex-1 space-y-1">
             <div className="flex flex-wrap items-center gap-2">
               <div className="inline-flex items-center gap-1.5 font-black text-fuchsia-300 uppercase tracking-wide">
                 <Sparkles size={12} /> Última consulta
@@ -2341,8 +2341,11 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
 
           {/* COLUNA DE AÇÕES — mesma organização da guia Quests: 1ª linha com
               os controles/ações de TODOS os usuários; 2ª linha é a SEÇÃO
-              BOSS, grupo destacado só com as ações exclusivas do cargo. */}
-          <div className="flex min-w-0 flex-col items-end gap-1.5">
+              BOSS, grupo destacado só com as ações exclusivas do cargo.
+              No desktop (lg), um divisor vertical discreto separa as ações
+              das informações da consulta — hierarquia mais clara; no mobile
+              as ações fluem abaixo, sem divisor. */}
+          <div className="flex min-w-0 flex-col items-end gap-1.5 lg:self-stretch lg:border-l lg:border-white/5 lg:pl-3">
             <div className="flex flex-wrap items-center justify-end gap-1.5">
               {/* OCULTAR ENCERRADOS / EXIBIR TODOS — mesmo botão das quests
                   (mesmo visual/alternância/carência de 5 min), aplicado à lista
@@ -2531,11 +2534,18 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                     negativos ("-20") para considerar também personagens com
                     percentual negativo (ex.: ≥ -20 ou ≤ -10). */}
                 <th className={`${STICKY_FILTER_CELL_CLASS} h-10 px-1 py-1.5 align-middle`}><div className="flex w-full items-center justify-center [&>button]:w-full [&>button]:max-w-[80px]"><FilterNumber label="Potencial (%)" value={tableFilters.potentialValue} operator={tableFilters.potentialOperator} onChange={(value, operator) => updateTableFilters({ potentialValue: value, potentialOperator: operator })} placeholder="%" allowNegative /></div></th>
-                {/* Skills, SW, SG e Detalhes: sem filtro próprio. */}
-                <th className={`${STICKY_FILTER_CELL_CLASS} h-10 px-1 py-1.5 text-center align-middle text-[10px] text-slate-600`}>—</th>
-                <th className={`${STICKY_FILTER_CELL_CLASS} h-10 px-1 py-1.5 text-center align-middle text-[10px] text-slate-600`}>—</th>
-                <th className={`${STICKY_FILTER_CELL_CLASS} h-10 px-1 py-1.5 text-center align-middle text-[10px] text-slate-600`}>—</th>
-                <th className={`${STICKY_FILTER_CELL_CLASS} h-10 px-1 py-1.5 text-center align-middle text-[10px] text-slate-600`}>—</th>
+                {/* Skills, SW, SG, GB e Detalhes: sem filtro próprio —
+                    SEMPRE uma célula por coluna do cabeçalho (15×15). A
+                    célula de "Detalhes" faltava desde a inclusão da coluna
+                    GB, deslocando o botão "Meus" (e o "Resetar") uma coluna
+                    à esquerda; como <table> alinha por célula, com as 15
+                    células o alinhamento é garantido em QUALQUER resolução/
+                    redimensionamento. */}
+                <th className={`${STICKY_FILTER_CELL_CLASS} h-10 px-1 py-1.5 text-center align-middle text-[10px] text-slate-600`} title="Coluna Skills — sem filtro">—</th>
+                <th className={`${STICKY_FILTER_CELL_CLASS} h-10 px-1 py-1.5 text-center align-middle text-[10px] text-slate-600`} title="Coluna SW — sem filtro">—</th>
+                <th className={`${STICKY_FILTER_CELL_CLASS} h-10 px-1 py-1.5 text-center align-middle text-[10px] text-slate-600`} title="Coluna SG — sem filtro">—</th>
+                <th className={`${STICKY_FILTER_CELL_CLASS} h-10 px-1 py-1.5 text-center align-middle text-[10px] text-slate-600`} title="Coluna GB — sem filtro">—</th>
+                <th className={`${STICKY_FILTER_CELL_CLASS} h-10 px-1 py-1.5 text-center align-middle text-[10px] text-slate-600`} title="Coluna Detalhes — sem filtro">—</th>
                 <th className={`${STICKY_FILTER_CELL_CLASS} h-10 px-1 py-1.5 text-center align-middle`}>
                   <button
                     type="button"
