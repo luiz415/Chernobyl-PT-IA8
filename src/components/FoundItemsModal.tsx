@@ -182,6 +182,15 @@ export default function FoundItemsModal({
     return group && item ? { group, item } : null;
   }, [saleTarget, groups]);
 
+  // ── Copiar conta/personagem — MESMO padrão do CharTable (clique copia,
+  //    ✓ verde por 1,5s). Chave: `${characterId}:char` ou `${characterId}:acc`.
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  async function copyText(text: string, key: string) {
+    try { await navigator.clipboard.writeText(text); } catch { /* fallback */ }
+    setCopiedKey(key);
+    setTimeout(() => setCopiedKey(null), 1500);
+  }
+
   // ── Remoção: confirmação em 2 cliques (expira sozinha) ────────────────────
   const [confirmRemoveKey, setConfirmRemoveKey] = useState<string | null>(null);
   useEffect(() => {
@@ -317,17 +326,32 @@ export default function FoundItemsModal({
               <section key={group.characterId} className="rounded-xl border border-white/10 bg-white/[0.02] overflow-hidden">
                 {/* Cabeçalho do personagem: Personagem · Conta · Servidor · Total */}
                 <header className="flex items-center gap-x-2.5 gap-y-1 px-3 py-1.5 bg-white/[0.04] border-b border-white/5 flex-wrap">
-                  <span className="inline-flex items-center gap-1.5 min-w-0">
+                  {/* Nome do personagem — botão de COPIAR (mesmo padrão do
+                      CharTable: clique copia, ✓ verde por 1,5s) */}
+                  <button
+                    type="button"
+                    onClick={() => copyText(group.personagem, `${group.characterId}:char`)}
+                    className="inline-flex items-center gap-1.5 min-w-0 rounded px-0.5 py-0.5 hover:bg-white/5 transition-colors cursor-pointer"
+                    title="Clique para copiar o nome do personagem"
+                  >
                     <Swords size={11} className="text-fuchsia-400 flex-shrink-0" />
-                    <span className="text-[11px] font-black text-fuchsia-200 truncate" title={group.personagem}>{group.personagem}</span>
-                    {group.vendido && (
-                      <span className="text-[7px] font-black uppercase tracking-wide px-1 py-px rounded border border-white/15 bg-white/5 text-slate-400 flex-shrink-0" title="Personagem está na guia Vendidos">vendido</span>
-                    )}
-                  </span>
+                    <span className="text-[11px] font-black text-fuchsia-200 truncate">{group.personagem}</span>
+                    {copiedKey === `${group.characterId}:char` && <Check size={12} className="text-emerald-400 flex-shrink-0" />}
+                  </button>
+                  {group.vendido && (
+                    <span className="text-[7px] font-black uppercase tracking-wide px-1 py-px rounded border border-white/15 bg-white/5 text-slate-400 flex-shrink-0" title="Personagem está na guia Vendidos">vendido</span>
+                  )}
+                  {/* Nome da conta — botão de COPIAR (mesmo padrão) */}
                   {group.account && (
-                    <span className="inline-flex items-center gap-1 text-[9px] font-semibold text-slate-400 min-w-0" title={`Conta: ${group.account}`}>
+                    <button
+                      type="button"
+                      onClick={() => copyText(group.account, `${group.characterId}:acc`)}
+                      className="inline-flex items-center gap-1 text-[9px] font-semibold text-slate-400 hover:text-slate-300 min-w-0 rounded px-0.5 py-0.5 hover:bg-white/5 transition-colors cursor-pointer"
+                      title="Clique para copiar o nome da conta"
+                    >
                       <User size={9} className="flex-shrink-0" /> <span className="truncate">{group.account}</span>
-                    </span>
+                      {copiedKey === `${group.characterId}:acc` && <Check size={12} className="text-emerald-400 flex-shrink-0" />}
+                    </button>
                   )}
                   <span className="inline-flex items-center gap-1 text-[9px] font-black uppercase tracking-wider text-sky-300" title="Servidor do snapshot — os valores vieram da Lista de Itens deste servidor">
                     <Globe size={9} className="flex-shrink-0" /> {group.serverName || "—"}
