@@ -6,8 +6,10 @@ import {
   SERVER_COIN_RATES_EVENT,
   getServerCoinRate,
   persistCoinRates,
+  readLocalCoinRateHistory,
   readLocalCoinRates,
   type BazaarCoinRates,
+  type ServerCoinRateHistory,
 } from "../utils/bazaarCoinRates";
 
 // ============================================================================
@@ -39,6 +41,18 @@ function rateText(rate: number): string {
   return rate > 0 ? String(rate).replace(".", ",") : "";
 }
 
+/** Data/hora da alteração (dd/mm/aaaa hh:mm) — "—" quando não registrada. */
+function historyDateText(ms: number | undefined): string {
+  if (!ms || ms <= 0) return "—";
+  return new Date(ms).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+
+/** Valor do histórico: "2,5k", "removida" (0 registrado) ou "—" (sem dado). */
+function historyRateText(rate: number | undefined): string {
+  if (rate === undefined) return "—";
+  return rate > 0 ? `${rateText(rate)}k` : "removida";
+}
+
 interface Props {
   onClose: () => void;
 }
@@ -48,8 +62,14 @@ export default function ServerCoinRatesModal({ onClose }: Props) {
   // appSettings/global do App). O evento cobre alterações feitas em OUTRO
   // local (ex.: Lista de Itens aberta em paralelo ou outro dispositivo).
   const [savedRates, setSavedRates] = useState<BazaarCoinRates>(() => readLocalCoinRates());
+  // Histórico de alterações por servidor (54ª) — mesma fonte/espelho; o
+  // MESMO evento das taxas sinaliza a releitura dos dois.
+  const [savedHistory, setSavedHistory] = useState<ServerCoinRateHistory>(() => readLocalCoinRateHistory());
   useEffect(() => {
-    const refresh = () => setSavedRates(readLocalCoinRates());
+    const refresh = () => {
+      setSavedRates(readLocalCoinRates());
+      setSavedHistory(readLocalCoinRateHistory());
+    };
     window.addEventListener(SERVER_COIN_RATES_EVENT, refresh);
     return () => window.removeEventListener(SERVER_COIN_RATES_EVENT, refresh);
   }, []);
@@ -128,6 +148,7 @@ export default function ServerCoinRatesModal({ onClose }: Props) {
     try {
       await persistCoinRates(nextRates);
       setSavedRates(readLocalCoinRates());
+      setSavedHistory(readLocalCoinRateHistory());
       setSavedFlash(true);
       window.setTimeout(() => setSavedFlash(false), 1800);
     } finally {
@@ -177,6 +198,13 @@ export default function ServerCoinRatesModal({ onClose }: Props) {
               const draft = drafts[server] ?? "";
               const error = errors[server];
               const dirty = draft.trim() !== rateText(saved);
+              // Histórico do servidor: entrada ausente = taxa migrada/nunca
+              // configurada — datas e valor anterior exibem "—" (nunca se
+              // inventa data nem valor).
+              const hist = savedHistory[serverKey(server)];
+              const currentDate = hist && hist.rate === saved ? hist.updatedAt : undefined;
+              const prevRate = hist && hist.rate === saved ? hist.prevRate : undefined;
+              const prevDate = hist && hist.rate === saved ? hist.prevUpdatedAt : undefined;
               return (
                 <li key={server} className="px-3 py-1.5">
                   <div className="flex items-center gap-2">
@@ -208,6 +236,17 @@ export default function ServerCoinRatesModal({ onClose }: Props) {
                       <span className="absolute right-2 top-1/2 -translate-y-1/2 text-[9px] font-bold text-slate-500 select-none pointer-events-none">k</span>
                     </div>
                   </div>
+                  {/* Histórico — valor atual e anterior com as datas em que
+                      cada um foi definido ("—" quando não registrado). */}
+                  <p className="mt-0.5 pl-[19px] text-[8px] leading-snug text-slate-500 tabular-nums">
+                    <span className="uppercase tracking-wider font-bold text-slate-500/80">Atual:</span>{" "}
+                    <span className={saved > 0 ? "font-bold text-amber-300/80" : "text-slate-600"}>{saved > 0 ? `${rateText(saved)}k` : "—"}</span>
+                    {" "}<span className="text-slate-600">em</span> {historyDateText(currentDate)}
+                    <span className="text-slate-700 mx-1">·</span>
+                    <span className="uppercase tracking-wider font-bold text-slate-500/80">Anterior:</span>{" "}
+                    <span className={prevRate !== undefined && prevRate > 0 ? "font-bold text-slate-400" : "text-slate-600"}>{historyRateText(prevRate)}</span>
+                    {" "}<span className="text-slate-600">em</span> {historyDateText(prevDate)}
+                  </p>
                   {error && <p className="mt-0.5 pl-[19px] text-[9px] text-red-400 leading-snug">{error}</p>}
                 </li>
               );

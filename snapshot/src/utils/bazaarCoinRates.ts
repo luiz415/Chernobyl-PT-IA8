@@ -41,12 +41,37 @@ import { doc } from "firebase/firestore";
 /** Mapa chave-do-servidor (serverKey) → cotação em k por 1000 RC. */
 export type BazaarCoinRates = Record<string, number>;
 
+/**
+ * HISTÓRICO DE ALTERAÇÕES por servidor (54ª tarefa) — campo PARALELO
+ * `serverCoinRateHistory` no MESMO doc appSettings/global. O mapa de taxas
+ * (`serverCoinRates`) permanece intocado como fonte dos CÁLCULOS; o
+ * histórico só registra "quando mudou e de onde veio":
+ *   • rate/updatedAt — valor atual e quando foi definido (0 = removida);
+ *   • prevRate/prevUpdatedAt — valor anterior e quando ELE foi definido.
+ * Campos ausentes = informação inexistente (taxas migradas da 45ª/53ª não
+ * têm data — exibimos "—", NUNCA inventamos data ou valor).
+ */
+export interface ServerCoinRateHistoryEntry {
+  /** Cotação atual (0 = cotação removida nesta alteração). */
+  rate: number;
+  /** Quando o valor atual foi definido (epoch ms). */
+  updatedAt: number;
+  /** Última cotação usada antes da atual (ausente = nunca houve/conhecida). */
+  prevRate?: number;
+  /** Quando o valor anterior foi definido (ausente = data não registrada). */
+  prevUpdatedAt?: number;
+}
+export type ServerCoinRateHistory = Record<string, ServerCoinRateHistoryEntry>;
+
 /** Espelho local GLOBAL (as cotações valem para o app inteiro, não por uid). */
 const SERVER_COIN_RATES_LOCAL_KEY = "rubinot_server_coin_rates_global";
 /** Chave do espelho LEGADO por usuário (45ª) — lida apenas como migração. */
 const LEGACY_LOCAL_KEY_PREFIX = "rubinot_bazaar_coin_rates_";
+/** Espelho local do HISTÓRICO de alterações (mesma dinâmica do de taxas). */
+const SERVER_COIN_RATE_HISTORY_LOCAL_KEY = "rubinot_server_coin_rate_history_global";
 /** Durabilidade no modo simulação (sem Firestore). */
 const SIM_STORE_KEY = "tibia_sim_server_coin_rates";
+const SIM_HISTORY_KEY = "tibia_sim_server_coin_rate_history";
 
 /**
  * Evento DOM disparado sempre que o espelho local muda (gravação local ou
@@ -77,9 +102,82 @@ export function sanitizeCoinRates(raw: unknown): BazaarCoinRates {
   return clean;
 }
 
+/** Sanitiza o histórico cru (Firestore/localStorage) — lixo é descartado. */
+export function sanitizeCoinRateHistory(raw: unknown): ServerCoinRateHistory {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+  const clean: ServerCoinRateHistory = {};
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (typeof key !== "string" || !key.trim() || !value || typeof value !== "object") continue;
+    const v = value as Record<string, unknown>;
+    const rate = Number(v.rate);
+    const updatedAt = Number(v.updatedAt);
+    // rate 0 é válido (cotação removida); updatedAt é obrigatório.
+    if (!Number.isFinite(rate) || rate < 0 || !Number.isFinite(updatedAt) || updatedAt <= 0) continue;
+    const entry: ServerCoinRateHistoryEntry = { rate: round1(rate), updatedAt };
+    const prevRate = Number(v.prevRate);
+    if (Number.isFinite(prevRate) && prevRate >= 0 && v.prevRate !== undefined && v.prevRate !== null) {
+      entry.prevRate = round1(prevRate);
+      const prevUpdatedAt = Number(v.prevUpdatedAt);
+      if (Number.isFinite(prevUpdatedAt) && prevUpdatedAt > 0) entry.prevUpdatedAt = prevUpdatedAt;
+    }
+    clean[key] = entry;
+  }
+  return clean;
+}
+
 /** Espelho local (leitura síncrona para os cálculos de QUALQUER usuário). */
 export function readLocalCoinRates(): BazaarCoinRates {
   return sanitizeCoinRates(loadUIState<unknown>(SERVER_COIN_RATES_LOCAL_KEY, null));
+}
+
+/** Espelho local do histórico de alterações por servidor. */
+export function readLocalCoinRateHistory(): ServerCoinRateHistory {
+  return sanitizeCoinRateHistory(loadUIState<unknown>(SERVER_COIN_RATE_HISTORY_LOCAL_KEY, null));
+}
+
+/** Atualiza o espelho local do histórico (sem evento próprio — o evento das
+ *  taxas já cobre; quem escuta relê os DOIS espelhos). */
+export function writeLocalCoinRateHistory(history: ServerCoinRateHistory): void {
+  saveUIState(SERVER_COIN_RATE_HISTORY_LOCAL_KEY, sanitizeCoinRateHistory(history));
+}
+
+/**
+ * ROTAÇÃO DO HISTÓRICO: compara as taxas ANTES/DEPOIS de uma gravação e,
+ * para cada servidor cuja cotação MUDOU (inclusão, alteração ou remoção):
+ *   1. o valor atual vira "valor anterior" (com a SUA data de definição —
+ *      taxa migrada sem histórico entra como anterior SEM data: nunca se
+ *      inventa data);
+ *   2. o novo valor e `now` viram o registro atual.
+ * Servidores sem mudança mantêm a entrada EXATAMENTE como estava (datas
+ * preservadas — histórico independente por servidor).
+ */
+export function buildNextCoinRateHistory(
+  history: ServerCoinRateHistory,
+  prevRates: BazaarCoinRates,
+  nextRates: BazaarCoinRates,
+  now: number,
+): ServerCoinRateHistory {
+  const prev = sanitizeCoinRates(prevRates);
+  const next = sanitizeCoinRates(nextRates);
+  const result: ServerCoinRateHistory = { ...sanitizeCoinRateHistory(history) };
+  const keys = new Set([...Object.keys(prev), ...Object.keys(next)]);
+  for (const key of keys) {
+    const before = prev[key] ?? 0;
+    const after = next[key] ?? 0;
+    if (before === after) continue; // sem mudança — datas intactas
+    const entry: ServerCoinRateHistoryEntry = { rate: after, updatedAt: now };
+    const existing = result[key];
+    if (existing) {
+      // O registro atual vira o anterior, com a data em que FOI definido.
+      entry.prevRate = existing.rate;
+      if (existing.updatedAt > 0) entry.prevUpdatedAt = existing.updatedAt;
+    } else if (before > 0) {
+      // Taxa pré-histórico (migrada): vira "anterior" SEM data registrada.
+      entry.prevRate = before;
+    }
+    result[key] = entry;
+  }
+  return result;
 }
 
 /** Espelho LEGADO por usuário (45ª) — usado somente na migração de leitura. */
@@ -131,6 +229,7 @@ export function withServerCoinRate(rates: BazaarCoinRates, server: string, rate:
 export async function fetchCoinRates(uid?: string): Promise<BazaarCoinRates> {
   try {
     if (isSimulationMode || !db) {
+      writeLocalCoinRateHistory(sanitizeCoinRateHistory(loadUIState<unknown>(SIM_HISTORY_KEY, null)));
       let rates = sanitizeCoinRates(loadUIState<unknown>(SIM_STORE_KEY, null));
       if (Object.keys(rates).length === 0) {
         // Migração sim: legado por usuário (tibia_sim_users.bazaarCoinRates).
@@ -146,7 +245,10 @@ export async function fetchCoinRates(uid?: string): Promise<BazaarCoinRates> {
       return rates;
     }
     const globalSnap = await getDoc(doc(db, "appSettings", "global"));
-    let rates = sanitizeCoinRates(globalSnap.exists() ? (globalSnap.data() as { serverCoinRates?: unknown }).serverCoinRates : undefined);
+    const globalData = globalSnap.exists() ? (globalSnap.data() as { serverCoinRates?: unknown; serverCoinRateHistory?: unknown }) : {};
+    // Histórico viaja no MESMO doc — espelhado aqui sem leitura adicional.
+    writeLocalCoinRateHistory(sanitizeCoinRateHistory(globalData.serverCoinRateHistory));
+    let rates = sanitizeCoinRates(globalData.serverCoinRates);
     if (Object.keys(rates).length === 0 && uid) {
       // Global vazio → reutiliza o mapa LEGADO do usuário (45ª) e tenta
       // promovê-lo ao doc global (gravação única; aceita apenas para Boss).
@@ -182,19 +284,27 @@ export async function fetchCoinRates(uid?: string): Promise<BazaarCoinRates> {
  */
 export async function persistCoinRates(rates: BazaarCoinRates): Promise<void> {
   const clean = sanitizeCoinRates(rates);
+  // HISTÓRICO (54ª): rotacionado a partir do estado ANTES desta gravação
+  // (espelho local = última foto conhecida) — por servidor, só quem mudou.
+  const nextHistory = buildNextCoinRateHistory(readLocalCoinRateHistory(), readLocalCoinRates(), clean, Date.now());
+  writeLocalCoinRateHistory(nextHistory);
   writeLocalCoinRates(clean);
   if (isSimulationMode || !db) {
-    try { saveUIState(SIM_STORE_KEY, clean); } catch { /* espelho local já garante a sessão */ }
+    try {
+      saveUIState(SIM_STORE_KEY, clean);
+      saveUIState(SIM_HISTORY_KEY, nextHistory);
+    } catch { /* espelho local já garante a sessão */ }
     return;
   }
   try {
-    await updateDoc(doc(db, "appSettings", "global"), { serverCoinRates: clean });
+    // UMA gravação: taxas + histórico viajam juntos no mesmo updateDoc.
+    await updateDoc(doc(db, "appSettings", "global"), { serverCoinRates: clean, serverCoinRateHistory: nextHistory });
   } catch {
     // Doc inexistente (cenário raro) — cria/mescla sem tocar outros campos.
     // Falha aqui também não pode derrubar a UI: o espelho local já foi
     // gravado e a próxima gravação bem-sucedida reenvia o mapa completo.
     try {
-      await setDoc(doc(db, "appSettings", "global"), { serverCoinRates: clean }, { merge: true });
+      await setDoc(doc(db, "appSettings", "global"), { serverCoinRates: clean, serverCoinRateHistory: nextHistory }, { merge: true });
     } catch { /* silencioso — espelho local garante esta sessão */ }
   }
 }

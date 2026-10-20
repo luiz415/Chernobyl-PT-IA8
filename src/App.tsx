@@ -29,7 +29,7 @@ import { loadItemsLastQuery, loadItemsInterests } from "./utils/bazaarWatchedIte
 // .serverCoinRates, espelhada em localStorage) compartilhada pelo modal
 // "RC Servidores", pela Lista de Itens do Bazaar e por todos os cálculos
 // kk ⇄ RC. Substitui a antiga taxa fixa única e as taxas por usuário.
-import { getServerCoinRate, readLocalCoinRates, sanitizeCoinRates, writeLocalCoinRates } from "./utils/bazaarCoinRates";
+import { getServerCoinRate, readLocalCoinRates, sanitizeCoinRateHistory, sanitizeCoinRates, writeLocalCoinRateHistory, writeLocalCoinRates } from "./utils/bazaarCoinRates";
 import ServerCoinRatesModal from "./components/ServerCoinRatesModal";
 import CurrencyCalculator from "./components/CurrencyCalculator";
 import ImbuementsModal from "./components/ImbuementsModal";
@@ -594,7 +594,10 @@ export default function App() {
       // MESMO documento appSettings/global — espelhamos no localStorage para
       // leitura síncrona em todos os cálculos kk ⇄ RC (ItemSoldModal,
       // Bazaar, modais de detalhes). Nenhuma leitura adicional ao Firestore;
-      // o evento interno sincroniza modais abertos em tempo real.
+      // o evento interno sincroniza modais abertos em tempo real. O
+      // HISTÓRICO de alterações (54ª) viaja no mesmo doc e é espelhado
+      // ANTES das taxas, para o evento já encontrar os dois atualizados.
+      writeLocalCoinRateHistory(sanitizeCoinRateHistory(data.serverCoinRateHistory));
       writeLocalCoinRates(sanitizeCoinRates(data.serverCoinRates));
       // Aplica imediatamente o status de pausa e as configurações remotas do logger local
       setLoggerPaused(newSettings.firestoreLoggerPaused);
