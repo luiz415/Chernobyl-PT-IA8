@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
-import { X, Coins, Check, PackageOpen, Globe, Search, Swords, Briefcase, History } from "lucide-react";
+import { X, Coins, Check, PackageOpen, Globe, Search, Swords, Briefcase, ArrowDownAZ, ArrowUpAZ, CalendarPlus } from "lucide-react";
 import type { Character, CharacterAcquisition, CharacterAcquisitionBuyerDetails, ItemSaleRecord } from "../types";
 import { formatRC } from "../types";
 import { serverLabel } from "../constants/servers";
-import { formatItemSaleSummary } from "../utils/itemSale";
+import { formatItemSaleSummary, isItemSaleConcluded } from "../utils/itemSale";
+import { questBadgeColorBySigla } from "../constants/questBadges";
 import { isPaymentConfirmed } from "../services/characterAcquisitionService";
 import ItemSoldModal from "./ItemSoldModal";
 
@@ -46,8 +47,9 @@ import ItemSoldModal from "./ItemSoldModal";
 //     reabre em branco para esses itens.
 //
 // CRITÉRIO "VENDIDO" — estado real do dado, não aparência (o mesmo canônico
-// do CharTable/ItemsForSaleModal): lucro registrado > 0 OU itemSale.resultRC
-// > 0. Pendente = item declarado sem valor registrado.
+// do CharTable/ItemsForSaleModal): lucro registrado > 0 OU venda registrada
+// no itemSale (resultRC > 0 ou venda confirmada SEM valor — `noValue`).
+// Pendente = item declarado sem venda registrada.
 // ============================================================================
 
 export type MySaleItemQuest = "soulwar" | "sanguine" | "crypt";
@@ -68,10 +70,16 @@ export interface MySaleItem {
   serverName: string;
   /** Guia de origem do personagem (badge informativo — sem expor o nome). */
   origin: "disponivel" | "vendido" | "negociado";
-  /** Já vendido? (lucro registrado > 0 ou itemSale.resultRC > 0). */
+  /** Já vendido? (lucro > 0, itemSale.resultRC > 0 ou venda sem valor). */
   sold: boolean;
-  /** Valor registrado da venda, em RC (0 enquanto pendente). */
+  /** Valor registrado da venda, em RC (0 enquanto pendente ou sem valor). */
   soldValueRC: number;
+  /** Data de INCLUSÃO do item (epoch ms) — null para registros antigos sem a
+   *  data e para negociados (o schema da negociação não a armazena); exibida
+   *  como "—" (NUNCA se inventa data histórica). */
+  addedAtMs: number | null;
+  /** Data da VENDA registrada (itemSale.soldAt, epoch ms) — null sem registro. */
+  soldAtMs: number | null;
   /** Resumo da operação (modal "Item Vendido"), quando registrada ("" sem). */
   saleSummary: string;
   /** Registro completo persistido (só source=character) — edição com initial. */
@@ -82,12 +90,13 @@ const QUEST_FIELDS: Array<{
   quest: MySaleItemQuest;
   sigla: string;
   item: "itemDropadoSW" | "itemDropadoSG" | "itemDropadoCrypt";
+  itemAt: "itemDropadoSWAt" | "itemDropadoSGAt" | "itemDropadoCryptAt";
   sale: "itemSaleSW" | "itemSaleSG" | "itemSaleCrypt";
   drop: "dropSW" | "dropBakra" | "dropCrypt";
 }> = [
-  { quest: "soulwar", sigla: "SW", item: "itemDropadoSW", sale: "itemSaleSW", drop: "dropSW" },
-  { quest: "sanguine", sigla: "SG", item: "itemDropadoSG", sale: "itemSaleSG", drop: "dropBakra" },
-  { quest: "crypt", sigla: "GB", item: "itemDropadoCrypt", sale: "itemSaleCrypt", drop: "dropCrypt" },
+  { quest: "soulwar", sigla: "SW", item: "itemDropadoSW", itemAt: "itemDropadoSWAt", sale: "itemSaleSW", drop: "dropSW" },
+  { quest: "sanguine", sigla: "SG", item: "itemDropadoSG", itemAt: "itemDropadoSGAt", sale: "itemSaleSG", drop: "dropBakra" },
+  { quest: "crypt", sigla: "GB", item: "itemDropadoCrypt", itemAt: "itemDropadoCryptAt", sale: "itemSaleCrypt", drop: "dropCrypt" },
 ];
 
 function questSiglaOf(quest: MySaleItemQuest): string {
@@ -117,8 +126,10 @@ export function collectMySaleItems(
       const itemName = String(c[field.item] || "").trim();
       if (!itemName) continue;
       const sale = c[field.sale] || null;
-      // Estado REAL: lucro gravado (campo canônico) ou registro completo.
+      // Estado REAL: lucro gravado (campo canônico) ou registro completo —
+      // inclui venda confirmada SEM valor (`noValue`), que encerra o item.
       const soldValueRC = Math.max(Number(c[field.drop] || 0), Number(sale?.resultRC || 0));
+      const addedAtRaw = Number(c[field.itemAt] || 0);
       items.push({
         key: `char:${c.id}:${field.quest}`,
         source: "character",
@@ -128,9 +139,11 @@ export function collectMySaleItems(
         itemName,
         serverName: serverLabel(c.servidor) || String(c.servidor || "").trim(),
         origin: c.vendido ? "vendido" : "disponivel",
-        sold: soldValueRC > 0,
+        sold: soldValueRC > 0 || isItemSaleConcluded(sale),
         soldValueRC,
-        saleSummary: sale && (sale.resultRC || 0) > 0 ? formatItemSaleSummary(sale) : "",
+        addedAtMs: addedAtRaw > 0 ? addedAtRaw : null,
+        soldAtMs: sale && isItemSaleConcluded(sale) && (sale.soldAt || 0) > 0 ? sale.soldAt ?? null : null,
+        saleSummary: sale && isItemSaleConcluded(sale) ? formatItemSaleSummary(sale) : "",
         saleRecord: sale,
       });
     }
@@ -159,6 +172,10 @@ export function collectMySaleItems(
       origin: "negociado",
       sold: soldValueRC > 0,
       soldValueRC,
+      // O schema da negociação não guarda a data de inclusão nem o registro
+      // completo da venda — sem data real disponível, exibimos "—".
+      addedAtMs: null,
+      soldAtMs: null,
       saleSummary: "",
       saleRecord: null,
     });
@@ -186,6 +203,50 @@ interface SaleFilters {
 }
 
 const EMPTY_FILTERS: SaleFilters = { text: "", server: "", quest: "", minRC: "", maxRC: "" };
+
+// ── Ordenação (combinável com os filtros; agrupamento por servidor mantido) ─
+// "server" ordena os GRUPOS de servidor; os demais critérios ordenam os itens
+// DENTRO de cada grupo (com desempate pelo nome). Datas/valores ausentes vão
+// sempre para o fim, em qualquer direção — nunca se inventa valor para ordenar.
+type SaleSortKey = "item" | "server" | "value" | "added" | "sold";
+type SaleSortDir = "asc" | "desc";
+
+const SORT_OPTIONS: Array<{ key: SaleSortKey; label: string }> = [
+  { key: "item", label: "Nome do item" },
+  { key: "server", label: "Servidor" },
+  { key: "value", label: "Valor registrado" },
+  { key: "added", label: "Data de inclusão" },
+  { key: "sold", label: "Data de venda" },
+];
+
+/** Comparador dos itens DENTRO de um grupo (desempate: nome asc). */
+function compareSaleItems(a: MySaleItem, b: MySaleItem, key: SaleSortKey, dir: SaleSortDir): number {
+  const flip = dir === "desc" ? -1 : 1;
+  const byName = a.itemName.localeCompare(b.itemName, "pt-BR");
+  if (key === "item") return flip * byName;
+  if (key === "value") {
+    const diff = a.soldValueRC - b.soldValueRC;
+    return diff !== 0 ? flip * diff : byName;
+  }
+  if (key === "added" || key === "sold") {
+    const av = key === "added" ? a.addedAtMs : a.soldAtMs;
+    const bv = key === "added" ? b.addedAtMs : b.soldAtMs;
+    // Sem data registrada -> sempre ao final, independentemente da direção.
+    if (av === null && bv === null) return byName;
+    if (av === null) return 1;
+    if (bv === null) return -1;
+    const diff = av - bv;
+    return diff !== 0 ? flip * diff : byName;
+  }
+  // "server": os grupos já são ordenados fora; dentro, nome asc.
+  return byName;
+}
+
+/** Data de inclusão/venda exibida SÓ com o dia (DD/MM/AAAA). */
+function formatDayBR(ms: number | null): string {
+  if (!ms || ms <= 0) return "—";
+  return new Date(ms).toLocaleDateString("pt-BR");
+}
 
 function normalizeSearchText(value: string): string {
   return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
@@ -237,6 +298,9 @@ export default function MyItemsForSaleModal({
   // entre elas nunca descarta o contexto da consulta.
   const [tab, setTab] = useState<"avenda" | "vendidos">("avenda");
   const [filters, setFilters] = useState<SaleFilters>(EMPTY_FILTERS);
+  // Ordenação — também compartilhada entre as abas (nunca descarta filtros).
+  const [sortKey, setSortKey] = useState<SaleSortKey>("item");
+  const [sortDir, setSortDir] = useState<SaleSortDir>("asc");
 
   // Servidores disponíveis para o filtro — somente os presentes nos dados.
   const serverOptions = useMemo(() => {
@@ -264,7 +328,9 @@ export default function MyItemsForSaleModal({
     });
   }, [items, tab, filters]);
 
-  // Agrupamento por servidor (ordem alfabética; itens por nome).
+  // Agrupamento por servidor — SEMPRE preservado. "Servidor" ordena os
+  // grupos (asc/desc); os demais critérios mantêm os grupos alfabéticos e
+  // ordenam os ITENS dentro de cada grupo (desempate pelo nome).
   const groupedByServer = useMemo(() => {
     const map = new Map<string, MySaleItem[]>();
     for (const item of filteredItems) {
@@ -273,10 +339,28 @@ export default function MyItemsForSaleModal({
       list.push(item);
       map.set(key, list);
     }
+    const groupFlip = sortKey === "server" && sortDir === "desc" ? -1 : 1;
     return [...map.entries()]
-      .sort((a, b) => a[0].localeCompare(b[0], "pt-BR"))
-      .map(([server, list]) => [server, [...list].sort((a, b) => a.itemName.localeCompare(b.itemName, "pt-BR"))] as const);
-  }, [filteredItems]);
+      .sort((a, b) => groupFlip * a[0].localeCompare(b[0], "pt-BR"))
+      .map(([server, list]) => [server, [...list].sort((a, b) => compareSaleItems(a, b, sortKey, sortDir))] as const);
+  }, [filteredItems, sortKey, sortDir]);
+
+  // ── Resumo financeiro da aba VENDIDOS — calculado SOMENTE sobre os itens
+  // EXIBIDOS (pós-filtros) e recalculado a cada mudança de filtro/ordenação.
+  // Vendas sem valor registrado (ex.: "Não informar valor") ficam FORA do
+  // total e da média — contadas à parte para não distorcer as métricas.
+  const soldSummary = useMemo(() => {
+    if (tab !== "vendidos") return null;
+    const valued = filteredItems.filter(item => item.soldValueRC > 0);
+    const totalRC = valued.reduce((sum, item) => sum + item.soldValueRC, 0);
+    return {
+      shownCount: filteredItems.length,
+      valuedCount: valued.length,
+      noValueCount: filteredItems.length - valued.length,
+      totalRC,
+      averageRC: valued.length > 0 ? Math.round(totalRC / valued.length) : 0,
+    };
+  }, [tab, filteredItems]);
 
   // ── Venda/edição via ItemSoldModal (calculadora oficial) ──────────────────
   const [saleTarget, setSaleTarget] = useState<MySaleItem | null>(null);
@@ -330,14 +414,14 @@ export default function MyItemsForSaleModal({
     }
   }
 
+  // Badge de origem — o modal trata dos ITENS do usuário, então o status do
+  // personagem (Vendido/Disponível) NÃO é exibido; apenas "Negociado"
+  // permanece, por indicar uma origem com persistência própria.
   const originBadge = (item: MySaleItem) => {
     if (item.origin === "negociado") {
       return <span className="inline-flex items-center gap-0.5 text-[8px] font-black px-1 py-px rounded border border-violet-500/40 bg-violet-500/15 text-violet-300 uppercase tracking-wide" title="Personagem negociado entre usuários, comprado por você"><Briefcase size={8} /> Negociado</span>;
     }
-    if (item.origin === "vendido") {
-      return <span className="inline-flex items-center gap-0.5 text-[8px] font-black px-1 py-px rounded border border-amber-500/40 bg-amber-500/15 text-amber-300 uppercase tracking-wide" title="Personagem na guia Vendidos (histórico)"><History size={8} /> Vendido</span>;
-    }
-    return <span className="inline-flex items-center gap-0.5 text-[8px] font-black px-1 py-px rounded border border-emerald-500/40 bg-emerald-500/15 text-emerald-300 uppercase tracking-wide" title="Personagem na guia Disponíveis"><Swords size={8} /> Disponível</span>;
+    return null;
   };
 
   const inputCls = "w-full bg-black/40 border border-white/10 rounded-lg px-2.5 py-1.5 text-[11px] text-slate-200 outline-none transition-colors focus:border-amber-500/50 placeholder-slate-600";
@@ -453,7 +537,48 @@ export default function MyItemsForSaleModal({
               className={inputCls}
             />
           </div>
+          {/* Ordenação — combinável com os filtros; agrupamento mantido */}
+          <div className="col-span-2 sm:col-span-4 flex items-center gap-1.5">
+            <span className="text-[9px] font-bold uppercase tracking-wider text-slate-500 flex-shrink-0">Ordenar por</span>
+            <select
+              value={sortKey}
+              onChange={e => setSortKey(e.target.value as SaleSortKey)}
+              aria-label="Critério de ordenação"
+              className={`${inputCls} cursor-pointer [color-scheme:dark] flex-1`}
+            >
+              {SORT_OPTIONS.map(opt => <option key={opt.key} value={opt.key}>{opt.label}</option>)}
+            </select>
+            <button
+              type="button"
+              onClick={() => setSortDir(d => (d === "asc" ? "desc" : "asc"))}
+              aria-label={sortDir === "asc" ? "Ordem crescente (clique para decrescente)" : "Ordem decrescente (clique para crescente)"}
+              title={sortDir === "asc" ? "Crescente — clique para decrescente" : "Decrescente — clique para crescente"}
+              className="inline-flex items-center gap-1 px-2 py-1.5 rounded-lg border border-white/10 bg-white/[0.03] text-slate-300 hover:text-amber-300 hover:border-amber-500/40 text-[10px] font-bold transition-colors cursor-pointer flex-shrink-0"
+            >
+              {sortDir === "asc" ? <ArrowDownAZ size={12} /> : <ArrowUpAZ size={12} />}
+              {sortDir === "asc" ? "Cresc." : "Decresc."}
+            </button>
+          </div>
         </div>
+
+        {/* Resumo financeiro — SÓ aba Vendidos, SÓ itens exibidos (pós-filtros);
+            vendas sem valor ficam fora do total/média (contadas à parte). */}
+        {soldSummary && soldSummary.shownCount > 0 && (
+          <div className="mx-4 mt-2 px-3 py-2 rounded-xl border border-emerald-500/25 bg-emerald-500/[0.06] flex items-center gap-x-4 gap-y-1 flex-wrap flex-shrink-0">
+            <span className="inline-flex items-baseline gap-1.5">
+              <span className="text-[9px] font-bold uppercase tracking-wider text-emerald-400/80">Total</span>
+              <span className="text-[13px] font-black tabular-nums text-emerald-300">{formatRC(soldSummary.totalRC)}</span>
+            </span>
+            <span className="inline-flex items-baseline gap-1.5">
+              <span className="text-[9px] font-bold uppercase tracking-wider text-emerald-400/80">Média</span>
+              <span className="text-[13px] font-black tabular-nums text-emerald-300">{soldSummary.valuedCount > 0 ? formatRC(soldSummary.averageRC) : "—"}</span>
+            </span>
+            <span className="text-[9px] text-slate-500 ml-auto tabular-nums">
+              {soldSummary.valuedCount} ite{soldSummary.valuedCount === 1 ? "m" : "ns"} com valor
+              {soldSummary.noValueCount > 0 ? ` · ${soldSummary.noValueCount} sem valor informado` : ""}
+            </span>
+          </div>
+        )}
 
         {error && (
           <div className="mx-4 mt-1 px-3 py-1.5 rounded-lg border border-red-500/40 bg-red-500/10 text-[10px] text-red-300 flex-shrink-0">
@@ -494,15 +619,31 @@ export default function MyItemsForSaleModal({
                           <span className="text-[11px] text-slate-200 font-semibold truncate" title={item.itemName}>{item.itemName}</span>
                         </div>
                         <div className="flex items-center gap-1 flex-shrink-0">
-                          <span className="text-[8px] font-black px-1 py-px rounded border border-sky-500/40 bg-sky-500/15 text-sky-300" title={item.quest === "soulwar" ? "Soul War" : item.quest === "sanguine" ? "Sanguine" : "Graveborn"}>{item.questSigla}</span>
+                          <span className={`text-[8px] font-black px-1 py-px rounded border ${questBadgeColorBySigla(item.questSigla)}`} title={item.quest === "soulwar" ? "Soul War" : item.quest === "sanguine" ? "Sanguine" : "Graveborn"}>{item.questSigla}</span>
                           {originBadge(item)}
+                          {/* Data de INCLUSÃO do item — somente o dia; registros
+                              antigos (ou negociados) sem a data exibem "—". */}
+                          <span className="inline-flex items-center gap-0.5 text-[8px] font-semibold text-slate-500 tabular-nums" title="Data de inclusão do item no personagem">
+                            <CalendarPlus size={8} className="flex-shrink-0" /> {formatDayBR(item.addedAtMs)}
+                          </span>
+                          {item.sold && item.soldAtMs !== null && (
+                            <span className="inline-flex items-center gap-0.5 text-[8px] font-semibold text-emerald-500/70 tabular-nums" title="Data em que a venda foi registrada">
+                              <Check size={8} className="flex-shrink-0" /> {formatDayBR(item.soldAtMs)}
+                            </span>
+                          )}
                         </div>
                         <div className="flex items-center gap-1.5 ml-auto flex-shrink-0">
                           {item.sold ? (
                             <>
-                              <span className="text-[11px] font-bold text-emerald-300 tabular-nums" title={item.saleSummary || undefined}>
-                                {formatRC(item.soldValueRC)}
-                              </span>
+                              {item.soldValueRC > 0 ? (
+                                <span className="text-[11px] font-bold text-emerald-300 tabular-nums" title={item.saleSummary || undefined}>
+                                  {formatRC(item.soldValueRC)}
+                                </span>
+                              ) : (
+                                <span className="text-[9px] font-bold text-slate-400" title="Venda confirmada sem valor informado">
+                                  sem valor
+                                </span>
+                              )}
                               <button
                                 type="button"
                                 disabled={saving}
@@ -562,6 +703,7 @@ export default function MyItemsForSaleModal({
           itemName={liveSaleTarget.itemName}
           contextLabel={`${liveSaleTarget.serverName || "Sem servidor"} — ${liveSaleTarget.questSigla}`}
           initial={liveSaleTarget.saleRecord}
+          allowNoValue={liveSaleTarget.source === "character"}
           onCancel={() => setSaleTarget(null)}
           onSave={sale => { void commitSale(sale); }}
         />

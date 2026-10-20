@@ -4,7 +4,8 @@ import { X, Coins, Copy, Check, PackageOpen, Users, Swords, Globe, ExternalLink 
 import type { Character, ItemSaleRecord, PartyTab, WaitingService } from "../types";
 import { formatRC } from "../types";
 import { serverLabel } from "../constants/servers";
-import { formatItemSaleSummary } from "../utils/itemSale";
+import { formatItemSaleSummary, isItemSaleConcluded } from "../utils/itemSale";
+import { questBadgeColorBySigla } from "../constants/questBadges";
 import ItemSoldModal from "./ItemSoldModal";
 import {
   buildItemSaleCommitPatch,
@@ -130,7 +131,7 @@ export function collectSaleGroups(
       // Estado REAL da venda: valor em RC gravado (campo canônico) ou
       // registro completo do modal "Item Vendido".
       const soldValueRC = Math.max(slot?.itemVendido || 0, slot?.itemSale?.resultRC || 0);
-      const sold = soldValueRC > 0;
+      const sold = soldValueRC > 0 || isItemSaleConcluded(slot?.itemSale);
 
       const characterName = resolveMemberName(party, id, characters, waitingList);
       const inSplit = !!slot?.split;
@@ -148,7 +149,7 @@ export function collectSaleGroups(
         inSplit,
         sold,
         soldValueRC,
-        saleSummary: slot?.itemSale && (slot.itemSale.resultRC || 0) > 0
+        saleSummary: slot?.itemSale && isItemSaleConcluded(slot.itemSale)
           ? formatItemSaleSummary(slot.itemSale)
           : "",
       });
@@ -343,8 +344,13 @@ export default function ItemsForSaleModal({ parties, characters, waitingList, on
         if (it.sold) {
           // Vendido: 🗡️ no item (como todos) + ✅ antes de "Vendido" com o
           // valor registrado (e a operação do modal, quando existir).
-          const operacao = it.saleSummary ? ` (${it.saleSummary})` : "";
-          linhas.push(`• 🗡️ ${it.itemName}${participante} — ✅ Vendido: ${formatRC(it.soldValueRC)}${operacao}`);
+          if (it.soldValueRC <= 0) {
+            // Venda sem valor informado: encerrada, sem número fictício.
+            linhas.push(`• 🗡️ ${it.itemName}${participante} — ✅ Vendido (valor não informado)`);
+          } else {
+            const operacao = it.saleSummary ? ` (${it.saleSummary})` : "";
+            linhas.push(`• 🗡️ ${it.itemName}${participante} — ✅ Vendido: ${formatRC(it.soldValueRC)}${operacao}`);
+          }
         } else {
           // Pendente: estado explícito após o nome do usuário.
           linhas.push(`• 🗡️ ${it.itemName}${participante} — Não vendido`);
@@ -494,14 +500,9 @@ export default function ItemsForSaleModal({ parties, characters, waitingList, on
                   {/* Contexto da PT — faixa própria do card */}
                   <div className="flex items-center gap-2 flex-wrap px-3 py-1.5 bg-amber-500/[0.07] border-b border-amber-500/15">
                     <span className="text-[13px] font-black text-amber-200 truncate max-w-[190px]">{g.partyName}</span>
+                    {/* Cores oficiais dos emblemas de Quest — fonte única (constants/questBadges). */}
                     {g.questSigla && (
-                      <span className={`text-[9px] font-bold px-1.5 py-px rounded-md border flex-shrink-0 ${
-                        g.questSigla === "SG"
-                          ? "border-rose-500/40 bg-rose-500/15 text-rose-300"
-                          : g.questSigla === "GB"
-                            ? "border-emerald-500/40 bg-emerald-500/15 text-emerald-300"
-                            : "border-slate-400/30 bg-slate-500/15 text-slate-300"
-                      }`}>
+                      <span className={`text-[9px] font-bold px-1.5 py-px rounded-md border flex-shrink-0 ${questBadgeColorBySigla(g.questSigla)}`}>
                         {g.questSigla}
                       </span>
                     )}
@@ -557,9 +558,15 @@ export default function ItemsForSaleModal({ parties, characters, waitingList, on
                             </div>
                           </div>
                           {it.sold && (
-                            <span className="text-[11px] font-black tabular-nums text-emerald-300 flex-shrink-0" title="Valor registrado da venda">
-                              {formatRC(it.soldValueRC)}
-                            </span>
+                            it.soldValueRC > 0 ? (
+                              <span className="text-[11px] font-black tabular-nums text-emerald-300 flex-shrink-0" title="Valor registrado da venda">
+                                {formatRC(it.soldValueRC)}
+                              </span>
+                            ) : (
+                              <span className="text-[9px] font-bold text-slate-400 flex-shrink-0" title="Venda confirmada sem valor informado">
+                                sem valor
+                              </span>
+                            )
                           )}
                           {it.inSplit && it.splitRecipient ? (
                             <span className={`inline-flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded-md border flex-shrink-0 max-w-[32%] ${

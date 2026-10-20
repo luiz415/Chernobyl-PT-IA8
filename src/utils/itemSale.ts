@@ -196,7 +196,43 @@ function formatKkShort(value: number): string {
  *   "Vendido por 300kk − Taxa Market 2x 5% (−20kk) = 280kk, RC a 2,5k"
  *   "Vendido por 100kk (venda direta, sem taxa), RC a 2,5k"
  */
+/**
+ * Registro de venda SEM VALOR INFORMADO ("Não informar valor"): o item é
+ * encerrado (sai dos pendentes) com TODOS os campos financeiros zerados —
+ * nenhum valor fictício, nenhuma participação em métricas. O carimbo
+ * `soldAt` registra quando a venda foi confirmada.
+ */
+export function buildItemSaleNoValueRecord(): ItemSaleRecord {
+  return {
+    vendaKk: 0,
+    rateKk: 0,
+    taxPercent: OFFER_TAX_PERCENT,
+    taxCount: 0,
+    taxDeductedKk: 0,
+    netKk: 0,
+    resultRC: 0,
+    soldAt: Date.now(),
+    offerTaxPerOfferKk: 0,
+    offerTaxTotalKk: 0,
+    saleTaxKk: 0,
+    noValue: true,
+  };
+}
+
+/**
+ * CRITÉRIO CANÔNICO de "venda registrada" de um ItemSaleRecord: valor em RC
+ * gravado OU venda confirmada sem valor (`noValue`). Fonte única — todos os
+ * pontos que decidem "vendido × pendente" a partir do registro usam esta
+ * função, para o item nunca continuar "à venda" só por não ter preço.
+ */
+export function isItemSaleConcluded(sale: ItemSaleRecord | null | undefined): boolean {
+  if (!sale) return false;
+  return (sale.resultRC || 0) > 0 || sale.noValue === true;
+}
+
 export function formatItemSaleSummary(sale: ItemSaleRecord): string {
+  // Venda sem valor informado: resumo fixo — não há operação a reconstruir.
+  if (sale.noValue === true) return "Vendido (valor não informado)";
   const bruto = formatKkValue(sale.vendaKk, "kk");
   const cotacao = `RC a ${formatRateKkDisplay(sale.rateKk) || String(sale.rateKk)}k`;
   // ── Registro da regra VIGENTE (criação 1%/1kk + venda 3%/5kk) ────────────

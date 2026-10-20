@@ -146,6 +146,14 @@ export interface Character {
   itemDropadoSG?: string;
   /** DROP CRYPT — item obtido na Crypt (lista CRYPT_ITEMS do CharTable). */
   itemDropadoCrypt?: string;
+  // ── DATA DE INCLUSÃO DO ITEM (epoch ms) ───────────────────────────────────
+  // Gravada quando o item é SELECIONADO (único ponto de inclusão: células
+  // DROP SW/SG/GB do CharTable). Opcional por retrocompatibilidade: itens
+  // antigos não têm a data e exibem "—" — NUNCA se inventa data histórica.
+  // Persistida/sincronizada pelos MESMOS caminhos dos demais campos.
+  itemDropadoSWAt?: number;
+  itemDropadoSGAt?: number;
+  itemDropadoCryptAt?: number;
   /**
    * Registro completo da venda do item da Quest (modal "Item Vendido").
    * Separado por Quest — o MESMO personagem pode ter vendas diferentes em
@@ -256,6 +264,14 @@ export interface ItemSaleRecord {
   offerTaxTotalKk?: number;
   /** Taxa da venda concluída em kk: min(3% do valor, 5kk) — cobrada 1 vez. */
   saleTaxKk?: number;
+  /**
+   * VENDA SEM VALOR INFORMADO (opção "Não informar valor" do modal "Item
+   * Vendido"): o item é tratado como VENDIDO/ENCERRADO mesmo com todos os
+   * campos financeiros zerados — sai das listas de pendentes, mas NUNCA
+   * entra em cálculo financeiro (resultRC/netKk permanecem 0; nenhum valor
+   * fictício é atribuído). Ausente = registro normal com valor.
+   */
+  noValue?: boolean;
 }
 
 export interface PartyCustomMember {

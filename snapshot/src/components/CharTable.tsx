@@ -5,6 +5,7 @@ import { VOCATIONS, VOC_COLORS, calcTotal, formatRC, formatDateBR, customConfirm
 import ItemSoldModal from "./ItemSoldModal";
 import { FilterMulti, FilterToggle, FilterNumber, FilterInline, type ToggleState } from "./FilterTypes";
 import { serverLabel } from "../constants/servers";
+import { isItemSaleConcluded } from "../utils/itemSale";
 import { completedSgRotations, describeSgCooldown, formatSgCooldownRemaining, isSgCooldownActive } from "../utils/sanguineRotation";
 
 type NumericOp = "gte" | "lte";
@@ -737,7 +738,7 @@ export default function CharTable({ characters, activeParties = [], readOnly, sh
             // atualização, sem estados intermediários). Remover o item NÃO
             // reverte a disponibilidade (ajuste manual pela célula SW).
             // Somente a quest do próprio item é tocada.
-            onChange={(val) => onCharacterInlineChange?.({ ...c, itemDropadoSW: val, ...(val.trim() ? { soulwar: false } : {}) })}
+            onChange={(val) => onCharacterInlineChange?.({ ...c, itemDropadoSW: val, ...(val.trim() ? (val !== (c.itemDropadoSW || "") ? { itemDropadoSWAt: Date.now() } : {}) : { itemDropadoSWAt: undefined }), ...(val.trim() ? { soulwar: false } : {}) })}
             itemList={SOULWAR_ITEMS}
             disabled={locked}
             disabledReason="Bloqueado: o Drop SW desta Quest pertence ao comprador da negociação"
@@ -755,7 +756,7 @@ export default function CharTable({ characters, activeParties = [], readOnly, sh
             value={c.itemDropadoSG || ""}
             // Mesma regra do DROP SW: selecionar item ⇒ Sanguine NÃO
             // disponível no MESMO patch; remoção não reverte; só a SG.
-            onChange={(val) => onCharacterInlineChange?.({ ...c, itemDropadoSG: val, ...(val.trim() ? { sanguine: false } : {}) })}
+            onChange={(val) => onCharacterInlineChange?.({ ...c, itemDropadoSG: val, ...(val.trim() ? (val !== (c.itemDropadoSG || "") ? { itemDropadoSGAt: Date.now() } : {}) : { itemDropadoSGAt: undefined }), ...(val.trim() ? { sanguine: false } : {}) })}
             itemList={SANGUINE_ITEMS}
             disabled={locked}
             disabledReason="Bloqueado: o Drop SG desta Quest pertence ao comprador da negociação"
@@ -773,7 +774,7 @@ export default function CharTable({ characters, activeParties = [], readOnly, sh
             value={c.itemDropadoCrypt || ""}
             // Mesma regra: selecionar item ⇒ Graveborn NÃO disponível no
             // MESMO patch (campo interno `crypt`); remoção não reverte.
-            onChange={(val) => onCharacterInlineChange?.({ ...c, itemDropadoCrypt: val, ...(val.trim() ? { crypt: false } : {}) })}
+            onChange={(val) => onCharacterInlineChange?.({ ...c, itemDropadoCrypt: val, ...(val.trim() ? (val !== (c.itemDropadoCrypt || "") ? { itemDropadoCryptAt: Date.now() } : {}) : { itemDropadoCryptAt: undefined }), ...(val.trim() ? { crypt: false } : {}) })}
             itemList={CRYPT_ITEMS}
             disabled={locked}
             disabledReason="Bloqueado: o Drop GB desta Quest pertence ao comprador da negociação"
@@ -790,7 +791,7 @@ export default function CharTable({ characters, activeParties = [], readOnly, sh
         // Ativo apenas com DROP SW selecionado; contexto SEMPRE Soul War
         // (Lucro SW), nunca misturado com o registro de Sanguine.
         const hasDrop = !!(c.itemDropadoSW || "").trim();
-        const hasSale = !!c.itemSaleSW && (c.itemSaleSW.resultRC || 0) > 0;
+        const hasSale = isItemSaleConcluded(c.itemSaleSW);
         const canSell = !locked && !readOnly && hasDrop && !!onCharacterInlineChange;
         return (
           <span className={`inline-flex items-center gap-1 tabular-nums text-[11px] ${locked ? "text-slate-500" : "text-slate-300"}`} title={locked ? "Bloqueado: o Lucro SW desta Quest pertence ao comprador da negociação" : undefined}>
@@ -826,7 +827,7 @@ export default function CharTable({ characters, activeParties = [], readOnly, sh
         const locked = lockedQuestFinancialIds.has(c.id);
         // Mesmo fluxo, contexto SEMPRE Sanguine (Lucro SG) — separado de SW.
         const hasDrop = !!(c.itemDropadoSG || "").trim();
-        const hasSale = !!c.itemSaleSG && (c.itemSaleSG.resultRC || 0) > 0;
+        const hasSale = isItemSaleConcluded(c.itemSaleSG);
         const canSell = !locked && !readOnly && hasDrop && !!onCharacterInlineChange;
         return (
           <span className={`inline-flex items-center gap-1 tabular-nums text-[11px] ${locked ? "text-slate-500" : "text-slate-300"}`} title={locked ? "Bloqueado: o Lucro SG desta Quest pertence ao comprador da negociação" : undefined}>
@@ -863,7 +864,7 @@ export default function CharTable({ characters, activeParties = [], readOnly, sh
         // Mesmo fluxo de SW/SG, contexto SEMPRE Crypt (Lucro Crypt) —
         // registro próprio (itemSaleCrypt/dropCrypt), nunca misturado.
         const hasDrop = !!(c.itemDropadoCrypt || "").trim();
-        const hasSale = !!c.itemSaleCrypt && (c.itemSaleCrypt.resultRC || 0) > 0;
+        const hasSale = isItemSaleConcluded(c.itemSaleCrypt);
         const canSell = !locked && !readOnly && hasDrop && !!onCharacterInlineChange;
         return (
           <span className={`inline-flex items-center gap-1 tabular-nums text-[11px] ${locked ? "text-slate-500" : "text-slate-300"}`} title={locked ? "Bloqueado: o Lucro GB desta Quest pertence ao comprador da negociação" : undefined}>

@@ -35,7 +35,7 @@ import ItemSoldModal from "./ItemSoldModal";
 // Cálculo da venda de item (kk -> RC) + Taxa Market: módulo puro compartilhado
 // com o modal "Item Vendido" e com Meus Personagens. `computeItemRC` e
 // `parseRateKk` são as MESMAS funções que este painel sempre usou (movidas).
-import { computeItemRC, formatItemSaleSummary } from "../utils/itemSale";
+import { computeItemRC, formatItemSaleSummary, isItemSaleConcluded } from "../utils/itemSale";
 import type { ItemSaleRecord } from "../types";
 import { openExternalUrl } from "../utils/openExternal";
 import WhatsappMessagePicker from "./WhatsappMessagePicker";
@@ -394,7 +394,7 @@ export function getVendidoButtonState(party: PartyTab, slot: ExtendedPartySlotDa
   const postComplete = !!party.questConcluida;
   const questLocked = !postComplete || !!party.isLocked || !!party.isPaused;
   const saleComplete = rcLocked && (slot?.itemVendido || 0) > 0;
-  const hasSaleData = !!slot?.itemSale && (slot.itemSale.resultRC || 0) > 0;
+  const hasSaleData = isItemSaleConcluded(slot?.itemSale);
   const enabled = hasItemDropado && !questLocked && !pgGlobalDisabled && !saleComplete && !rcLocked;
   return { enabled, hasSaleData, saleComplete, rcLocked, questLocked, hasItemDropado, pgGlobalDisabled };
 }
@@ -501,7 +501,10 @@ export function buildPartyWhatsAppSummaryText(
     const vendaKk = d?.calcTotalKk || 0;
     const cotacaoKk = d?.calcRateKk || 0;
 
-    if (itemDropado && itemVendido > 0) {
+    if (itemDropado && itemVendido <= 0 && saleRecord?.noValue === true) {
+      // Venda confirmada SEM valor: encerrada, mas nunca com número fictício.
+      linhas.push(`\u2022 ${jogador}: ${itemDropado} > Vendido (valor n\u00e3o informado)`);
+    } else if (itemDropado && itemVendido > 0) {
       if (saleRecord && saleRecord.resultRC > 0) {
         linhas.push(`• ${jogador}: ${itemDropado} > ${formatItemSaleSummary(saleRecord)} = ${formatRC(itemVendido)}`);
       } else if (vendaKk > 0 && cotacaoKk > 0) {

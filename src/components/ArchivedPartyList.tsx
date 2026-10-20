@@ -2,6 +2,7 @@ import { useState, useMemo, useEffect } from "react";
 import { Sword, Coins, Award, Clock, User, Archive } from "lucide-react";
 import type { PartyTab } from "../types";
 import { formatRC } from "../types";
+import { QUEST_BADGE_COLOR_CLASSES } from "../constants/questBadges";
 import { useAuth } from "../context/AuthContext";
 import { FilterSelect } from "./FilterTypes";
 import { serverLabel } from "../constants/servers";
@@ -420,12 +421,13 @@ export default function ArchivedPartyList({ parties, userName, highlightedId, on
             <span className="text-sm font-bold text-white truncate tracking-wide max-w-[100px]">{p.name}</span>
           </div>
           <div className="flex items-center gap-1">
-            <span className={`text-[8px] font-bold px-2 py-0.5 rounded uppercase tracking-wider ${
+            {/* Cores oficiais dos emblemas de Quest — fonte única (constants/questBadges). */}
+            <span className={`text-[8px] font-bold px-2 py-0.5 rounded uppercase tracking-wider border ${
               questColor === "rose"
-                ? "bg-rose-500/20 text-rose-300 border border-rose-500/80"
+                ? QUEST_BADGE_COLOR_CLASSES.sanguine
                 : questColor === "emerald"
-                  ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/80"
-                  : "bg-slate-500/20 text-slate-200 border border-slate-500/80"
+                  ? QUEST_BADGE_COLOR_CLASSES.crypt
+                  : QUEST_BADGE_COLOR_CLASSES.soulwar
             }`}>
               {questLabel}
             </span>

@@ -9,6 +9,7 @@ import { VOC_COLORS, formatRC, resolveServiceValue, SERVICE_PAYMENT_LABELS } fro
 import { useAuth } from "../context/AuthContext";
 import { isVipActive } from "../utils/vipAccess";
 import { SERVER_OPTIONS, isSameServer, serverLabel } from "../constants/servers";
+import { QUEST_BADGE_COLOR_CLASSES } from "../constants/questBadges";
 import { FilterSelect, FilterMulti, FilterNumber, FilterDateMax } from "./FilterTypes";
 import { loadUIState, saveUIState } from "../storage";
 import { openExternalUrl } from "../utils/openExternal";
@@ -1561,8 +1562,8 @@ export default function MyServicesPanel({
                       <td className="px-1 py-1.5 text-center">
                         <span className={`text-[9px] font-black uppercase tracking-wider px-1.5 py-0.5 rounded border ${
                           request.quest === "sanguine"
-                            ? "border-rose-500/40 bg-rose-500/10 text-rose-300"
-                            : "border-slate-500/40 bg-slate-500/10 text-slate-300"
+                            ? QUEST_BADGE_COLOR_CLASSES.sanguine
+                            : QUEST_BADGE_COLOR_CLASSES.soulwar
                         }`}>
                           {request.quest === "sanguine" ? "SG" : "SW"}
                         </span>
@@ -1686,8 +1687,8 @@ export default function MyServicesPanel({
                   <td className="px-1 py-1.5 text-center">
                     <span className={`text-[9px] font-black uppercase tracking-wider px-1.5 py-0.5 rounded border ${
                       service.quest === "sanguine"
-                        ? "border-rose-500/40 bg-rose-500/10 text-rose-300"
-                        : "border-slate-500/40 bg-slate-500/10 text-slate-300"
+                        ? QUEST_BADGE_COLOR_CLASSES.sanguine
+                        : QUEST_BADGE_COLOR_CLASSES.soulwar
                     }`}>
                       {service.quest === "sanguine" ? "SG" : "SW"}
                     </span>

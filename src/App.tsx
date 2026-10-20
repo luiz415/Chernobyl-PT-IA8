@@ -4862,6 +4862,10 @@ export default function App() {
           itemDropadoSW: currentCharacter.itemDropadoSW,
           itemDropadoSG: currentCharacter.itemDropadoSG,
           itemDropadoCrypt: currentCharacter.itemDropadoCrypt,
+          // Datas de inclusão acompanham os itens preservados (52ª tarefa).
+          itemDropadoSWAt: currentCharacter.itemDropadoSWAt,
+          itemDropadoSGAt: currentCharacter.itemDropadoSGAt,
+          itemDropadoCryptAt: currentCharacter.itemDropadoCryptAt,
           dropSW: currentCharacter.dropSW,
           dropBakra: currentCharacter.dropBakra,
           dropCrypt: currentCharacter.dropCrypt,

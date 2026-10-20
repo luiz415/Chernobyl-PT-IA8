@@ -9,6 +9,7 @@ import { FilterSelect } from "./FilterTypes";
 import VipAccessButton from "./VipAccessButton";
 import { getEffectiveUserRole } from "../utils/vipAccess";
 import { SERVER_OPTIONS, isOfficialServer } from "../constants/servers";
+import { QUEST_BADGE_COLOR_CLASSES } from "../constants/questBadges";
 import WhatsappMessagePicker from "./WhatsappMessagePicker";
 import FirstMessageMarker from "./FirstMessageMarker";
 import PartyMembershipBadge from "./PartyMembershipBadge";
@@ -784,8 +785,8 @@ export default function WaitingListPanel({ items, onAdd, onUpdate, onDelete, use
                 </th>
                 <th className="bg-[var(--th-bg-base)] px-1 py-1 border-b border-[var(--th-line)]/80">
                   <div className="grid grid-cols-2 gap-0.5">
-                    <button type="button" onClick={() => setFQuest(fQuest === "soulwar" ? "" : "soulwar")} className={`h-6 rounded border text-[9px] font-bold ${fQuest === "soulwar" ? "border-slate-400 bg-slate-500/20 text-slate-200" : "border-slate-600/30 bg-white/[0.02] text-slate-500 hover:bg-white/5"}`}>SW</button>
-                    <button type="button" onClick={() => setFQuest(fQuest === "sanguine" ? "" : "sanguine")} className={`h-6 rounded border text-[9px] font-bold ${fQuest === "sanguine" ? "border-rose-500/50 bg-rose-500/20 text-rose-300" : "border-rose-600/30 bg-white/[0.02] text-rose-500 hover:bg-white/5"}`}>SG</button>
+                    <button type="button" onClick={() => setFQuest(fQuest === "soulwar" ? "" : "soulwar")} className={`h-6 rounded border text-[9px] font-bold ${fQuest === "soulwar" ? QUEST_BADGE_COLOR_CLASSES.soulwar : "border-slate-600/30 bg-white/[0.02] text-slate-500 hover:bg-white/5"}`}>SW</button>
+                    <button type="button" onClick={() => setFQuest(fQuest === "sanguine" ? "" : "sanguine")} className={`h-6 rounded border text-[9px] font-bold ${fQuest === "sanguine" ? QUEST_BADGE_COLOR_CLASSES.sanguine : "border-red-800/40 bg-white/[0.02] text-red-500/70 hover:bg-white/5"}`}>SG</button>
                   </div>
                 </th>
                 <th className="bg-[var(--th-bg-base)] px-1 py-1 border-b border-[var(--th-line)]/80"><input type="text" value={fNotes} onChange={e => setFNotes(e.target.value)} placeholder="filtrar..." className="filter-input" /></th>

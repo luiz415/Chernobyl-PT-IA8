@@ -8,6 +8,7 @@ import {
   OFFER_TAX_PERCENT,
   SALE_TAX_CAP_KK,
   SALE_TAX_PERCENT,
+  buildItemSaleNoValueRecord,
   buildItemSaleRecord,
   computeItemRC,
   computeMarketTaxTotalKk,
@@ -39,17 +40,27 @@ interface Props {
   contextLabel?: string;
   /** Registro existente (reabrir para editar antes do salvamento permanente). */
   initial?: ItemSaleRecord | null;
+  /**
+   * Exibe a opção "Não informar valor" (padrão: true). Desligada onde o
+   * destino da persistência só armazena o LUCRO numérico (ex.: negociados
+   * entre usuários) e não comporta uma venda sem valor.
+   */
+  allowNoValue?: boolean;
   onCancel: () => void;
   onSave: (record: ItemSaleRecord) => void;
 }
 
-export default function ItemSoldModal({ itemName, contextLabel, initial, onCancel, onSave }: Props) {
+export default function ItemSoldModal({ itemName, contextLabel, initial, allowNoValue = true, onCancel, onSave }: Props) {
   // ── Estado dos campos (strings de digitação, pt-BR) ───────────────────────
   const [vendaRaw, setVendaRaw] = useState(() => initial && initial.vendaKk > 0 ? formatRateKkDisplay(initial.vendaKk) : "");
   const [rateRaw, setRateRaw] = useState(() => initial && initial.rateKk > 0 ? formatRateKkDisplay(initial.rateKk) : "");
   // Quantidade de OFERTAS CRIADAS no Market para este item (0 = venda direta
   // para oferta de compra, sem criar oferta própria).
   const [offerCount, setOfferCount] = useState(() => initial?.taxCount || 0);
+  // "Não informar valor": confirma a venda SEM preço — o item é encerrado
+  // com os campos financeiros zerados (nunca entra em métricas). Reabrir um
+  // registro sem valor volta com a opção marcada.
+  const [noValue, setNoValue] = useState(() => allowNoValue && initial?.noValue === true);
 
   // Esc fecha sem salvar (padrão dos demais modais do app).
   useEffect(() => {
@@ -78,6 +89,9 @@ export default function ItemSoldModal({ itemName, contextLabel, initial, onCance
   const saleCapped = vendaKk > 0 && (vendaKk * SALE_TAX_PERCENT) / 100 > SALE_TAX_CAP_KK;
 
   function handleSave() {
+    // Venda sem valor: registro próprio (tudo zerado + noValue) — o fluxo
+    // com valor permanece EXATAMENTE o atual quando a opção está desmarcada.
+    if (noValue) { onSave(buildItemSaleNoValueRecord()); return; }
     if (!readyForTax) return;
     onSave(buildItemSaleRecord(vendaKk, rateKk, offerCount));
   }
@@ -121,7 +135,8 @@ export default function ItemSoldModal({ itemName, contextLabel, initial, onCance
                   onChange={e => setVendaRaw(sanitizeRateKkInput(e.target.value))}
                   placeholder="0"
                   autoFocus
-                  className={`${inputCls} pr-8 border-sky-500/40 focus:border-sky-400/70 text-sky-200`}
+                  disabled={noValue}
+                  className={`${inputCls} pr-8 border-sky-500/40 focus:border-sky-400/70 text-sky-200 disabled:opacity-40 disabled:cursor-not-allowed`}
                 />
                 <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[10px] font-bold text-sky-400/70 select-none pointer-events-none">kk</span>
               </div>
@@ -136,12 +151,33 @@ export default function ItemSoldModal({ itemName, contextLabel, initial, onCance
                   onChange={e => setRateRaw(sanitizeRateKkInput(e.target.value))}
                   placeholder="0"
                   title="Cotação: quantos k equivalem a 1000 RC"
-                  className={`${inputCls} pr-7 border-red-500/40 focus:border-red-400/70 text-red-200`}
+                  disabled={noValue}
+                  className={`${inputCls} pr-7 border-red-500/40 focus:border-red-400/70 text-red-200 disabled:opacity-40 disabled:cursor-not-allowed`}
                 />
                 <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[10px] font-bold text-red-400/70 select-none pointer-events-none">k</span>
               </div>
             </label>
           </div>
+
+          {/* "Não informar valor" — confirma a venda SEM preço: o item é
+              encerrado (sai de "À Venda") com os campos financeiros zerados
+              e fica FORA de qualquer métrica. Desmarcada = fluxo atual. */}
+          {allowNoValue && (
+          <label className={`flex items-start gap-2 rounded-xl border px-3 py-2 cursor-pointer transition-colors ${noValue ? "border-violet-500/50 bg-violet-500/10" : "border-white/10 bg-white/[0.03] hover:bg-white/[0.06]"}`}>
+            <input
+              type="checkbox"
+              checked={noValue}
+              onChange={e => setNoValue(e.target.checked)}
+              className="mt-0.5 h-3.5 w-3.5 accent-violet-500 cursor-pointer"
+            />
+            <span className="flex-1">
+              <span className={`block text-[11px] font-bold ${noValue ? "text-violet-300" : "text-slate-300"}`}>Não informar valor</span>
+              <span className="block text-[9px] leading-snug text-slate-500">
+                Confirma a venda sem preço: o item deixa de aparecer como "À Venda" e não entra em nenhum cálculo financeiro.
+              </span>
+            </span>
+          </label>
+          )}
 
           {/* Taxas do Market — regra vigente: criação (1%/1kk por oferta) +
               venda concluída (3%/5kk, uma vez). */}
@@ -154,7 +190,7 @@ export default function ItemSoldModal({ itemName, contextLabel, initial, onCance
               <div className="flex items-center gap-1">
                 <button
                   type="button"
-                  disabled={!readyForTax || offerCount === 0}
+                  disabled={noValue || !readyForTax || offerCount === 0}
                   onClick={() => setOfferCount(c => Math.max(0, c - 1))}
                   title="Uma oferta criada a menos"
                   className="w-6 h-6 inline-flex items-center justify-center rounded-lg border border-amber-500/40 bg-amber-500/15 text-amber-300 hover:bg-amber-500/25 transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
@@ -164,7 +200,7 @@ export default function ItemSoldModal({ itemName, contextLabel, initial, onCance
                 <span className="w-8 text-center px-1 py-0.5 rounded bg-amber-500 text-black text-[11px] font-black font-mono tabular-nums select-none">{offerCount}</span>
                 <button
                   type="button"
-                  disabled={!readyForTax}
+                  disabled={noValue || !readyForTax}
                   onClick={() => setOfferCount(c => c + 1)}
                   title={readyForTax
                     ? `Cada oferta criada no Market paga ${OFFER_TAX_PERCENT}% do valor anunciado (máx. ${OFFER_TAX_CAP_KK}kk por oferta), mesmo sem venda. 0 = venda direta para oferta de compra.`
@@ -175,7 +211,7 @@ export default function ItemSoldModal({ itemName, contextLabel, initial, onCance
                 </button>
                 <button
                   type="button"
-                  disabled={offerCount === 0}
+                  disabled={noValue || offerCount === 0}
                   onClick={() => setOfferCount(0)}
                   title="Zerar ofertas criadas (venda direta)"
                   className="p-1.5 rounded-lg border border-white/10 bg-white/5 text-slate-400 hover:text-white hover:bg-white/10 transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed flex-shrink-0"
@@ -229,7 +265,7 @@ export default function ItemSoldModal({ itemName, contextLabel, initial, onCance
             </button>
             <button
               type="button"
-              disabled={!readyForTax || preview.resultRC <= 0}
+              disabled={!noValue && (!readyForTax || preview.resultRC <= 0)}
               onClick={handleSave}
               className="flex-1 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-black text-xs font-black inline-flex items-center justify-center gap-1 transition-colors cursor-pointer shadow-lg shadow-emerald-500/10 disabled:opacity-40 disabled:cursor-not-allowed"
             >

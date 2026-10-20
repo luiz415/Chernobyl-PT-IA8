@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { Plus, Users, X, Lock, LockOpen, RotateCcw, ChevronDown, UserCheck, ArrowDown, ArrowUp, ArrowUpDown, Sparkles, RefreshCw, BarChart3, Eye, EyeOff, MousePointerClick, Coins, Globe, Crown, CalendarClock, Timer, PauseCircle, CheckCircle2 } from "lucide-react";
 import type { Character, CharacterAcquisition, PartyFinalizationReason, PartyTab, WaitingService } from "../types";
 import { getCharacterAccountKey } from "../utils/accountIdentity";
+import { QUEST_BADGE_COLOR_CLASSES } from "../constants/questBadges";
 import { countPartiesAwaitingPaymentForUser, isPartyAwaitingPaymentForUser } from "../utils/partyPendingPayment";
 import { getPartyParticipation, isPartyVisibleToViewer } from "../utils/partyPermissions";
 import { VOCATIONS } from "../types";
@@ -969,11 +970,11 @@ export default function PartyManager({ parties, characters, waitingList, userNam
                   <Users size={11} className="flex-shrink-0" />
                   <span className="truncate max-w-[60px]">{p.name}</span>
                   {p.ptType === "sanguine" ? (
-                    <span className="text-[8px] font-bold px-1 py-px rounded border border-rose-500/30 bg-rose-500/10 text-rose-400 flex-shrink-0">SG</span>
+                    <span className={`text-[8px] font-bold px-1 py-px rounded border flex-shrink-0 ${QUEST_BADGE_COLOR_CLASSES.sanguine}`}>SG</span>
                   ) : p.ptType === "soulwar" ? (
-                    <span className="text-[8px] font-bold px-1 py-px rounded border border-slate-500/30 bg-slate-500/10 text-slate-400 flex-shrink-0">SW</span>
+                    <span className={`text-[8px] font-bold px-1 py-px rounded border flex-shrink-0 ${QUEST_BADGE_COLOR_CLASSES.soulwar}`}>SW</span>
                   ) : p.ptType === "crypt" ? (
-                    <span className="text-[8px] font-bold px-1 py-px rounded border border-emerald-500/30 bg-emerald-500/10 text-emerald-400 flex-shrink-0">GB</span>
+                    <span className={`text-[8px] font-bold px-1 py-px rounded border flex-shrink-0 ${QUEST_BADGE_COLOR_CLASSES.crypt}`}>GB</span>
                   ) : null}
                   {/* Contador de slots: apenas em "Com Vagas" — nos demais
                       estágios a lotação já é implícita pela categoria. */}
@@ -1709,11 +1710,11 @@ export default function PartyManager({ parties, characters, waitingList, userNam
                                 <Users size={13} className={`flex-shrink-0 ${theme.cardAccent}`} />
                                 <span className="text-[13px] font-black text-white truncate">{p.name}</span>
                                 {p.ptType === "sanguine" ? (
-                                  <span className="text-[8px] font-bold px-1 py-px rounded border border-rose-500/30 bg-rose-500/10 text-rose-400 flex-shrink-0">SG</span>
+                                  <span className={`text-[8px] font-bold px-1 py-px rounded border flex-shrink-0 ${QUEST_BADGE_COLOR_CLASSES.sanguine}`}>SG</span>
                                 ) : p.ptType === "soulwar" ? (
-                                  <span className="text-[8px] font-bold px-1 py-px rounded border border-slate-500/30 bg-slate-500/10 text-slate-400 flex-shrink-0">SW</span>
+                                  <span className={`text-[8px] font-bold px-1 py-px rounded border flex-shrink-0 ${QUEST_BADGE_COLOR_CLASSES.soulwar}`}>SW</span>
                                 ) : p.ptType === "crypt" ? (
-                                  <span className="text-[8px] font-bold px-1 py-px rounded border border-emerald-500/30 bg-emerald-500/10 text-emerald-400 flex-shrink-0">GB</span>
+                                  <span className={`text-[8px] font-bold px-1 py-px rounded border flex-shrink-0 ${QUEST_BADGE_COLOR_CLASSES.crypt}`}>GB</span>
                                 ) : null}
                                 <span className="ml-auto inline-flex items-center gap-1 text-[9px] font-bold text-slate-400 flex-shrink-0">
                                   <Globe size={9} className="text-slate-500" />
