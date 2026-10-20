@@ -200,6 +200,18 @@ export interface CharacterBazaarItemsSnapshot {
     unitValueKk: number;
     amount: number;
     totalKk: number;
+    /**
+     * À VENDA (58ª tarefa): item marcado INDIVIDUALMENTE no modal "Ver"
+     * (Meus Personagens → Itens) para aparecer em "Itens à Venda". Como o
+     * item veio na COMPRA do personagem — e não de uma Quest — ele NUNCA
+     * tem associação com SW/SG/GB. Desmarcar apenas o retira da venda:
+     * o registro original do item (e a venda, se houver) é preservado.
+     */
+    forSale?: boolean;
+    /** Quando foi colocado à venda (epoch ms) — definido na 1ª marcação. */
+    forSaleAt?: number;
+    /** Venda registrada (MESMO ItemSaleRecord/calculadora das Quests). */
+    sale?: ItemSaleRecord | null;
   }>;
   /** Quando o snapshot foi capturado (clique em "Comprado"). */
   capturedAtMs: number;

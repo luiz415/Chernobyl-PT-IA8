@@ -6320,15 +6320,34 @@ export default function App() {
       />
       {/* Itens do Bazaar do personagem (EXCLUSIVO DO BOSS): coluna "Itens" de
           Meus Personagens → Disponíveis. Snapshot local — nenhuma consulta. */}
-      {userProfile?.role === "Boss" && bazaarItemsViewCharacter && (
-        <CharacterBazaarItemsModal
-          character={bazaarItemsViewCharacter}
-          /* Cotação do SERVIDOR do snapshot (0 = não configurada → o modal
-             não converte) — mesma configuração por servidor da guia Itens. */
-          coinRate={getServerCoinRate(readLocalCoinRates(), bazaarItemsViewCharacter.bazaarItems?.server)}
-          onClose={() => setBazaarItemsViewCharacter(null)}
-        />
-      )}
+      {userProfile?.role === "Boss" && bazaarItemsViewCharacter && (() => {
+        // Personagem VIVO (58ª): o estado guarda uma cópia do clique em
+        // "Ver"; buscamos a versão atual de data.characters para o toggle
+        // "À venda" refletir na hora dentro do próprio modal.
+        const liveBazaarView = data.characters.find(c => c.id === bazaarItemsViewCharacter.id) || bazaarItemsViewCharacter;
+        return (
+          <CharacterBazaarItemsModal
+            character={liveBazaarView}
+            /* Cotação do SERVIDOR do snapshot (0 = não configurada → o modal
+               não converte) — mesma configuração por servidor da guia Itens. */
+            coinRate={getServerCoinRate(readLocalCoinRates(), liveBazaarView.bazaarItems?.server)}
+            /* À VENDA (58ª): grava forSale/forSaleAt no PRÓPRIO match do
+               snapshot pelo MESMO canal do CharTable (persistência local +
+               sync existentes). `forSaleAt` é definido só na PRIMEIRA
+               marcação (nunca reescrevemos a data de inclusão); desmarcar
+               preserva o registro do item e a venda já registrada. */
+            onToggleForSale={(matchIndex, forSale) => {
+              const snap = liveBazaarView.bazaarItems;
+              if (!snap || !snap.matches[matchIndex]) return;
+              const matches = snap.matches.map((m, i) => i === matchIndex
+                ? { ...m, forSale, ...(forSale && !((m.forSaleAt || 0) > 0) ? { forSaleAt: Date.now() } : {}) }
+                : m);
+              handleCharacterInlineChange({ ...liveBazaarView, bazaarItems: { ...snap, matches } });
+            }}
+            onClose={() => setBazaarItemsViewCharacter(null)}
+          />
+        );
+      })()}
       {/* "Itens à Venda" de Meus Personagens — gerenciamento centralizado dos
           itens de Quest do usuário. Persistência pelos canais EXISTENTES:
           handleCharacterInlineChange (personagens, com a guarda de negociação)

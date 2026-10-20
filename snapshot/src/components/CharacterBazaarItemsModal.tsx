@@ -12,11 +12,19 @@
 // (as Listas de Itens por servidor continuam sendo editadas na guia Itens).
 // Mesmos utilitários de cálculo (formatKkValue/computeItemRC) — nenhuma
 // fórmula paralela.
+//
+// ÚNICA exceção de escrita (58ª tarefa): a coluna "À venda" — um controle
+// discreto por item que o marca/desmarca para o modal "Itens à Venda" de
+// Meus Personagens. A marcação grava `forSale`/`forSaleAt` no PRÓPRIO match
+// do snapshot, pelo MESMO canal de persistência do personagem
+// (onCharacterInlineChange do App); desmarcar NUNCA apaga o registro
+// original do item nem a venda já registrada. Itens da compra não têm
+// associação com SW/SG/GB.
 // ============================================================================
 
-import { Globe, Package, X } from "lucide-react";
+import { Check, Coins, Globe, Package, X } from "lucide-react";
 import type { Character } from "../types";
-import { computeItemRC, formatKkValue as formatKkValueBase } from "../utils/itemSale";
+import { computeItemRC, formatKkValue as formatKkValueBase, isItemSaleConcluded } from "../utils/itemSale";
 
 /**
  * Formatação de kk da modal de itens do personagem: valores têm até 1 casa decimal,
@@ -32,6 +40,12 @@ interface Props {
   character: Character | null;
   /** Cotação do coin (k) — a mesma persistida pela guia Bazaar → Itens. */
   coinRate: number;
+  /**
+   * Marca/desmarca um item do snapshot como "À venda" (58ª tarefa) — o App
+   * persiste pelo MESMO canal do CharTable (handleCharacterInlineChange).
+   * Ausente = coluna exibida sem ação (somente leitura).
+   */
+  onToggleForSale?: (matchIndex: number, forSale: boolean) => void;
   onClose: () => void;
 }
 
@@ -50,7 +64,7 @@ function formatCapturedAt(ms: number): string {
   }
 }
 
-export default function CharacterBazaarItemsModal({ character, coinRate, onClose }: Props) {
+export default function CharacterBazaarItemsModal({ character, coinRate, onToggleForSale, onClose }: Props) {
   const snapshot = character?.bazaarItems;
   if (!character || !snapshot) return null;
 
@@ -94,6 +108,9 @@ export default function CharacterBazaarItemsModal({ character, coinRate, onClose
                 <th className="px-1.5 py-1.5 text-right">Pós-Tier (kk)</th>
                 <th className="px-1.5 py-1.5 text-center">Qtd</th>
                 <th className="px-1.5 py-1.5 text-right">Total (kk)</th>
+                {/* À VENDA (58ª): controle discreto por item — vai para o
+                    modal "Itens à Venda" de Meus Personagens, SEM Quest. */}
+                <th className="px-1.5 py-1.5 text-center">À venda</th>
               </tr>
             </thead>
             <tbody>
@@ -102,7 +119,7 @@ export default function CharacterBazaarItemsModal({ character, coinRate, onClose
                   {/* Personagem comprado só com Ouro relevante (> 1kk): sem
                       itens monitorados — o total vem exclusivamente do Ouro,
                       detalhado logo abaixo ("Inclui Ouro"). */}
-                  <td colSpan={7} className="px-1.5 py-2.5 text-center italic text-slate-500">
+                  <td colSpan={8} className="px-1.5 py-2.5 text-center italic text-slate-500">
                     Nenhum item monitorado encontrado — o valor deste personagem vem apenas do Ouro.
                   </td>
                 </tr>
@@ -120,6 +137,31 @@ export default function CharacterBazaarItemsModal({ character, coinRate, onClose
                   <td className="px-1.5 py-1.5 text-right font-mono text-slate-200">{formatKkValue(match.unitValueKk, "kk")}</td>
                   <td className="px-1.5 py-1.5 text-center font-mono text-slate-200">{match.amount}</td>
                   <td className="px-1.5 py-1.5 text-right font-mono font-bold text-amber-200">{formatKkValue(match.totalKk, "kk")}</td>
+                  <td className="px-1.5 py-1.5 text-center">
+                    <div className="inline-flex flex-col items-center gap-0.5">
+                      <button
+                        type="button"
+                        onClick={() => onToggleForSale?.(index, !match.forSale)}
+                        disabled={!onToggleForSale}
+                        aria-pressed={!!match.forSale}
+                        title={match.forSale
+                          ? "Item marcado À VENDA — aparece em “Itens à Venda” de Meus Personagens (sem Quest associada). Clique para retirar da venda; o registro do item é preservado."
+                          : "Colocar este item à venda — ele passa a aparecer em “Itens à Venda” de Meus Personagens (sem associação com SW/SG/GB)."}
+                        className={`inline-flex items-center gap-0.5 rounded border px-1.5 py-0.5 text-[8px] font-black uppercase tracking-wide transition-colors ${
+                          match.forSale
+                            ? "border-amber-500/50 bg-amber-500/20 text-amber-300 hover:bg-amber-500/30"
+                            : "border-white/10 bg-white/5 text-slate-400 hover:border-amber-500/35 hover:bg-amber-500/10 hover:text-amber-300"
+                        } ${onToggleForSale ? "cursor-pointer" : "cursor-default opacity-60"}`}
+                      >
+                        <Coins size={8} /> {match.forSale ? "À venda" : "Vender"}
+                      </button>
+                      {isItemSaleConcluded(match.sale || null) && (
+                        <span className="inline-flex items-center gap-0.5 text-[7px] font-black uppercase tracking-wide text-emerald-400/90" title="Venda registrada em “Itens à Venda” — o registro permanece mesmo se o item for desmarcado.">
+                          <Check size={7} strokeWidth={3} /> Vendido
+                        </span>
+                      )}
+                    </div>
+                  </td>
                 </tr>
               ))}
             </tbody>

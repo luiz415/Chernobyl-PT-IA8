@@ -17,6 +17,14 @@ import ItemSoldModal from "./ItemSoldModal";
 // e incluindo os personagens NEGOCIADOS COMPRADOS pelo usuário atual, e
 // permite registrar/revisar a venda sem sair do modal.
 //
+// ITENS DO BAZAAR (58ª tarefa): itens que VIERAM NA COMPRA do personagem
+// (snapshot `Character.bazaarItems`) e foram marcados "À venda" no modal
+// "Ver" entram aqui como TERCEIRA origem (`source: "bazaar"`), com o MESMO
+// padrão de exibição/edição/confirmação dos demais — porém SEM associação
+// com SW/SG/GB (não vieram de Quest): badge próprio "Bazaar" no lugar da
+// sigla. A venda grava o ItemSaleRecord no PRÓPRIO match do snapshot, pelo
+// MESMO canal `onCharacterInlineChange` (nenhum campo de Quest é tocado).
+//
 // FONTE DE DADOS — 100% local, nenhuma consulta nova ao Firestore:
 //   • `characters` = data.characters do App (Disponíveis + Vendidos), a MESMA
 //     lista viva do CharTable; toda alteração reflete aqui via props/useMemo.
@@ -52,18 +60,22 @@ import ItemSoldModal from "./ItemSoldModal";
 // Pendente = item declarado sem venda registrada.
 // ============================================================================
 
-export type MySaleItemQuest = "soulwar" | "sanguine" | "crypt";
+/** Origem temática do item: Quests (SW/SG/GB) ou item do Bazaar (SEM Quest). */
+export type MySaleItemQuest = "soulwar" | "sanguine" | "crypt" | "bazaar";
 
 /** Um item de Quest do usuário (pendente ou vendido), com contexto de origem. */
 export interface MySaleItem {
-  /** Chave estável: `char:<characterId>:<quest>` ou `acq:<acquisitionId>`. */
+  /** Chave estável: `char:<characterId>:<quest>`, `acq:<acquisitionId>` ou
+   *  `char:<characterId>:bazaar:<matchIndex>`. */
   key: string;
   /** Origem do registro — define COMO a venda é persistida. */
-  source: "character" | "acquisition";
-  /** Id do personagem (source=character) ou da negociação (source=acquisition). */
+  source: "character" | "acquisition" | "bazaar";
+  /** Id do personagem (source=character|bazaar) ou da negociação (source=acquisition). */
   sourceId: string;
+  /** Índice do item no snapshot `bazaarItems.matches` (só source=bazaar). */
+  matchIndex?: number;
   quest: MySaleItemQuest;
-  /** Sigla exibida: SW | SG | GB. */
+  /** Sigla exibida: SW | SG | GB — "" para itens do Bazaar (sem Quest). */
   questSigla: string;
   itemName: string;
   /** Nome canônico do servidor (serverLabel); "" quando desconhecido. */
@@ -145,6 +157,40 @@ export function collectMySaleItems(
         soldAtMs: sale && isItemSaleConcluded(sale) && (sale.soldAt || 0) > 0 ? sale.soldAt ?? null : null,
         saleSummary: sale && isItemSaleConcluded(sale) ? formatItemSaleSummary(sale) : "",
         saleRecord: sale,
+      });
+    }
+
+    // ── Itens do BAZAAR do personagem marcados "À venda" (58ª) ──────────────
+    // Snapshot da compra (`bazaarItems.matches`): entra SOMENTE o item com
+    // `forSale` — desmarcado sai da lista sem apagar o registro original.
+    // SEM Quest associada (sigla vazia; badge "Bazaar" na exibição).
+    const snap = c.bazaarItems;
+    if (snap && Array.isArray(snap.matches)) {
+      snap.matches.forEach((match, matchIndex) => {
+        if (!match.forSale) return;
+        const itemName = String(match.foundName || "").trim();
+        if (!itemName) return;
+        const sale = match.sale || null;
+        const concluded = isItemSaleConcluded(sale);
+        items.push({
+          key: `char:${c.id}:bazaar:${matchIndex}`,
+          source: "bazaar",
+          sourceId: c.id,
+          matchIndex,
+          quest: "bazaar",
+          questSigla: "",
+          itemName,
+          serverName: serverLabel(snap.server) || String(snap.server || "").trim(),
+          origin: c.vendido ? "vendido" : "disponivel",
+          sold: concluded,
+          soldValueRC: Math.max(0, Number(sale?.resultRC || 0)),
+          // Data em que o item foi COLOCADO À VENDA (1ª marcação) — nunca
+          // inventada; marcações antigas sem o campo exibem "—".
+          addedAtMs: (match.forSaleAt || 0) > 0 ? match.forSaleAt ?? null : null,
+          soldAtMs: concluded && (sale?.soldAt || 0) > 0 ? sale?.soldAt ?? null : null,
+          saleSummary: concluded && sale ? formatItemSaleSummary(sale) : "",
+          saleRecord: sale,
+        });
       });
     }
   }
@@ -387,6 +433,23 @@ export default function MyItemsForSaleModal({
     setSaleTarget(null);
     if (!target) return;
     setError("");
+    if (target.source === "bazaar") {
+      // Item do Bazaar (58ª): grava o registro COMPLETO no próprio match do
+      // snapshot — MESMO canal do CharTable (onCharacterInlineChange).
+      // NENHUM campo de Quest (itemSaleX/dropX) é tocado: o item não tem
+      // associação com SW/SG/GB.
+      const character = characters.find(c => c.id === target.sourceId);
+      const snap = character?.bazaarItems;
+      if (!character || !snap || target.matchIndex === undefined || !snap.matches[target.matchIndex]) return;
+      onCharacterInlineChange({
+        ...character,
+        bazaarItems: {
+          ...snap,
+          matches: snap.matches.map((m, i) => (i === target.matchIndex ? { ...m, sale } : m)),
+        },
+      });
+      return;
+    }
     if (target.source === "character") {
       // MESMO patch do CharTable: registro completo + lucro da Quest no
       // contexto correto (SW -> itemSaleSW/dropSW; SG -> itemSaleSG/dropBakra;
@@ -442,7 +505,7 @@ export default function MyItemsForSaleModal({
               <div className="min-w-0">
                 <h3 className="text-[15px] font-black text-amber-200 leading-tight tracking-tight truncate">Itens à Venda</h3>
                 <p className="text-[10px] text-slate-400 leading-snug truncate">
-                  Itens de Quest de todos os seus personagens — Disponíveis, Vendidos e Negociados comprados
+                  Itens de Quest e itens do Bazaar dos seus personagens — Disponíveis, Vendidos e Negociados comprados
                 </p>
               </div>
             </div>
@@ -510,10 +573,11 @@ export default function MyItemsForSaleModal({
             aria-label="Filtrar por Quest"
             className={`${inputCls} cursor-pointer [color-scheme:dark]`}
           >
-            <option value="">Todas as Quests</option>
+            <option value="">Todas as origens</option>
             <option value="soulwar">Soul War (SW)</option>
             <option value="sanguine">Sanguine (SG)</option>
             <option value="crypt">Graveborn (GB)</option>
+            <option value="bazaar">Itens do Bazaar (sem Quest)</option>
           </select>
           {/* Faixa de valor: valores registrados existem só nos VENDIDOS. */}
           <div className={`flex items-center gap-1 ${tab === "vendidos" ? "" : "opacity-40 pointer-events-none"}`} title={tab === "vendidos" ? "Faixa de valor registrado (RC)" : "Disponível na aba Vendidos (pendentes não têm valor registrado)"}>
@@ -593,7 +657,7 @@ export default function MyItemsForSaleModal({
               <PackageOpen size={28} className="mx-auto text-slate-600 mb-2" />
               <p className="text-xs text-slate-500 italic">
                 {items.length === 0
-                  ? "Nenhum item de Quest declarado nos seus personagens."
+                  ? "Nenhum item de Quest declarado nem item do Bazaar marcado à venda nos seus personagens."
                   : tab === "avenda"
                     ? "Nenhum item pendente corresponde aos filtros atuais."
                     : "Nenhum item vendido corresponde aos filtros atuais."}
@@ -619,7 +683,14 @@ export default function MyItemsForSaleModal({
                           <span className="text-[11px] text-slate-200 font-semibold truncate" title={item.itemName}>{item.itemName}</span>
                         </div>
                         <div className="flex items-center gap-1 flex-shrink-0">
-                          <span className={`text-[8px] font-black px-1 py-px rounded border ${questBadgeColorBySigla(item.questSigla)}`} title={item.quest === "soulwar" ? "Soul War" : item.quest === "sanguine" ? "Sanguine" : "Graveborn"}>{item.questSigla}</span>
+                          {item.quest === "bazaar" ? (
+                            /* Item do Bazaar (58ª): veio na COMPRA do
+                               personagem — SEM Quest associada (nunca exibe
+                               SW/SG/GB). Fúcsia = identidade da guia Itens. */
+                            <span className="text-[8px] font-black px-1 py-px rounded border border-fuchsia-500/40 bg-fuchsia-500/15 text-fuchsia-300 uppercase tracking-wide" title="Item do Bazaar — veio na compra do personagem; sem Quest associada (SW/SG/GB)">Bazaar</span>
+                          ) : (
+                            <span className={`text-[8px] font-black px-1 py-px rounded border ${questBadgeColorBySigla(item.questSigla)}`} title={item.quest === "soulwar" ? "Soul War" : item.quest === "sanguine" ? "Sanguine" : "Graveborn"}>{item.questSigla}</span>
+                          )}
                           {originBadge(item)}
                           {/* Data de INCLUSÃO do item — somente o dia; registros
                               antigos (ou negociados) sem a data exibem "—". */}
@@ -701,9 +772,11 @@ export default function MyItemsForSaleModal({
       {liveSaleTarget && (
         <ItemSoldModal
           itemName={liveSaleTarget.itemName}
-          contextLabel={`${liveSaleTarget.serverName || "Sem servidor"} — ${liveSaleTarget.questSigla}`}
+          contextLabel={`${liveSaleTarget.serverName || "Sem servidor"} — ${liveSaleTarget.quest === "bazaar" ? "Item do Bazaar" : liveSaleTarget.questSigla}`}
           initial={liveSaleTarget.saleRecord}
-          allowNoValue={liveSaleTarget.source === "character"}
+          /* Fonte local completa (personagem OU match do snapshot) comporta
+             venda sem valor; só a negociação (schema = lucro numérico) não. */
+          allowNoValue={liveSaleTarget.source !== "acquisition"}
           server={liveSaleTarget.serverName}
           onCancel={() => setSaleTarget(null)}
           onSave={sale => { void commitSale(sale); }}
