@@ -1,26 +1,36 @@
 // ============================================================================
-// COTAÇÃO DO RUBINI COIN POR SERVIDOR — fonte única do módulo Bazaar
+// COTAÇÃO DO RUBINI COIN POR SERVIDOR — fonte única GLOBAL do aplicativo
 // ----------------------------------------------------------------------------
 // A RC tem valor DIFERENTE em cada servidor, então a conversão kk → RC deixa
 // de depender de uma taxa fixa única: cada servidor tem a SUA cotação,
-// configurada pelo Boss no modal "Lista de Itens" (ou no modal "Ver" de um
-// personagem — mesmo armazenamento).
+// configurada pelo Boss no modal "RC Servidores" do cabeçalho OU no modal
+// "Lista de Itens" do Bazaar (ou no modal "Ver" de um personagem) — TODOS
+// gravam o MESMO armazenamento; não existem taxas independentes por tela.
 //
 // SEMÂNTICA (inalterada): a cotação segue a convenção histórica do app —
 // "Coin (k)" = quantos k equivalem a 1000 RC — e a conversão continua sendo
 // feita EXCLUSIVAMENTE pela função canônica `computeItemRC` de
 // `utils/itemSale.ts` (floor(kk ÷ cotação × 1000)). Nenhuma fórmula nova.
 //
-// PERSISTÊNCIA: `users/{uid}.bazaarCoinRates` no Firestore (mapa
-// chave-do-servidor → cotação), gravado pelo próprio usuário (mesma
-// permissão já usada por `serviceFormConfig`). Um ESPELHO local
-// (localStorage, por usuário) garante leitura síncrona nos cálculos e
-// funcionamento no modo simulação — o Firestore é a fonte durável.
+// PERSISTÊNCIA (53ª tarefa — GLOBAL): campo `serverCoinRates` no documento
+// `appSettings/global` (mapa chave-do-servidor → cotação). As Security Rules
+// JÁ DEPLOYADAS desse caminho garantem no BACKEND que somente o Boss grava
+// (`allow create, update, delete: if isBoss()`); todos os usuários aprovados
+// leem. O listener onSnapshot de `appSettings/global` que o App já mantém
+// para TODOS os usuários entrega as cotações em tempo real (dispositivos
+// sincronizados) SEM nenhuma leitura adicional ao Firestore. Um ESPELHO
+// local (localStorage, único/global) garante leitura síncrona nos cálculos
+// e funcionamento no modo simulação — o Firestore é a fonte durável.
 //
-// SEM FALLBACK: servidor sem cotação configurada retorna 0 — os cálculos
-// exibem "—" (dado indisponível), exatamente como o app sempre tratou a
-// ausência de cotação. NUNCA herdamos a taxa de outro servidor nem a taxa
-// fixa legada (`rubinot_bazaar_items_coin_rate`).
+// LEGADO (45ª tarefa): as cotações viviam em `users/{uid}.bazaarCoinRates`.
+// MIGRAÇÃO SEGURA: quando o doc global ainda NÃO tem cotações e o usuário
+// possui o mapa legado, ele é reutilizado e (se o usuário for Boss — as
+// rules decidem) promovido ao doc global UMA vez. Um mapa global já
+// preenchido NUNCA é sobrescrito pelo legado.
+//
+// SEM FALLBACK DE VALOR: servidor sem cotação configurada retorna 0 — os
+// cálculos exibem "—" (dado indisponível). NUNCA herdamos a taxa de outro
+// servidor nem a taxa fixa legada (`rubinot_bazaar_items_coin_rate`).
 // ============================================================================
 
 import { loadUIState, saveUIState } from "../storage";
@@ -31,11 +41,20 @@ import { doc } from "firebase/firestore";
 /** Mapa chave-do-servidor (serverKey) → cotação em k por 1000 RC. */
 export type BazaarCoinRates = Record<string, number>;
 
-const BAZAAR_COIN_RATES_KEY_PREFIX = "rubinot_bazaar_coin_rates_";
+/** Espelho local GLOBAL (as cotações valem para o app inteiro, não por uid). */
+const SERVER_COIN_RATES_LOCAL_KEY = "rubinot_server_coin_rates_global";
+/** Chave do espelho LEGADO por usuário (45ª) — lida apenas como migração. */
+const LEGACY_LOCAL_KEY_PREFIX = "rubinot_bazaar_coin_rates_";
+/** Durabilidade no modo simulação (sem Firestore). */
+const SIM_STORE_KEY = "tibia_sim_server_coin_rates";
 
-function localKey(uid?: string): string {
-  return `${BAZAAR_COIN_RATES_KEY_PREFIX}${uid || "anon"}`;
-}
+/**
+ * Evento DOM disparado sempre que o espelho local muda (gravação local ou
+ * snapshot do Firestore via listener do App). Componentes com estado próprio
+ * (ex.: BazaarItemsPanel) escutam para refletir em tempo real alterações
+ * feitas em OUTRO modal — sem nenhuma consulta nova.
+ */
+export const SERVER_COIN_RATES_EVENT = "rubinot:server-coin-rates";
 
 /** Arredonda a 1 casa decimal (mesma precisão da cotação histórica). */
 function round1(value: number): number {
@@ -58,14 +77,25 @@ export function sanitizeCoinRates(raw: unknown): BazaarCoinRates {
   return clean;
 }
 
-/** Espelho local (leitura síncrona para os cálculos). */
-export function readLocalCoinRates(uid?: string): BazaarCoinRates {
-  return sanitizeCoinRates(loadUIState<unknown>(localKey(uid), null));
+/** Espelho local (leitura síncrona para os cálculos de QUALQUER usuário). */
+export function readLocalCoinRates(): BazaarCoinRates {
+  return sanitizeCoinRates(loadUIState<unknown>(SERVER_COIN_RATES_LOCAL_KEY, null));
 }
 
-/** Atualiza o espelho local (chamado após carregar/gravar no Firestore). */
-export function writeLocalCoinRates(uid: string | undefined, rates: BazaarCoinRates): void {
-  saveUIState(localKey(uid), sanitizeCoinRates(rates));
+/** Espelho LEGADO por usuário (45ª) — usado somente na migração de leitura. */
+export function readLegacyLocalCoinRates(uid?: string): BazaarCoinRates {
+  return sanitizeCoinRates(loadUIState<unknown>(`${LEGACY_LOCAL_KEY_PREFIX}${uid || "anon"}`, null));
+}
+
+/**
+ * Atualiza o espelho local e NOTIFICA os componentes abertos (evento DOM).
+ * Chamado pelo listener de `appSettings/global` do App e pelas gravações.
+ */
+export function writeLocalCoinRates(rates: BazaarCoinRates): void {
+  saveUIState(SERVER_COIN_RATES_LOCAL_KEY, sanitizeCoinRates(rates));
+  try {
+    window.dispatchEvent(new CustomEvent(SERVER_COIN_RATES_EVENT));
+  } catch { /* ambientes sem window/CustomEvent (testes) — espelho já gravado */ }
 }
 
 /**
@@ -90,57 +120,81 @@ export function withServerCoinRate(rates: BazaarCoinRates, server: string, rate:
 }
 
 /**
- * Carrega as cotações persistidas do usuário (Firestore ou, no modo
- * simulação, `tibia_sim_users`) e atualiza o espelho local. Falha de rede →
- * devolve o espelho local (nunca lança).
+ * Carrega as cotações GLOBAIS persistidas (appSettings/global.serverCoinRates
+ * ou, no modo simulação, o armazenamento local) e atualiza o espelho.
+ * `uid` é usado APENAS para a migração do mapa legado por usuário (45ª):
+ * se o global ainda estiver vazio e o legado tiver cotações, o legado é
+ * reutilizado e promovido ao global (a promoção só é aceita pelo backend
+ * quando o usuário é Boss — as rules decidem; nunca sobrescreve um global
+ * já preenchido). Falha de rede → devolve o espelho local (nunca lança).
  */
-export async function fetchCoinRates(uid: string | undefined): Promise<BazaarCoinRates> {
-  if (!uid) return {};
+export async function fetchCoinRates(uid?: string): Promise<BazaarCoinRates> {
   try {
     if (isSimulationMode || !db) {
-      const raw = localStorage.getItem("tibia_sim_users");
-      const parsed: Array<{ uid?: string; bazaarCoinRates?: unknown }> = raw ? JSON.parse(raw) : [];
-      const me = parsed.find(u => u.uid === uid);
-      const rates = sanitizeCoinRates(me?.bazaarCoinRates);
-      writeLocalCoinRates(uid, rates);
+      let rates = sanitizeCoinRates(loadUIState<unknown>(SIM_STORE_KEY, null));
+      if (Object.keys(rates).length === 0) {
+        // Migração sim: legado por usuário (tibia_sim_users.bazaarCoinRates).
+        try {
+          const raw = localStorage.getItem("tibia_sim_users");
+          const parsed: Array<{ uid?: string; bazaarCoinRates?: unknown }> = raw ? JSON.parse(raw) : [];
+          const me = parsed.find(u => u.uid === uid);
+          rates = sanitizeCoinRates(me?.bazaarCoinRates);
+          if (Object.keys(rates).length > 0) saveUIState(SIM_STORE_KEY, rates);
+        } catch { /* sem legado sim */ }
+      }
+      writeLocalCoinRates(rates);
       return rates;
     }
-    const snap = await getDoc(doc(db, "users", uid));
-    const rates = sanitizeCoinRates(snap.exists() ? (snap.data() as { bazaarCoinRates?: unknown }).bazaarCoinRates : undefined);
-    writeLocalCoinRates(uid, rates);
+    const globalSnap = await getDoc(doc(db, "appSettings", "global"));
+    let rates = sanitizeCoinRates(globalSnap.exists() ? (globalSnap.data() as { serverCoinRates?: unknown }).serverCoinRates : undefined);
+    if (Object.keys(rates).length === 0 && uid) {
+      // Global vazio → reutiliza o mapa LEGADO do usuário (45ª) e tenta
+      // promovê-lo ao doc global (gravação única; aceita apenas para Boss).
+      let legacy = readLegacyLocalCoinRates(uid);
+      if (Object.keys(legacy).length === 0) {
+        try {
+          const userSnap = await getDoc(doc(db, "users", uid));
+          legacy = sanitizeCoinRates(userSnap.exists() ? (userSnap.data() as { bazaarCoinRates?: unknown }).bazaarCoinRates : undefined);
+        } catch { /* sem legado remoto */ }
+      }
+      if (Object.keys(legacy).length > 0) {
+        rates = legacy;
+        try {
+          await updateDoc(doc(db, "appSettings", "global"), { serverCoinRates: legacy });
+        } catch { /* não-Boss (rules) ou offline — segue com a leitura local */ }
+      }
+    }
+    writeLocalCoinRates(rates);
     return rates;
   } catch {
-    return readLocalCoinRates(uid);
+    return readLocalCoinRates();
   }
 }
 
 /**
- * PERSISTE o mapa completo de cotações do usuário: espelho local na hora
- * (cálculos refletem imediatamente) + Firestore/`tibia_sim_users` como
- * fonte durável. O campo é gravado por inteiro (substituição) para que
- * remoções de cotação também sejam persistidas.
+ * PERSISTE o mapa completo de cotações GLOBAIS: espelho local na hora
+ * (cálculos e modais refletem imediatamente, via evento) + Firestore
+ * (`appSettings/global.serverCoinRates`) como fonte durável. O campo é
+ * gravado por inteiro (substituição) para que remoções de cotação também
+ * sejam persistidas. No backend, as Security Rules de `appSettings` só
+ * aceitam a gravação de usuários Boss — chamadas de outros perfis falham
+ * silenciosamente no servidor (e a UI de edição nem é exibida a eles).
  */
-export async function persistCoinRates(uid: string | undefined, rates: BazaarCoinRates): Promise<void> {
+export async function persistCoinRates(rates: BazaarCoinRates): Promise<void> {
   const clean = sanitizeCoinRates(rates);
-  writeLocalCoinRates(uid, clean);
-  if (!uid) return;
+  writeLocalCoinRates(clean);
   if (isSimulationMode || !db) {
-    try {
-      const raw = localStorage.getItem("tibia_sim_users");
-      const parsed: Array<Record<string, unknown>> = raw ? JSON.parse(raw) : [];
-      const next = parsed.map(u => (u.uid === uid ? { ...u, bazaarCoinRates: clean } : u));
-      localStorage.setItem("tibia_sim_users", JSON.stringify(next));
-    } catch { /* espelho local já garante o funcionamento nesta sessão */ }
+    try { saveUIState(SIM_STORE_KEY, clean); } catch { /* espelho local já garante a sessão */ }
     return;
   }
   try {
-    await updateDoc(doc(db, "users", uid), { bazaarCoinRates: clean });
+    await updateDoc(doc(db, "appSettings", "global"), { serverCoinRates: clean });
   } catch {
     // Doc inexistente (cenário raro) — cria/mescla sem tocar outros campos.
     // Falha aqui também não pode derrubar a UI: o espelho local já foi
     // gravado e a próxima gravação bem-sucedida reenvia o mapa completo.
     try {
-      await setDoc(doc(db, "users", uid), { bazaarCoinRates: clean }, { merge: true });
+      await setDoc(doc(db, "appSettings", "global"), { serverCoinRates: clean }, { merge: true });
     } catch { /* silencioso — espelho local garante esta sessão */ }
   }
 }

@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { X, Coins, Percent, RotateCcw, Check, Minus, Plus } from "lucide-react";
 import type { ItemSaleRecord } from "../types";
 import { formatRC } from "../types";
+import { getServerCoinRate, readLocalCoinRates } from "../utils/bazaarCoinRates";
 import {
   OFFER_TAX_CAP_KK,
   OFFER_TAX_PERCENT,
@@ -46,14 +47,30 @@ interface Props {
    * entre usuários) e não comporta uma venda sem valor.
    */
   allowNoValue?: boolean;
+  /**
+   * SERVIDOR do item (53ª tarefa): usado APENAS para pré-preencher o campo
+   * "RC no Market" com a cotação GLOBAL configurada pelo Boss para esse
+   * servidor (modal "RC Servidores"/Lista de Itens — fonte única). O
+   * usuário pode editar o valor livremente para ESTA operação; a edição
+   * nunca altera a configuração global. Servidor sem cotação (ou prop
+   * ausente) → campo vazio, como sempre (nunca inventamos conversão).
+   */
+  server?: string | null;
   onCancel: () => void;
   onSave: (record: ItemSaleRecord) => void;
 }
 
-export default function ItemSoldModal({ itemName, contextLabel, initial, allowNoValue = true, onCancel, onSave }: Props) {
+export default function ItemSoldModal({ itemName, contextLabel, initial, allowNoValue = true, server, onCancel, onSave }: Props) {
   // ── Estado dos campos (strings de digitação, pt-BR) ───────────────────────
   const [vendaRaw, setVendaRaw] = useState(() => initial && initial.vendaKk > 0 ? formatRateKkDisplay(initial.vendaKk) : "");
-  const [rateRaw, setRateRaw] = useState(() => initial && initial.rateKk > 0 ? formatRateKkDisplay(initial.rateKk) : "");
+  // "RC no Market": o registro em edição tem precedência; sem registro, o
+  // campo abre com a cotação GLOBAL do servidor (quando configurada) — a
+  // edição aqui vale só para ESTA venda e nunca regrava a configuração.
+  const [rateRaw, setRateRaw] = useState(() => {
+    if (initial && initial.rateKk > 0) return formatRateKkDisplay(initial.rateKk);
+    const serverRate = getServerCoinRate(readLocalCoinRates(), server);
+    return serverRate > 0 ? formatRateKkDisplay(serverRate) : "";
+  });
   // Quantidade de OFERTAS CRIADAS no Market para este item (0 = venda direta
   // para oferta de compra, sem criar oferta própria).
   const [offerCount, setOfferCount] = useState(() => initial?.taxCount || 0);

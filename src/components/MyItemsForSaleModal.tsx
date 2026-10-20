@@ -704,6 +704,7 @@ export default function MyItemsForSaleModal({
           contextLabel={`${liveSaleTarget.serverName || "Sem servidor"} — ${liveSaleTarget.questSigla}`}
           initial={liveSaleTarget.saleRecord}
           allowNoValue={liveSaleTarget.source === "character"}
+          server={liveSaleTarget.serverName}
           onCancel={() => setSaleTarget(null)}
           onSave={sale => { void commitSale(sale); }}
         />

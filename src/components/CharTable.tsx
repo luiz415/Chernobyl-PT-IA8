@@ -1704,6 +1704,7 @@ export default function CharTable({ characters, activeParties = [], readOnly, sh
             itemName={itemName}
             contextLabel={`${target.personagem} — ${contextName}`}
             initial={existing}
+            server={target.servidor}
             onCancel={() => setItemSaleTarget(null)}
             onSave={(sale: ItemSaleRecord) => {
               onCharacterInlineChange?.({

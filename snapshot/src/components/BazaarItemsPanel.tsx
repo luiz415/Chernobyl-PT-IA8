@@ -98,10 +98,12 @@ import {
 // Fonte ÚNICA de servidores (mesma lista/normalização do restante do app):
 // as Listas de Itens agora são POR SERVIDOR, chaveadas pelo nome oficial.
 import { SERVER_OPTIONS } from "../constants/servers";
-// COTAÇÃO DO RC POR SERVIDOR — fonte única da conversão kk → RC do módulo
-// (persistida em users/{uid}.bazaarCoinRates + espelho local; sem fallback
+// COTAÇÃO DO RC POR SERVIDOR — fonte única GLOBAL da conversão kk → RC
+// (persistida em appSettings/global.serverCoinRates + espelho local; a
+// MESMA configuração do modal "RC Servidores" do cabeçalho; sem fallback
 // e sem a taxa fixa legada). Ver utils/bazaarCoinRates.ts.
 import {
+  SERVER_COIN_RATES_EVENT,
   fetchCoinRates,
   getServerCoinRate,
   persistCoinRates,
@@ -587,17 +589,27 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
   }, [selectedServer]);
   // ── COTAÇÃO DO RC POR SERVIDOR ─────────────────────────────────────────
   // Cada servidor tem a PRÓPRIA cotação ("Coin (k)" = k por 1000 RC),
-  // persistida em `users/{uid}.bazaarCoinRates` e editada no modal "Lista
-  // de Itens" (campo por servidor) ou no modal "Ver" (servidor do
-  // personagem). Semeada do espelho local (síncrono) e sincronizada do
-  // Firestore uma vez por usuário. Servidor sem cotação → 0 → "—" (nunca
-  // herdamos taxa de outro servidor nem a taxa fixa legada).
-  const [coinRates, setCoinRates] = useState<BazaarCoinRates>(() => readLocalCoinRates(currentUid));
+  // persistida GLOBALMENTE em `appSettings/global.serverCoinRates` — a
+  // MESMA configuração do modal "RC Servidores" do cabeçalho — e editada
+  // aqui no modal "Lista de Itens" (campo por servidor) ou no modal "Ver"
+  // (servidor do personagem). Semeada do espelho local (síncrono),
+  // sincronizada do Firestore uma vez no mount (com migração do mapa
+  // legado por usuário da 45ª) e atualizada em TEMPO REAL pelo evento do
+  // espelho (alterações feitas no modal "RC Servidores" ou vindas de outro
+  // dispositivo refletem aqui sem nenhuma consulta nova). Servidor sem
+  // cotação → 0 → "—" (nunca herdamos taxa de outro servidor nem a taxa
+  // fixa legada).
+  const [coinRates, setCoinRates] = useState<BazaarCoinRates>(() => readLocalCoinRates());
   useEffect(() => {
     let cancelled = false;
-    setCoinRates(readLocalCoinRates(currentUid));
+    setCoinRates(readLocalCoinRates());
     void fetchCoinRates(currentUid).then(rates => { if (!cancelled) setCoinRates(rates); });
-    return () => { cancelled = true; };
+    const onRatesChanged = () => { if (!cancelled) setCoinRates(readLocalCoinRates()); };
+    window.addEventListener(SERVER_COIN_RATES_EVENT, onRatesChanged);
+    return () => {
+      cancelled = true;
+      window.removeEventListener(SERVER_COIN_RATES_EVENT, onRatesChanged);
+    };
   }, [currentUid]);
   /** Cotação do servidor (k por 1000 RC); 0 = não configurada. */
   const rateFor = (server: string | undefined | null): number => getServerCoinRate(coinRates, server);
@@ -605,7 +617,7 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
   const saveServerCoinRate = (server: string, rate: number | null) => {
     const next = withServerCoinRate(coinRates, server, rate);
     setCoinRates(next);
-    void persistCoinRates(currentUid, next);
+    void persistCoinRates(next);
   };
   const [endUntil, setEndUntil] = useState<string>(() => getDefaultBazarEndUntil(timezoneOffsetMinutes));
   const [lastQuery, setLastQuery] = useState<BazaarItemsLastQuery | null>(() => loadItemsLastQuery());
@@ -776,7 +788,7 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
   }, [currentUid, detailTotalsQueryMs]);
   // ── Cotação do RC do servidor — edição no modal "Detalhes" ───────────────
   // Edita a MESMA configuração persistente usada pela Lista de Itens
-  // (users/{uid}.bazaarCoinRates), para o servidor do personagem exibido.
+  // (appSettings/global.serverCoinRates), para o servidor do personagem exibido.
   const [detailRateEdit, setDetailRateEdit] = useState<string | null>(null);
   const [detailRateError, setDetailRateError] = useState<string | null>(null);
   const [detailRateSaved, setDetailRateSaved] = useState(false);
@@ -837,7 +849,7 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
   /**
    * Salva a cotação do SERVIDOR do personagem exibido no modal Detalhes —
    * grava a MESMA configuração persistente da Lista de Itens
-   * (users/{uid}.bazaarCoinRates): vira a taxa de TODO o módulo para esse
+   * (appSettings/global.serverCoinRates): vira a taxa de TODO o app para esse
    * servidor, refletida na hora (sem nova consulta). Vazio = remover.
    */
   const saveDetailRate = (server: string) => {
@@ -870,7 +882,7 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
   // ── Cotação do RC no modal "Lista de Itens" — campo POR SERVIDOR ─────────
   // Texto em edição (sincronizado com o servidor selecionado), erro de
   // validação e feedback "Salvo" (1,5s). Salvar grava SOMENTE a cotação do
-  // servidor selecionado (users/{uid}.bazaarCoinRates) — os demais
+  // servidor selecionado (appSettings/global.serverCoinRates) — os demais
   // servidores permanecem intactos.
   const [listRateDraft, setListRateDraft] = useState<string>("");
   const [listRateError, setListRateError] = useState<string | null>(null);
@@ -2960,7 +2972,7 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
               {/* ── COTAÇÃO DO RC DESTE SERVIDOR ──────────────────────────
                   A RC vale diferente em cada servidor: a cotação ("Coin (k)"
                   = quantos k equivalem a 1000 RC) é INDEPENDENTE por
-                  servidor e persistida na conta (users/{uid}.bazaarCoinRates
+                  servidor e persistida globalmente (appSettings/global.serverCoinRates
                   — a MESMA configuração editável no modal "Ver"). Salvar
                   grava SÓ o servidor selecionado; todos os cálculos dele
                   (coluna RC, Potencial, modais) refletem na hora. Campo
@@ -3612,7 +3624,7 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                 )}
                 {/* ── CONVERSÃO RC — cotação DO SERVIDOR deste personagem ──
                     Mesma configuração persistente da Lista de Itens
-                    (users/{uid}.bazaarCoinRates): o lápis edita AQUI a taxa
+                    (appSettings/global.serverCoinRates): o lápis edita AQUI a taxa
                     do servidor e ela vira a cotação de todo o módulo para
                     ele, na hora — sem nova consulta ao Bazaar. */}
                 {detailRateEdit !== null ? (

@@ -25,9 +25,12 @@ import CharacterBazaarItemsModal from "./components/CharacterBazaarItemsModal";
 // Cotação do coin persistida pela guia Bazaar → Itens (local) — usada apenas
 // para a conversão em RC no modal de itens do personagem (Boss).
 import { loadItemsLastQuery, loadItemsInterests } from "./utils/bazaarWatchedItems";
-// Cotação do RC POR SERVIDOR (configuração persistente da guia Itens,
-// espelhada em localStorage) — substitui a antiga taxa fixa única.
-import { getServerCoinRate, readLocalCoinRates } from "./utils/bazaarCoinRates";
+// Cotação do RC POR SERVIDOR — fonte única GLOBAL (appSettings/global
+// .serverCoinRates, espelhada em localStorage) compartilhada pelo modal
+// "RC Servidores", pela Lista de Itens do Bazaar e por todos os cálculos
+// kk ⇄ RC. Substitui a antiga taxa fixa única e as taxas por usuário.
+import { getServerCoinRate, readLocalCoinRates, sanitizeCoinRates, writeLocalCoinRates } from "./utils/bazaarCoinRates";
+import ServerCoinRatesModal from "./components/ServerCoinRatesModal";
 import CurrencyCalculator from "./components/CurrencyCalculator";
 import ImbuementsModal from "./components/ImbuementsModal";
 import RtcImportModal from "./components/RtcImportModal";
@@ -516,6 +519,8 @@ export default function App() {
   const [imbueOpen, setImbueOpen] = useState(false);
   // Import RTC: gerenciador de códigos de importação (recomendados + pessoais).
   const [rtcImportOpen, setRtcImportOpen] = useState(false);
+  // Modal "RC Servidores" (cotação GLOBAL do RC por servidor — só Boss).
+  const [serverRatesOpen, setServerRatesOpen] = useState(false);
   // Contador de cliques no botão "Câmbio". Só marcar `calcOpen` como `true`
   // não basta: se a janela já está aberta o valor não muda, nenhum efeito
   // roda e o clique se perde. Este contador é o sinal de "trazer para frente".
@@ -585,6 +590,12 @@ export default function App() {
         publicPartiesEnabled: data.publicPartiesEnabled !== false,
       };
       setGlobalSettings(newSettings);
+      // COTAÇÃO DO RC POR SERVIDOR (53ª): o campo serverCoinRates viaja no
+      // MESMO documento appSettings/global — espelhamos no localStorage para
+      // leitura síncrona em todos os cálculos kk ⇄ RC (ItemSoldModal,
+      // Bazaar, modais de detalhes). Nenhuma leitura adicional ao Firestore;
+      // o evento interno sincroniza modais abertos em tempo real.
+      writeLocalCoinRates(sanitizeCoinRates(data.serverCoinRates));
       // Aplica imediatamente o status de pausa e as configurações remotas do logger local
       setLoggerPaused(newSettings.firestoreLoggerPaused);
       setLoggerRemoteConfig({
@@ -5973,6 +5984,15 @@ export default function App() {
           <button onClick={handleOpenCalc} className="inline-flex items-center gap-0.5 sm:gap-1 rounded-md border border-[var(--th-line)]/80 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20 hover:border-amber-600/50 hover:text-amber-200 transition-all duration-200 cursor-pointer" title="Câmbio" style={{ padding: "clamp(2.7px, 0.54vh, 5.4px) clamp(5.4px, 0.9vw, 9px)", fontSize: "clamp(8.1px, 1.35vh, 9.9px)" }}>
             <Calculator size={11} className="sm:w-[13px] sm:h-[13px]" /> <span className="hidden sm:inline">Câmbio</span>
           </button>
+          {/* RC Servidores — cotação GLOBAL do RC por servidor (fonte única
+              compartilhada com a Lista de Itens do Bazaar). SOMENTE Boss:
+              a UI esconde o botão e as Security Rules de appSettings
+              bloqueiam a gravação de outros perfis no backend. */}
+          {isBossUser && (
+            <button onClick={() => setServerRatesOpen(true)} className="inline-flex items-center gap-0.5 sm:gap-1 rounded-md border border-[var(--th-line)]/80 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20 hover:border-amber-600/50 hover:text-amber-200 transition-all duration-200 cursor-pointer" title="RC Servidores — cotação do RC por servidor (k por 1000 RC)" style={{ padding: "clamp(2.7px, 0.54vh, 5.4px) clamp(5.4px, 0.9vw, 9px)", fontSize: "clamp(8.1px, 1.35vh, 9.9px)" }}>
+              <Coins size={11} className="sm:w-[13px] sm:h-[13px]" /> <span className="hidden sm:inline">RC Servidores</span>
+            </button>
+          )}
           {/* Import RTC — cor ciano própria (destacada), sem conflitar com
               Câmbio (âmbar) e Imbue (violeta). */}
           <button onClick={() => setRtcImportOpen(true)} className="inline-flex items-center gap-0.5 sm:gap-1 rounded-md border border-cyan-500/40 bg-cyan-500/10 text-cyan-300 hover:bg-cyan-500/20 hover:border-cyan-400/60 hover:text-cyan-200 transition-all duration-200 cursor-pointer shadow-[0_0_8px_rgba(34,211,238,0.15)]" title="Import RTC — códigos de importação por Quest e vocação" style={{ padding: "clamp(2.7px, 0.54vh, 5.4px) clamp(5.4px, 0.9vw, 9px)", fontSize: "clamp(8.1px, 1.35vh, 9.9px)" }}>
@@ -6302,7 +6322,7 @@ export default function App() {
           character={bazaarItemsViewCharacter}
           /* Cotação do SERVIDOR do snapshot (0 = não configurada → o modal
              não converte) — mesma configuração por servidor da guia Itens. */
-          coinRate={getServerCoinRate(readLocalCoinRates(currentUser?.uid), bazaarItemsViewCharacter.bazaarItems?.server)}
+          coinRate={getServerCoinRate(readLocalCoinRates(), bazaarItemsViewCharacter.bazaarItems?.server)}
           onClose={() => setBazaarItemsViewCharacter(null)}
         />
       )}
@@ -6323,6 +6343,10 @@ export default function App() {
         />
       )}
       <CurrencyCalculator open={calcOpen} onClose={() => setCalcOpen(false)} focusSignal={calcFocusSignal} />
+      {/* RC Servidores — cotação GLOBAL do RC por servidor (só Boss). */}
+      {isBossUser && serverRatesOpen && (
+        <ServerCoinRatesModal onClose={() => setServerRatesOpen(false)} />
+      )}
       <ImbuementsModal open={imbueOpen} onClose={() => setImbueOpen(false)} />
       <RtcImportModal open={rtcImportOpen} onClose={() => setRtcImportOpen(false)} />
       <FeedbackModal open={feedbackOpen} onClose={() => setFeedbackOpen(false)} userName={displayUserName} />

@@ -39,10 +39,9 @@ import {
   type WatchedItem,
 } from "../utils/bazaarWatchedItems";
 // Cotação do RC POR SERVIDOR — mesma configuração persistente da guia Itens
-// (users/{uid}.bazaarCoinRates, espelhada em localStorage para leitura
+// (fonte GLOBAL appSettings/global.serverCoinRates, espelhada em localStorage para leitura
 // síncrona). Cada registro ingerido congela a taxa do PRÓPRIO servidor.
 import { getServerCoinRate, readLocalCoinRates } from "../utils/bazaarCoinRates";
-import { auth } from "../firebase/config";
 import { computeItemRC } from "../utils/itemSale";
 import {
   computeStatsFromMetricDocs,
@@ -420,7 +419,7 @@ export default function BazaarStatsPanel({ isBossUser, isElectron, isOtherQueryR
       // Cotações POR SERVIDOR (espelho local da configuração persistida):
       // cada registro converte com a taxa do PRÓPRIO servidor — servidor sem
       // cotação fica com itemsRc=0/coinRateKk=0 (sem inventar conversão).
-      const coinRatesByServer = readLocalCoinRates(auth.currentUser?.uid);
+      const coinRatesByServer = readLocalCoinRates();
       const watchedByServer = loadWatchedItemsByServer();
       const indexCache = new Map<string, Map<string, WatchedItem>>();
       const indexFor = (server: string) => {

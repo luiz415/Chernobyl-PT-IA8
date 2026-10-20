@@ -402,6 +402,7 @@ export default function ItemsForSaleModal({ parties, characters, waitingList, on
       itemName: slot.itemDropado || "Item",
       contextLabel: resolveMemberName(party, saleTarget.slotId, characters, waitingList) || party.name,
       initial: slot.itemSale || null,
+      server: party.servidor || "",
     };
   }, [saleTarget, parties, characters, waitingList]);
 
@@ -651,6 +652,7 @@ export default function ItemsForSaleModal({ parties, characters, waitingList, on
           itemName={saleTargetData.itemName}
           contextLabel={saleTargetData.contextLabel}
           initial={saleTargetData.initial}
+          server={saleTargetData.server}
           onCancel={() => setSaleTarget(null)}
           onSave={commitSaleFromModal}
         />

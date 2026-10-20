@@ -3921,6 +3921,7 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
             itemName={saleSlot.itemDropado || "Item"}
             contextLabel={saleContext}
             initial={saleSlot.itemSale || null}
+            server={party.servidor}
             onCancel={() => setItemSaleModalId(null)}
             onSave={sale => commitItemSale(itemSaleModalId, sale)}
           />

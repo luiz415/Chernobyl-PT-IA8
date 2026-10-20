@@ -54,7 +54,7 @@ import {
   type RawItemMatch,
   type WatchedItem,
 } from "../utils/bazaarWatchedItems";
-// Cotação do RC POR SERVIDOR (persistida em users/{uid}.bazaarCoinRates,
+// Cotação do RC POR SERVIDOR (fonte GLOBAL: appSettings/global.serverCoinRates,
 // espelhada em localStorage para leitura síncrona) — mesma configuração
 // editada na guia Itens (Lista de Itens / modal Ver).
 import { getServerCoinRate, readLocalCoinRates } from "../utils/bazaarCoinRates";
@@ -1775,14 +1775,14 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
   // Textos em edição dos campos do modal (permitem digitação parcial "2,").
   const [questsViewInputs, setQuestsViewInputs] = useState<{ coin: string; gold: string; items: Record<string, string> }>({ coin: "", gold: "", items: {} });
   // Cotação padrão = a do SERVIDOR do personagem exibido, na configuração
-  // persistente por servidor (users/{uid}.bazaarCoinRates — a MESMA editada
+  // persistente por servidor (appSettings/global.serverCoinRates — a MESMA editada
   // na Lista de Itens/modal Ver da guia Itens; lida do espelho local a cada
   // abertura do modal, sem leitura extra). Servidor sem cotação = 0 → o
   // campo abre vazio e o modal pede o valor (nunca inventa conversão nem
   // usa a taxa fixa legada). O valor digitado aqui continua sendo um
   // OVERRIDE LOCAL deste personagem — não altera a configuração persistida.
   const questsViewDefaultCoinRate = useMemo(
-    () => getServerCoinRate(readLocalCoinRates(currentUser?.uid), questsItemsDetailResult?.server),
+    () => getServerCoinRate(readLocalCoinRates(), questsItemsDetailResult?.server),
     [questsItemsDetailResult] // eslint-disable-line react-hooks/exhaustive-deps
   );
 
