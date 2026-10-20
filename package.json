@@ -9,11 +9,11 @@
   "main": "electron-main.cjs",
   "scripts": {
     "dev": "vite --host",
-    "electron": "vite build && electron .",
+    "electron": "vite build --config vite.config.electron.ts && electron .",
     "electron:dev": "concurrently \"npm run dev\" \"wait-on http://localhost:5173 && electron .\"",
     "build": "vite build",
-    "build:electron": "vite build && electron-builder --win",
-    "publish": "vite build && electron-builder --win --publish always"
+    "build:electron": "vite build --config vite.config.electron.ts && electron-builder --win",
+    "publish": "vite build --config vite.config.electron.ts && electron-builder --win --publish always"
   },
   "dependencies": {
     "clsx": "2.1.1",

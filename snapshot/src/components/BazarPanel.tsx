@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
-import bazarBgUrl from "../assets/bazar-bg.png";
+import bazarBgUrl from "../assets/bazar-bg.webp"; // WebP: 1,78 MB → ~157 KB (mesma imagem)
 import { AlertTriangle, ArrowDownUp, BarChart3, Check, CheckCircle2, ChevronDown, ChevronUp, Coins, Crown, ExternalLink, Eye, EyeOff, Filter, FlagTriangleRight, Flame, Package, Plus, RefreshCw, RotateCcw, ShieldAlert, ShoppingBag, Sparkles, Star, Target, Users, X } from "lucide-react";
 import BazaarItemsPanel from "./BazaarItemsPanel";
 import BazaarStatsPanel from "./BazaarStatsPanel";
@@ -1102,6 +1102,55 @@ function formatTimeOfDayWithOffset(ms: number | null | undefined, offsetMinutes:
   return `${hours}:${minutes}:${seconds}`;
 }
 
+// ════════════════════════════════════════════════════════════════════════
+// RELÓGIO DA CONSULTA — componente ISOLADO (otimização de fluidez).
+// Antes, um setInterval de 1s atualizava `queryNowMs` no estado do PAINEL
+// INTEIRO: durante uma consulta longa, o BazarPanel completo (milhares de
+// linhas de JSX) re-renderizava a cada segundo, em paralelo ao trabalho da
+// própria consulta. Agora o tick de 1s vive AQUI DENTRO e re-renderiza só
+// estes três cartões; o painel re-renderiza apenas quando o progresso real
+// (processed/total) muda. Valores e layout IDÊNTICOS aos anteriores.
+// ════════════════════════════════════════════════════════════════════════
+function QueryClockCards({ queryStartMs, processed, total, timezoneOffsetMinutes }: {
+  queryStartMs: number | null;
+  processed: number;
+  total: number;
+  timezoneOffsetMinutes: number;
+}) {
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    if (!queryStartMs) return;
+    setNowMs(Date.now());
+    const interval = window.setInterval(() => setNowMs(Date.now()), 1000);
+    return () => window.clearInterval(interval);
+  }, [queryStartMs]);
+
+  const elapsedMs = queryStartMs ? Math.max(0, nowMs - queryStartMs) : 0;
+  const remainingMs = queryStartMs && processed > 0 && total > processed
+    ? (elapsedMs / processed) * (total - processed)
+    : total > 0 && processed >= total
+      ? 0
+      : null;
+  const completionMs = remainingMs !== null ? nowMs + remainingMs : null;
+
+  return (
+    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-[10px]">
+      <div className="rounded-lg border border-white/10 bg-black/25 px-3 py-2">
+        <div className="text-slate-500 uppercase tracking-wide">Tempo decorrido</div>
+        <div className="font-mono text-amber-200 text-xs mt-0.5">{formatDuration(elapsedMs)}</div>
+      </div>
+      <div className="rounded-lg border border-white/10 bg-black/25 px-3 py-2">
+        <div className="text-slate-500 uppercase tracking-wide">Restante estimado</div>
+        <div className="font-mono text-amber-200 text-xs mt-0.5">{remainingMs === null ? "Calculando..." : formatDuration(remainingMs)}</div>
+      </div>
+      <div className="rounded-lg border border-white/10 bg-black/25 px-3 py-2">
+        <div className="text-slate-500 uppercase tracking-wide">Conclusão prevista</div>
+        <div className="font-mono text-amber-200 text-xs mt-0.5">{completionMs === null ? "--:--:--" : formatTimeOfDayWithOffset(completionMs, timezoneOffsetMinutes)}</div>
+      </div>
+    </div>
+  );
+}
+
 function getInterestCreatedAtMs(user: any): number {
   // Prefere o carimbo do SERVIDOR (momento real da ação, gravado com
   // serverTimestamp no agregado); cai para o relógio local usado na UI
@@ -1491,7 +1540,6 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
   const [speedModeLabel, setSpeedModeLabel] = useState("");
   const [retrySelection, setRetrySelection] = useState<{ browser: string; label: string; attempts?: number }[]>([]);
   const [queryStartMs, setQueryStartMs] = useState<number | null>(null);
-  const [queryNowMs, setQueryNowMs] = useState(() => Date.now());
   const [lastSummary, setLastSummary] = useState<BazarLastSummary | null>(() => readBazarLastSummary());
   const [officialMetadata, setOfficialMetadata] = useState<OfficialBazaarMetadata | null>(() => readOfficialBazaarCache()?.metadata || null);
   const [bazaarInterests, setBazaarInterests] = useState<BazaarInterestMap>({});
@@ -1972,13 +2020,6 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
   }, []);
 
   useEffect(() => {
-    if (!queryStartMs) return;
-    setQueryNowMs(Date.now());
-    const interval = window.setInterval(() => setQueryNowMs(Date.now()), 1000);
-    return () => window.clearInterval(interval);
-  }, [queryStartMs]);
-
-  useEffect(() => {
     if (demoMode) return; // demo: filtros de consulta reais intocados
     saveBazarFilters({
       serverSelectionMode,
@@ -2100,7 +2141,6 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
         }
         setQueryStatus(formatProgressMessage(progress));
         setQueryStartMs(progress.startedAt || Date.now());
-        setQueryNowMs(Date.now());
         setIsLoading(progress.stage === "bazaar");
         setIsCheckingDetails(progress.stage === "details");
         if (progress.total > 0) {
@@ -2847,7 +2887,6 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
     setIsCheckingDetails(false);
     setCheckingDetailsCount(0);
     setQueryStartMs(startedAt);
-    setQueryNowMs(startedAt);
     setQueryProgress({ stage: "bazaar", message: "Consultando Bazaar...", processed: 0, total: 0, percent: 0 });
     setQueryStatus("Consultando Bazaar...");
     setRetryPending(0);
@@ -3612,16 +3651,9 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
     tableFilters.cryptStates.length > 0
   );
 
-  const activeElapsedMs = queryStartMs ? Math.max(0, queryNowMs - queryStartMs) : 0;
   const activeProcessed = queryProgress?.processed || 0;
   const activeTotal = queryProgress?.total || 0;
   const activePercent = activeTotal > 0 ? Math.min(100, Math.max(0, queryProgress?.percent ?? Math.round((activeProcessed / activeTotal) * 100))) : 0;
-  const estimatedRemainingMs = queryStartMs && activeProcessed > 0 && activeTotal > activeProcessed
-    ? (activeElapsedMs / activeProcessed) * (activeTotal - activeProcessed)
-    : activeTotal > 0 && activeProcessed >= activeTotal
-      ? 0
-      : null;
-  const estimatedCompletionMs = estimatedRemainingMs !== null ? queryNowMs + estimatedRemainingMs : null;
 
   // Quando há lista oficial, o quadro reflete os METADADOS publicados — é o
   // que todos os usuários recebem. Antes só 3 campos eram repassados aqui, e
@@ -4524,20 +4556,7 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
                   </div>
                 )}
 
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-[10px]">
-                  <div className="rounded-lg border border-white/10 bg-black/25 px-3 py-2">
-                    <div className="text-slate-500 uppercase tracking-wide">Tempo decorrido</div>
-                    <div className="font-mono text-amber-200 text-xs mt-0.5">{formatDuration(activeElapsedMs)}</div>
-                  </div>
-                  <div className="rounded-lg border border-white/10 bg-black/25 px-3 py-2">
-                    <div className="text-slate-500 uppercase tracking-wide">Restante estimado</div>
-                    <div className="font-mono text-amber-200 text-xs mt-0.5">{estimatedRemainingMs === null ? "Calculando..." : formatDuration(estimatedRemainingMs)}</div>
-                  </div>
-                  <div className="rounded-lg border border-white/10 bg-black/25 px-3 py-2">
-                    <div className="text-slate-500 uppercase tracking-wide">Conclusão prevista</div>
-                    <div className="font-mono text-amber-200 text-xs mt-0.5">{estimatedCompletionMs === null ? "--:--:--" : formatTimeOfDayWithOffset(estimatedCompletionMs, timezoneOffsetMinutes)}</div>
-                  </div>
-                </div>
+                <QueryClockCards queryStartMs={queryStartMs} processed={activeProcessed} total={activeTotal} timezoneOffsetMinutes={timezoneOffsetMinutes} />
 
                 {/* Progresso POR NAVEGADOR: taxa de falhas ao vivo de cada um
                     que já rodou, mais os que ainda faltam na cadeia de retry.

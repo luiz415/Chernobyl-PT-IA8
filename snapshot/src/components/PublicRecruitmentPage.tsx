@@ -1,5 +1,5 @@
 import type { CSSProperties, ReactNode } from "react";
-import publicFormBgUrl from "../assets/public-form-bg.jpg";
+import publicFormBgUrl from "../assets/public-form-bg.webp"; // WebP: 609 KB → ~229 KB
 import {
   Award,
   BadgeCheck,

@@ -7,9 +7,15 @@ import { GlobalDataProvider } from "./context/GlobalDataContext";
 import { UserStatsProvider } from "./context/UserStatsContext";
 import { ThemeProvider } from "./theme/ThemeContext";
 import TutorialRoot from "./tutorial/TutorialRoot";
-import PublicServiceForm from "./components/PublicServiceForm";
-import PublicRecruitmentPage from "./components/PublicRecruitmentPage";
+import { lazyWithSuspense } from "./utils/lazyLoad";
 import { installGlobalPulseSync } from "./utils/pulseSync";
+
+// Páginas PÚBLICAS (#/servico e #/serviceiro) em chunks próprios: quem abre o
+// app normal não baixa o código dos formulários públicos — e quem abre um
+// link público não baixa o app inteiro. A rota é decidida antes do render,
+// então apenas UM dos lados é carregado por visita.
+const PublicServiceForm = lazyWithSuspense(() => import("./components/PublicServiceForm"));
+const PublicRecruitmentPage = lazyWithSuspense(() => import("./components/PublicRecruitmentPage"));
 
 // Sincroniza TODOS os efeitos de pulsação participantes (seletores de estágio
 // das PTs + botões do rodapé) num único ciclo global ancorado em t=0 da

@@ -130,7 +130,6 @@ export default function BossAdminPanel({ open, onClose, minAverage = 10, globalS
     // ============================================================================
     const loadVipPlans = async () => {
       try {
-        const { getDoc } = await import("firebase/firestore");
         const docSnap = await getDoc(doc(db, "appSettings", "vip_plans"));
         if (docSnap.exists()) {
           const data = docSnap.data();
@@ -742,7 +741,6 @@ export default function BossAdminPanel({ open, onClose, minAverage = 10, globalS
 
     const loadDonationSettings = async () => {
       try {
-        const { getDoc } = await import("firebase/firestore");
         const docSnap = await getDoc(doc(db, "settings", "donation_settings"));
         if (docSnap.exists()) {
           const data = docSnap.data();

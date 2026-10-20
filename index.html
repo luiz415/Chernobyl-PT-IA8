@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="pt-BR">
   <head>
     <meta charset="UTF-8" />
 
@@ -11,6 +11,17 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 
     <title>Chernobyl PT</title>
+    <meta
+      name="description"
+      content="Chernobyl PT — gerenciamento de personagens, PTs, services, Bazaar e estatísticas para Tibia (RubinOT). Organize quests, vendas e negociações em um só lugar."
+    />
+
+    <!--
+      PRELOAD do background da tela inicial (LCP): a imagem era descoberta
+      somente após a execução do bundle JS. Com nome estável em public/ e
+      preload aqui, o download começa em paralelo ao JS.
+    -->
+    <link rel="preload" as="image" href="./initial-bg.webp" fetchpriority="high" />
 
     <!--
       Anti-flash de tema: aplica o tema salvo em <html> ANTES de qualquer
@@ -32,6 +43,21 @@
         } catch (e) {
           document.documentElement.setAttribute("data-theme", "ember");
         }
+
+        /* Preload CONDICIONAL do background da tela de login: só quando não
+           há indício de sessão (flag local mantida pelo AuthContext). Usuário
+           deslogado ganha a descoberta antecipada do LCP; logado não baixa
+           ~113 KB à toa. Falha aqui nunca quebra nada (best-effort). */
+        try {
+          if (localStorage.getItem("chernobyl_auth_hint") !== "1") {
+            var l = document.createElement("link");
+            l.rel = "preload";
+            l.as = "image";
+            l.href = "./auth-bg.webp";
+            l.fetchPriority = "high";
+            document.head.appendChild(l);
+          }
+        } catch (e) {}
       })();
     </script>
   </head>

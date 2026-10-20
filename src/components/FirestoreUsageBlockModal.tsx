@@ -1,5 +1,5 @@
 import { ShieldAlert, LogOut, Clock } from "lucide-react";
-import blockBgUrl from "../assets/block-bg.png";
+import blockBgUrl from "../assets/block-bg.webp"; // WebP: 1,82 MB → ~152 KB (mesma imagem)
 
 interface Props {
   secondsLeft: number;

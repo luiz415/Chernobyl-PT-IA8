@@ -28,7 +28,10 @@ import {
   setRateLimitDisabled,
   setUsageRole,
 } from "../utils/firestoreUsageMonitor";
-import FirestoreUsageBlockModal from "../components/FirestoreUsageBlockModal";
+import { lazyWithSuspense } from "../utils/lazyLoad";
+// Modal de bloqueio por uso excessivo: raro — carregado sob demanda (chunk
+// próprio + imagem de fundo fora do bundle inicial). Render já condicional.
+const FirestoreUsageBlockModal = lazyWithSuspense(() => import("../components/FirestoreUsageBlockModal"));
 import { getEffectiveUserRole, getVipExpirationMillis, getVipRemainingDays, VIP_DAY_MS } from "../utils/vipAccess";
 import { getPresenceGovernance, subscribePresenceGovernance } from "../utils/presenceGovernance";
 import type { ServiceFormConfig } from "../utils/serviceFormConfig";
@@ -527,6 +530,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const unsubscribe = onAuthStateChanged(auth, async (user) => {
         if (isCheckingSessionRef.current) return;
         setCurrentUser(user);
+        // Flag local para o index.html decidir o preload do background de
+        // login: com sessão ativa não há tela de login, então o preload de
+        // auth-bg.webp é dispensado na próxima visita. Best-effort.
+        try {
+          if (user) localStorage.setItem("chernobyl_auth_hint", "1");
+          else localStorage.removeItem("chernobyl_auth_hint");
+        } catch { /* indisponível (ex.: storage cheio) — sem impacto */ }
         if (user) {
           // Fetch firestore profile
           try {

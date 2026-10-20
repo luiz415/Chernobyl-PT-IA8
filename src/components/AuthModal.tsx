@@ -1,6 +1,9 @@
 import { useState, useEffect } from "react";
 import { useAuth } from "../context/AuthContext";
-import authBgUrl from "../assets/auth-bg.png";
+// Background da tela de login: WebP otimizado (1,99 MB → ~113 KB, mesma
+// imagem) servido de public/ com NOME ESTÁVEL — o index.html consegue fazer
+// preload condicional (usuário deslogado) antes mesmo do JS executar (LCP).
+const authBgUrl = "./auth-bg.webp";
 import ExoriLogo from "./ExoriLogo";
 import { Shield, Lock, Mail, User, AlertCircle, RefreshCw, KeyRound, CheckCircle2, Phone, Swords, LogIn, MessageCircle, Monitor } from "lucide-react";
 

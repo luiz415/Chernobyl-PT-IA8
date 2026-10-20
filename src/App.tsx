@@ -15,12 +15,14 @@ import { calculateAcquiredQuestDrops, calculateAcquiredQuestProfit, cancelCharac
 import { toFirestoreMillis } from "./utils/firestoreTimestamp";
 import { buildNextRotationSeeds, type NextRotationCustomSeed } from "./utils/nextRotationSeeds";
 import { getPersonalPartyHistoryEntry, readPersonalPartyHistoryCache, requestPartyFinalization, subscribePersonalPartyHistory } from "./services/partyHistoryService";
-import initialBgUrl from "./assets/initial-bg.png";
+// Background da tela inicial: WebP otimizado (1,96 MB → ~95 KB) em public/
+// com nome estável — pré-carregado via <link rel="preload"> no index.html
+// (descoberta do LCP antes da execução do bundle).
+const initialBgUrl = "./initial-bg.webp";
 import CharTable from "./components/CharTable";
 import AcquiredCharactersPanel from "./components/AcquiredCharactersPanel";
 import MyItemsForSaleModal, { collectMySaleItems, countMyUnsoldSaleItems } from "./components/MyItemsForSaleModal";
 import FoundItemsModal, { collectFoundItemGroups } from "./components/FoundItemsModal";
-import CharacterModal from "./components/CharacterModal";
 import CharacterBazaarItemsModal from "./components/CharacterBazaarItemsModal";
 // Cotação do coin persistida pela guia Bazaar → Itens (local) — usada apenas
 // para a conversão em RC no modal de itens do personagem (Boss).
@@ -30,32 +32,13 @@ import { loadItemsLastQuery, loadItemsInterests } from "./utils/bazaarWatchedIte
 // "RC Servidores", pela Lista de Itens do Bazaar e por todos os cálculos
 // kk ⇄ RC. Substitui a antiga taxa fixa única e as taxas por usuário.
 import { getServerCoinRate, readLocalCoinRates, sanitizeCoinRateHistory, sanitizeCoinRates, writeLocalCoinRateHistory, writeLocalCoinRates } from "./utils/bazaarCoinRates";
-import ServerCoinRatesModal from "./components/ServerCoinRatesModal";
-import CurrencyCalculator from "./components/CurrencyCalculator";
-import ImbuementsModal from "./components/ImbuementsModal";
-import RtcImportModal from "./components/RtcImportModal";
-import PartyManager from "./components/PartyManager";
-import PersonalPartyHistoryList from "./components/PersonalPartyHistoryList";
-import StatsPanel from "./components/StatsPanel";
-import RankingPanel from "./components/RankingPanel";
-import MyServicesPanel from "./components/MyServicesPanel";
 import { applySanguineOutcomeToOwnServices, fetchAllSharedServicesAsWaiting, isServiceProbablyDone, readAllSharedServicesCache, readServiceRequestsCache, readSharedServicesCache, replaceOwnerSharedServicesInWaitingCache } from "./services/sharedServicesService";
 import { backfillServiceQueueEntries, buildServiceQueueKey, freeServiceQueueEntry, registerServiceQueueEntry } from "./services/serviceQueueIndexService";
 import NotesPanel from "./components/NotesPanel";
-import WaitingListPanel from "./components/WaitingListPanel";
 import { useNotifications } from "./hooks/useNotifications";
 import { NotificationCenter } from "./components/NotificationCenter";
-import FeedbackModal from "./components/FeedbackModal";
-import DonationModal from "./components/DonationModal";
-import AdviceDonationModal from "./components/AdviceDonationModal";
 import { useAuth } from "./context/AuthContext";
 import AuthModal from "./components/AuthModal";
-import BossAdminPanel from "./components/BossAdminPanel";
-import ReceiveRCModal from "./components/ReceiveRCModal";
-import TwitchModal from "./components/TwitchModal";
-import BazarPanel from "./components/BazarPanel";
-import AutoBidEngine from "./components/AutoBidEngine";
-import FriendsModal from "./components/FriendsModal";
 import VipAccessButton from "./components/VipAccessButton";
 import HubHelpTooltip from "./components/HubHelpTooltip";
 import { Shield, HelpCircle, Tv, GraduationCap } from "lucide-react";
@@ -88,9 +71,37 @@ import {
   where,
   runTransaction,
   increment,
-  deleteField
+  deleteField,
+  getCountFromServer
 } from "firebase/firestore";
 import { db, setDoc, updateDoc, deleteDoc, onSnapshot, getDocs, getDoc } from "./firebase/config";
+import { lazyModal, lazyWithSuspense, PanelLoadingFallback } from "./utils/lazyLoad";
+
+// ═══ CARREGAMENTO SOB DEMANDA (ver src/utils/lazyLoad.tsx) ═══
+// Painéis de guia: chunk baixado quando a guia abre (render já era condicional).
+const PartyManager = lazyWithSuspense(() => import("./components/PartyManager"), <PanelLoadingFallback />);
+const PersonalPartyHistoryList = lazyWithSuspense(() => import("./components/PersonalPartyHistoryList"), <PanelLoadingFallback />);
+const StatsPanel = lazyWithSuspense(() => import("./components/StatsPanel"), <PanelLoadingFallback />);
+const RankingPanel = lazyWithSuspense(() => import("./components/RankingPanel"), <PanelLoadingFallback />);
+const MyServicesPanel = lazyWithSuspense(() => import("./components/MyServicesPanel"), <PanelLoadingFallback />);
+const WaitingListPanel = lazyWithSuspense(() => import("./components/WaitingListPanel"), <PanelLoadingFallback />);
+const BazarPanel = lazyWithSuspense(() => import("./components/BazarPanel"), <PanelLoadingFallback />);
+const ServerCoinRatesModal = lazyWithSuspense(() => import("./components/ServerCoinRatesModal"));
+const AutoBidEngine = lazyWithSuspense(() => import("./components/AutoBidEngine"));
+// Modais sempre montados com prop `open`: chunk baixado na 1ª abertura;
+// após abrir, permanecem montados (latch) — semântica de estado preservada.
+const CharacterModal = lazyModal(() => import("./components/CharacterModal"));
+const CurrencyCalculator = lazyModal(() => import("./components/CurrencyCalculator"));
+const ImbuementsModal = lazyModal(() => import("./components/ImbuementsModal"));
+const RtcImportModal = lazyModal(() => import("./components/RtcImportModal"));
+const FeedbackModal = lazyModal(() => import("./components/FeedbackModal"));
+const DonationModal = lazyModal(() => import("./components/DonationModal"));
+const AdviceDonationModal = lazyModal(() => import("./components/AdviceDonationModal"));
+const BossAdminPanel = lazyModal(() => import("./components/BossAdminPanel"));
+const ReceiveRCModal = lazyModal(() => import("./components/ReceiveRCModal"));
+const TwitchModal = lazyModal(() => import("./components/TwitchModal"));
+const FriendsModal = lazyModal(() => import("./components/FriendsModal"));
+
 // Logs e presence centralizados no AuthContext
 const isElectron = typeof window !== 'undefined' && !!(window as any).require;
 const SHARED_CHARACTERS_METADATA_REF = { collection: "settings", id: "shared_characters_metadata" } as const;
@@ -5573,15 +5584,18 @@ export default function App() {
 
       const fetchBossBadgeCounts = async () => {
         try {
-          const [donationsSnap, bossNotifsSnap, vipSnap] = await Promise.all([
-            getDocs(collection(db, "donations")),
+          // OTIMIZAÇÃO DE CUSTO: donations era lida INTEIRA (getDocs sem
+          // filtro) só para contar "pendente" — custo crescia para sempre com
+          // o histórico. Agora: agregação getCountFromServer com filtro de
+          // status (1 read por lote de até 1.000 resultados) para donations e
+          // VIP. Notifications mantém getDocs: o critério (ignored/status
+          // undefined = unread) não é expressável em filtro de servidor.
+          const [donationsCountSnap, bossNotifsSnap, vipCountSnap] = await Promise.all([
+            getCountFromServer(query(collection(db, "donations"), where("status", "==", "pendente"))),
             getDocs(query(collection(db, "notifications"), where("targetRole", "==", "Boss"))),
-            getDocs(query(collection(db, "vipCreditRequests"), where("status", "==", "pendente"))),
+            getCountFromServer(query(collection(db, "vipCreditRequests"), where("status", "==", "pendente"))),
           ]);
           if (cancelled) return;
-
-          let donationsCount = 0;
-          donationsSnap.docs.forEach(d => { if (d.data().status === "pendente") donationsCount++; });
 
           let requestsCount = 0;
           bossNotifsSnap.docs.forEach(d => {
@@ -5589,9 +5603,9 @@ export default function App() {
             if (!data.ignored && (data.status === "unread" || data.status === undefined)) requestsCount++;
           });
 
-          setPendingDonationsCount(donationsCount);
+          setPendingDonationsCount(donationsCountSnap.data().count);
           setPendingRequestsCount(requestsCount);
-          setPendingVipCount(vipSnap.size);
+          setPendingVipCount(vipCountSnap.data().count);
         } catch {
           if (!cancelled) {
             setPendingDonationsCount(0);
@@ -5609,13 +5623,14 @@ export default function App() {
       };
     }
 
-    const unsubDonations = onSnapshot(collection(db, "donations"), (snap) => {
-      let count = 0;
-      snap.docs.forEach(d => {
-        if (d.data().status === "pendente") count++;
-      });
-      setPendingDonationsCount(count);
-    }, () => {});
+    // OTIMIZAÇÃO DE CUSTO: o listener escutava a coleção donations INTEIRA
+    // (todo o histórico, para sempre) só para contar "pendente". Filtrado por
+    // status, o snapshot entrega apenas os pendentes — snap.size é a contagem.
+    const unsubDonations = onSnapshot(
+      query(collection(db, "donations"), where("status", "==", "pendente")),
+      (snap) => { setPendingDonationsCount(snap.size); },
+      () => {}
+    );
 
     const unsubBossNotifs = onSnapshot(
       query(collection(db, "notifications"), where("targetRole", "==", "Boss")),
@@ -6154,7 +6169,7 @@ export default function App() {
 
       {/* Motor do Auto Bid — roda em segundo plano (independente do modal e do
           painel ativo). Renderiza nada; apenas agenda/executa os lances. */}
-      <AutoBidEngine currentUserUid={currentUser?.uid || null} />
+      {isElectron && <AutoBidEngine currentUserUid={currentUser?.uid || null} />}
 
       {/* RODAPÉ COM STATUS DE CONEXÃO, USUÁRIOS ONLINE E SINCRONIZAÇÃO */}
       <footer ref={appFooterRef} className="px-2 sm:px-4 py-1 sm:py-1.5 text-[9px] bg-[var(--th-bg-raised)]/95 backdrop-blur-md border-t border-[var(--th-line)]/60 flex flex-wrap gap-2 sm:gap-3 items-center justify-between flex-shrink-0 relative z-10" style={{ minHeight: "clamp(20px, 3vh, 30px)", padding: "clamp(2px, 0.1vh, 5px) clamp(5px, 1vw, 10px)" }}>

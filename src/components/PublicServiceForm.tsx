@@ -1,6 +1,10 @@
+// signInAnonymously: import ESTÁTICO — firebase/auth já entra estaticamente
+// via AuthContext/config, então o import() dinâmico era inócuo (warning
+// INEFFECTIVE_DYNAMIC_IMPORT do build) e nunca criava chunk separado.
+import { signInAnonymously } from "firebase/auth";
 import { useState, useEffect, useRef, useMemo } from "react";
 import type { CSSProperties } from "react";
-import publicFormBgUrl from "../assets/public-form-bg.jpg";
+import publicFormBgUrl from "../assets/public-form-bg.webp"; // WebP: 609 KB → ~229 KB
 import { Clock, Save, CheckCircle2, AlertTriangle, MessageCircle, Swords, ShieldCheck, Timer, Phone, ChevronLeft, ChevronRight, ChevronDown, Check, XCircle } from "lucide-react";
 import type { WaitingService, Vocation } from "../types";
 import { VOCATIONS, VOC_COLORS, VOC_LABEL, todayISO } from "../types";
@@ -744,7 +748,6 @@ export default function PublicServiceForm() {
       // (regras: isAuth() é obrigatório para ler "users")
       if (auth && !auth.currentUser) {
         try {
-          const { signInAnonymously } = await import("firebase/auth");
           await signInAnonymously(auth);
         } catch { /* falha silenciosa — consulta abaixo falhará e lista ficará vazia */ }
       }
@@ -1083,7 +1086,6 @@ export default function PublicServiceForm() {
       // 2. Login anônimo no Firebase (necessário para as regras do Firestore)
       let uid = "public_anonymous";
       if (!isSimulationMode && auth) {
-        const { signInAnonymously } = await import("firebase/auth");
         const cred = await signInAnonymously(auth);
         uid = cred.user.uid;
       }

@@ -2,7 +2,7 @@ import { useMemo, useState, useEffect } from "react";
 import { Copy, CheckCircle2, Heart, Trophy, Coins, Send, X, Swords } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 import { db, isSimulationMode, setDoc, updateDoc } from "../firebase/config";
-import { collection, doc, increment } from "firebase/firestore";
+import { collection, doc, getDoc, getDocs, increment } from "firebase/firestore";
 import { formatRC } from "../types";
 
 interface Props {
@@ -100,7 +100,6 @@ export default function DonationModal({ open, onClose, minAverage = 10 }: Props)
     // Carregar do Firestore apenas quando o modal abre (cache sob demanda)
     const loadDonationChar = async () => {
       try {
-        const { getDoc } = await import("firebase/firestore");
         const docSnap = await getDoc(doc(db, "settings", "donation_settings"));
         if (docSnap.exists()) {
           const data = docSnap.data();
@@ -163,7 +162,6 @@ export default function DonationModal({ open, onClose, minAverage = 10 }: Props)
 
     const loadUserStats = async () => {
       try {
-        const { getDocs } = await import("firebase/firestore");
         const snapshot = await getDocs(collection(db, "userStats"));
         const map: Record<string, { totalPtsConcluidas: number; totalRcDoado: number; totalRcDoadoAprovado: number }> = {};
         snapshot.docs.forEach(d => {

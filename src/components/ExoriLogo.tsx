@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import exoriShieldImg from './exori-shield.png';
+import exoriShieldImg from './exori-shield.webp'; // 219 KB → ~11 KB (160px, 2× o maior uso de 80px)
 import { loadLowCpuUsage } from '../storage';
 
 interface Props {

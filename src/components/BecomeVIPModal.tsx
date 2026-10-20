@@ -9,7 +9,7 @@ import {
   Sparkles,
   X,
 } from "lucide-react";
-import { collection, doc, serverTimestamp } from "firebase/firestore";
+import { collection, doc, getDoc, serverTimestamp } from "firebase/firestore";
 import type { UserProfile } from "../context/AuthContext";
 import { addDoc, db, isSimulationMode } from "../firebase/config";
 import VipBenefitsModal from "./VipBenefitsModal";
@@ -75,7 +75,6 @@ export default function BecomeVIPModal({ open, onClose, userProfile }: BecomeVIP
     // fallback e nenhum listener permanente para configurações administrativas.
     const loadSettings = async () => {
       try {
-        const { getDoc } = await import("firebase/firestore");
         const plansSnap = await getDoc(doc(db, "appSettings", "vip_plans"));
         if (plansSnap.exists()) {
           const data = plansSnap.data();
