@@ -6100,7 +6100,10 @@ export default function App() {
         <WindowToggle active={activeWindow === "bazar"} icon={<ShoppingBag size={11} />} label="Bazaar" onClick={() => toggleWindow("bazar")} hero />
       </div>
 
-      <div className="flex-1 min-h-0 overflow-hidden relative z-10 p-0.25 sm:p-0.5">
+      {/* <main>: landmark principal exigido pela acessibilidade (axe
+          landmark-one-main) — mesmo container/classes de antes, só a tag
+          semântica mudou (display:block igual a div; layout inalterado). */}
+      <main className="flex-1 min-h-0 overflow-hidden relative z-10 p-0.25 sm:p-0.5">
         {activeWindow === "characters" ? (
           <div className="h-full w-full">{topContent}</div>
         ) : (
@@ -6165,7 +6168,7 @@ export default function App() {
         ) : null}
         </div>
         )}
-      </div>
+      </main>
 
       {/* Motor do Auto Bid — roda em segundo plano (independente do modal e do
           painel ativo). Renderiza nada; apenas agenda/executa os lances. */}
@@ -6219,7 +6222,11 @@ export default function App() {
         <div className="flex items-center gap-3 flex-wrap">
           {/* BOX 1 — Controles de zoom (cabeçalho + conteúdo) */}
           <div className="nav-frame flex items-center gap-3 flex-wrap bg-[var(--th-bg-deep)]/60 rounded-lg px-2.5 py-1">
-            <div className="flex items-center gap-1.5 text-slate-500">
+            {/* text-[#74849b] (era text-slate-500): slate-500 (#62748e) dava
+                contraste 4.16:1 sobre o fundo do rodapé (mínimo WCAG AA 4.5:1
+                p/ texto de 9px). Tom intermediário entre slate-500 e slate-400,
+                mesma matiz — ratio ~5.2:1, hierarquia visual preservada. */}
+            <div className="flex items-center gap-1.5 text-[#74849b]">
               <span>Zoom Cabeçalho</span>
               <button type="button" onClick={() => setHeaderZoomLevel((z: number) => Math.max(60, z - 5))} className="w-4 h-4 flex items-center justify-center rounded hover:bg-white/5 border border-white/5 font-bold transition-colors cursor-pointer text-[11px]">-</button>
               <span className="font-bold font-mono min-w-[28px] text-center text-slate-400 text-[11px]">{headerZoomLevel}%</span>
@@ -6228,7 +6235,8 @@ export default function App() {
 
             <span className="h-3.5 w-px bg-[var(--th-line)]/50" />
 
-            <div className="flex items-center gap-1.5 text-slate-500">
+            {/* Mesmo ajuste de contraste do rótulo "Zoom Cabeçalho" acima. */}
+            <div className="flex items-center gap-1.5 text-[#74849b]">
               <span>Zoom Conteúdo</span>
               <button type="button" onClick={() => setContentZoomLevel((z: number) => Math.max(60, z - 5))} className="w-4 h-4 flex items-center justify-center rounded hover:bg-white/5 border border-white/5 font-bold transition-colors cursor-pointer text-[11px]">-</button>
               <span className="font-bold font-mono min-w-[28px] text-center text-slate-400 text-[11px]">{contentZoomLevel}%</span>
@@ -6860,7 +6868,9 @@ function LandingPage({ onOpenHub, onOpenNotif, pendingCount, notificationOpen, s
                 {feat.icon}
               </div>
               <div className="min-w-0">
-                <h3 className="text-sm font-bold text-white mb-1 group-hover:text-emerald-300 transition-colors">{feat.title}</h3>
+                {/* h2 (era h3): a página tem só h1 antes destes títulos — h1→h3 pulava um
+                    nível (axe heading-order). Mesmas classes: aparência idêntica. */}
+                <h2 className="text-sm font-bold text-white mb-1 group-hover:text-emerald-300 transition-colors">{feat.title}</h2>
                 <p className="text-[11px] text-slate-400 leading-relaxed">{feat.desc}</p>
               </div>
             </button>

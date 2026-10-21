@@ -488,14 +488,15 @@
   animation-duration: 1.8s;
 }
 
-/* Boss/Amigos COM pendências: além do pulso de borda compartilhado, mantém o
-   piscar de opacidade do `animate-pulse` (Tailwind) como indicador de
-   pendência. As duas animações rodam juntas, ambas com 1.8s, e o
-   sincronizador global (pulseSync) ancora as duas em t=0 — tudo em uníssono. */
+/* Boss/Amigos COM pendências: além do pulso de borda compartilhado (no
+   ::after — ver pt-stage-pulse), mantém o piscar de opacidade do
+   `animate-pulse` (Tailwind) no elemento como indicador de pendência. As duas
+   animações rodam com 1.8s e o sincronizador global (pulseSync) ancora as
+   duas em t=0 — tudo em uníssono. A borda ESTÁTICA destes botões é clara
+   (ex.: amber-500/80); replica-se aqui o tom discreto do vale do pulso
+   original (alpha 0.3) para o anel do ::after respirar sobre a mesma base. */
 .footer-pulse > button.pt-stage-pulse.animate-pulse {
-  animation:
-    pt-stage-border-pulse 1.8s ease-in-out infinite,
-    pulse 1.8s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  border-color: rgba(var(--pt-pulse-rgb), 0.3);
 }
 
 /* Respiração do anel de borda. Os limites vêm de variáveis, então hover e
@@ -645,20 +646,52 @@ input[type="date"]::-webkit-calendar-picker-indicator {
      • Com Vagas / Prontas / Iniciadas → pulsa quando a categoria tem ≥1 PT;
      • Aguardando Pagamento → regra original preservada: pulsa apenas quando
        há pagamento pendente COM o usuário logado. */
+/* IMPLEMENTAÇÃO (otimizada p/ compositor): animar `border-color`/`box-shadow`
+   diretamente no elemento invalida estilo+pintura a CADA frame (custo contínuo
+   de Style & Layout/Rendering medido em produção). O MESMO visual é obtido com
+   um pseudo-elemento ::after que já carrega o anel/halo do PICO prontos
+   (estáticos) e respira só via `opacity` — propriedade compositável: o
+   navegador rasteriza o anel UMA vez e só varia o alpha na GPU.
+     • vale (0%): ::after invisível → aparece a borda estática do próprio
+       elemento (os modificadores espelham a cor/alpha ~0.3 da borda de cada
+       botão — mesmo tom do antigo vale do keyframe);
+     • pico (50%): ::after a 100% → borda 0.9 + halo 12px + anel externo 3px,
+       valores idênticos aos do keyframe original.
+   O keyframe mantém o MESMO nome e período (1.8s = PULSE_PERIOD_MS): o
+   sincronizador global (pulseSync) continua ancorando a fase em t=0 — o
+   evento `animationstart` do ::after dispara no elemento hospedeiro e
+   `getAnimations({ subtree: true })` já inclui pseudo-elementos. */
 @keyframes pt-stage-border-pulse {
   0%, 100% {
-    border-color: rgba(var(--pt-pulse-rgb), 0.3);
-    box-shadow: 0 0 0 0 rgba(var(--pt-pulse-rgb), 0);
+    opacity: 0;
   }
   50% {
-    border-color: rgba(var(--pt-pulse-rgb), 0.9);
-    box-shadow:
-      0 0 12px 1px rgba(var(--pt-pulse-rgb), 0.28),
-      0 0 0 3px rgba(var(--pt-pulse-rgb), 0.14);
+    opacity: 1;
   }
 }
 .pt-stage-pulse {
+  position: relative;
+}
+.pt-stage-pulse::after {
+  content: "";
+  position: absolute;
+  /* Cobre exatamente a borda do elemento: ::after é posicionado a partir do
+     padding-box, então recua a largura da borda para sobrepor o anel. */
+  inset: calc(-1 * var(--pt-pulse-bw, 1px));
+  border-radius: inherit;
+  border: var(--pt-pulse-bw, 1px) solid rgba(var(--pt-pulse-rgb), 0.9);
+  box-shadow:
+    0 0 12px 1px rgba(var(--pt-pulse-rgb), 0.28),
+    0 0 0 3px rgba(var(--pt-pulse-rgb), 0.14);
+  opacity: 0;
+  pointer-events: none;
+  will-change: opacity;
   animation: pt-stage-border-pulse 1.8s ease-in-out infinite;
+}
+/* Botões com borda de 2px (ex.: "Aguardando" com pendência no rodapé):
+   o anel acompanha a espessura para continuar sobrepondo a borda. */
+.pt-stage-pulse.border-2 {
+  --pt-pulse-bw: 2px;
 }
 /* Com Vagas — violet-500 */
 .pt-stage-pulse--violet { --pt-pulse-rgb: 139, 92, 246; }
@@ -688,19 +721,18 @@ input[type="date"]::-webkit-calendar-picker-indicator {
    próprio do botão (mesmo comportamento do antigo anel footer-pulse-ring).
    Exceção: botões COM pendência (`animate-pulse` — Boss/Amigos) continuam
    pulsando no hover, como já acontecia antes. */
-.footer-pulse > button.pt-stage-pulse:not(.animate-pulse):hover {
+.footer-pulse > button.pt-stage-pulse:not(.animate-pulse):hover::after {
   animation: none;
+  opacity: 0;
 }
 
 /* Respeita "Poupar CPU": o pulso de borda dos botões do rodapé é desligado
    (a borda estática original do botão permanece). Botões COM pendência
    (`animate-pulse` — Boss/Amigos) mantêm o piscar de opacidade do Tailwind,
    como já acontecia antes do pulso de borda. */
-.low-cpu .footer-pulse > button.pt-stage-pulse {
+.low-cpu .footer-pulse > button.pt-stage-pulse::after {
   animation: none;
-}
-.low-cpu .footer-pulse > button.pt-stage-pulse.animate-pulse {
-  animation: pulse 1.8s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  opacity: 0;
 }
 
 

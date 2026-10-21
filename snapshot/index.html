@@ -24,6 +24,16 @@
     <link rel="preload" as="image" href="./initial-bg.webp" fetchpriority="high" />
 
     <!--
+      PRECONNECT: as duas origens do Firebase usadas em TODO carregamento
+      (identitytoolkit = verificação da sessão do Auth; firestore = dados).
+      Abre DNS+TLS em paralelo ao JS — o Lighthouse de produção estimou
+      ~110ms de economia para firestore.googleapis.com. `crossorigin` porque
+      as conexões são fetch/XHR com CORS.
+    -->
+    <link rel="preconnect" href="https://firestore.googleapis.com" crossorigin />
+    <link rel="preconnect" href="https://identitytoolkit.googleapis.com" crossorigin />
+
+    <!--
       Anti-flash de tema: aplica o tema salvo em <html> ANTES de qualquer
       pintura, evitando que o tema padrão apareça por um instante.
       Mantido inline e síncrono de propósito.
