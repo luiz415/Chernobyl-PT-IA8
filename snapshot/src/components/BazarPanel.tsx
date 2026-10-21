@@ -153,6 +153,32 @@ function questsViewRcText(coinRate: number, kk: number): string {
   if (!(coinRate > 0)) return "—";
   return `${computeItemRC(coinRate, kk).toLocaleString("pt-BR")} RC`;
 }
+/**
+ * Total (kk) EXIBIDO na coluna "Valor Itens" — SINCRONIZADO com o modal
+ * "Ver": quando o personagem tem personalização LOCAL salva (valor de item
+ * e/ou Ouro), o total é RECALCULADO exatamente como no modal (soma dos
+ * itens efetivos + Ouro efetivo, arredondado a 1 casa); sem personalização,
+ * mantém o efetivo original (inclusive a correção manual da guia Itens).
+ * A persistência (updateQuestsViewOverride) só guarda entradas que DIFEREM
+ * do automático — presença no mapa significa valor realmente personalizado,
+ * a mesma semântica do `hasValueOverride` do modal. Nada é lido/gravado no
+ * Firestore: puro reflexo do override local já existente.
+ */
+function questsViewAdjustedTotalKk(
+  view: QuestsItemsDetailView,
+  ovr: QuestsViewOverride | undefined,
+): { kk: number; adjusted: boolean } {
+  const items = ovr?.items || {};
+  const hasItemOverride = Object.keys(items).length > 0;
+  const hasGoldOverride = typeof ovr?.goldKk === "number";
+  if (!hasItemOverride && !hasGoldOverride) return { kk: view.effectiveKk, adjusted: false };
+  const sum = view.matches.reduce((acc, match, index) => {
+    const override = items[questsViewItemKey(index, match.foundName)];
+    return acc + (typeof override === "number" ? override : Number(match.totalKk || 0));
+  }, 0);
+  const gold = hasGoldOverride ? Number(ovr?.goldKk || 0) : Number(view.goldKk || 0);
+  return { kk: Math.round((sum + gold) * 10) / 10, adjusted: true };
+}
 
 /** Constrói a view a partir do resultado LOCAL da guia Itens (Boss). */
 function itemsViewFromLocalResult(result: BazaarItemsCharacterResult): QuestsItemsDetailView {
@@ -1833,6 +1859,12 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
     () => getServerCoinRate(readLocalCoinRates(), questsItemsDetailResult?.server),
     [questsItemsDetailResult] // eslint-disable-line react-hooks/exhaustive-deps
   );
+  // Espelho local das cotações por servidor para a COLUNA "Valor Itens"
+  // (conversão kk → RC por linha). Lido UMA vez por render (nunca por linha)
+  // da mesma fonte usada pelo modal "Ver" e pela guia Itens — sem leituras
+  // ao Firestore; qualquer render (troca de guia, edição, consulta) traz o
+  // valor mais recente do espelho.
+  const questsTableCoinRates = readLocalCoinRates();
 
   const persistQuestsViewOverrides = (next: QuestsViewOverridesMap) => {
     setQuestsViewOverrides(next);
@@ -4720,7 +4752,7 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
                       (mesmos valores/regras — effectiveTotalKk com correção
                       manual prioritária; cruzamento pelo id do leilão).
                       Sem consulta da guia Itens para este leilão => "—". */}
-                  <th className={`${STICKY_HEAD_CELL_CLASS} h-10 px-1 py-2 text-center align-middle leading-none`} title="Valor total dos itens monitorados encontrados para este personagem na última consulta da guia Itens (mesmos valores e regras de cálculo/Tier da guia Itens — nenhuma consulta extra). '—' = personagem sem itens na última consulta da guia Itens.">Valor Itens (kk)</th>
+                  <th className={`${STICKY_HEAD_CELL_CLASS} h-10 px-1 py-2 text-center align-middle leading-none`} title="Valor total dos itens monitorados encontrados para este personagem na última consulta da guia Itens (mesmos valores e regras de cálculo/Tier da guia Itens — nenhuma consulta extra), em kk e, entre parênteses, o equivalente em RC pela cotação do servidor. Personalizações feitas no modal 'Ver' refletem aqui imediatamente. '—' = personagem sem itens na última consulta da guia Itens.">Valor Itens</th>
                   <th className={`${STICKY_HEAD_CELL_CLASS} h-10 px-1 py-2 text-center align-middle leading-none`}>SW</th>
                   <th className={`${STICKY_HEAD_CELL_CLASS} h-10 px-1 py-2 text-center align-middle leading-none`}>SG</th>
                   <th className={`${STICKY_HEAD_CELL_CLASS} h-10 px-1 py-2 text-center align-middle leading-none`} title="The Roost of the Graveborn">GB</th>
@@ -4984,17 +5016,42 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
                               </span>
                             );
                           }
+                          // SINCRONIA COM O MODAL "VER": total com a
+                          // personalização LOCAL salva (quando houver) —
+                          // mesma regra de recálculo do modal; cotação do RC
+                          // também espelha o modal (override local > cotação
+                          // do servidor). Sem cotação → só o kk (sem
+                          // parênteses), nunca inventa conversão.
+                          const viewOverride = questsViewOverrides[auctionKey];
+                          const { kk: displayKk, adjusted } = questsViewAdjustedTotalKk(itemsView, viewOverride);
+                          const rowCoinRate = typeof viewOverride?.coinRateKk === "number" && viewOverride.coinRateKk > 0
+                            ? viewOverride.coinRateKk
+                            : getServerCoinRate(questsTableCoinRates, itemsView.server);
                           return (
                             <div className="flex flex-col items-center gap-0.5">
                               <span
                                 className="font-mono text-[11px] font-black text-amber-200"
-                                title={itemsView.isManual
-                                  ? `Valor corrigido manualmente na guia Itens (calculado pela consulta: ${formatItemsKk(itemsView.calculatedKk)})`
-                                  : "Valor total dos itens monitorados — mesma regra de cálculo/Tier da guia Itens (última consulta)"}
+                                title={adjusted
+                                  ? `Total recalculado com os seus valores locais do modal "Ver" (automático da consulta: ${formatItemsKk(itemsView.effectiveKk)})`
+                                  : itemsView.isManual
+                                    ? `Valor corrigido manualmente na guia Itens (calculado pela consulta: ${formatItemsKk(itemsView.calculatedKk)})`
+                                    : "Valor total dos itens monitorados — mesma regra de cálculo/Tier da guia Itens (última consulta)"}
                               >
-                                {formatItemsKk(itemsView.effectiveKk)}
-                                {itemsView.isManual && <span className="ml-0.5 align-middle rounded border border-fuchsia-500/40 bg-fuchsia-500/15 px-1 py-px text-[7px] font-black uppercase tracking-wide text-fuchsia-300">manual</span>}
+                                {formatItemsKk(displayKk)}
+                                {adjusted ? (
+                                  <span className="ml-0.5 align-middle rounded border border-fuchsia-500/40 bg-fuchsia-500/15 px-1 py-px text-[7px] font-black uppercase tracking-wide text-fuchsia-300" title={`Personalização local do modal "Ver" (só neste dispositivo). Automático da consulta: ${formatItemsKk(itemsView.effectiveKk)}.`}>local</span>
+                                ) : itemsView.isManual && (
+                                  <span className="ml-0.5 align-middle rounded border border-fuchsia-500/40 bg-fuchsia-500/15 px-1 py-px text-[7px] font-black uppercase tracking-wide text-fuchsia-300">manual</span>
+                                )}
                               </span>
+                              {rowCoinRate > 0 && (
+                                <span
+                                  className="font-mono text-[9px] font-bold text-emerald-300"
+                                  title={`Equivalente em RC pela cotação ${typeof viewOverride?.coinRateKk === "number" && viewOverride.coinRateKk > 0 ? "personalizada no modal \"Ver\"" : `de ${itemsView.server}`} (${String(rowCoinRate).replace(".", ",")}k por 1000 RC) — mesma conversão do restante do aplicativo: floor(kk ÷ cotação × 1000)`}
+                                >
+                                  ({questsViewRcText(rowCoinRate, displayKk)})
+                                </span>
+                              )}
                               <button
                                 type="button"
                                 onClick={() => setQuestsItemsDetailResult({ ...itemsView, auctionKey })}

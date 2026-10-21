@@ -847,6 +847,29 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
     return override !== undefined ? override : Number(match.totalKk || 0);
   };
   /**
+   * Total (kk) EXIBIDO na TABELA para um personagem — sincronizado com o
+   * modal "Ver" (Detalhes): quando o personagem tem AJUSTES LOCAIS de Total
+   * (detailTotalsByChar), recalcula EXATAMENTE como o rodapé do modal
+   * (soma dos Totais efetivos — ajustado > calculado — + Ouro, arredondado a
+   * 1 casa); sem ajustes, mantém o valor efetivo de sempre (correção manual
+   * > calculado). Usado pela exibição das colunas KK/RC e pelos respectivos
+   * filtros/ordenação, para a tabela nunca divergir do modal. Nada disso
+   * altera os dados persistidos/publicados da consulta.
+   */
+  const rowDisplayTotalsInfo = (result: BazaarItemsCharacterResult): { kk: number; adjusted: boolean } => {
+    const charKey = String(result.id || result.url || result.name || "");
+    const overrides = charKey ? detailTotalsByChar[charKey] : undefined;
+    if (!overrides || Object.keys(overrides).length === 0) {
+      return { kk: effectiveTotalKk(result), adjusted: false };
+    }
+    const matches = Array.isArray(result.matches) ? result.matches : [];
+    const sum = matches.reduce((acc, match, index) => {
+      const override = overrides[detailTotalKey(index, match.foundName)];
+      return acc + (override !== undefined ? override : Number(match.totalKk || 0));
+    }, 0);
+    return { kk: Math.round((sum + (result.goldKk || 0)) * 10) / 10, adjusted: true };
+  };
+  /**
    * Salva a cotação do SERVIDOR do personagem exibido no modal Detalhes —
    * grava a MESMA configuração persistente da Lista de Itens
    * (appSettings/global.serverCoinRates): vira a taxa de TODO o app para esse
@@ -1958,8 +1981,9 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
         if (tableFilters.bidOperator === "gte" && bid < tableFilters.bidValue) return false;
         if (tableFilters.bidOperator === "lte" && bid > tableFilters.bidValue) return false;
       }
-      // Filtros de KK/RC usam o valor EFETIVO: correção manual > calculado.
-      const kk = effectiveTotalKk(result);
+      // Filtros de KK/RC usam o MESMO valor exibido na coluna: ajustes
+      // locais do modal "Ver" (quando houver) > correção manual > calculado.
+      const kk = rowDisplayTotalsInfo(result).kk;
       if (tableFilters.kkValue !== null) {
         if (tableFilters.kkOperator === "gte" && kk < tableFilters.kkValue) return false;
         if (tableFilters.kkOperator === "lte" && kk > tableFilters.kkValue) return false;
@@ -2018,8 +2042,8 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
         // cotação = 0 — fica no fundo, como quando não havia taxa).
         const rateA = rateFor(a.server);
         const rateB = rateFor(b.server);
-        av = rateA > 0 ? computeItemRC(rateA, effectiveTotalKk(a)) : 0;
-        bv = rateB > 0 ? computeItemRC(rateB, effectiveTotalKk(b)) : 0;
+        av = rateA > 0 ? computeItemRC(rateA, rowDisplayTotalsInfo(a).kk) : 0;
+        bv = rateB > 0 ? computeItemRC(rateB, rowDisplayTotalsInfo(b).kk) : 0;
       } else if (entry.key === "potential") {
         // Ordena pelo VALOR NUMÉRICO real do percentual, nunca pela cor.
         // Sem percentual (cotação/valor ausente), empata no fundo:
@@ -2027,8 +2051,9 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
         av = potentialPercent(a, rateFor(a.server)) ?? -1e15;
         bv = potentialPercent(b, rateFor(b.server)) ?? -1e15;
       } else if (entry.key === "totalKk") {
-        av = effectiveTotalKk(a);
-        bv = effectiveTotalKk(b);
+        // Ordena pelo MESMO valor exibido (ajustes locais do "Ver" incluídos).
+        av = rowDisplayTotalsInfo(a).kk;
+        bv = rowDisplayTotalsInfo(b).kk;
       } else {
         av = a[entry.key] ?? 0;
         bv = b[entry.key] ?? 0;
@@ -2051,7 +2076,10 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
       });
     }
     return sorted;
-  }, [visibleResults, tableFilters, sortStack, coinRates, itemInterests, timezoneOffsetMinutes, hideEndedResults, currentUnixTs]);
+    // detailTotalsByChar: ajustes locais do modal "Ver" entram no valor
+    // exibido/filtrado/ordenado das colunas KK/RC — editar no modal reflete
+    // na tabela imediatamente.
+  }, [visibleResults, tableFilters, sortStack, coinRates, itemInterests, timezoneOffsetMinutes, hideEndedResults, currentUnixTs, detailTotalsByChar]);
 
   const hasActiveTableFilters = !!(
     tableFilters.name.trim() ||
@@ -2598,9 +2626,13 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                 // "Tenho Interesse" — estado 100% LOCAL (localStorage por uid).
                 const isInterested = itemInterests.includes(auctionKey);
                 // KK EFETIVO: correção manual (quando ativa) > calculado.
-                // RC/exibição/badge derivam deste valor.
+                // (Usado pela edição manual inline e pelo Potencial.)
                 const effectiveKk = effectiveTotalKk(result);
                 const isManualKk = hasManualTotalKk(result);
+                // KK EXIBIDO nas colunas KK/RC: sincronizado com o modal
+                // "Ver" — ajustes locais de Total (quando houver) recalculam
+                // o total exatamente como o rodapé do modal.
+                const rowDisplay = rowDisplayTotalsInfo(result);
                 // COTAÇÃO do SERVIDOR deste personagem — cada linha converte
                 // kk → RC exclusivamente com a taxa do próprio servidor
                 // (0 = não configurada → "—", nunca taxa de outro servidor).
@@ -2720,10 +2752,16 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                       </span>
                     ) : (
                       <span className="inline-flex items-center justify-center gap-1">
-                        <span title={isManualKk ? `Valor corrigido manualmente (calculado pela consulta: ${formatKkValue(result.totalKk, "kk")})` : "Valor calculado pela consulta"}>
-                          {formatKkValue(effectiveKk, "kk")}
+                        <span title={rowDisplay.adjusted
+                          ? `Total recalculado com os ajustes locais do modal "Ver" (sem ajustes: ${formatKkValue(effectiveKk, "kk")})`
+                          : isManualKk ? `Valor corrigido manualmente (calculado pela consulta: ${formatKkValue(result.totalKk, "kk")})` : "Valor calculado pela consulta"}>
+                          {formatKkValue(rowDisplay.kk, "kk")}
                         </span>
-                        {isManualKk && (
+                        {rowDisplay.adjusted ? (
+                          <span className="rounded border border-sky-500/40 bg-sky-500/15 px-1 py-px text-[7px] font-black uppercase tracking-wide text-sky-300" title={`Total com os ajustes locais feitos no modal "Ver" (salvos só neste dispositivo, até uma nova consulta). Sem ajustes: ${formatKkValue(effectiveKk, "kk")}.`}>
+                            ajustes locais
+                          </span>
+                        ) : isManualKk && (
                           <span className="rounded border border-fuchsia-500/40 bg-fuchsia-500/15 px-1 py-px text-[7px] font-black uppercase tracking-wide text-fuchsia-300" title={`Correção manual ativa (calculado: ${formatKkValue(result.totalKk, "kk")})`}>
                             manual
                           </span>
@@ -2749,9 +2787,9 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                       </span>
                     )}
                   </td>
-                  <td className="px-2 py-1.5 text-center font-mono font-bold text-emerald-300" title={isManualKk ? "RC calculado sobre o valor corrigido manualmente" : undefined}>
+                  <td className="px-2 py-1.5 text-center font-mono font-bold text-emerald-300" title={rowDisplay.adjusted ? "RC calculado sobre o total com os ajustes locais do modal \"Ver\"" : isManualKk ? "RC calculado sobre o valor corrigido manualmente" : undefined}>
                     {rowCoinRate > 0
-                      ? computeItemRC(rowCoinRate, effectiveKk).toLocaleString("de-DE")
+                      ? computeItemRC(rowCoinRate, rowDisplay.kk).toLocaleString("de-DE")
                       : <span title={`Sem cotação do RC configurada para ${result.server} — defina na Lista de Itens (campo "Coin (k)" do servidor)`}>—</span>}
                   </td>
                   <td className="px-2 py-1.5 text-center">
