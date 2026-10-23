@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import bazarBgUrl from "../assets/bazar-bg.webp"; // WebP: 1,78 MB → ~157 KB (mesma imagem)
-import { AlertTriangle, ArrowDownUp, BarChart3, Check, CheckCircle2, ChevronDown, ChevronUp, Coins, Crown, ExternalLink, Eye, EyeOff, Filter, FlagTriangleRight, Flame, Package, Plus, RefreshCw, RotateCcw, ShieldAlert, ShoppingBag, Sparkles, Star, Target, Users, X } from "lucide-react";
+import { AlertTriangle, ArrowDownUp, BarChart3, Check, CheckCircle2, ChevronDown, ChevronUp, Coins, Crown, ExternalLink, Eye, EyeOff, Filter, FlagTriangleRight, Flame, Globe, Package, Plus, RefreshCw, RotateCcw, ShieldAlert, ShoppingBag, Sparkles, Star, Target, Users, X } from "lucide-react";
 import BazaarItemsPanel from "./BazaarItemsPanel";
 import BazaarStatsPanel from "./BazaarStatsPanel";
 import BazaarSearchFiltersModal from "./BazaarSearchFiltersModal";
@@ -38,6 +38,7 @@ import { collectBusyIdsForQuest } from "../utils/questEligibility";
 // calculado), mesma formatação kk (trimZeros). Cruzamento por auction.id
 // (mesmo id nas duas consultas) — nenhuma consulta nova ao site.
 import {
+  applyOfficialWatchedItemUpdate,
   BAZAAR_ITEMS_LAST_QUERY_UPDATED_EVENT,
   buildCharacterMatches,
   buildWatchlistIndex,
@@ -48,6 +49,7 @@ import {
   hasManualTotalKk,
   loadItemsLastQuery,
   loadWatchedItemsByServer,
+  parseTieredItemName,
   saveItemsLastQuery,
   type BazaarItemsCharacterResult,
   type BazaarItemsLastQuery,
@@ -97,7 +99,14 @@ function hasRelevantLoot(matchCount: number, goldKk: number): boolean {
 interface QuestsItemsDetailView {
   name: string;
   server: string;
-  matches: { foundName: string; tier: number; amount: number; totalKk: number }[];
+  /**
+   * `watchedName`/`baseValueKk` (66ª tarefa): identificação do item na Lista
+   * de Itens e o valor BASE usado na valoração — fonte LOCAL os traz
+   * prontos; fonte EMBUTIDA os reconstrói pela MESMA fórmula oficial do
+   * Tier já usada no snapshot de compra (buildPurchaseItemsSnapshot).
+   * Alimentam a coluna "Atualizar" (exclusiva do Boss) do modal "Ver".
+   */
+  matches: { foundName: string; tier: number; amount: number; totalKk: number; watchedName?: string; baseValueKk?: number }[];
   /** Valor EFETIVO exibido (correção manual > calculado, quando fonte local). */
   effectiveKk: number;
   /** Valor CALCULADO pela consulta (para o tooltip quando há manual). */
@@ -191,6 +200,10 @@ function itemsViewFromLocalResult(result: BazaarItemsCharacterResult): QuestsIte
       tier: Number(match.tier || 0),
       amount: Number(match.amount || 0),
       totalKk: Number(match.totalKk || 0),
+      // Fonte LOCAL (consulta da guia Itens): o match já carrega o item da
+      // lista e o valor base — transportados para a coluna "Atualizar".
+      watchedName: String(match.watchedName || ""),
+      baseValueKk: Number(match.baseValueKk || 0),
     })),
     effectiveKk: effectiveTotalKk(result),
     calculatedKk: Number(result.totalKk || 0),
@@ -208,12 +221,21 @@ function itemsViewFromAuction(auction: BazaarAuction): QuestsItemsDetailView | n
   return {
     name: String(auction.name || ""),
     server: String(auction.server || ""),
-    matches: embeddedMatches.map(match => ({
-      foundName: String(match.foundName || ""),
-      tier: Number(match.tier || 0),
-      amount: Number(match.amount || 0),
-      totalKk: Number(match.totalKk || 0),
-    })),
+    matches: embeddedMatches.map(match => {
+      // Fonte EMBUTIDA (resumo publicado): reconstrói o valor BASE pela
+      // MESMA fórmula oficial do Tier usada no snapshot de compra
+      // (buildPurchaseItemsSnapshot): unit = total ÷ qtd; base = unit ÷
+      // (1 + 0,3 × tier). O resumo não guarda o nome da lista — o item é
+      // identificado pelo nome encontrado (o [Tier x] é separado na hora
+      // de atualizar, via parseTieredItemName).
+      const amount = Number(match.amount || 0);
+      const totalKk = Number(match.totalKk || 0);
+      const tier = Math.max(0, Number(match.tier || 0));
+      const unitValueKk = Math.round((amount > 0 ? totalKk / amount : totalKk) * 100) / 100;
+      const baseValueKk = Math.round((unitValueKk / (1 + 0.3 * tier)) * 100) / 100;
+      const foundName = String(match.foundName || "");
+      return { foundName, tier, amount, totalKk, watchedName: foundName, baseValueKk };
+    }),
     effectiveKk: Number(auction.itemsTotalKk || 0),
     calculatedKk: Number(auction.itemsTotalKk || 0),
     // A correção manual do Boss é local ao dispositivo dele — o publicado é
@@ -1926,6 +1948,53 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
   // vai para a área de transferência; nenhuma outra ação do modal muda.
   const [copiedQuestsViewItemKey, setCopiedQuestsViewItemKey] = useState<string | null>(null);
   useEffect(() => { setCopiedQuestsViewItemKey(null); }, [questsItemsDetailResult]);
+  // ── COLUNA "ATUALIZAR" DO MODAL "VER" (66ª tarefa — EXCLUSIVA DO BOSS) ───
+  // Confirmação inline por linha/escopo (1º clique NUNCA executa), guard de
+  // execução e feedback de sucesso/erro — mesmo padrão do "Atualizar" do
+  // modal Detalhes da guia Itens. A gravação usa o núcleo único
+  // applyOfficialWatchedItemUpdate (Lista de Itens oficial + reprecificação
+  // da última consulta — zero fontes paralelas).
+  const [questsViewUpdateConfirm, setQuestsViewUpdateConfirm] = useState<{ index: number; scope: "all" | "server" } | null>(null);
+  const [questsViewUpdateBusy, setQuestsViewUpdateBusy] = useState(false);
+  const [questsViewUpdateDone, setQuestsViewUpdateDone] = useState<{ index: number; ok: boolean; message: string } | null>(null);
+  const questsViewUpdateTimerRef = useRef<number | null>(null);
+  useEffect(() => () => { if (questsViewUpdateTimerRef.current !== null) window.clearTimeout(questsViewUpdateTimerRef.current); }, []);
+  // Troca de personagem no modal: descarta confirmação/feedback pendentes.
+  useEffect(() => { setQuestsViewUpdateConfirm(null); setQuestsViewUpdateDone(null); }, [questsItemsDetailResult]);
+  function confirmQuestsViewOfficialUpdate() {
+    const pending = questsViewUpdateConfirm;
+    const view = questsItemsDetailResult;
+    // Dupla checagem de cargo (defesa além da visibilidade dos botões).
+    if (!pending || !view || !isBossUser || questsViewUpdateBusy) return;
+    const match = view.matches[pending.index];
+    if (!match) { setQuestsViewUpdateConfirm(null); return; }
+    setQuestsViewUpdateBusy(true);
+    try {
+      const result = applyOfficialWatchedItemUpdate({
+        scope: pending.scope,
+        server: view.server,
+        itemName: match.watchedName || parseTieredItemName(match.foundName).baseName,
+        valueKk: Number(match.baseValueKk || 0),
+        serverUniverse: SERVER_OPTIONS,
+      });
+      const touched = result.changedServers.length + result.addedServers.length;
+      const message = !result.ok
+        ? (result.error || "Falha ao atualizar a Lista de Itens.")
+        : touched === 0
+          ? "Já atualizado"
+          : pending.scope === "all"
+            ? `${touched} servidor(es)`
+            : `${view.server} atualizado`;
+      setQuestsViewUpdateDone({ index: pending.index, ok: result.ok, message });
+    } catch (error) {
+      setQuestsViewUpdateDone({ index: pending.index, ok: false, message: String((error as Error)?.message || "Falha ao atualizar a Lista de Itens.") });
+    } finally {
+      setQuestsViewUpdateBusy(false);
+      setQuestsViewUpdateConfirm(null);
+      if (questsViewUpdateTimerRef.current !== null) window.clearTimeout(questsViewUpdateTimerRef.current);
+      questsViewUpdateTimerRef.current = window.setTimeout(() => { setQuestsViewUpdateDone(null); questsViewUpdateTimerRef.current = null; }, 2500);
+    }
+  }
   async function copyQuestsViewItemName(name: string, key: string) {
     const text = String(name || "").trim();
     if (!text) return;
@@ -5621,6 +5690,11 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
                     <th className="px-1.5 py-1.5 text-center">QTD</th>
                     <th className="px-1.5 py-1.5 text-right">Total (kk)</th>
                     <th className="px-1.5 py-1.5 text-right">RC</th>
+                    {/* ATUALIZAR (66ª — EXCLUSIVO DO BOSS): grava o valor
+                        BASE do item na Lista de Itens oficial (guia
+                        Personagens com Itens) — todos os servidores ou só o
+                        do personagem. Demais usuários: modal inalterado. */}
+                    {isBossUser && <th className="px-1.5 py-1.5 text-center">Atualizar</th>}
                   </tr>
                 </thead>
                 <tbody>
@@ -5629,7 +5703,7 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
                       {/* Personagem só com Ouro relevante (> 1kk): sem itens
                           monitorados — o total vem exclusivamente do Ouro,
                           detalhado logo abaixo. */}
-                      <td colSpan={5} className="px-1.5 py-2.5 text-center italic text-slate-500">
+                      <td colSpan={isBossUser ? 6 : 5} className="px-1.5 py-2.5 text-center italic text-slate-500">
                         Nenhum item monitorado encontrado — o valor deste personagem vem apenas do Ouro.
                       </td>
                     </tr>
@@ -5638,8 +5712,18 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
                     const key = questsViewItemKey(index, match.foundName);
                     const itemKk = effItemKk(index, match);
                     const overridden = Math.abs(itemKk - Number(match.totalKk || 0)) > 0.0001;
+                    // Coluna "Atualizar" (Boss): valor BASE que será gravado
+                    // na Lista de Itens — vem da consulta (fonte local) ou é
+                    // reconstruído do resumo embutido (fórmula oficial do
+                    // Tier). Sem base válida, os botões ficam desabilitados.
+                    const rowBaseKk = Number(match.baseValueKk || 0);
+                    const rowCanUpdate = rowBaseKk >= 0.1;
+                    const rowItemLabel = match.watchedName || parseTieredItemName(match.foundName).baseName;
+                    const rowConfirm = questsViewUpdateConfirm?.index === index ? questsViewUpdateConfirm : null;
+                    const rowDone = questsViewUpdateDone?.index === index ? questsViewUpdateDone : null;
                     return (
-                    <tr key={`${match.foundName}-${index}`} className="border-b border-[var(--th-line)]/25">
+                    <Fragment key={`${match.foundName}-${index}`}>
+                    <tr className={`border-b border-[var(--th-line)]/25 ${rowConfirm ? "!border-b-0 bg-amber-500/5" : ""}`}>
                       <td className="px-1.5 py-1.5 text-left">
                         {/* Nome do item = botão de copiar (mesmo padrão do
                             nome de personagem): copia SOMENTE o nome. */}
@@ -5672,7 +5756,75 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
                         </span>
                       </td>
                       <td className="px-1.5 py-1.5 text-right font-mono font-bold text-emerald-300" title="Conversão do Total (kk) deste item pelo Valor do Coin informado acima.">{questsViewRcText(viewCoinRate, itemKk)}</td>
+                      {/* ATUALIZAR (66ª — Boss): grava o valor BASE deste
+                          item na Lista de Itens oficial. 1º clique só abre a
+                          confirmação; durante a operação os botões ficam
+                          bloqueados; o feedback substitui os botões por
+                          2,5s. */}
+                      {isBossUser && (
+                        <td className="px-1.5 py-1.5 text-center">
+                          {rowDone ? (
+                            <span className={`inline-flex items-center gap-1 text-[8px] font-black uppercase tracking-wide ${rowDone.ok ? "text-emerald-300" : "text-rose-300"}`} title={rowDone.message}>
+                              {rowDone.ok ? <Check size={10} className="flex-shrink-0" /> : <AlertTriangle size={10} className="flex-shrink-0" />}
+                              <span className="max-w-[90px] truncate">{rowDone.message}</span>
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center justify-center gap-1">
+                              <button
+                                type="button"
+                                disabled={!rowCanUpdate || questsViewUpdateBusy}
+                                onClick={() => setQuestsViewUpdateConfirm(prev => (prev?.index === index && prev.scope === "all" ? null : { index, scope: "all" }))}
+                                className={`rounded border px-1 py-0.5 inline-flex items-center gap-0.5 text-[8px] font-black uppercase tracking-wide transition-colors ${rowConfirm?.scope === "all" ? "border-amber-500/60 bg-amber-500/20 text-amber-200" : "border-amber-500/35 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20"} disabled:opacity-40 disabled:cursor-not-allowed`}
+                                title={rowCanUpdate ? `Atualizar em todos os servidores: gravar ${formatItemsKk(rowBaseKk)} como valor base de "${rowItemLabel}" na Lista de Itens (guia Personagens com Itens) de TODOS os servidores.` : "Valor base indisponível para este item — nada a atualizar."}
+                              >
+                                <Globe size={9} className="flex-shrink-0" /> Todos
+                              </button>
+                              <button
+                                type="button"
+                                disabled={!rowCanUpdate || questsViewUpdateBusy}
+                                onClick={() => setQuestsViewUpdateConfirm(prev => (prev?.index === index && prev.scope === "server" ? null : { index, scope: "server" }))}
+                                className={`rounded border px-1 py-0.5 inline-flex items-center gap-0.5 text-[8px] font-black uppercase tracking-wide transition-colors ${rowConfirm?.scope === "server" ? "border-amber-500/60 bg-amber-500/20 text-amber-200" : "border-amber-500/35 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20"} disabled:opacity-40 disabled:cursor-not-allowed`}
+                                title={rowCanUpdate ? `Atualizar neste servidor: gravar ${formatItemsKk(rowBaseKk)} como valor base de "${rowItemLabel}" SOMENTE na lista de ${view.server} — os demais servidores não são alterados.` : "Valor base indisponível para este item — nada a atualizar."}
+                              >
+                                <RefreshCw size={9} className="flex-shrink-0" /> Servidor
+                              </button>
+                            </span>
+                          )}
+                        </td>
+                      )}
                     </tr>
+                    {/* Confirmação inline (mesmo padrão do "Atualizar" do
+                        modal Detalhes da guia Itens): o 1º clique NUNCA
+                        executa — só esta linha confirma. */}
+                    {isBossUser && rowConfirm && !rowDone && (
+                      <tr className="border-b border-[var(--th-line)]/25 bg-amber-500/5">
+                        <td colSpan={6} className="px-1.5 pb-1.5 pt-0">
+                          <span className="inline-flex flex-wrap items-center gap-1.5 text-[9px] text-amber-200">
+                            <AlertTriangle size={10} className="flex-shrink-0 text-amber-300" />
+                            <span>
+                              Gravar <span className="font-mono font-bold">{formatItemsKk(rowBaseKk)}</span> como valor base de <span className="font-bold">“{rowItemLabel}”</span> {rowConfirm.scope === "all" ? "na Lista de Itens de TODOS os servidores" : <>SOMENTE na lista de <span className="font-bold">{view.server}</span> (demais servidores intactos)</>}?
+                            </span>
+                            <button
+                              type="button"
+                              disabled={questsViewUpdateBusy}
+                              onClick={confirmQuestsViewOfficialUpdate}
+                              className="rounded border border-emerald-500/40 bg-emerald-500/15 px-1.5 py-0.5 inline-flex items-center gap-1 font-black uppercase tracking-wide text-emerald-300 hover:bg-emerald-500/25 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                            >
+                              {questsViewUpdateBusy ? <RefreshCw size={9} className="animate-spin flex-shrink-0" /> : <Check size={9} className="flex-shrink-0" />} {questsViewUpdateBusy ? "Atualizando…" : "Confirmar"}
+                            </button>
+                            <button
+                              type="button"
+                              disabled={questsViewUpdateBusy}
+                              onClick={() => setQuestsViewUpdateConfirm(null)}
+                              className="rounded border border-slate-500/40 bg-slate-500/10 px-1.5 py-0.5 inline-flex items-center gap-1 font-black uppercase tracking-wide text-slate-300 hover:bg-slate-500/20 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                            >
+                              <X size={9} className="flex-shrink-0" /> Cancelar
+                            </button>
+                          </span>
+                        </td>
+                      </tr>
+                    )}
+                    </Fragment>
                     );
                   })}
                   {showGoldRow && (
@@ -5702,6 +5854,8 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
                         </span>
                       </td>
                       <td className="px-1.5 py-1.5 text-right font-mono font-bold text-emerald-300" title="Conversão do Ouro (kk) pelo Valor do Coin informado acima.">{questsViewRcText(viewCoinRate, effGoldKk)}</td>
+                      {/* Ouro não é item da Lista de Itens — sem atualização. */}
+                      {isBossUser && <td className="px-1.5 py-1.5 text-center"><span className="text-slate-600">—</span></td>}
                     </tr>
                   )}
                 </tbody>

@@ -22,8 +22,11 @@
 // associação com SW/SG/GB.
 // ============================================================================
 
-import { Check, Coins, Globe, Package, X } from "lucide-react";
+import { Fragment, useEffect, useRef, useState } from "react";
+import { AlertTriangle, Check, Coins, Globe, Package, RefreshCw, X } from "lucide-react";
 import type { Character } from "../types";
+import { SERVER_OPTIONS } from "../constants/servers";
+import { applyOfficialWatchedItemUpdate, parseTieredItemName } from "../utils/bazaarWatchedItems";
 import { computeItemRC, formatKkValue as formatKkValueBase, isItemSaleConcluded } from "../utils/itemSale";
 
 /**
@@ -46,6 +49,13 @@ interface Props {
    * Ausente = coluna exibida sem ação (somente leitura).
    */
   onToggleForSale?: (matchIndex: number, forSale: boolean) => void;
+  /**
+   * Coluna "Atualizar" (66ª tarefa — EXCLUSIVA DO BOSS): o App passa
+   * `role === "Boss"`. Dupla garantia: além de o modal só ser montado para o
+   * Boss, a coluna e o handler só existem com esta prop ativa — para os
+   * demais usuários o modal permanece EXATAMENTE como era.
+   */
+  canUpdateOfficialList?: boolean;
   onClose: () => void;
 }
 
@@ -64,9 +74,60 @@ function formatCapturedAt(ms: number): string {
   }
 }
 
-export default function CharacterBazaarItemsModal({ character, coinRate, onToggleForSale, onClose }: Props) {
+export default function CharacterBazaarItemsModal({ character, coinRate, onToggleForSale, canUpdateOfficialList, onClose }: Props) {
   const snapshot = character?.bazaarItems;
+
+  // ── COLUNA "ATUALIZAR" (66ª tarefa — EXCLUSIVA DO BOSS) ────────────────────
+  // Confirmação inline por linha/escopo (1º clique NUNCA executa), bloqueio
+  // durante a operação e feedback de sucesso/erro — mesmo padrão do
+  // "Atualizar" do modal Detalhes da guia Itens. A gravação usa o núcleo
+  // único applyOfficialWatchedItemUpdate (Lista de Itens oficial da guia
+  // Personagens com Itens + reprecificação da última consulta — nenhuma
+  // fonte paralela). Hooks declarados ANTES de qualquer retorno condicional.
+  const [updateConfirm, setUpdateConfirm] = useState<{ index: number; scope: "all" | "server" } | null>(null);
+  const [updateBusy, setUpdateBusy] = useState(false);
+  const [updateDone, setUpdateDone] = useState<{ index: number; ok: boolean; message: string } | null>(null);
+  const updateTimerRef = useRef<number | null>(null);
+  useEffect(() => () => { if (updateTimerRef.current !== null) window.clearTimeout(updateTimerRef.current); }, []);
+  // Troca de personagem: descarta confirmação/feedback pendentes.
+  useEffect(() => { setUpdateConfirm(null); setUpdateDone(null); }, [character]);
+
   if (!character || !snapshot) return null;
+
+  function confirmOfficialUpdate() {
+    const pending = updateConfirm;
+    const snap = character?.bazaarItems;
+    // Dupla checagem de autorização (além da montagem Boss-only do App).
+    if (!pending || !snap || !canUpdateOfficialList || updateBusy) return;
+    const match = snap.matches[pending.index];
+    if (!match) { setUpdateConfirm(null); return; }
+    setUpdateBusy(true);
+    try {
+      const result = applyOfficialWatchedItemUpdate({
+        scope: pending.scope,
+        server: snap.server || "",
+        itemName: match.watchedName || parseTieredItemName(match.foundName).baseName,
+        valueKk: Number(match.baseValueKk || 0),
+        serverUniverse: SERVER_OPTIONS,
+      });
+      const touched = result.changedServers.length + result.addedServers.length;
+      const message = !result.ok
+        ? (result.error || "Falha ao atualizar a Lista de Itens.")
+        : touched === 0
+          ? "Já atualizado"
+          : pending.scope === "all"
+            ? `${touched} servidor(es)`
+            : `${snap.server} atualizado`;
+      setUpdateDone({ index: pending.index, ok: result.ok, message });
+    } catch (error) {
+      setUpdateDone({ index: pending.index, ok: false, message: String((error as Error)?.message || "Falha ao atualizar a Lista de Itens.") });
+    } finally {
+      setUpdateBusy(false);
+      setUpdateConfirm(null);
+      if (updateTimerRef.current !== null) window.clearTimeout(updateTimerRef.current);
+      updateTimerRef.current = window.setTimeout(() => { setUpdateDone(null); updateTimerRef.current = null; }, 2500);
+    }
+  }
 
   // Valor EFETIVO: correção manual da consulta (quando havia) tem prioridade
   // sobre o calculado — mesma regra da tabela da guia Itens.
@@ -111,6 +172,11 @@ export default function CharacterBazaarItemsModal({ character, coinRate, onToggl
                 {/* À VENDA (58ª): controle discreto por item — vai para o
                     modal "Itens à Venda" de Meus Personagens, SEM Quest. */}
                 <th className="px-1.5 py-1.5 text-center">À venda</th>
+                {/* ATUALIZAR (66ª — EXCLUSIVO DO BOSS): grava o valor BASE
+                    do item na Lista de Itens oficial (guia Personagens com
+                    Itens) — todos os servidores ou só o do personagem. Para
+                    os demais usuários o modal permanece inalterado. */}
+                {canUpdateOfficialList && <th className="px-1.5 py-1.5 text-center">Atualizar</th>}
               </tr>
             </thead>
             <tbody>
@@ -119,13 +185,23 @@ export default function CharacterBazaarItemsModal({ character, coinRate, onToggl
                   {/* Personagem comprado só com Ouro relevante (> 1kk): sem
                       itens monitorados — o total vem exclusivamente do Ouro,
                       detalhado logo abaixo ("Inclui Ouro"). */}
-                  <td colSpan={8} className="px-1.5 py-2.5 text-center italic text-slate-500">
+                  <td colSpan={canUpdateOfficialList ? 9 : 8} className="px-1.5 py-2.5 text-center italic text-slate-500">
                     Nenhum item monitorado encontrado — o valor deste personagem vem apenas do Ouro.
                   </td>
                 </tr>
               )}
-              {snapshot.matches.map((match, index) => (
-                <tr key={`${match.foundName}-${index}`} className="border-b border-[var(--th-line)]/25">
+              {snapshot.matches.map((match, index) => {
+                // Coluna "Atualizar" (Boss): o snapshot da compra SEMPRE traz
+                // watchedName/baseValueKk (copiados da consulta de origem) —
+                // é esse valor BASE oficial que será gravado na Lista.
+                const rowBaseKk = Number(match.baseValueKk || 0);
+                const rowCanUpdate = rowBaseKk >= 0.1;
+                const rowItemLabel = match.watchedName || parseTieredItemName(match.foundName).baseName;
+                const rowConfirm = updateConfirm?.index === index ? updateConfirm : null;
+                const rowDone = updateDone?.index === index ? updateDone : null;
+                return (
+                <Fragment key={`${match.foundName}-${index}`}>
+                <tr className={`border-b border-[var(--th-line)]/25 ${rowConfirm ? "!border-b-0 bg-amber-500/5" : ""}`}>
                   <td className="px-1.5 py-1.5 text-left font-bold text-slate-100">{match.foundName}</td>
                   <td className="px-1.5 py-1.5 text-slate-300">{match.watchedName}</td>
                   <td className="px-1.5 py-1.5 text-right font-mono text-slate-200">{formatKkValue(match.baseValueKk, "kk")}</td>
@@ -162,8 +238,75 @@ export default function CharacterBazaarItemsModal({ character, coinRate, onToggl
                       )}
                     </div>
                   </td>
+                  {/* ATUALIZAR (66ª — Boss): 1º clique só abre a confirmação;
+                      durante a operação os botões ficam bloqueados; o
+                      feedback substitui os botões por 2,5s. */}
+                  {canUpdateOfficialList && (
+                    <td className="px-1.5 py-1.5 text-center">
+                      {rowDone ? (
+                        <span className={`inline-flex items-center gap-1 text-[8px] font-black uppercase tracking-wide ${rowDone.ok ? "text-emerald-300" : "text-rose-300"}`} title={rowDone.message}>
+                          {rowDone.ok ? <Check size={10} className="flex-shrink-0" /> : <AlertTriangle size={10} className="flex-shrink-0" />}
+                          <span className="max-w-[90px] truncate">{rowDone.message}</span>
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center justify-center gap-1">
+                          <button
+                            type="button"
+                            disabled={!rowCanUpdate || updateBusy}
+                            onClick={() => setUpdateConfirm(prev => (prev?.index === index && prev.scope === "all" ? null : { index, scope: "all" }))}
+                            className={`rounded border px-1 py-0.5 inline-flex items-center gap-0.5 text-[8px] font-black uppercase tracking-wide transition-colors cursor-pointer ${rowConfirm?.scope === "all" ? "border-amber-500/60 bg-amber-500/20 text-amber-200" : "border-amber-500/35 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20"} disabled:opacity-40 disabled:cursor-not-allowed`}
+                            title={rowCanUpdate ? `Atualizar em todos os servidores: gravar ${formatKkValue(rowBaseKk, "kk")} como valor base de "${rowItemLabel}" na Lista de Itens (guia Personagens com Itens) de TODOS os servidores.` : "Valor base indisponível para este item — nada a atualizar."}
+                          >
+                            <Globe size={9} className="flex-shrink-0" /> Todos
+                          </button>
+                          <button
+                            type="button"
+                            disabled={!rowCanUpdate || updateBusy}
+                            onClick={() => setUpdateConfirm(prev => (prev?.index === index && prev.scope === "server" ? null : { index, scope: "server" }))}
+                            className={`rounded border px-1 py-0.5 inline-flex items-center gap-0.5 text-[8px] font-black uppercase tracking-wide transition-colors cursor-pointer ${rowConfirm?.scope === "server" ? "border-amber-500/60 bg-amber-500/20 text-amber-200" : "border-amber-500/35 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20"} disabled:opacity-40 disabled:cursor-not-allowed`}
+                            title={rowCanUpdate ? `Atualizar neste servidor: gravar ${formatKkValue(rowBaseKk, "kk")} como valor base de "${rowItemLabel}" SOMENTE na lista de ${snapshot.server || "—"} — os demais servidores não são alterados.` : "Valor base indisponível para este item — nada a atualizar."}
+                          >
+                            <RefreshCw size={9} className="flex-shrink-0" /> Servidor
+                          </button>
+                        </span>
+                      )}
+                    </td>
+                  )}
                 </tr>
-              ))}
+                {/* Confirmação inline (mesmo padrão do "Atualizar" do modal
+                    Detalhes da guia Itens): 1º clique NUNCA executa — só
+                    esta linha confirma. */}
+                {canUpdateOfficialList && rowConfirm && !rowDone && (
+                  <tr className="border-b border-[var(--th-line)]/25 bg-amber-500/5">
+                    <td colSpan={9} className="px-1.5 pb-1.5 pt-0">
+                      <span className="inline-flex flex-wrap items-center gap-1.5 text-[9px] text-amber-200">
+                        <AlertTriangle size={10} className="flex-shrink-0 text-amber-300" />
+                        <span>
+                          Gravar <span className="font-mono font-bold">{formatKkValue(rowBaseKk, "kk")}</span> como valor base de <span className="font-bold">“{rowItemLabel}”</span> {rowConfirm.scope === "all" ? "na Lista de Itens de TODOS os servidores" : <>SOMENTE na lista de <span className="font-bold">{snapshot.server || "—"}</span> (demais servidores intactos)</>}?
+                        </span>
+                        <button
+                          type="button"
+                          disabled={updateBusy}
+                          onClick={confirmOfficialUpdate}
+                          className="rounded border border-emerald-500/40 bg-emerald-500/15 px-1.5 py-0.5 inline-flex items-center gap-1 font-black uppercase tracking-wide text-emerald-300 hover:bg-emerald-500/25 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                        >
+                          {updateBusy ? <RefreshCw size={9} className="animate-spin flex-shrink-0" /> : <Check size={9} className="flex-shrink-0" />} {updateBusy ? "Atualizando…" : "Confirmar"}
+                        </button>
+                        <button
+                          type="button"
+                          disabled={updateBusy}
+                          onClick={() => setUpdateConfirm(null)}
+                          className="rounded border border-slate-500/40 bg-slate-500/10 px-1.5 py-0.5 inline-flex items-center gap-1 font-black uppercase tracking-wide text-slate-300 hover:bg-slate-500/20 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                        >
+                          <X size={9} className="flex-shrink-0" /> Cancelar
+                        </button>
+                      </span>
+                    </td>
+                  </tr>
+                )}
+                </Fragment>
+                );
+              })}
             </tbody>
           </table>
 

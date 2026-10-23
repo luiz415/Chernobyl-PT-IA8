@@ -624,6 +624,147 @@ export function mergeWatchedLists(
   return { merged, added, updated };
 }
 
+// ============================================================================
+// ATUALIZAÇÃO OFICIAL A PARTIR DOS MODAIS "VER" (66ª tarefa) — NÚCLEO ÚNICO.
+//
+// Usado pela coluna "Atualizar" dos modais "Ver" do Painel Bazaar (guia de
+// quests) e de Meus Personagens → Itens (exclusivos do Boss): grava o valor
+// BASE de um item na "Lista de Itens" oficial (a MESMA fonte da guia
+// "Personagens com Itens") — em TODOS os servidores ou SOMENTE no servidor
+// do personagem do modal.
+//
+// Reutiliza integralmente as regras existentes (nenhuma fonte paralela,
+// nenhuma fórmula nova):
+//   • escopo GLOBAL: propagateWatchedItemValueToAllServers — o mesmo núcleo
+//     do botão "Atualizar" do modal Detalhes/Lista de Itens (atualiza onde o
+//     valor difere, cria onde não existe, data só muda se o valor mudou);
+//   • escopo SERVIDOR: a mesma regra da edição inline do modal Detalhes
+//     (atualiza/cria APENAS na lista do servidor — as demais ficam intactas);
+//   • reprecifica a última consulta da guia Itens SÓ nos servidores tocados
+//     (repriceQueryResultsForServerItem), preservando correções manuais e a
+//     parcela de Ouro; a gravação dispara o evento que o painel já escuta.
+//
+// As listas são 100% LOCAIS (localStorage do dispositivo do Boss — decisão
+// de arquitetura da guia Itens): não existe escrita em backend nesta
+// operação, logo não há autorização de backend aplicável; o gate de cargo é
+// o mesmo da guia Itens (recursos exclusivos do Boss na interface).
+//
+// CONCORRÊNCIA: a operação é síncrona (localStorage), mas um guard de
+// reentrância garante que dois acionamentos jamais se intercalem (o segundo
+// recebe erro e nada grava). Em QUALQUER falha, nada parcial é persistido
+// antes do ponto de gravação única do mapa.
+// ============================================================================
+
+/** Disparado quando a Lista de Itens oficial é gravada FORA da guia Itens. */
+export const BAZAAR_WATCHED_ITEMS_UPDATED_EVENT = "bazaar-watched-items-updated";
+
+export interface OfficialItemUpdateResult {
+  ok: boolean;
+  error?: string;
+  /** Servidores cujo VALOR foi efetivamente alterado. */
+  changedServers: string[];
+  /** Servidores onde o item foi CRIADO (ainda não existia na lista). */
+  addedServers: string[];
+}
+
+let officialItemUpdateInProgress = false;
+
+export function applyOfficialWatchedItemUpdate(input: {
+  /** "all" = todas as listas de servidores; "server" = só a do personagem. */
+  scope: "all" | "server";
+  /** Servidor do personagem do modal (alvo do escopo "server" e do reprice). */
+  server: string;
+  /** Nome do item (da lista quando conhecido; aceita o encontrado com [Tier x]). */
+  itemName: string;
+  /** Valor BASE (kk, até 1 casa decimal) a gravar na(s) lista(s). */
+  valueKk: number;
+  /** Universo oficial de servidores (SERVER_OPTIONS) — escopo "all". */
+  serverUniverse: readonly string[];
+}): OfficialItemUpdateResult {
+  const fail = (error: string): OfficialItemUpdateResult => ({ ok: false, error, changedServers: [], addedServers: [] });
+  if (officialItemUpdateInProgress) return fail("Já existe uma atualização em andamento — aguarde a conclusão.");
+  officialItemUpdateInProgress = true;
+  try {
+    // Nome BASE do item (sem o sufixo [Tier x]) — mesma separação oficial.
+    const baseName = parseTieredItemName(String(input.itemName || "")).baseName;
+    const nameKey = normalizeWatchedItemName(baseName);
+    if (!nameKey) return fail("Item sem nome válido para atualizar.");
+    // Valor base com a MESMA precisão aceita pela Lista de Itens (1 casa).
+    const valueKk = Math.round(Number(input.valueKk) * 10) / 10;
+    if (!Number.isFinite(valueKk) || valueKk < 0.1) return fail("Valor base inválido (precisa ser maior que zero, com até 1 casa decimal).");
+    const now = Date.now();
+    const map = loadWatchedItemsByServer();
+    // Nome CANÔNICO: se o item já está cadastrado em alguma lista, preserva
+    // o nome de lá (evita variação de caixa/acentos); senão usa o base.
+    let canonicalName = baseName;
+    for (const items of Object.values(map)) {
+      const listed = (items || []).find(item => normalizeWatchedItemName(item.name) === nameKey);
+      if (listed) { canonicalName = listed.name; break; }
+    }
+
+    let nextMap: WatchedItemsByServer;
+    let changedServers: string[] = [];
+    let addedServers: string[] = [];
+    if (input.scope === "all") {
+      // MESMO núcleo do "Atualizar" global do modal Detalhes/Lista de Itens.
+      const result = propagateWatchedItemValueToAllServers(map, canonicalName, valueKk, now, input.serverUniverse);
+      nextMap = result.map;
+      changedServers = result.changedServers;
+      addedServers = result.addedServers;
+    } else {
+      // MESMA regra da edição inline do modal Detalhes: SOMENTE a lista do
+      // servidor do personagem — nenhum outro servidor é tocado.
+      const serverKey = canonicalServerKey(String(input.server || ""));
+      if (!serverKey) return fail("Servidor do personagem não identificado.");
+      const items = map[serverKey] || [];
+      const index = items.findIndex(item => normalizeWatchedItemName(item.name) === nameKey);
+      if (index >= 0) {
+        if (items[index].valueKk === valueKk) {
+          // Idempotência: valor já em vigor — nada a gravar, data intacta.
+          return { ok: true, changedServers: [], addedServers: [] };
+        }
+        nextMap = { ...map, [serverKey]: items.map((item, i) => (i === index ? { ...item, valueKk, updatedAtMs: now } : item)) };
+        changedServers = [serverKey];
+      } else {
+        nextMap = {
+          ...map,
+          [serverKey]: [...items, { id: `wi_${now.toString(36)}_${Math.random().toString(36).slice(2, 7)}`, name: canonicalName, valueKk, updatedAtMs: now }],
+        };
+        addedServers = [serverKey];
+      }
+    }
+
+    if (changedServers.length === 0 && addedServers.length === 0) {
+      // Tudo já estava no valor (idempotência) — nenhuma gravação.
+      return { ok: true, changedServers, addedServers };
+    }
+    // Gravação ÚNICA do mapa (mesma chave/formato de sempre).
+    saveWatchedItemsByServer(nextMap);
+    // Reprecifica a última consulta da guia Itens SÓ nos servidores tocados
+    // (correções manuais e Ouro preservados). A gravação dispara o evento
+    // BAZAAR_ITEMS_LAST_QUERY_UPDATED_EVENT — o painel/App já escutam.
+    try {
+      const lastQuery = loadItemsLastQuery();
+      if (lastQuery && Array.isArray(lastQuery.results) && lastQuery.results.length > 0) {
+        let repriced = lastQuery.results;
+        for (const server of [...changedServers, ...addedServers]) {
+          repriced = repriceQueryResultsForServerItem(repriced, server, canonicalName, valueKk);
+        }
+        if (repriced !== lastQuery.results) {
+          saveItemsLastQuery({ ...lastQuery, results: repriced });
+        }
+      }
+    } catch { /* consulta local ilegível: a lista já foi atualizada; o botão "Atualizar" do quadro reprecifica depois */ }
+    // Avisa a guia Itens (se montada) para recarregar a lista do storage.
+    try { window.dispatchEvent(new Event(BAZAAR_WATCHED_ITEMS_UPDATED_EVENT)); } catch {}
+    return { ok: true, changedServers, addedServers };
+  } catch (error) {
+    return fail(String((error as Error)?.message || error || "Falha ao atualizar a Lista de Itens."));
+  } finally {
+    officialItemUpdateInProgress = false;
+  }
+}
+
 // ── LEGADO: cotação ÚNICA do coin (taxa fixa global) ────────────────────────
 // Substituída pela cotação POR SERVIDOR (src/utils/bazaarCoinRates.ts —
 // persistida em users/{uid}.bazaarCoinRates e espelhada em localStorage).

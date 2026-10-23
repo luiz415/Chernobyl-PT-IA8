@@ -6408,6 +6408,10 @@ export default function App() {
                 : m);
               handleCharacterInlineChange({ ...liveBazaarView, bazaarItems: { ...snap, matches } });
             }}
+            /* ATUALIZAR LISTA OFICIAL (66ª — EXCLUSIVO DO BOSS): dupla
+               garantia — além de o modal só ser montado para o Boss (acima),
+               a coluna "Atualizar" exige esta prop verdadeira. */
+            canUpdateOfficialList={userProfile?.role === "Boss"}
             onClose={() => setBazaarItemsViewCharacter(null)}
           />
         );

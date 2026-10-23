@@ -79,6 +79,7 @@ import {
   loadItemsInterests,
   loadItemsLastQuery,
   loadWatchedItemsByServer,
+  BAZAAR_WATCHED_ITEMS_UPDATED_EVENT,
   mergeWatchedLists,
   normalizeWatchedItemName,
   parseWatchlistImportAny,
@@ -592,6 +593,17 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
   const [watchedByServer, setWatchedByServer] = useState<WatchedItemsByServer>(() => loadWatchedItemsByServer());
   const [selectedServer, setSelectedServer] = useState<string>(() => readItemsSelectedServer());
   const watchedItems = getServerWatchedItems(watchedByServer, selectedServer);
+
+  // Lista oficial gravada FORA desta guia (coluna "Atualizar" dos modais
+  // "Ver" do Painel Bazaar e de Meus Personagens — 66ª tarefa): recarrega o
+  // estado do storage para o painel refletir na hora. As gravações feitas
+  // AQUI dentro não disparam o evento (o estado já é atualizado junto) —
+  // sem loop e sem releitura contínua.
+  useEffect(() => {
+    const refresh = () => setWatchedByServer(loadWatchedItemsByServer());
+    window.addEventListener(BAZAAR_WATCHED_ITEMS_UPDATED_EVENT, refresh);
+    return () => window.removeEventListener(BAZAAR_WATCHED_ITEMS_UPDATED_EVENT, refresh);
+  }, []);
 
   useEffect(() => {
     saveItemsSelectedServer(selectedServer);
