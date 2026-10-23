@@ -60,7 +60,7 @@ import {
 // Cotação do RC POR SERVIDOR (fonte GLOBAL: appSettings/global.serverCoinRates,
 // espelhada em localStorage para leitura síncrona) — mesma configuração
 // editada na guia Itens (Lista de Itens / modal Ver).
-import { getServerCoinRate, readLocalCoinRates } from "../utils/bazaarCoinRates";
+import { SERVER_COIN_RATES_EVENT, getServerCoinRate, parseCoinRateInput, persistCoinRates, readLocalCoinRates, withServerCoinRate } from "../utils/bazaarCoinRates";
 import { computeItemRC, formatKkValue as formatKkValueBase } from "../utils/itemSale";
 
 /**
@@ -2000,6 +2000,67 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
   useEffect(() => () => { if (questsViewUpdateTimerRef.current !== null) window.clearTimeout(questsViewUpdateTimerRef.current); }, []);
   // Troca de personagem no modal: descarta confirmação/feedback pendentes.
   useEffect(() => { setQuestsViewUpdateConfirm(null); setQuestsViewUpdateDone(null); }, [questsItemsDetailResult]);
+  // ── RC DO SERVIDOR — EDIÇÃO GLOBAL PELO MODAL "VER" (69ª — SÓ BOSS) ─────
+  // Promove o valor digitado no campo "Valor do Coin" à cotação OFICIAL do
+  // SERVIDOR do personagem exibido — a MESMA fonte única do app inteiro
+  // (`appSettings/global.serverCoinRates`, editada também pelos modais
+  // "RC Servidores", "Lista de Itens" e "Detalhes" da guia Itens): modal
+  // "RC Servidores" e todos os cálculos/conversões refletem na hora pelo
+  // evento do espelho + listener do App (outros dispositivos). Backend:
+  // as Security Rules de `appSettings` (já deployadas) só aceitam gravação
+  // de Boss — a autorização NÃO depende da interface. Busy evita gravações
+  // duplicadas; valor já vigente não grava nada (idempotência).
+  const [questsViewRateSaving, setQuestsViewRateSaving] = useState(false);
+  const [questsViewRateFeedback, setQuestsViewRateFeedback] = useState<{ ok: boolean; message: string } | null>(null);
+  const questsViewRateTimerRef = useRef<number | null>(null);
+  useEffect(() => () => { if (questsViewRateTimerRef.current !== null) window.clearTimeout(questsViewRateTimerRef.current); }, []);
+  // Troca de personagem: feedback pendente da cotação é descartado.
+  useEffect(() => { setQuestsViewRateFeedback(null); }, [questsItemsDetailResult]);
+  function flashQuestsViewRateFeedback(ok: boolean, message: string, ms: number) {
+    setQuestsViewRateFeedback({ ok, message });
+    if (questsViewRateTimerRef.current !== null) window.clearTimeout(questsViewRateTimerRef.current);
+    questsViewRateTimerRef.current = window.setTimeout(() => { setQuestsViewRateFeedback(null); questsViewRateTimerRef.current = null; }, ms);
+  }
+  async function saveQuestsViewOfficialRate() {
+    const view = questsItemsDetailResult;
+    // Dupla checagem de cargo (além de o controle só ser exibido ao Boss);
+    // o backend (Rules) revalida de novo na gravação.
+    if (!view || !isBossUser || questsViewRateSaving) return;
+    const server = String(view.server || "").trim();
+    if (!server) { flashQuestsViewRateFeedback(false, "Servidor do personagem não identificado.", 4000); return; }
+    // VALIDAÇÃO ÚNICA oficial de cotação (a mesma do modal RC Servidores/
+    // Lista de Itens): número > 0 com até 1 casa decimal.
+    const parsed = parseCoinRateInput(questsViewInputs.coin);
+    if (parsed === null) { flashQuestsViewRateFeedback(false, "Cotação inválida — número maior que zero com até 1 casa decimal (ex.: 2,5).", 4000); return; }
+    const current = getServerCoinRate(readLocalCoinRates(), server);
+    if (Math.abs(current - parsed) < 0.0001) { flashQuestsViewRateFeedback(true, "Já atualizado", 2500); return; }
+    setQuestsViewRateSaving(true);
+    try {
+      // Fonte oficial: altera SOMENTE a chave deste servidor no mapa
+      // (withServerCoinRate preserva os demais) e persiste espelho +
+      // Firestore (histórico da 54ª rotacionado junto, como sempre).
+      const { remoteOk } = await persistCoinRates(withServerCoinRate(readLocalCoinRates(), server, parsed));
+      if (remoteOk) {
+        flashQuestsViewRateFeedback(true, `RC de ${server} atualizado`, 2500);
+      } else {
+        // Espelho local gravado; sincronização remota pendente (semântica
+        // padrão do app: a próxima gravação bem-sucedida reenvia o mapa).
+        flashQuestsViewRateFeedback(false, "Falha ao sincronizar com o servidor — valor aplicado neste dispositivo e reenviado na próxima gravação.", 5000);
+      }
+      // O valor digitado virou a cotação OFICIAL: a personalização local do
+      // Coin deste personagem deixa de existir (campo passa a casar com o
+      // padrão). Itens/Ouro personalizados não são tocados.
+      if (view.auctionKey) {
+        updateQuestsViewOverride(view.auctionKey, prev => ({ ...prev, coinRateKk: undefined }));
+      }
+    } catch (error) {
+      // Nada além do espelho local pode ter mudado; valores dos demais
+      // servidores permanecem intactos (mapa alterado só nesta chave).
+      flashQuestsViewRateFeedback(false, String((error as Error)?.message || "Falha ao salvar a cotação."), 5000);
+    } finally {
+      setQuestsViewRateSaving(false);
+    }
+  }
   function confirmQuestsViewOfficialUpdate() {
     const pending = questsViewUpdateConfirm;
     const view = questsItemsDetailResult;
@@ -2074,9 +2135,21 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
   // campo abre vazio e o modal pede o valor (nunca inventa conversão nem
   // usa a taxa fixa legada). O valor digitado aqui continua sendo um
   // OVERRIDE LOCAL deste personagem — não altera a configuração persistida.
+  // TEMPO REAL das cotações (69ª tarefa): o espelho local dispara
+  // SERVER_COIN_RATES_EVENT a cada gravação (deste ou de outro modal) e o
+  // listener onSnapshot do App o realimenta com alterações de outros
+  // dispositivos. O contador força re-render: a cotação padrão do modal
+  // "Ver" e a coluna "Valor Itens" refletem na hora, sem nenhuma leitura
+  // nova ao Firestore.
+  const [coinRatesVersion, setCoinRatesVersion] = useState(0);
+  useEffect(() => {
+    const bump = () => setCoinRatesVersion(v => v + 1);
+    window.addEventListener(SERVER_COIN_RATES_EVENT, bump);
+    return () => window.removeEventListener(SERVER_COIN_RATES_EVENT, bump);
+  }, []);
   const questsViewDefaultCoinRate = useMemo(
     () => getServerCoinRate(readLocalCoinRates(), questsItemsDetailResult?.server),
-    [questsItemsDetailResult] // eslint-disable-line react-hooks/exhaustive-deps
+    [questsItemsDetailResult, coinRatesVersion] // eslint-disable-line react-hooks/exhaustive-deps
   );
   // Espelho local das cotações por servidor para a COLUNA "Valor Itens"
   // (conversão kk → RC por linha). Lido UMA vez por render (nunca por linha)
@@ -5697,6 +5770,35 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
                   </span>
                 ) : (
                   <span className="text-amber-300 font-bold">Informe o Valor do Coin para converter em RC</span>
+                )}
+                {/* RC GLOBAL DO SERVIDOR (69ª — EXCLUSIVO DO BOSS): promove o
+                    valor digitado acima à cotação OFICIAL do servidor deste
+                    personagem (appSettings/global.serverCoinRates — a MESMA
+                    fonte do modal "RC Servidores"/Lista de Itens): todos os
+                    cálculos do app passam a usá-la, em tempo real. Demais
+                    usuários: bloco inalterado (o campo segue sendo apenas a
+                    personalização local deles). */}
+                {isBossUser && (
+                  <span className="inline-flex items-center gap-1.5">
+                    {questsViewRateFeedback ? (
+                      <span className={`inline-flex items-center gap-1 text-[8px] font-black uppercase tracking-wide ${questsViewRateFeedback.ok ? "text-emerald-300" : "text-rose-300"}`} title={questsViewRateFeedback.message}>
+                        {questsViewRateFeedback.ok ? <Check size={10} className="flex-shrink-0" /> : <AlertTriangle size={10} className="flex-shrink-0" />}
+                        <span className="max-w-[220px] truncate">{questsViewRateFeedback.message}</span>
+                      </span>
+                    ) : (
+                      <button
+                        type="button"
+                        disabled={questsViewRateSaving}
+                        onClick={() => { void saveQuestsViewOfficialRate(); }}
+                        className={`rounded border px-1.5 py-0.5 inline-flex items-center gap-1 text-[8px] font-black uppercase tracking-wide transition-colors cursor-pointer border-amber-500/35 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20 disabled:opacity-40 disabled:cursor-not-allowed`}
+                        title={`Salvar o valor digitado como a cotação OFICIAL de ${view.server || "este servidor"} (a mesma do modal "RC Servidores") — vale para TODO o aplicativo e todos os usuários, em tempo real. Somente a cotação deste servidor é alterada.`}
+                      >
+                        {questsViewRateSaving
+                          ? <><RefreshCw size={9} className="animate-spin flex-shrink-0" /> Salvando…</>
+                          : <><Globe size={9} className="flex-shrink-0" /> Salvar p/ {view.server || "servidor"}</>}
+                      </button>
+                    )}
+                  </span>
                 )}
                 {hasStoredCustomization && (
                   <button

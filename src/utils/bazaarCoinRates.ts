@@ -298,8 +298,16 @@ export async function fetchCoinRates(uid?: string): Promise<BazaarCoinRates> {
  * sejam persistidas. No backend, as Security Rules de `appSettings` só
  * aceitam a gravação de usuários Boss — chamadas de outros perfis falham
  * silenciosamente no servidor (e a UI de edição nem é exibida a eles).
+ *
+ * RETORNO (69ª tarefa — retrocompatível; chamadores antigos o ignoram):
+ * `remoteOk` indica se a fonte durável (Firestore) confirmou a gravação.
+ * `false` = o espelho local desta sessão foi atualizado, mas a
+ * sincronização remota falhou (rede/permissão) — a próxima gravação
+ * bem-sucedida reenvia o mapa completo (semântica existente, inalterada);
+ * o chamador pode usar isso para AVISAR o usuário. No modo simulação (sem
+ * Firestore por design) o armazenamento local é a própria fonte → `true`.
  */
-export async function persistCoinRates(rates: BazaarCoinRates): Promise<void> {
+export async function persistCoinRates(rates: BazaarCoinRates): Promise<{ remoteOk: boolean }> {
   const clean = sanitizeCoinRates(rates);
   // HISTÓRICO (54ª): rotacionado a partir do estado ANTES desta gravação
   // (espelho local = última foto conhecida) — por servidor, só quem mudou.
@@ -311,17 +319,20 @@ export async function persistCoinRates(rates: BazaarCoinRates): Promise<void> {
       saveUIState(SIM_STORE_KEY, clean);
       saveUIState(SIM_HISTORY_KEY, nextHistory);
     } catch { /* espelho local já garante a sessão */ }
-    return;
+    return { remoteOk: true };
   }
   try {
     // UMA gravação: taxas + histórico viajam juntos no mesmo updateDoc.
     await updateDoc(doc(db, "appSettings", "global"), { serverCoinRates: clean, serverCoinRateHistory: nextHistory });
+    return { remoteOk: true };
   } catch {
     // Doc inexistente (cenário raro) — cria/mescla sem tocar outros campos.
     // Falha aqui também não pode derrubar a UI: o espelho local já foi
     // gravado e a próxima gravação bem-sucedida reenvia o mapa completo.
     try {
       await setDoc(doc(db, "appSettings", "global"), { serverCoinRates: clean, serverCoinRateHistory: nextHistory }, { merge: true });
+      return { remoteOk: true };
     } catch { /* silencioso — espelho local garante esta sessão */ }
+    return { remoteOk: false };
   }
 }
