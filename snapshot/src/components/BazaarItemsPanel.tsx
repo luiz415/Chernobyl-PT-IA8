@@ -67,6 +67,7 @@ import { publishBazaarItemsValues, type OfficialBazaarItemMatch } from "../servi
 import {
   BAZAAR_ITEMS_LAST_QUERY_UPDATED_EVENT,
   addWatchedItemToAllServers,
+  applyOfficialWatchedItemUpdate,
   buildCharacterMatches,
   buildWatchlistIndex,
   canonicalServerKey,
@@ -778,11 +779,17 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
   // somente leitura — o total (Tier × quantidade) NUNCA alimenta a lista.
   const [detailEdit, setDetailEdit] = useState<{ matchIndex: number; value: string } | null>(null);
   const [detailEditError, setDetailEditError] = useState<string | null>(null);
-  // ── "Atualizar" (modal Detalhes): propagação GLOBAL do valor do item ──────
-  // Índice do match em CONFIRMAÇÃO inline (1º clique NUNCA aplica — exige
-  // Confirmar explícito na própria linha) e feedback pós-aplicação (2,5s).
-  const [detailApply, setDetailApply] = useState<number | null>(null);
-  const [detailApplyDone, setDetailApplyDone] = useState<{ matchIndex: number; count: number } | null>(null);
+  // ── Coluna "Atualizar" (modal Detalhes) — PADRÃO ÚNICO dos modais "Ver" ──
+  // Dois botões por item ("Todos" = todos os servidores; "Servidor" = só o
+  // do personagem), confirmação inline por linha/escopo (1º clique NUNCA
+  // aplica), bloqueio durante a operação e feedback de 2,5s — a MESMA
+  // apresentação e comportamento dos modais "Ver" do Painel Bazaar (quests)
+  // e de Meus Personagens. A gravação usa o núcleo único
+  // applyOfficialWatchedItemUpdate (Lista de Itens oficial + reprecificação
+  // da última consulta — zero regras duplicadas).
+  const [detailApply, setDetailApply] = useState<{ matchIndex: number; scope: "all" | "server" } | null>(null);
+  const [detailApplyBusy, setDetailApplyBusy] = useState(false);
+  const [detailApplyDone, setDetailApplyDone] = useState<{ matchIndex: number; ok: boolean; message: string } | null>(null);
   const detailApplyTimerRef = useRef<number | null>(null);
   // ── TOTAL (KK) LOCAL no modal "Detalhes" — PERSISTIDO por consulta ───────
   // Itens com Tier nem sempre seguem o acréscimo padrão de +30%/nível: o
@@ -1786,15 +1793,6 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
   }
 
   /**
-   * "ATUALIZAR" (modal Detalhes) — após o CONFIRMAR da confirmação inline,
-   * propaga o valor BASE atual do item (o exibido na coluna "Base (kk)",
-   * que vem da lista do servidor do personagem) para o MESMO item em TODAS
-   * as listas de servidores. Eficiência: o helper puro devolve quais
-   * servidores realmente mudaram — listas já no valor novo não são
-   * regravadas e a reprecificação da última consulta roda SÓ para os
-   * servidores alterados. Zero Firestore (listas são 100% locais).
-   */
-  /**
    * VALOR BASE OFICIAL de um match do modal Detalhes — SEMPRE o valor
    * cadastrado na Lista de Itens do SERVIDOR do personagem (fonte única de
    * preço), nunca o Valor Total (que embute Tier × quantidade) e nunca a
@@ -1822,19 +1820,57 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
     return serverItems.find(item => normalizeWatchedItemName(item.name) === nameKey) || null;
   }
 
-  function applyDetailGlobalValue(matchIndex: number) {
-    if (!detailResult) return;
-    const match = detailResult.matches[matchIndex];
+  /**
+   * CONFIRMAR da coluna "Atualizar" do modal Detalhes — padrão único dos
+   * modais "Ver": aplica o valor BASE oficial do item (o da Lista de Itens
+   * do servidor; jamais o Valor Total ou a correção manual) no escopo
+   * escolhido, pelo núcleo único applyOfficialWatchedItemUpdate. Os estados
+   * do painel se realinham pelos eventos que o núcleo dispara (lista →
+   * BAZAAR_WATCHED_ITEMS_UPDATED_EVENT; última consulta →
+   * BAZAAR_ITEMS_LAST_QUERY_UPDATED_EVENT); somente o personagem ABERTO no
+   * modal é recarregado aqui para refletir sem fechar/reabrir.
+   */
+  function confirmDetailOfficialUpdate() {
+    const pending = detailApply;
+    // Dupla checagem de autorização (além de a guia ser exclusiva do Boss).
+    if (!pending || !detailResult || !isBossUser || detailApplyBusy) return;
+    const match = detailResult.matches[pending.matchIndex];
     if (!match) { setDetailApply(null); return; }
-    // EXCLUSIVAMENTE o valor BASE da Lista de Itens do servidor — jamais o
-    // Valor Total do personagem (Tier × quantidade) ou a correção manual.
-    const { changedServers, addedServers } = propagateItemValueGlobally(match.watchedName, resolveDetailBaseValueKk(match));
-
-    // Feedback inline (2,5s): quantos servidores foram efetivamente
-    // tocados (atualizados + criados) — 0 significa que todos já estavam
-    // no valor (item presente em todos, idempotência).
+    setDetailApplyBusy(true);
+    let done: { matchIndex: number; ok: boolean; message: string };
+    try {
+      const result = applyOfficialWatchedItemUpdate({
+        scope: pending.scope,
+        server: detailResult.server,
+        itemName: match.watchedName,
+        valueKk: resolveDetailBaseValueKk(match),
+        serverUniverse: SERVER_OPTIONS,
+      });
+      const touched = result.changedServers.length + result.addedServers.length;
+      const message = !result.ok
+        ? (result.error || "Falha ao atualizar a Lista de Itens.")
+        : touched === 0
+          ? "Já atualizado"
+          : pending.scope === "all"
+            ? `${touched} servidor(es)`
+            : `${detailResult.server} atualizado`;
+      done = { matchIndex: pending.matchIndex, ok: result.ok, message };
+      // Personagem aberto no modal: reflete os números novos na hora (os
+      // demais estados recarregam pelos eventos do núcleo).
+      if (result.ok && touched > 0) {
+        const stored = loadItemsLastQuery();
+        if (stored) {
+          const detailKey = detailResult.id || detailResult.url || detailResult.name;
+          const refreshed = stored.results.find(r => (r.id || r.url || r.name) === detailKey);
+          if (refreshed) setDetailResult(refreshed);
+        }
+      }
+    } catch (error) {
+      done = { matchIndex: pending.matchIndex, ok: false, message: String((error as Error)?.message || "Falha ao atualizar a Lista de Itens.") };
+    }
+    setDetailApplyBusy(false);
     setDetailApply(null);
-    setDetailApplyDone({ matchIndex, count: changedServers.length + addedServers.length });
+    setDetailApplyDone(done);
     if (detailApplyTimerRef.current !== null) window.clearTimeout(detailApplyTimerRef.current);
     detailApplyTimerRef.current = window.setTimeout(() => {
       setDetailApplyDone(null);
@@ -1929,10 +1965,27 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
    *  • snapshot dos itens (matches/ouro/correção manual) associado ao
    *    personagem ao salvar (`bazaarItems`) — o Boss os revê depois em
    *    Meus Personagens → Disponíveis → Itens → Ver, sem nova consulta.
+   *
+   * AJUSTES LOCAIS DO MODAL DETALHES (correção da auditoria): quando o
+   * personagem tem ajustes locais de Total (kk) por linha
+   * (detailTotalsByChar — a MESMA chave de personagem desta função), o
+   * snapshot importa os valores EFETIVOS (ajustado > calculado) e o total
+   * recalculado EXATAMENTE como o rodapé do modal (soma dos efetivos +
+   * Ouro, 1 casa); a correção manual deixa de valer nesse caso (mesma
+   * precedência do modal). `baseValueKk`/`unitValueKk` permanecem oficiais
+   * — o ajuste é do TOTAL da linha e nunca contamina o valor base. Sem
+   * ajustes, comportamento idêntico ao anterior.
    */
   function openPurchaseModalForResult(result: BazaarItemsCharacterResult) {
     if (!onOpenPurchaseModal) return;
     const auctionKey = result.id || result.url || result.name;
+    const charOverrides: Record<string, number> = detailTotalsByChar[auctionKey] || {};
+    const hasLocalTotals = Object.keys(charOverrides).length > 0;
+    const matches = result.matches.map((match, index) => {
+      const override = charOverrides[detailTotalKey(index, match.foundName)];
+      return { ...match, ...(override !== undefined ? { totalKk: override } : {}) };
+    });
+    const adjustedTotalKk = Math.round((matches.reduce((acc, m) => acc + Number(m.totalKk || 0), 0) + Number(result.goldKk || 0)) * 10) / 10;
     const response = onOpenPurchaseModal({
       name: result.name,
       level: result.level,
@@ -1943,10 +1996,10 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
       cryptCompleted: result.cryptCompleted ?? null,
       items: {
         server: result.server,
-        totalKk: result.totalKk,
+        totalKk: hasLocalTotals ? adjustedTotalKk : result.totalKk,
         ...(typeof result.goldKk === "number" && result.goldKk > 0 ? { goldKk: result.goldKk } : {}),
-        manualTotalKk: typeof result.manualTotalKk === "number" && result.manualTotalKk > 0 ? result.manualTotalKk : null,
-        matches: result.matches.map(match => ({ ...match })),
+        manualTotalKk: !hasLocalTotals && typeof result.manualTotalKk === "number" && result.manualTotalKk > 0 ? result.manualTotalKk : null,
+        matches,
         capturedAtMs: Date.now(),
       },
     });
@@ -3455,7 +3508,7 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                     // Chave do feedback de cópia — uma por linha do modal.
                     const detailCopyKey = `detail_item_${index}`;
                     // Confirmação/feedback do "Atualizar" — por linha.
-                    const isConfirmingApply = detailApply === index;
+                    const isConfirmingApply = detailApply?.matchIndex === index ? detailApply : null;
                     const applyDone = detailApplyDone?.matchIndex === index ? detailApplyDone : null;
                     // Valor BASE oficial da linha — o da Lista de Itens do
                     // servidor (o snapshot da consulta é só fallback). É o
@@ -3623,60 +3676,68 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                         )}
                       </td>
                       <td className="px-1.5 py-1.5 text-center">
-                        {/* "ATUALIZAR" — propaga o valor BASE atual deste item
-                            para TODAS as listas de servidores. O 1º clique
-                            NUNCA aplica: abre a confirmação inline abaixo da
-                            linha (Confirmar/Cancelar). */}
+                        {/* "ATUALIZAR" — PADRÃO ÚNICO dos modais "Ver": dois
+                            botões por item (Todos = todos os servidores;
+                            Servidor = só o deste personagem), aplicando o
+                            valor BASE oficial. O 1º clique NUNCA aplica:
+                            abre a confirmação inline abaixo da linha. */}
                         {applyDone ? (
-                          <span className="inline-flex items-center gap-1 rounded px-1 py-0.5 text-[9px] font-black text-emerald-300 bg-emerald-500/15" title={applyDone.count > 0 ? `Valor aplicado em ${applyDone.count} servidor(es)` : "Todos os servidores já estavam com este valor"}>
-                            <Check size={10} strokeWidth={3} /> {applyDone.count > 0 ? `${applyDone.count} atualizado(s)` : "Já atualizado"}
+                          <span className={`inline-flex items-center gap-1 text-[8px] font-black uppercase tracking-wide ${applyDone.ok ? "text-emerald-300" : "text-rose-300"}`} title={applyDone.message}>
+                            {applyDone.ok ? <Check size={10} className="flex-shrink-0" /> : <AlertTriangle size={10} className="flex-shrink-0" />}
+                            <span className="max-w-[90px] truncate">{applyDone.message}</span>
                           </span>
                         ) : (
-                          <button
-                            type="button"
-                            onClick={() => setDetailApply(prev => (prev === index ? null : index))}
-                            className={`inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[9px] font-black transition-colors cursor-pointer ${
-                              isConfirmingApply
-                                ? "border-amber-400/60 bg-amber-500/20 text-amber-200"
-                                : "border-amber-600/30 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20"
-                            }`}
-                            title={`Aplicar o valor BASE atual (${formatKkValue(rowBaseValueKk, "kk")} — o da Lista de Itens, nunca o Valor Total) de "${match.watchedName}" à Lista de Itens de TODOS os servidores; onde o item ainda não existir, ele é criado com este valor (pede confirmação)`}
-                          >
-                            <RefreshCw size={9} className="flex-shrink-0" /> Atualizar
-                          </button>
+                          <span className="inline-flex items-center justify-center gap-1">
+                            <button
+                              type="button"
+                              disabled={detailApplyBusy}
+                              onClick={() => setDetailApply(prev => (prev?.matchIndex === index && prev.scope === "all" ? null : { matchIndex: index, scope: "all" }))}
+                              className={`rounded border px-1 py-0.5 inline-flex items-center gap-0.5 text-[8px] font-black uppercase tracking-wide transition-colors cursor-pointer ${isConfirmingApply?.scope === "all" ? "border-amber-500/60 bg-amber-500/20 text-amber-200" : "border-amber-500/35 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20"} disabled:opacity-40 disabled:cursor-not-allowed`}
+                              title={`Atualizar em todos os servidores: gravar ${formatKkValue(rowBaseValueKk, "kk")} como valor base de "${match.watchedName}" na Lista de Itens de TODOS os servidores (cria o item onde ainda não existir).`}
+                            >
+                              <Globe size={9} className="flex-shrink-0" /> Todos
+                            </button>
+                            <button
+                              type="button"
+                              disabled={detailApplyBusy}
+                              onClick={() => setDetailApply(prev => (prev?.matchIndex === index && prev.scope === "server" ? null : { matchIndex: index, scope: "server" }))}
+                              className={`rounded border px-1 py-0.5 inline-flex items-center gap-0.5 text-[8px] font-black uppercase tracking-wide transition-colors cursor-pointer ${isConfirmingApply?.scope === "server" ? "border-amber-500/60 bg-amber-500/20 text-amber-200" : "border-amber-500/35 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20"} disabled:opacity-40 disabled:cursor-not-allowed`}
+                              title={`Atualizar neste servidor: gravar ${formatKkValue(rowBaseValueKk, "kk")} como valor base de "${match.watchedName}" SOMENTE na lista de ${detailResult.server} — os demais servidores não são alterados (recria o item se ele tiver sido removido desta lista).`}
+                            >
+                              <RefreshCw size={9} className="flex-shrink-0" /> Servidor
+                            </button>
+                          </span>
                         )}
                       </td>
                     </tr>
-                    {/* Confirmação INLINE (sem segundo modal): linha compacta
-                        logo abaixo do item, deixando explícito o alcance
-                        GLOBAL da ação. Confirmar aplica; Cancelar descarta. */}
-                    {isConfirmingApply && (
+                    {/* Confirmação INLINE (padrão único dos modais "Ver"):
+                        linha compacta logo abaixo do item, explícita sobre o
+                        ESCOPO escolhido. Confirmar aplica; Cancelar descarta. */}
+                    {isConfirmingApply && !applyDone && (
                       <tr className="border-b border-[var(--th-line)]/25 bg-amber-500/5">
                         <td colSpan={7} className="px-1.5 pb-1.5 pt-0">
-                          <div className="flex flex-wrap items-center justify-end gap-x-2 gap-y-1 rounded-md border border-amber-400/30 bg-amber-500/10 px-2 py-1">
+                          <span className="inline-flex flex-wrap items-center gap-1.5 text-[9px] text-amber-200">
                             <AlertTriangle size={10} className="flex-shrink-0 text-amber-300" />
-                            <span className="text-[9px] font-bold text-amber-200">
-                              Aplicar o valor base <span className="font-mono text-amber-100">{formatKkValue(rowBaseValueKk, "kk")}</span> a "{match.watchedName}" em <span className="uppercase">todos os servidores</span>?
+                            <span>
+                              Gravar <span className="font-mono font-bold">{formatKkValue(rowBaseValueKk, "kk")}</span> como valor base de <span className="font-bold">“{match.watchedName}”</span> {isConfirmingApply.scope === "all" ? "na Lista de Itens de TODOS os servidores" : <>SOMENTE na lista de <span className="font-bold">{detailResult.server}</span> (demais servidores intactos)</>}?
                             </span>
-                            <span className="inline-flex items-center gap-1">
-                              <button
-                                type="button"
-                                onClick={() => applyDetailGlobalValue(index)}
-                                className="inline-flex items-center gap-1 rounded-md border border-emerald-500/40 bg-emerald-500/15 px-1.5 py-0.5 text-[9px] font-black text-emerald-300 hover:bg-emerald-500/25 transition-colors cursor-pointer"
-                                title="Confirmar: atualiza este item nas Listas de Itens de todos os servidores (cria o item onde ainda não existir)"
-                              >
-                                <Check size={10} strokeWidth={3} /> Confirmar
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => setDetailApply(null)}
-                                className="inline-flex items-center gap-1 rounded-md border border-white/15 bg-white/5 px-1.5 py-0.5 text-[9px] font-black text-slate-300 hover:bg-white/10 hover:text-white transition-colors cursor-pointer"
-                                title="Cancelar: nenhuma alteração é feita"
-                              >
-                                <X size={10} /> Cancelar
-                              </button>
-                            </span>
-                          </div>
+                            <button
+                              type="button"
+                              disabled={detailApplyBusy}
+                              onClick={confirmDetailOfficialUpdate}
+                              className="rounded border border-emerald-500/40 bg-emerald-500/15 px-1.5 py-0.5 inline-flex items-center gap-1 font-black uppercase tracking-wide text-emerald-300 hover:bg-emerald-500/25 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                            >
+                              {detailApplyBusy ? <RefreshCw size={9} className="animate-spin flex-shrink-0" /> : <Check size={9} className="flex-shrink-0" />} {detailApplyBusy ? "Atualizando…" : "Confirmar"}
+                            </button>
+                            <button
+                              type="button"
+                              disabled={detailApplyBusy}
+                              onClick={() => setDetailApply(null)}
+                              className="rounded border border-slate-500/40 bg-slate-500/10 px-1.5 py-0.5 inline-flex items-center gap-1 font-black uppercase tracking-wide text-slate-300 hover:bg-slate-500/20 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                            >
+                              <X size={9} className="flex-shrink-0" /> Cancelar
+                            </button>
+                          </span>
                         </td>
                       </tr>
                     )}

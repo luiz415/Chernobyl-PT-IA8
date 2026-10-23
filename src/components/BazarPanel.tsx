@@ -262,42 +262,81 @@ function itemsViewFromAuction(auction: BazaarAuction): QuestsItemsDetailView | n
  *      sem inventar regra nova; o "item da lista" recebe o próprio nome
  *      encontrado (o resumo publicado não guarda o nome da lista).
  *
+ * PERSONALIZAÇÕES DO MODAL "VER" (correção da auditoria): quando o usuário
+ * personalizou valores no modal "Ver" (valor de item e/ou Ouro — override
+ * LOCAL indexado pela auctionKey), o snapshot importa esses valores
+ * EFETIVOS: `totalKk` da linha personalizada recebe o valor editado e o
+ * total do personagem é recalculado EXATAMENTE como no modal (soma dos
+ * itens efetivos + Ouro efetivo, 1 casa — questsViewAdjustedTotalKk);
+ * `manualTotalKk` é zerado nesse caso porque o modal "Ver" dá precedência
+ * ao override sobre a correção manual (mesma regra `hasValueOverride`).
+ * IMPORTANTE: `baseValueKk`/`unitValueKk` permanecem os OFICIAIS (da lista/
+ * reconstrução da consulta) — a personalização é do TOTAL da linha e NUNCA
+ * contamina o valor base que a coluna "Atualizar" (Boss) pode promover à
+ * Lista de Itens global. Sem personalização, comportamento idêntico ao
+ * anterior.
+ *
  * Sem itens em nenhuma das fontes ⇒ `undefined` (o personagem é salvo sem
  * `bazaarItems`, e a coluna Itens exibe "—", como hoje).
  */
 function buildPurchaseItemsSnapshot(
   localResult: BazaarItemsCharacterResult | undefined,
   auction: BazaarAuction,
+  viewOverride?: QuestsViewOverride,
 ): CharacterBazaarItemsSnapshot | undefined {
+  const overrideItems = viewOverride?.items || {};
+  const hasItemOverride = Object.keys(overrideItems).length > 0;
+  const hasGoldOverride = typeof viewOverride?.goldKk === "number";
+  const hasAnyOverride = hasItemOverride || hasGoldOverride;
+  /** Total (kk) efetivo da linha `index`: personalizado > original. */
+  const effectiveRowKk = (index: number, foundName: string, originalKk: number): number => {
+    const override = overrideItems[questsViewItemKey(index, foundName)];
+    return typeof override === "number" ? override : originalKk;
+  };
   // Mesma regra única (hasRelevantLoot) da coluna "Valor Itens (kk)":
   // snapshot também existe para personagem só com Ouro relevante (> 1kk).
   if (localResult && hasRelevantLoot(Array.isArray(localResult.matches) ? localResult.matches.length : 0, Number(localResult.goldKk || 0))) {
+    const matches = (localResult.matches || []).map((match, index) => ({
+      ...match,
+      totalKk: effectiveRowKk(index, String(match.foundName || ""), Number(match.totalKk || 0)),
+    }));
+    const effGoldKk = hasGoldOverride ? Number(viewOverride?.goldKk || 0) : Number(localResult.goldKk || 0);
+    // Com personalização: total recalculado como no modal "Ver" (soma dos
+    // efetivos + Ouro efetivo, 1 casa). Sem: exatamente o fluxo anterior.
+    const adjustedTotalKk = Math.round((matches.reduce((acc, m) => acc + Number(m.totalKk || 0), 0) + effGoldKk) * 10) / 10;
     return {
       server: localResult.server,
-      totalKk: Number(localResult.totalKk || 0),
-      ...(typeof localResult.goldKk === "number" && localResult.goldKk > 0 ? { goldKk: localResult.goldKk } : {}),
-      manualTotalKk: typeof localResult.manualTotalKk === "number" && localResult.manualTotalKk > 0 ? localResult.manualTotalKk : null,
-      matches: (localResult.matches || []).map(match => ({ ...match })),
+      totalKk: hasAnyOverride ? adjustedTotalKk : Number(localResult.totalKk || 0),
+      ...(effGoldKk > 0 ? { goldKk: effGoldKk } : {}),
+      // Override presente ⇒ precedência do modal "Ver" (hasValueOverride):
+      // o manual da consulta deixa de valer para o personagem importado.
+      manualTotalKk: !hasAnyOverride && typeof localResult.manualTotalKk === "number" && localResult.manualTotalKk > 0 ? localResult.manualTotalKk : null,
+      matches,
       capturedAtMs: Date.now(),
     };
   }
   if (typeof auction.itemsTotalKk === "number" && hasRelevantLoot(Array.isArray(auction.itemsMatches) ? auction.itemsMatches.length : 0, Number(auction.itemsGoldKk || 0))) {
+    const matches = (auction.itemsMatches || []).map((match, index) => {
+      const amount = Number(match.amount || 0);
+      const totalKk = Number(match.totalKk || 0);
+      const tier = Math.max(0, Number(match.tier || 0));
+      // Base/unit SEMPRE reconstruídos do total ORIGINAL da consulta (a
+      // personalização não contamina o valor base oficial).
+      const unitValueKk = Math.round((amount > 0 ? totalKk / amount : totalKk) * 100) / 100;
+      const baseValueKk = Math.round((unitValueKk / (1 + 0.3 * tier)) * 100) / 100;
+      const foundName = String(match.foundName || "");
+      return { foundName, watchedName: foundName, baseValueKk, tier, unitValueKk, amount, totalKk: effectiveRowKk(index, foundName, totalKk) };
+    });
+    const effGoldKk = hasGoldOverride ? Number(viewOverride?.goldKk || 0) : Number(auction.itemsGoldKk || 0);
+    const adjustedTotalKk = Math.round((matches.reduce((acc, m) => acc + Number(m.totalKk || 0), 0) + effGoldKk) * 10) / 10;
     return {
       server: String(auction.server || ""),
-      totalKk: Number(auction.itemsTotalKk || 0),
-      ...(Number(auction.itemsGoldKk || 0) > 0 ? { goldKk: Number(auction.itemsGoldKk || 0) } : {}),
+      totalKk: hasAnyOverride ? adjustedTotalKk : Number(auction.itemsTotalKk || 0),
+      ...(effGoldKk > 0 ? { goldKk: effGoldKk } : {}),
       // A correção manual do Boss é local ao dispositivo dele — o publicado
       // é sempre o valor calculado pela consulta.
       manualTotalKk: null,
-      matches: (auction.itemsMatches || []).map(match => {
-        const amount = Number(match.amount || 0);
-        const totalKk = Number(match.totalKk || 0);
-        const tier = Math.max(0, Number(match.tier || 0));
-        const unitValueKk = Math.round((amount > 0 ? totalKk / amount : totalKk) * 100) / 100;
-        const baseValueKk = Math.round((unitValueKk / (1 + 0.3 * tier)) * 100) / 100;
-        const foundName = String(match.foundName || "");
-        return { foundName, watchedName: foundName, baseValueKk, tier, unitValueKk, amount, totalKk };
-      }),
+      matches,
       capturedAtMs: Date.now(),
     };
   }
@@ -5320,8 +5359,12 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
                               // obtidos (fonte local da guia Itens > campos
                               // embutidos na lista oficial) — persistido no
                               // personagem para o "Ver" da coluna Itens de
-                              // Meus Personagens, sem nova consulta.
-                              const purchaseItems = buildPurchaseItemsSnapshot(itemsResultByAuctionKey.get(auctionKey), auction);
+                              // Meus Personagens, sem nova consulta. As
+                              // personalizações LOCAIS do modal "Ver" deste
+                              // leilão (valores de item/Ouro) são importadas
+                              // junto — o que o usuário vê no "Ver" é o que
+                              // chega a Meus Personagens.
+                              const purchaseItems = buildPurchaseItemsSnapshot(itemsResultByAuctionKey.get(auctionKey), auction, questsViewOverrides[auctionKey]);
                               const response = onAddCharacterFromBazaar?.({
                                 name: auction.name || "",
                                 level: auction.level || 0,
