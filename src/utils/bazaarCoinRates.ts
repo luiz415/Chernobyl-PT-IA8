@@ -336,3 +336,38 @@ export async function persistCoinRates(rates: BazaarCoinRates): Promise<{ remote
     return { remoteOk: false };
   }
 }
+
+/**
+ * EDIÇÃO GLOBAL DO RC PELO MODAL "VER" (69ª/70ª tarefas — EXCLUSIVA DO BOSS
+ * na UI; as Security Rules revalidam o cargo no backend): fluxo ÚNICO de
+ * validação → idempotência → persistência usado pelos modais "Ver" do
+ * Painel Bazaar (BazarPanel) e de Meus Personagens (CharacterBazaarItemsModal)
+ * — nenhuma lógica duplicada entre eles.
+ *
+ * Regras (as mesmas da 69ª tarefa):
+ * - valida `rawInput` com a validação única oficial (parseCoinRateInput:
+ *   número > 0, até 1 casa decimal) — inválido NÃO grava nada;
+ * - valor já vigente → "Já atualizado" SEM gravação (evita duplicadas);
+ * - altera SOMENTE a chave do servidor informado (withServerCoinRate
+ *   preserva os demais) na fonte oficial appSettings/global.serverCoinRates;
+ * - nunca lança: falha remota vira `ok=false` com `saved=true` (espelho
+ *   local aplicado; o mapa completo é reenviado na próxima gravação
+ *   bem-sucedida — semântica padrão do persistCoinRates).
+ *
+ * Retorno: `ok` orienta a cor do feedback (sucesso/erro), `saved` indica se
+ * o espelho local mudou (o chamador usa para limpar personalizações locais
+ * que passaram a coincidir com o novo padrão) e `message` é o texto pronto
+ * do feedback.
+ */
+export async function saveOfficialServerCoinRate(server: string, rawInput: string): Promise<{ ok: boolean; saved: boolean; message: string }> {
+  const name = String(server || "").trim();
+  if (!name) return { ok: false, saved: false, message: "Servidor do personagem não identificado." };
+  const parsed = parseCoinRateInput(rawInput);
+  if (parsed === null) return { ok: false, saved: false, message: "Cotação inválida — número maior que zero com até 1 casa decimal (ex.: 2,5)." };
+  const current = getServerCoinRate(readLocalCoinRates(), name);
+  if (Math.abs(current - parsed) < 0.0001) return { ok: true, saved: false, message: "Já atualizado" };
+  const { remoteOk } = await persistCoinRates(withServerCoinRate(readLocalCoinRates(), name, parsed));
+  return remoteOk
+    ? { ok: true, saved: true, message: `RC de ${name} atualizado` }
+    : { ok: false, saved: true, message: "Falha ao sincronizar com o servidor — valor aplicado neste dispositivo e reenviado na próxima gravação." };
+}

@@ -60,7 +60,7 @@ import {
 // Cotação do RC POR SERVIDOR (fonte GLOBAL: appSettings/global.serverCoinRates,
 // espelhada em localStorage para leitura síncrona) — mesma configuração
 // editada na guia Itens (Lista de Itens / modal Ver).
-import { SERVER_COIN_RATES_EVENT, getServerCoinRate, parseCoinRateInput, persistCoinRates, readLocalCoinRates, withServerCoinRate } from "../utils/bazaarCoinRates";
+import { SERVER_COIN_RATES_EVENT, getServerCoinRate, readLocalCoinRates, saveOfficialServerCoinRate } from "../utils/bazaarCoinRates";
 import { computeItemRC, formatKkValue as formatKkValueBase } from "../utils/itemSale";
 
 /**
@@ -2026,31 +2026,19 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
     // Dupla checagem de cargo (além de o controle só ser exibido ao Boss);
     // o backend (Rules) revalida de novo na gravação.
     if (!view || !isBossUser || questsViewRateSaving) return;
-    const server = String(view.server || "").trim();
-    if (!server) { flashQuestsViewRateFeedback(false, "Servidor do personagem não identificado.", 4000); return; }
-    // VALIDAÇÃO ÚNICA oficial de cotação (a mesma do modal RC Servidores/
-    // Lista de Itens): número > 0 com até 1 casa decimal.
-    const parsed = parseCoinRateInput(questsViewInputs.coin);
-    if (parsed === null) { flashQuestsViewRateFeedback(false, "Cotação inválida — número maior que zero com até 1 casa decimal (ex.: 2,5).", 4000); return; }
-    const current = getServerCoinRate(readLocalCoinRates(), server);
-    if (Math.abs(current - parsed) < 0.0001) { flashQuestsViewRateFeedback(true, "Já atualizado", 2500); return; }
     setQuestsViewRateSaving(true);
     try {
-      // Fonte oficial: altera SOMENTE a chave deste servidor no mapa
-      // (withServerCoinRate preserva os demais) e persiste espelho +
-      // Firestore (histórico da 54ª rotacionado junto, como sempre).
-      const { remoteOk } = await persistCoinRates(withServerCoinRate(readLocalCoinRates(), server, parsed));
-      if (remoteOk) {
-        flashQuestsViewRateFeedback(true, `RC de ${server} atualizado`, 2500);
-      } else {
-        // Espelho local gravado; sincronização remota pendente (semântica
-        // padrão do app: a próxima gravação bem-sucedida reenvia o mapa).
-        flashQuestsViewRateFeedback(false, "Falha ao sincronizar com o servidor — valor aplicado neste dispositivo e reenviado na próxima gravação.", 5000);
-      }
+      // FLUXO ÚNICO (70ª — compartilhado com o modal "Ver" de Meus
+      // Personagens): validação oficial (> 0, até 1 casa decimal),
+      // idempotência ("Já atualizado" sem gravar) e persistência na fonte
+      // oficial, alterando SOMENTE a chave deste servidor (histórico da
+      // 54ª rotacionado junto, como sempre).
+      const result = await saveOfficialServerCoinRate(String(view.server || "").trim(), questsViewInputs.coin);
+      flashQuestsViewRateFeedback(result.ok, result.message, result.ok ? 2500 : result.saved ? 5000 : 4000);
       // O valor digitado virou a cotação OFICIAL: a personalização local do
       // Coin deste personagem deixa de existir (campo passa a casar com o
       // padrão). Itens/Ouro personalizados não são tocados.
-      if (view.auctionKey) {
+      if (result.saved && view.auctionKey) {
         updateQuestsViewOverride(view.auctionKey, prev => ({ ...prev, coinRateKk: undefined }));
       }
     } catch (error) {

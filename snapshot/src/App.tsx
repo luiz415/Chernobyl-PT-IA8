@@ -31,7 +31,7 @@ import { loadItemsLastQuery, loadItemsInterests, BAZAAR_ITEMS_LAST_QUERY_UPDATED
 // .serverCoinRates, espelhada em localStorage) compartilhada pelo modal
 // "RC Servidores", pela Lista de Itens do Bazaar e por todos os cálculos
 // kk ⇄ RC. Substitui a antiga taxa fixa única e as taxas por usuário.
-import { getServerCoinRate, readLocalCoinRates, sanitizeCoinRateHistory, sanitizeCoinRates, writeLocalCoinRateHistory, writeLocalCoinRates } from "./utils/bazaarCoinRates";
+import { sanitizeCoinRateHistory, sanitizeCoinRates, writeLocalCoinRateHistory, writeLocalCoinRates } from "./utils/bazaarCoinRates";
 import { applySanguineOutcomeToOwnServices, fetchAllSharedServicesAsWaiting, isServiceProbablyDone, readAllSharedServicesCache, readServiceRequestsCache, readSharedServicesCache, replaceOwnerSharedServicesInWaitingCache } from "./services/sharedServicesService";
 import { backfillServiceQueueEntries, buildServiceQueueKey, freeServiceQueueEntry, registerServiceQueueEntry } from "./services/serviceQueueIndexService";
 import NotesPanel from "./components/NotesPanel";
@@ -6392,9 +6392,11 @@ export default function App() {
         return (
           <CharacterBazaarItemsModal
             character={liveBazaarView}
-            /* Cotação do SERVIDOR do snapshot (0 = não configurada → o modal
-               não converte) — mesma configuração por servidor da guia Itens. */
-            coinRate={getServerCoinRate(readLocalCoinRates(), liveBazaarView.bazaarItems?.server)}
+            /* Cotação do SERVIDOR do snapshot: desde a 70ª tarefa o próprio
+               modal a lê do espelho da fonte oficial (mesma configuração por
+               servidor da guia Itens) e reage ao SERVER_COIN_RATES_EVENT —
+               a prop estática foi removida para o rodapé refletir em tempo
+               real a edição global do RC feita pelo Boss. */
             /* À VENDA (58ª): grava forSale/forSaleAt no PRÓPRIO match do
                snapshot pelo MESMO canal do CharTable (persistência local +
                sync existentes). `forSaleAt` é definido só na PRIMEIRA

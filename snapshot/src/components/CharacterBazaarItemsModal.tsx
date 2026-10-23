@@ -22,10 +22,11 @@
 // associação com SW/SG/GB.
 // ============================================================================
 
-import { Fragment, useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, Check, Coins, Globe, Package, RefreshCw, X } from "lucide-react";
 import type { Character } from "../types";
 import { SERVER_OPTIONS } from "../constants/servers";
+import { SERVER_COIN_RATES_EVENT, coinRateText, getServerCoinRate, readLocalCoinRates, saveOfficialServerCoinRate } from "../utils/bazaarCoinRates";
 import { applyOfficialWatchedItemUpdate, parseTieredItemName } from "../utils/bazaarWatchedItems";
 import { computeItemRC, formatKkValue as formatKkValueBase, isItemSaleConcluded } from "../utils/itemSale";
 
@@ -41,8 +42,6 @@ function formatKkValue(value: number, suffix: "k" | "kk" = "kk"): string {
 
 interface Props {
   character: Character | null;
-  /** Cotação do coin (k) — a mesma persistida pela guia Bazaar → Itens. */
-  coinRate: number;
   /**
    * Marca/desmarca um item do snapshot como "À venda" (58ª tarefa) — o App
    * persiste pelo MESMO canal do CharTable (handleCharacterInlineChange).
@@ -74,8 +73,68 @@ function formatCapturedAt(ms: number): string {
   }
 }
 
-export default function CharacterBazaarItemsModal({ character, coinRate, onToggleForSale, canUpdateOfficialList, onClose }: Props) {
+export default function CharacterBazaarItemsModal({ character, onToggleForSale, canUpdateOfficialList, onClose }: Props) {
   const snapshot = character?.bazaarItems;
+
+  // ── COTAÇÃO DO RC EM TEMPO REAL (70ª tarefa) ───────────────────────────────
+  // A cotação do servidor é lida do ESPELHO LOCAL da fonte oficial
+  // (appSettings/global.serverCoinRates — a mesma da guia Itens/"RC
+  // Servidores"), por render, exatamente como o App fazia ao montar o modal
+  // (nenhuma fonte nova). O contador força re-render quando QUALQUER tela
+  // grava uma cotação (SERVER_COIN_RATES_EVENT) ou quando o onSnapshot do
+  // App realimenta o espelho com mudanças de outros dispositivos — o rodapé
+  // de conversão reflete na hora, sem recarregamento e sem nenhuma leitura
+  // nova ao Firestore.
+  const [coinRatesVersion, setCoinRatesVersion] = useState(0);
+  useEffect(() => {
+    const bump = () => setCoinRatesVersion(v => v + 1);
+    window.addEventListener(SERVER_COIN_RATES_EVENT, bump);
+    return () => window.removeEventListener(SERVER_COIN_RATES_EVENT, bump);
+  }, []);
+  const coinRate = useMemo(
+    () => getServerCoinRate(readLocalCoinRates(), snapshot?.server),
+    [snapshot, coinRatesVersion] // eslint-disable-line react-hooks/exhaustive-deps
+  );
+
+  // ── RC DO SERVIDOR — EDIÇÃO GLOBAL (70ª — EXCLUSIVA DO BOSS) ──────────────
+  // Mesmo recurso do modal "Ver" do Painel Bazaar (69ª), pelo MESMO fluxo
+  // único saveOfficialServerCoinRate (validação oficial, "Já atualizado"
+  // sem gravar, altera SÓ o servidor deste personagem na fonte oficial).
+  // Além de o modal só ser montado para o Boss, o campo/botão exigem
+  // canUpdateOfficialList e o backend (Rules) revalida o cargo na gravação
+  // — demais usuários não veem nem executam. Busy evita cliques
+  // concorrentes; feedback de sucesso/erro no padrão da 69ª.
+  const [rateInput, setRateInput] = useState("");
+  const [rateSaving, setRateSaving] = useState(false);
+  const [rateFeedback, setRateFeedback] = useState<{ ok: boolean; message: string } | null>(null);
+  const rateTimerRef = useRef<number | null>(null);
+  useEffect(() => () => { if (rateTimerRef.current !== null) window.clearTimeout(rateTimerRef.current); }, []);
+  // Troca de personagem: campo re-semeado com a cotação vigente do servidor
+  // dele ("" quando não configurada) e feedback pendente descartado.
+  useEffect(() => {
+    setRateInput(coinRateText(getServerCoinRate(readLocalCoinRates(), character?.bazaarItems?.server)));
+    setRateFeedback(null);
+  }, [character]);
+  async function saveOfficialRate() {
+    const server = String(character?.bazaarItems?.server || "").trim();
+    // Dupla checagem de autorização (além da montagem Boss-only do App).
+    if (!canUpdateOfficialList || rateSaving) return;
+    setRateSaving(true);
+    try {
+      const result = await saveOfficialServerCoinRate(server, rateInput);
+      setRateFeedback({ ok: result.ok, message: result.message });
+      if (rateTimerRef.current !== null) window.clearTimeout(rateTimerRef.current);
+      rateTimerRef.current = window.setTimeout(() => { setRateFeedback(null); rateTimerRef.current = null; }, result.ok ? 2500 : result.saved ? 5000 : 4000);
+    } catch (error) {
+      // saveOfficialServerCoinRate não lança; proteção extra — nada além do
+      // espelho local pode ter mudado (demais servidores intactos).
+      setRateFeedback({ ok: false, message: String((error as Error)?.message || "Falha ao salvar a cotação.") });
+      if (rateTimerRef.current !== null) window.clearTimeout(rateTimerRef.current);
+      rateTimerRef.current = window.setTimeout(() => { setRateFeedback(null); rateTimerRef.current = null; }, 5000);
+    } finally {
+      setRateSaving(false);
+    }
+  }
 
   // ── COLUNA "ATUALIZAR" (66ª tarefa — EXCLUSIVA DO BOSS) ────────────────────
   // Confirmação inline por linha/escopo (1º clique NUNCA executa), bloqueio
@@ -330,6 +389,46 @@ export default function CharacterBazaarItemsModal({ character, coinRate, onToggl
               </span>
             ) : (
               <span className="text-slate-500">Sem cotação do RC para {snapshot.server || "este servidor"} — defina na guia Bazaar → Itens (Lista de Itens) para ver a conversão.</span>
+            )}
+            {/* RC GLOBAL DO SERVIDOR (70ª — EXCLUSIVO DO BOSS): edita a
+                cotação OFICIAL do servidor deste personagem
+                (appSettings/global.serverCoinRates — a MESMA fonte do modal
+                "RC Servidores"/Lista de Itens e do modal "Ver" do Painel
+                Bazaar): todos os cálculos do app passam a usá-la, em tempo
+                real. Para os demais usuários o rodapé permanece inalterado
+                (o modal nem é montado para eles). */}
+            {canUpdateOfficialList && !!snapshot.server && (
+              <span className="inline-flex flex-wrap items-center gap-1.5">
+                <label className="inline-flex items-center gap-1.5" title="Cotação do Rubini Coin no Market: quantos k equivalem a 1000 RC. Mesma regra de conversão usada no restante do aplicativo — floor(kk ÷ cotação × 1000).">
+                  <span className="text-[8px] font-black uppercase tracking-wide text-amber-300">RC de {snapshot.server}:</span>
+                  <input
+                    value={rateInput}
+                    onChange={event => setRateInput(event.target.value)}
+                    placeholder="ex: 2,5"
+                    inputMode="decimal"
+                    className="w-14 rounded border border-[var(--th-line)]/60 bg-black/40 px-1.5 py-0.5 text-[10px] font-mono text-amber-200 outline-none focus:border-amber-500/50"
+                  />
+                  <span className="text-[9px] text-slate-500">k = 1000 RC</span>
+                </label>
+                {rateFeedback ? (
+                  <span className={`inline-flex items-center gap-1 text-[8px] font-black uppercase tracking-wide ${rateFeedback.ok ? "text-emerald-300" : "text-rose-300"}`} title={rateFeedback.message}>
+                    {rateFeedback.ok ? <Check size={10} className="flex-shrink-0" /> : <AlertTriangle size={10} className="flex-shrink-0" />}
+                    <span className="max-w-[220px] truncate">{rateFeedback.message}</span>
+                  </span>
+                ) : (
+                  <button
+                    type="button"
+                    disabled={rateSaving}
+                    onClick={() => { void saveOfficialRate(); }}
+                    className="rounded border px-1.5 py-0.5 inline-flex items-center gap-1 text-[8px] font-black uppercase tracking-wide transition-colors cursor-pointer border-amber-500/35 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20 disabled:opacity-40 disabled:cursor-not-allowed"
+                    title={`Salvar o valor digitado como a cotação OFICIAL de ${snapshot.server} (a mesma do modal "RC Servidores") — vale para TODO o aplicativo e todos os usuários, em tempo real. Somente a cotação deste servidor é alterada.`}
+                  >
+                    {rateSaving
+                      ? <><RefreshCw size={9} className="animate-spin flex-shrink-0" /> Salvando…</>
+                      : <><Globe size={9} className="flex-shrink-0" /> Salvar p/ {snapshot.server}</>}
+                  </button>
+                )}
+              </span>
             )}
             <span className="text-[9px] text-slate-500 basis-full">
               Tier: valor base × (1 + 0,3 × Tier). Conversão RC: floor((total ÷ coin) × 1000). Dados importados da consulta de origem — nenhuma nova consulta.
