@@ -31,6 +31,7 @@ import { db, rtdb, isSimulationMode, onSnapshot, updateDoc, setDoc, deleteDoc, g
 import { collection, doc, serverTimestamp, query, where, increment, runTransaction, Timestamp } from "firebase/firestore";
 // Leitura pontual da presença (RTDB, custo zero) — só na aba Usuários.
 import { ref as rtdbRef, get as rtdbGet } from "firebase/database";
+import { derivePresence, type DerivedPresence } from "../utils/presenceStatus";
 import { getLogs, clearLogs, getStats, type LogEntry } from "../utils/firestoreLogger";
 import { getVipEffectiveExpirationMillis, getVipExpirationMillis, formatVipExpirationDate, formatVipRemainingTime, VIP_DAY_MS } from "../utils/vipAccess";
 import { ArrowDown, ArrowUp, ArrowUpDown } from "lucide-react";
@@ -641,42 +642,57 @@ export default function BossAdminPanel({ open, onClose, minAverage = 10, globalS
   }
 
   // ============================================================================
-  // "VISTO POR ÚLTIMO" — LEITURA PONTUAL DO REALTIME DATABASE
+  // STATUS ONLINE/OFFLINE + "VISTO POR ÚLTIMO" — RTDB COM REGRA DE FRESCOR
   //
-  // A presença mora no RTDB (status/{uid}): conexões vivas em `conns` e
-  // `lastSeen` gravado pelo PRÓPRIO SERVIDOR na desconexão (onDisconnect) —
-  // sempre correto, mesmo em fechamento abrupto. O nó persiste após a saída,
-  // então o antigo cache paliativo de localStorage deixou de ser necessário.
+  // A presença mora no RTDB (status/{uid}): conexões em `conns` (com
+  // heartbeat `hb` regravado pelo cliente a cada 4 min) e `lastSeen`
+  // gravado também pelo servidor na desconexão (onDisconnect).
   //
-  // ECONOMIA: uma única leitura `get(status)` (RTDB, custo por operação =
-  // zero) ao abrir a aba Usuários — nenhum listener, nenhum poll, nenhuma
-  // leitura de coleção Firestore.
+  // CORREÇÃO DA AUDITORIA (falsos "Online" por dias): a regra antiga era
+  // "online ⇔ ≥1 conexão com active !== false", SEM expiração — uma conexão
+  // órfã (onDisconnect que falhou) mantinha o usuário online para sempre.
+  // Agora o status vem de `derivePresence` (src/utils/presenceStatus.ts —
+  // regra ÚNICA, espelhada no backend em functions/src/presenceCore.ts):
+  // online ⇔ ≥1 conexão ativa E com heartbeat fresco (15 min). O "Visto"
+  // considera também o maior heartbeat conhecido.
+  //
+  // ATUALIZAÇÃO SEM RECARREGAR: releitura a cada 60s enquanto a aba
+  // Usuários está aberta e VISÍVEL (documento oculto → pula o tick; ao
+  // voltar a ficar visível, relê na hora). São leituras `get` do RTDB
+  // (custo por operação = zero, nó de poucos KB), exclusivas do Boss com o
+  // painel aberto — nenhum listener, nenhuma leitura de coleção Firestore.
   // ============================================================================
-  interface BossPresenceEntry { online: boolean; lastSeen: number; lastLoginAt: number }
-  const [presenceMap, setPresenceMap] = useState<Record<string, BossPresenceEntry>>({});
+  const [presenceMap, setPresenceMap] = useState<Record<string, DerivedPresence>>({});
   useEffect(() => {
     if (!open || !userProfile || userProfile.role !== "Boss" || activeTab !== "users" || isIdleMode) return;
     if (isSimulationMode || !rtdb) { setPresenceMap({}); return; }
     if (globalSettings?.presenceEnabled === false) { setPresenceMap({}); return; }
+    const rtdbInstance = rtdb; // narrowing para dentro da closure
     let cancelled = false;
-    rtdbGet(rtdbRef(rtdb, "status")).then(snapshot => {
-      if (cancelled) return;
-      const raw = (snapshot.val() || {}) as Record<string, any>;
-      const map: Record<string, BossPresenceEntry> = {};
-      Object.keys(raw).forEach(uid => {
-        const entry = raw[uid] || {};
-        const conns = entry.conns && typeof entry.conns === "object" ? entry.conns : {};
-        // Mesma regra da Cloud Function: online ⇔ ≥1 conexão ativa.
-        const online = Object.keys(conns).some(id => conns[id]?.active !== false);
-        map[uid] = {
-          online,
-          lastSeen: Number(entry.lastSeen) || 0,
-          lastLoginAt: Number(entry.lastLoginAt) || 0,
-        };
-      });
-      setPresenceMap(map);
-    }).catch(() => { if (!cancelled) setPresenceMap({}); });
-    return () => { cancelled = true; };
+    const refresh = () => {
+      rtdbGet(rtdbRef(rtdbInstance, "status")).then(snapshot => {
+        if (cancelled) return;
+        const raw = (snapshot.val() || {}) as Record<string, any>;
+        const now = Date.now();
+        const map: Record<string, DerivedPresence> = {};
+        Object.keys(raw).forEach(uid => {
+          map[uid] = derivePresence(raw[uid], now);
+        });
+        setPresenceMap(map);
+      }).catch(() => { if (!cancelled) setPresenceMap({}); });
+    };
+    refresh();
+    const interval = setInterval(() => {
+      if (document.visibilityState === "hidden") return; // aba oculta: não gasta
+      refresh();
+    }, 60 * 1000);
+    const onVisible = () => { if (document.visibilityState === "visible") refresh(); };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
   }, [open, userProfile?.role, activeTab, isIdleMode, globalSettings?.presenceEnabled]);
 
   function formatPresenceTime(millis?: number): string {

@@ -54,6 +54,12 @@ export { cleanupRemovedSlotPreApprovals } from "./acquisitionCleanup.js";
 // trigger deve rodar na região da instância RTDB; RTDB não existe em
 // southamerica-east1).
 export { presenceSync } from "./presenceSync.js";
+// Rede de segurança da presença (auditoria dos falsos "Online"): o
+// onDisconnect do RTDB não é garantido — conexões órfãs ficavam marcando
+// usuários como online por dias. A varredura agendada remove conexões sem
+// heartbeat fresco (regra única em presenceCore.ts, espelhada no front) e
+// resgata o "Visto por último" que o onDisconnect falhou em gravar.
+export { presenceCleanup } from "./presenceCleanup.js";
 // Notificações personalizadas do Boss: o painel grava apenas o PEDIDO em
 // `customNotificationRequests` (Rules restringem a criação a Boss aprovado);
 // o trigger revalida o papel no backend e faz o fan-out em lotes para a

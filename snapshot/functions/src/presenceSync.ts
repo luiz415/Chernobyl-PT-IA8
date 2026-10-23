@@ -3,6 +3,12 @@ import { logger } from "firebase-functions";
 import { getApps, initializeApp } from "firebase-admin/app";
 import { getDatabase } from "firebase-admin/database";
 import { getFirestore, FieldValue } from "firebase-admin/firestore";
+import {
+  countOnlineUsers,
+  isCountRelevantConnChange,
+  type PresenceConn,
+  type PresenceStatusTree,
+} from "./presenceCore.js";
 
 if (getApps().length === 0) {
   initializeApp();
@@ -13,27 +19,32 @@ if (getApps().length === 0) {
 // ============================================================================
 //
 // ARQUITETURA (prioridade: ECONOMIA de consumo do Firestore):
-//   Cliente ──► RTDB status/{uid}/conns/{connId} (+ onDisconnect no servidor)
-//           ──► ESTE trigger (dispara SÓ quando o nó de um uid muda:
-//               conexão aberta/fechada ou flag de ociosidade)
+//   Cliente ──► RTDB status/{uid}/conns/{connId} (+ onDisconnect no servidor
+//               + HEARTBEAT `hb` a cada 4 min — ver presenceCore.ts)
+//           ──► ESTE trigger (dispara quando UMA conexão muda)
 //           ──► Firestore presence/count { onlineCount } — escrito SOMENTE
 //               quando o total realmente muda.
 //   Clientes leem presence/count por POLLING de 10 min (1 read) — SEM listener.
 //
+// MUDANÇAS DA AUDITORIA DE PRESENÇA (falsos "Online" por dias):
+//   • O trigger desceu de `/status/{uid}` para `/status/{uid}/conns/{connId}`:
+//     com o heartbeat, a imensa maioria dos eventos é "só hb mudou" — o
+//     before/after da PRÓPRIA conexão permite detectar isso e RETORNAR CEDO
+//     sem nenhuma leitura (custo ~zero por invocação de heartbeat). As
+//     gravações de metadados (`name`/`lastSeen`/`lastLoginAt`) deixaram de
+//     disparar o trigger — elas nunca mudam o total.
+//   • A contagem agora usa a regra única de `presenceCore.ts`: online ⇔
+//     ≥1 conexão com `active !== false` E heartbeat FRESCO (15 min).
+//     Conexões órfãs (onDisconnect que falhou) deixam de inflar o contador
+//     mesmo ANTES de a limpeza agendada (`presenceCleanup`) removê-las.
+//
 // POR QUE É BARATO:
 //   • presença bruta vive no RTDB → zero custo por operação;
-//   • o trigger roda apenas em transições (login/logout/queda/ocioso) —
-//     nunca em intervalos; sem usuários mudando, zero invocações;
-//   • a leitura do total é feita no RTDB (grátis); o Firestore só recebe
-//     1 write quando `onlineCount` muda de valor;
+//   • heartbeats retornam cedo SEM ler nada; transições reais (login/
+//     logout/queda/ocioso/limpeza) recontam com UMA leitura RTDB (grátis);
+//   • o Firestore só recebe 1 write quando `onlineCount` muda de valor;
 //   • nenhuma coleção Firestore é varrida por ninguém (a antiga coleção
 //     `presence/{uid}` foi aposentada — só o doc `presence/count` resta).
-//
-// SEMÂNTICA DE ONLINE: uid online ⇔ status/{uid}/conns tem ≥1 conexão com
-// `active !== false`. Múltiplas abas/dispositivos contam UMA vez. A flag
-// `active:false` é a ociosidade (6 min sem atividade, marcada pelo cliente);
-// a REMOÇÃO da conexão é a desconexão (feita pelo servidor via onDisconnect
-// em fechamento abrupto, ou pelo cliente em logout limpo).
 //
 // REGIÃO: o RTDB do projeto vive em us-central1 (o RTDB não existe em
 // southamerica-east1) e triggers de RTDB DEVEM rodar na região da instância.
@@ -42,13 +53,12 @@ if (getApps().length === 0) {
 // IDEMPOTÊNCIA / CONCORRÊNCIA: o total é recontado do zero a cada execução
 // (fonte = RTDB inteiro, não deltas) e a escrita compara com o valor já
 // persistido — reexecuções ou eventos fora de ordem convergem sozinhos.
-// `maxInstances: 1` (herdado do padrão do projeto, aqui explícito) serializa
-// rajadas e evita corridas de escrita.
+// `maxInstances: 1` serializa rajadas e evita corridas de escrita.
 // ============================================================================
 
 export const presenceSync = onValueWritten(
   {
-    ref: "/status/{uid}",
+    ref: "/status/{uid}/conns/{connId}",
     region: "us-central1",
     maxInstances: 1,
     memory: "256MiB",
@@ -57,17 +67,19 @@ export const presenceSync = onValueWritten(
   async event => {
     const changedUid = event.params.uid;
 
-    // 1) Reconta o total no RTDB (leitura gratuita, fonte da verdade).
-    const statusSnap = await getDatabase().ref("status").get();
-    const status = (statusSnap.val() || {}) as Record<string, any>;
-
-    let onlineCount = 0;
-    for (const uid of Object.keys(status)) {
-      const conns = status[uid]?.conns;
-      if (!conns || typeof conns !== "object") continue;
-      const hasActiveConn = Object.keys(conns).some(id => conns[id]?.active !== false);
-      if (hasActiveConn) onlineCount += 1;
+    // 0) HEARTBEAT PERIÓDICO? (conexão existia antes e depois com o mesmo
+    //    estado ativo/ocioso → só `hb` mudou) — nada a recontar, custo zero.
+    const before = (event.data.before.val() || null) as PresenceConn | null;
+    const after = (event.data.after.val() || null) as PresenceConn | null;
+    if (!isCountRelevantConnChange(before, after)) {
+      return;
     }
+
+    // 1) Reconta o total no RTDB (leitura gratuita, fonte da verdade) com a
+    //    regra única (ativa E fresca — presenceCore.ts).
+    const statusSnap = await getDatabase().ref("status").get();
+    const status = (statusSnap.val() || {}) as PresenceStatusTree;
+    const onlineCount = countOnlineUsers(status, Date.now());
 
     // 2) Compara com o último total publicado — guardado no PRÓPRIO RTDB
     //    (meta/onlineCount), para que invocações sem mudança de total não
