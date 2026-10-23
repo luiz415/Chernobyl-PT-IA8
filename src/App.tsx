@@ -26,7 +26,7 @@ import FoundItemsModal, { collectFoundItemGroups } from "./components/FoundItems
 import CharacterBazaarItemsModal from "./components/CharacterBazaarItemsModal";
 // Cotação do coin persistida pela guia Bazaar → Itens (local) — usada apenas
 // para a conversão em RC no modal de itens do personagem (Boss).
-import { loadItemsLastQuery, loadItemsInterests } from "./utils/bazaarWatchedItems";
+import { loadItemsLastQuery, loadItemsInterests, BAZAAR_ITEMS_LAST_QUERY_UPDATED_EVENT } from "./utils/bazaarWatchedItems";
 // Cotação do RC POR SERVIDOR — fonte única GLOBAL (appSettings/global
 // .serverCoinRates, espelhada em localStorage) compartilhada pelo modal
 // "RC Servidores", pela Lista de Itens do Bazaar e por todos os cálculos
@@ -983,23 +983,35 @@ export default function App() {
     // itens só funcionavam depois de o usuário visitar a guia Itens na
     // sessão; agora ambos os canais nascem juntos com o app, cada um com a
     // sua fila (a guia realimenta com dados frescos quando aberta).
-    try {
-      const itemsQuery = loadItemsLastQuery();
-      if (itemsQuery && Array.isArray(itemsQuery.results)) {
-        syncBazaarItemsEndingAlerts({
-          characters: itemsQuery.results.map(result => ({
-            id: result.id || result.url || result.name,
-            name: result.name,
-            server: result.server,
-            auctionEndTs: result.auctionEndTs ?? null,
-            url: result.url,
-          })),
-          interestedAuctionIds: loadItemsInterests(uid),
-          currentUserUid: uid,
-          bazaarVersion: `items_${itemsQuery.completedAtMs}`,
-        });
-      }
-    } catch { /* cache ilegível: a guia Itens realimenta ao abrir */ }
+    const feedItemsChannelFromStorage = () => {
+      try {
+        const itemsQuery = loadItemsLastQuery();
+        if (itemsQuery && Array.isArray(itemsQuery.results)) {
+          syncBazaarItemsEndingAlerts({
+            characters: itemsQuery.results.map(result => ({
+              id: result.id || result.url || result.name,
+              name: result.name,
+              server: result.server,
+              auctionEndTs: result.auctionEndTs ?? null,
+              url: result.url,
+            })),
+            interestedAuctionIds: loadItemsInterests(uid),
+            currentUserUid: uid,
+            bazaarVersion: `items_${itemsQuery.completedAtMs}`,
+          });
+        }
+      } catch { /* cache ilegível: a guia Itens realimenta ao abrir */ }
+    };
+    feedItemsChannelFromStorage();
+    // "Última Consulta" de ITENS regravada DEPOIS do boot (ex.: etapa de
+    // itens integrada à consulta de QUESTS, que persiste na mesma chave):
+    // sem este ouvinte, a fila do canal de itens só era realimentada se a
+    // guia Itens estivesse montada — com a guia nunca visitada na sessão, os
+    // alertas de interesse seguiam presos à consulta anterior. Agora o canal
+    // acompanha a gravação em qualquer guia (mesmos dados locais; o painel,
+    // quando montado, continua realimentando com o estado dele — idempotente).
+    window.addEventListener(BAZAAR_ITEMS_LAST_QUERY_UPDATED_EVENT, feedItemsChannelFromStorage);
+    return () => window.removeEventListener(BAZAAR_ITEMS_LAST_QUERY_UPDATED_EVENT, feedItemsChannelFromStorage);
   }, [currentUser?.uid]);
 
   // ── PUSH (Web Push/FCM): entrega com a aba/app fechado ────────────────────

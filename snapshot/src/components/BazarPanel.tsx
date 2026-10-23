@@ -21,7 +21,8 @@ import type { BazaarItemsPurchasePrefill, Character, CharacterBazaarItemsSnapsho
 import { useAuth } from "../context/AuthContext";
 import { getManualSyncCooldownRemainingMs, markManualSyncAttempt, publishOfficialBazaarList, readOfficialBazaarCache, removeBazaarInterest, removeBazaarInterestsForAuctions, setBazaarInterest, syncBazaarInterests, syncOfficialBazaarList, type BazaarInterestMap, type OfficialBazaarMetadata } from "../services/bazaarOfficialService";
 import { applyValueOverlay, buildValueOverlay, clearBazaarValueOverlay, computeAutoRemoveAuctions, parseAutoRemoveLimit, readBazaarValueOverlay, sanitizeAutoRemoveLimit, saveBazaarValueOverlay } from "../utils/bazaarValueRefresh";
-import { BAZAR_NOTIFY_MINUTES_MAX, BAZAR_NOTIFY_MINUTES_MIN, clampBazarNotifyMinutes, formatAuctionEnd, formatDateTimeWithOffset, formatDuration, formatTimeZoneOffset, getBazarEndUntilAtConfiguredTime, getDefaultBazarEndUntil, getDeviceTimezoneOffsetMinutes, normalizeAuctionEndTimestamp, parseDateTimeLocalWithOffset, readBazarNotifyMinutes } from "../utils/bazaarTime";
+import { BAZAR_NOTIFY_MINUTES_MAX, BAZAR_NOTIFY_MINUTES_MIN, BAZAR_NOTIFY_SETTINGS_CHANGED_EVENT, BAZAR_REPEAT_ALERT_CHANGED_EVENT, clampBazarNotifyMinutes, formatAuctionEnd, formatDateTimeWithOffset, formatDuration, formatTimeZoneOffset, getBazarEndUntilAtConfiguredTime, getDefaultBazarEndUntil, getDeviceTimezoneOffsetMinutes, normalizeAuctionEndTimestamp, parseDateTimeLocalWithOffset, readBazarNotifyMinutes, readBazarRepeatAlert, saveBazarRepeatAlert } from "../utils/bazaarTime";
+import { copyTextToClipboard } from "../utils/clipboard";
 import { syncNotificationPrefsToCloud } from "../services/notificationPrefsSyncService";
 import { syncBazaarEndingAlerts } from "../services/bazaarInterestNotificationService";
 import { buildBazaarBidUrl, extractBazaarAuctionId, parseBidAmount, sanitizeBidInput } from "../utils/bazaarBid";
@@ -1522,6 +1523,118 @@ interface BazarPanelProps {
   };
 }
 
+// ============================================================================
+// SEÇÃO "NOTIFICAR" — CONTROLE COMPARTILHADO ENTRE AS DUAS GUIAS.
+//
+// Mesmo controle (antecedência + "Repetir Alerta") no quadro "Última
+// Consulta" das guias "Personagens Para SW/SG/GB" e "Personagens com Itens".
+// A CONFIGURAÇÃO é uma só (vale para os dois canais de alerta): a
+// antecedência é a preferência já persistida nos filtros do Bazaar
+// (readBazarNotifyMinutes) — aplicar aqui sobe pelo callback para o
+// BazarPanel, dono da persistência; "Repetir Alerta" vive em chave própria
+// (saveBazarRepeatAlert) e é espelhado entre as instâncias pelo evento
+// BAZAR_REPEAT_ALERT_CHANGED_EVENT. 0 minutos = notificações de
+// encerramento DESATIVADAS (inicial e repetições).
+// ============================================================================
+export function BazaarNotifySettingsControl({ appliedMinutes, onApplyMinutes }: {
+  /** Valor em vigor (persistido) — o rascunho local parte dele. */
+  appliedMinutes: number;
+  /** Persiste o novo valor (o BazarPanel grava nos filtros do Bazaar). */
+  onApplyMinutes: (minutes: number) => void;
+}) {
+  const [draft, setDraft] = useState(appliedMinutes);
+  const [savedAt, setSavedAt] = useState(0);
+  // Espelha alterações aplicadas na OUTRA guia (uma única configuração).
+  useEffect(() => { setDraft(appliedMinutes); }, [appliedMinutes]);
+  // Esconde a confirmação discreta de "Aplicar" após alguns segundos.
+  useEffect(() => {
+    if (!savedAt) return;
+    const timer = window.setTimeout(() => setSavedAt(0), 2600);
+    return () => window.clearTimeout(timer);
+  }, [savedAt]);
+  const [repeatAlert, setRepeatAlert] = useState(() => readBazarRepeatAlert());
+  useEffect(() => {
+    const refresh = () => setRepeatAlert(readBazarRepeatAlert());
+    window.addEventListener(BAZAR_REPEAT_ALERT_CHANGED_EVENT, refresh);
+    return () => window.removeEventListener(BAZAR_REPEAT_ALERT_CHANGED_EVENT, refresh);
+  }, []);
+  const isDirty = draft !== appliedMinutes;
+  const isOff = draft <= 0;
+  return (
+    <div className="inline-flex h-7 items-center gap-1.5 rounded-md border border-[var(--th-line)]/70 bg-black/35 px-2" title="Minutos de antecedência para a notificação de encerramento do leilão. 0 = notificações de encerramento DESATIVADAS (nenhum alerta inicial e nenhuma repetição).">
+      <span className="text-[10px] leading-none text-slate-400">Notificar</span>
+      <div className="inline-flex items-center gap-0.5">
+        <button
+          type="button"
+          onClick={() => setDraft(prev => clampBazarNotifyMinutes(prev - 1))}
+          disabled={draft <= BAZAR_NOTIFY_MINUTES_MIN}
+          title="Diminuir 1 minuto (0 desativa as notificações de encerramento)"
+          aria-label="Diminuir minutos de antecedência"
+          className="inline-flex h-5 w-5 items-center justify-center rounded border border-white/10 bg-white/5 text-slate-300 transition-colors hover:bg-white/15 hover:text-white disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:bg-white/5 cursor-pointer"
+        >
+          <ChevronDown size={11} strokeWidth={3} />
+        </button>
+        <span
+          role="spinbutton"
+          aria-valuemin={BAZAR_NOTIFY_MINUTES_MIN}
+          aria-valuemax={BAZAR_NOTIFY_MINUTES_MAX}
+          aria-valuenow={draft}
+          aria-label="Minutos de antecedência (0 = desativado)"
+          title={isOff ? "0 = notificações de encerramento desativadas" : undefined}
+          className={`min-w-[18px] select-none text-center font-mono text-[12px] font-black leading-none tabular-nums ${isOff ? "text-slate-500" : "text-amber-300"}`}
+        >
+          {draft}
+        </span>
+        <button
+          type="button"
+          onClick={() => setDraft(prev => clampBazarNotifyMinutes(prev + 1))}
+          disabled={draft >= BAZAR_NOTIFY_MINUTES_MAX}
+          title="Aumentar 1 minuto"
+          aria-label="Aumentar minutos de antecedência"
+          className="inline-flex h-5 w-5 items-center justify-center rounded border border-white/10 bg-white/5 text-slate-300 transition-colors hover:bg-white/15 hover:text-white disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:bg-white/5 cursor-pointer"
+        >
+          <ChevronUp size={11} strokeWidth={3} />
+        </button>
+      </div>
+      <span className="text-[10px] leading-none text-slate-400">{isOff ? "min (desativado)" : "min antes"}</span>
+      <button
+        type="button"
+        onClick={() => { const value = clampBazarNotifyMinutes(draft); setDraft(value); onApplyMinutes(value); setSavedAt(Date.now()); }}
+        disabled={!isDirty}
+        title={isDirty ? (isOff ? "Aplicar: 0 DESATIVA as notificações de encerramento (cancela também as repetições pendentes)" : "Aplicar novo tempo de antecedência") : "Nenhuma alteração para aplicar"}
+        className={`inline-flex h-5 items-center justify-center rounded border px-1.5 text-[9px] font-black transition-colors ${
+          isDirty
+            ? "border-amber-500/40 bg-amber-500/15 text-amber-300 hover:bg-amber-500/25 cursor-pointer"
+            : "border-white/10 bg-white/5 text-slate-600 cursor-not-allowed"
+        }`}
+      >
+        Aplicar
+      </button>
+      {savedAt > 0 && (
+        <span className="inline-flex items-center gap-0.5 text-[9px] font-black leading-none text-emerald-300" role="status">
+          <Check size={10} strokeWidth={3} /> Salvo
+        </span>
+      )}
+      <span className="h-4 w-px bg-white/10" aria-hidden="true" />
+      {/* "REPETIR ALERTA" — após o alerta inicial de um leilão de interesse,
+          repete o SOM a cada 30s (2 toques rápidos por repetição; a última
+          EXATAMENTE 30s antes do fim), sem notificações adicionais. */}
+      <label
+        className="inline-flex cursor-pointer items-center gap-1"
+        title="Repetir Alerta: após a notificação inicial de encerramento de um leilão com 'Tenho Interesse', repete o SOM do alerta a cada 30 segundos (tocado 2 vezes em sequência rápida a cada repetição), sem novas notificações no centro/desktop. A última repetição ocorre exatamente 30 segundos antes do encerramento e nenhuma após o fim. Desmarcar interrompe imediatamente as repetições pendentes."
+      >
+        <input
+          type="checkbox"
+          checked={repeatAlert}
+          onChange={event => saveBazarRepeatAlert(event.target.checked)}
+          className="h-3.5 w-3.5 cursor-pointer accent-amber-500"
+        />
+        <span className="text-[10px] leading-none text-slate-400">Repetir Alerta</span>
+      </label>
+    </div>
+  );
+}
+
 function BazarPanelContent({ sharedCharacters = [], waitingList = [], activeParties = [], personalCharacters = [], accounts = [], onAddCharacterFromBazaar, onOpenBazaarItemsPurchase, demoBazaar }: BazarPanelProps) {
   // MODO DEMO (tutorial): dados fictícios, sem consultas nem persistência.
   const demoMode = !!demoBazaar;
@@ -1701,8 +1814,6 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
   // `applied` é o valor persistido; `draft` é o que está nas setas e só vira
   // `applied` quando o usuário clica em "Aplicar".
   const [notifyBeforeMinutes, setNotifyBeforeMinutes] = useState(() => readBazarNotifyMinutes());
-  const [notifyMinutesDraft, setNotifyMinutesDraft] = useState(() => readBazarNotifyMinutes());
-  const [notifyMinutesSavedAt, setNotifyMinutesSavedAt] = useState(0);
   const [sortKey, setSortKey] = useState<SortKey>("auctionEndTs");
   const [sortDir, setSortDir] = useState<SortDir>("asc");
   const [checkingDetailsCount, setCheckingDetailsCount] = useState(0);
@@ -2073,6 +2184,12 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
       endUntilAutoTime,
       endUntilAutoDays,
     });
+    // Preferências de notificação (antecedência/fuso) ACABARAM de ser
+    // persistidas: avisa o agendador local para re-varrer na hora — é o que
+    // faz "antecedência 0" cancelar imediatamente alertas e repetições
+    // pendentes (e um valor maior disparar sem esperar o próximo minuto).
+    // Inócuo quando a gravação veio de outros filtros (varredura idempotente).
+    try { window.dispatchEvent(new Event(BAZAR_NOTIFY_SETTINGS_CHANGED_EVENT)); } catch {}
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [serverSelectionMode, selectedServers, vocationLevels, maxValue, soulwarFilter, sanguineFilter, cryptFilter, endUntil, timezoneOffsetMinutes, notifyBeforeMinutes, endUntilMode, endUntilAutoTime, endUntilAutoDays]);
 
@@ -2081,13 +2198,6 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
     saveBazarTableFilters(tableFilters);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tableFilters]);
-
-  // Esconde a confirmação discreta de "Aplicar" após alguns segundos.
-  useEffect(() => {
-    if (!notifyMinutesSavedAt) return;
-    const timer = window.setTimeout(() => setNotifyMinutesSavedAt(0), 2600);
-    return () => window.clearTimeout(timer);
-  }, [notifyMinutesSavedAt]);
 
   // ── FUSO ALTERADO → SINCRONIZA COM O BACKEND ─────────────────────────────
   // O watcher de encerramento (Cloud Function) usa o fuso de
@@ -3555,24 +3665,37 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
     setTableFilters(defaultBazarTableFilters());
   }
 
-  const isNotifyMinutesDirty = notifyMinutesDraft !== notifyBeforeMinutes;
-
-  function stepNotifyMinutesDraft(delta: number) {
-    setNotifyMinutesDraft(prev => clampBazarNotifyMinutes(prev + delta));
-  }
-
-  function applyNotifyMinutes() {
-    const value = clampBazarNotifyMinutes(notifyMinutesDraft);
-    setNotifyMinutesDraft(value);
-    setNotifyBeforeMinutes(value);
-    setNotifyMinutesSavedAt(Date.now());
-    // A detecção de encerramento roda no BACKEND (Cloud Function a cada
-    // minuto) — o novo tempo precisa valer lá. O sincronizador lê o
-    // localStorage já persistido, então o setTimeout de antes não é preciso;
-    // a gravação local acontece no efeito de filtros antes do próximo render.
+  /**
+   * Aplica a antecedência vinda do controle "Notificar" (compartilhado com a
+   * guia Itens — BazaarNotifySettingsControl). A persistência continua a
+   * MESMA: o estado entra no efeito de filtros acima, que grava o objeto no
+   * localStorage e avisa o agendador local. 0 = desativado (nenhum alerta).
+   */
+  function handleApplyNotifyMinutes(value: number) {
+    const safe = clampBazarNotifyMinutes(value);
+    setNotifyBeforeMinutes(safe);
+    // O espelho no Firestore (userNotificationPrefs) continua sendo
+    // atualizado como antes — o sincronizador lê o localStorage já
+    // persistido pelo efeito de filtros.
     if (currentUser?.uid) {
       window.setTimeout(() => { void syncNotificationPrefsToCloud(currentUser!.uid); }, 0);
     }
+  }
+
+  // ── CLIQUE DIREITO no botão "Abrir" → COPIA a URL do personagem ──────────
+  // Nunca abre o link nem exibe o menu de contexto; feedback discreto no
+  // próprio botão ("Copiado!"/"Falhou" por 1,5s — mesmo padrão dos botões de
+  // copiar do app). O estado de "Aberto/Último Aberto" não muda.
+  const [linkCopyFeedback, setLinkCopyFeedback] = useState<{ key: string; ok: boolean } | null>(null);
+  const linkCopyTimerRef = useRef<number | null>(null);
+  function handleAuctionLinkContextMenu(event: { preventDefault: () => void; stopPropagation: () => void }, feedbackKey: string, url: string) {
+    event.preventDefault();
+    event.stopPropagation();
+    void copyTextToClipboard(url).then(ok => {
+      setLinkCopyFeedback({ key: feedbackKey, ok });
+      if (linkCopyTimerRef.current) window.clearTimeout(linkCopyTimerRef.current);
+      linkCopyTimerRef.current = window.setTimeout(() => setLinkCopyFeedback(null), 1500);
+    });
   }
 
   function markBazaarLinkOpened(auctionKey: string) {
@@ -3884,6 +4007,11 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
               // fonte da guia Quests) + abertura do CharacterModal completo.
               personalCharacterNames={personalCharacterNameSet}
               onOpenPurchaseModal={onOpenBazaarItemsPurchase}
+              // Seção "Notificar" (antecedência + Repetir Alerta) no quadro
+              // "Última Consulta" da guia Itens — MESMO controle e MESMA
+              // configuração da guia de quests (persistência única, aqui).
+              notifyBeforeMinutes={notifyBeforeMinutes}
+              onApplyNotifyMinutes={handleApplyNotifyMinutes}
             />
           </div>
         )}
@@ -4030,8 +4158,9 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
                     if (notifAuctionKey) markBazaarLinkOpened(notifAuctionKey);
                     openExternal(notification.url || "");
                   }}
+                  onContextMenu={event => handleAuctionLinkContextMenu(event, `notif_${notification.id}`, notification.url || "")}
                   className="w-full rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-left text-[11px] leading-tight text-amber-200 flex items-center justify-between gap-2 hover:bg-amber-500/20 transition-colors cursor-pointer"
-                  title={notifLinkState === "open" ? "Abrir personagem no Bazaar" : notifOpenedLabel}
+                  title={`${notifLinkState === "open" ? "Abrir personagem no Bazaar" : notifOpenedLabel}. Clique direito: copiar a URL do personagem (não abre).`}
                 >
                   <span className="inline-flex items-center gap-1.5 min-w-0">
                     <AlertTriangle size={12} className="flex-shrink-0" />
@@ -4073,7 +4202,7 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
                         <Check size={9} strokeWidth={3} />{notifLinkState === "last" ? "Último aberto" : "Aberto"}
                       </span>
                     )}
-                    <span className="text-[9px] font-black underline">Abrir</span>
+                    <span className={`text-[9px] font-black underline ${linkCopyFeedback?.key === `notif_${notification.id}` ? (linkCopyFeedback.ok ? "text-emerald-300" : "text-red-300") : ""}`}>{linkCopyFeedback?.key === `notif_${notification.id}` ? (linkCopyFeedback.ok ? "Copiado!" : "Falhou") : "Abrir"}</span>
                   </span>
                 </button>
               );
@@ -4390,63 +4519,11 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
                   />
                 </div>
 
-                {/* Antecedência da notificação de encerramento (1 a 60 min).
-                    Só é salva ao clicar em Aplicar. Valor não editável por
-                    digitação — apenas pelas setas. */}
-                <div className="inline-flex h-7 items-center gap-1.5 rounded-md border border-[var(--th-line)]/70 bg-black/35 px-2" title="Minutos de antecedência para a notificação de encerramento do leilão">
-                  <span className="text-[10px] leading-none text-slate-400">Notificar</span>
-                  <div className="inline-flex items-center gap-0.5">
-                    <button
-                      type="button"
-                      onClick={() => stepNotifyMinutesDraft(-1)}
-                      disabled={notifyMinutesDraft <= BAZAR_NOTIFY_MINUTES_MIN}
-                      title="Diminuir 1 minuto"
-                      aria-label="Diminuir minutos de antecedência"
-                      className="inline-flex h-5 w-5 items-center justify-center rounded border border-white/10 bg-white/5 text-slate-300 transition-colors hover:bg-white/15 hover:text-white disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:bg-white/5 cursor-pointer"
-                    >
-                      <ChevronDown size={11} strokeWidth={3} />
-                    </button>
-                    <span
-                      role="spinbutton"
-                      aria-valuemin={BAZAR_NOTIFY_MINUTES_MIN}
-                      aria-valuemax={BAZAR_NOTIFY_MINUTES_MAX}
-                      aria-valuenow={notifyMinutesDraft}
-                      aria-label="Minutos de antecedência"
-                      className="min-w-[18px] select-none text-center font-mono text-[12px] font-black leading-none text-amber-300 tabular-nums"
-                    >
-                      {notifyMinutesDraft}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => stepNotifyMinutesDraft(1)}
-                      disabled={notifyMinutesDraft >= BAZAR_NOTIFY_MINUTES_MAX}
-                      title="Aumentar 1 minuto"
-                      aria-label="Aumentar minutos de antecedência"
-                      className="inline-flex h-5 w-5 items-center justify-center rounded border border-white/10 bg-white/5 text-slate-300 transition-colors hover:bg-white/15 hover:text-white disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:bg-white/5 cursor-pointer"
-                    >
-                      <ChevronUp size={11} strokeWidth={3} />
-                    </button>
-                  </div>
-                  <span className="text-[10px] leading-none text-slate-400">min antes</span>
-                  <button
-                    type="button"
-                    onClick={applyNotifyMinutes}
-                    disabled={!isNotifyMinutesDirty}
-                    title={isNotifyMinutesDirty ? "Aplicar novo tempo de antecedência" : "Nenhuma alteração para aplicar"}
-                    className={`inline-flex h-5 items-center justify-center rounded border px-1.5 text-[9px] font-black transition-colors ${
-                      isNotifyMinutesDirty
-                        ? "border-amber-500/40 bg-amber-500/15 text-amber-300 hover:bg-amber-500/25 cursor-pointer"
-                        : "border-white/10 bg-white/5 text-slate-600 cursor-not-allowed"
-                    }`}
-                  >
-                    Aplicar
-                  </button>
-                  {notifyMinutesSavedAt > 0 && (
-                    <span className="inline-flex items-center gap-0.5 text-[9px] font-black leading-none text-emerald-300" role="status">
-                      <Check size={10} strokeWidth={3} /> Salvo
-                    </span>
-                  )}
-                </div>
+                {/* Antecedência da notificação de encerramento (0 a 60 min;
+                    0 = desativado) + "Repetir Alerta" — controle COMPARTILHADO
+                    com a guia Itens (BazaarNotifySettingsControl): uma única
+                    configuração para os dois canais de alerta. */}
+                <BazaarNotifySettingsControl appliedMinutes={notifyBeforeMinutes} onApplyMinutes={handleApplyNotifyMinutes} />
                 <button type="button" onClick={() => setHideEndedAuctions(prev => !prev)} className={`inline-flex h-7 items-center gap-1 rounded-md border px-2.5 text-[10px] font-black transition-colors cursor-pointer ${hideEndedAuctions ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20" : "border-amber-500/25 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20"}`} title={hideEndedAuctions ? "Mostrar também leilões encerrados" : "Ocultar leilões encerrados"}>
                   {hideEndedAuctions ? "Ocultar encerrados" : "Exibir todos"}
                 </button>
@@ -5121,7 +5198,7 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
                       <td className="h-12 px-1 py-1 text-center align-middle">
                         <div className="flex w-full flex-col items-stretch gap-0.5">
                           <div className="flex w-full min-w-0 items-center gap-0.5">
-                            <button type="button" onClick={() => openAuctionLink(auction)} title={linkState === "last" ? "Último personagem aberto" : linkState === "opened" ? "Este link já foi aberto neste dispositivo" : "Abrir personagem no Bazaar"} className={`inline-flex h-7 max-w-full min-w-0 items-center justify-center gap-0.5 rounded-lg px-1.5 py-1 border text-[9px] font-black transition-colors cursor-pointer ${linkButtonClass}`}><ExternalLink size={11} className="flex-shrink-0" /> <span className="truncate">{linkButtonLabel}</span></button>
+                            <button type="button" onClick={() => openAuctionLink(auction)} onContextMenu={event => handleAuctionLinkContextMenu(event, `link_${auctionKey}`, auction.url)} title={`${linkState === "last" ? "Último personagem aberto" : linkState === "opened" ? "Este link já foi aberto neste dispositivo" : "Abrir personagem no Bazaar"}. Clique direito: copiar a URL do personagem (não abre).`} className={`inline-flex h-7 max-w-full min-w-0 items-center justify-center gap-0.5 rounded-lg px-1.5 py-1 border text-[9px] font-black transition-colors cursor-pointer ${linkButtonClass}`}><ExternalLink size={11} className="flex-shrink-0" /> <span className={`truncate ${linkCopyFeedback?.key === `link_${auctionKey}` ? (linkCopyFeedback.ok ? "text-emerald-300" : "text-red-300") : ""}`}>{linkCopyFeedback?.key === `link_${auctionKey}` ? (linkCopyFeedback.ok ? "Copiado!" : "Falhou") : linkButtonLabel}</span></button>
                             <input
                               type="text"
                               inputMode="numeric"

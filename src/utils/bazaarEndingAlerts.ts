@@ -51,7 +51,10 @@ export interface EndingAlert {
   endTimeLabel: string;
 }
 
-export const ENDING_ALERT_MINUTES_MIN = 1;
+// ZERO = DESATIVADO (explícito): antecedência 0 desliga por completo os
+// alertas de encerramento (inicial e repetições) — `collectDueEndingAlerts`
+// retorna vazio. Espelha BAZAR_NOTIFY_MINUTES_MIN em utils/bazaarTime.ts.
+export const ENDING_ALERT_MINUTES_MIN = 0;
 export const ENDING_ALERT_MINUTES_MAX = 60;
 export const ENDING_ALERT_MINUTES_DEFAULT = 3;
 
@@ -59,6 +62,34 @@ export function clampEndingAlertMinutes(value: unknown): number {
   const numeric = Math.round(Number(value));
   if (!Number.isFinite(numeric)) return ENDING_ALERT_MINUTES_DEFAULT;
   return Math.min(ENDING_ALERT_MINUTES_MAX, Math.max(ENDING_ALERT_MINUTES_MIN, numeric));
+}
+
+// ============================================================================
+// "REPETIR ALERTA" — grade PURA das repetições de som.
+//
+// As repetições são ancoradas no horário REAL de encerramento: a grade são
+// os instantes `endMs − k·30s` (k ≥ 1), de modo que a ÚLTIMA repetição cai
+// EXATAMENTE 30 segundos antes do fim e nenhuma ocorre após o encerramento.
+// `computeNextRepeatAtMs` devolve o PRÓXIMO instante da grade ESTRITAMENTE
+// futuro — por ser derivado de timestamps absolutos, re-render, troca de
+// guia ou reinício de timers nunca desloca nem duplica repetições (reagendar
+// recalcula o MESMO instante-alvo). Regra temporal segura para despertar
+// atrasado (aba congelada): o chamador toca no máximo UMA repetição vencida
+// (se ainda antes do fim) e volta à grade — ticks perdidos não se acumulam.
+// ============================================================================
+export const ENDING_ALERT_REPEAT_INTERVAL_MS = 30_000;
+
+/**
+ * Próximo instante de repetição (ms absolutos) estritamente após `nowMs`,
+ * ou null quando não há mais repetições (restam ≤ 30s ou leilão encerrado).
+ */
+export function computeNextRepeatAtMs(auctionEndMs: number, nowMs: number): number | null {
+  const endMs = Number(auctionEndMs);
+  if (!Number.isFinite(endMs) || endMs <= nowMs) return null;
+  // k = maior índice cujo instante (endMs − k·30s) ainda está no futuro.
+  const k = Math.ceil((endMs - nowMs) / ENDING_ALERT_REPEAT_INTERVAL_MS) - 1;
+  if (k < 1) return null;
+  return endMs - k * ENDING_ALERT_REPEAT_INTERVAL_MS;
 }
 
 /** Normaliza o carimbo de encerramento para MILISSEGUNDOS (aceita s ou ms). */
@@ -115,6 +146,9 @@ export function collectDueEndingAlerts(input: {
   // JANELA de disparo (abaixo) e o TÍTULO da notificação: o tempo informado
   // na mensagem é sempre exatamente o que o usuário configurou.
   const notifyMinutesConfigured = clampEndingAlertMinutes(input.notifyMinutes);
+  // ZERO = DESATIVADO: nada é coletado/alertado (nenhum som, nenhuma
+  // notificação, nenhuma repetição — o motor de repetições também respeita).
+  if (notifyMinutesConfigured <= 0) return [];
   const notifyMs = notifyMinutesConfigured * 60 * 1000;
   const due: EndingAlert[] = [];
 

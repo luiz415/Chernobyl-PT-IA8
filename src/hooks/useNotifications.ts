@@ -213,8 +213,21 @@ export function useNotifications({ currentUserUid }: Props) {
       return next;
     });
 
-    // Notificação na área de trabalho apenas para notificações realmente novas e pendentes
-    if (!isDuplicate && newNotif.status === "pending" && isReadyForDesktop.current) {
+    // ── ISENÇÃO DO WARM-UP: alertas LOCAIS de encerramento do Bazaar ──────
+    // O warm-up de 5s abaixo existe para a RE-HIDRATAÇÃO do boot (Firestore/
+    // localStorage reanexando notificações antigas) não virar rajada de
+    // som/desktop. Os alertas de "leilão encerrando" são agendados NO
+    // DISPOSITIVO e podem vencer legitimamente nos primeiros segundos da
+    // sessão (varredura de boot dos canais do Bazaar): como o agendador
+    // marca o alerta como enviado ANTES de despachar, suprimir som/desktop
+    // aqui PERDIA o aviso para sempre (ficava só silencioso no centro) —
+    // era a principal causa de "alerta que não dispara" ao abrir o app.
+    // O dedup próprio (registro por consulta + ids determinísticos +
+    // desktopShownIds) garante que a isenção não duplica nada.
+    const exemptFromWarmup = newNotif.type === "bazaar_interest_ending";
+
+    // Som apenas para notificações realmente novas e pendentes
+    if (!isDuplicate && newNotif.status === "pending" && (isReadyForDesktop.current || exemptFromWarmup)) {
       playNotificationSound();
     }
 
@@ -236,7 +249,7 @@ export function useNotifications({ currentUserUid }: Props) {
       }
     }
 
-    if (!isDuplicate && !alreadyShownOnDesktop && newNotif.status === "pending" && desktopEnabled && isReadyForDesktop.current) {
+    if (!isDuplicate && !alreadyShownOnDesktop && newNotif.status === "pending" && desktopEnabled && (isReadyForDesktop.current || exemptFromWarmup)) {
       // Clique na notificação desktop → EVENTO CANÔNICO ÚNICO. O roteador do
       // App (sempre montado) resolve o destino de TODOS os tipos pelo mapa
       // resolveNotificationDestination: PT por ID (Gerenciador/Meu Histórico),

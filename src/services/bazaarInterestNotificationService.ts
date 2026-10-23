@@ -1,9 +1,19 @@
 import {
   collectDueEndingAlerts,
+  computeNextRepeatAtMs,
   endingAlertSentKey,
+  normalizeEndingMs,
   type EndingAuctionInput,
 } from "../utils/bazaarEndingAlerts";
-import { readBazarNotifyMinutes, readBazarTimezoneOffsetMinutes } from "../utils/bazaarTime";
+import {
+  BAZAR_NOTIFY_SETTINGS_CHANGED_EVENT,
+  BAZAR_REPEAT_ALERT_CHANGED_EVENT,
+  readBazarNotifyMinutes,
+  readBazarRepeatAlert,
+  readBazarTimezoneOffsetMinutes,
+} from "../utils/bazaarTime";
+import { isNotificationTypeEnabled } from "../utils/notificationPreferences";
+import { playNotificationSound } from "../utils/notificationSound";
 
 // ============================================================================
 // ALERTAS DE ENCERRAMENTO DO BAZAAR — AGENDADOR LOCAL DO DISPOSITIVO.
@@ -88,10 +98,17 @@ interface AlertChannel {
   idPrefix: string;
   queue: QueueSnapshot | null;
   storeCache: SentStore | null;
+  /**
+   * Agendamentos de REPETIÇÃO de som ("Repetir Alerta") por leilão já
+   * alertado: chave = `${auctionId}_${endMs}` (a mesma do registro "sent").
+   * Vivem AQUI (singleton de módulo) — nunca em componente React: re-render
+   * e troca de guia não tocam nestes timers.
+   */
+  repeatTimers: Map<string, { auctionId: string; endMs: number; timer: number }>;
 }
 
-const questsChannel: AlertChannel = { storeKey: SENT_STORE_KEY, idPrefix: "", queue: null, storeCache: null };
-const itemsChannel: AlertChannel = { storeKey: ITEMS_SENT_STORE_KEY, idPrefix: ITEMS_ALERT_ID_PREFIX, queue: null, storeCache: null };
+const questsChannel: AlertChannel = { storeKey: SENT_STORE_KEY, idPrefix: "", queue: null, storeCache: null, repeatTimers: new Map() };
+const itemsChannel: AlertChannel = { storeKey: ITEMS_SENT_STORE_KEY, idPrefix: ITEMS_ALERT_ID_PREFIX, queue: null, storeCache: null, repeatTimers: new Map() };
 const channels: AlertChannel[] = [questsChannel, itemsChannel];
 
 let sweepTimer: number | null = null;
@@ -122,6 +139,100 @@ function clearTimerIfIdle(): void {
     window.clearInterval(sweepTimer);
     sweepTimer = null;
   }
+}
+
+// ============================================================================
+// "REPETIR ALERTA" — repetições de SOM após o alerta inicial.
+//
+// Regras (exatamente as do painel):
+//   • só para leilões JÁ alertados (registro "sent" do canal), ainda com
+//     "Tenho Interesse" e ainda ABERTOS;
+//   • uma repetição a cada 30s, ancorada no horário REAL de encerramento
+//     (grade endMs − k·30s) — a última EXATAMENTE 30s antes do fim e NUNCA
+//     após encerrar;
+//   • cada repetição toca o som 2× em sequência rápida; NENHUMA notificação
+//     adicional (centro/desktop) é emitida;
+//   • preferências revalidadas no INSTANTE de cada disparo: desativar o
+//     checkbox, zerar a antecedência, desmarcar o interesse ou desligar o
+//     tipo/som interrompem imediatamente;
+//   • (re)sincronizar recria os timers a partir de timestamps absolutos —
+//     re-render, troca de guia, atualização de lista ou reinício do sweeper
+//     nunca atrasam nem duplicam repetições (o alvo recalculado é o mesmo).
+// ============================================================================
+
+/** Pausa entre as duas batidas de som de uma MESMA repetição. */
+const REPEAT_SOUND_GAP_MS = 400;
+
+function clearChannelRepeats(channel: AlertChannel): void {
+  channel.repeatTimers.forEach(entry => window.clearTimeout(entry.timer));
+  channel.repeatTimers.clear();
+}
+
+function scheduleRepeatTick(channel: AlertChannel, key: string, auctionId: string, endMs: number): void {
+  const nowMs = Date.now();
+  const nextAt = computeNextRepeatAtMs(endMs, nowMs);
+  if (nextAt === null) {
+    channel.repeatTimers.delete(key);
+    return;
+  }
+  const timer = window.setTimeout(() => fireRepeatTick(channel, key, auctionId, endMs), Math.max(0, nextAt - nowMs));
+  channel.repeatTimers.set(key, { auctionId, endMs, timer });
+}
+
+function fireRepeatTick(channel: AlertChannel, key: string, auctionId: string, endMs: number): void {
+  channel.repeatTimers.delete(key);
+  // Revalidação COMPLETA no instante do disparo — qualquer condição desfeita
+  // entre o agendamento e agora cancela a repetição (e as seguintes).
+  if (!readBazarRepeatAlert()) return;              // checkbox desativado
+  if (readBazarNotifyMinutes() <= 0) return;        // antecedência 0 = desativado
+  const queue = channel.queue;
+  if (!queue || !queue.currentUserUid) return;
+  const stillEligible = queue.characters.some(character => {
+    const id = String(character?.id || "").trim();
+    return id === auctionId
+      && queue.interestedAuctionIds.has(id)
+      && normalizeEndingMs(character?.auctionEndTs) === endMs;
+  });
+  if (!stillEligible) return;                       // saiu da lista/interesse
+  const nowMs = Date.now();
+  if (nowMs >= endMs) return;                       // NUNCA após o encerramento
+  // Som 2× — mesmo canal de som das notificações (respeita a preferência
+  // global de som internamente) + o gate do TIPO "leilão encerrando".
+  if (isNotificationTypeEnabled("bazaar_interest_ending")) {
+    playNotificationSound();
+    window.setTimeout(() => {
+      // A 2ª batida também nunca soa após o fim (regra temporal segura).
+      if (Date.now() < endMs && readBazarRepeatAlert()) playNotificationSound();
+    }, REPEAT_SOUND_GAP_MS);
+  }
+  // Próximo instante da grade absoluta (ou fim das repetições).
+  scheduleRepeatTick(channel, key, auctionId, endMs);
+}
+
+/**
+ * Recria os agendamentos de repetição do canal a partir do ESTADO ATUAL
+ * (fila + registro "sent" + preferências). Chamado após cada varredura e
+ * nas mudanças de preferência — idempotente: a grade é absoluta, então
+ * recriar aponta para os MESMOS instantes (zero duplicação/atraso).
+ */
+function syncRepeatSchedules(channel: AlertChannel): void {
+  clearChannelRepeats(channel);
+  const queue = channel.queue;
+  if (!queue || !queue.currentUserUid) return;
+  if (!readBazarRepeatAlert()) return;              // desativado → nada pendente
+  if (readBazarNotifyMinutes() <= 0) return;        // antecedência 0 → nada pendente
+  const store = readStore(channel, queue.bazaarVersion);
+  const nowMs = Date.now();
+  queue.characters.forEach(character => {
+    const auctionId = String(character?.id || "").trim();
+    if (!auctionId || !queue.interestedAuctionIds.has(auctionId)) return;
+    const endMs = normalizeEndingMs(character?.auctionEndTs);
+    if (!endMs || endMs <= nowMs) return;
+    const sentKey = endingAlertSentKey(auctionId, endMs);
+    // Repetições EXISTEM apenas APÓS o alerta inicial daquele leilão.
+    if (!(sentKey in store.sent)) return;
+    scheduleRepeatTick(channel, sentKey, auctionId, endMs);
+  });
 }
 
 function dispatchAlert(alert: ReturnType<typeof collectDueEndingAlerts>[number], createdAtMs: number, idPrefix: string): void {
@@ -200,6 +311,11 @@ function sweepChannel(channel: AlertChannel): void {
     store.sent = Object.fromEntries(entries);
     writeStore(channel, store);
   }
+  // "Repetir Alerta": re-deriva os agendamentos do estado atual — cobre o
+  // nascimento das repetições logo após o alerta inicial (recém-marcado em
+  // `sent`), re-ancora timers congelados (despertar de aba oculta) e
+  // interrompe repetições de leilões que saíram das condições.
+  syncRepeatSchedules(channel);
 }
 
 /** Varredura completa: percorre os dois canais (quests e itens). */
@@ -213,10 +329,16 @@ function ensureSweeper(): void {
   if (!wakeBound) {
     wakeBound = true;
     // Aba congelada pelo navegador (Idle extremo/economia de bateria): os
-    // timers podem ter parado — ao VOLTAR, varre imediatamente o que venceu.
+    // timers podem ter parado — ao VOLTAR, varre imediatamente o que venceu
+    // (a varredura também re-ancora as repetições pela grade absoluta).
     document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") sweep(); });
     window.addEventListener("focus", sweep);
     window.addEventListener("online", sweep);
+    // Preferências alteradas no painel → efeito IMEDIATO (sem esperar o
+    // próximo minuto): desligar "Repetir Alerta" ou zerar a antecedência
+    // cancela na hora os agendamentos pendentes; religar reconstitui.
+    window.addEventListener(BAZAR_REPEAT_ALERT_CHANGED_EVENT, () => channels.forEach(syncRepeatSchedules));
+    window.addEventListener(BAZAR_NOTIFY_SETTINGS_CHANGED_EVENT, sweep);
   }
 }
 
@@ -240,6 +362,7 @@ export function syncBazaarEndingAlerts(input: SyncEndingAlertsInput): void {
   const version = String(input?.bazaarVersion || "").trim();
   if (!uid || !version || !Array.isArray(input?.characters)) {
     questsChannel.queue = null;
+    clearChannelRepeats(questsChannel);
     clearTimerIfIdle();
     return;
   }
@@ -280,6 +403,7 @@ export function syncBazaarItemsEndingAlerts(input: SyncItemsEndingAlertsInput): 
   const version = String(input?.bazaarVersion || "").trim();
   if (!uid || !version || !Array.isArray(input?.characters)) {
     itemsChannel.queue = null;
+    clearChannelRepeats(itemsChannel);
     clearTimerIfIdle();
     return;
   }
@@ -296,12 +420,14 @@ export function syncBazaarItemsEndingAlerts(input: SyncItemsEndingAlertsInput): 
 /** Para o agendador do painel de itens (logout/troca de usuário). */
 export function stopBazaarItemsEndingAlerts(): void {
   itemsChannel.queue = null;
+  clearChannelRepeats(itemsChannel);
   clearTimerIfIdle();
 }
 
 /** Para o agendador (logout/troca de usuário). */
 export function stopBazaarEndingAlerts(): void {
   questsChannel.queue = null;
+  clearChannelRepeats(questsChannel);
   clearTimerIfIdle();
 }
 

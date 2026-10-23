@@ -13,12 +13,17 @@ const DEFAULT_BAZAAR_TIMEZONE_OFFSET_MINUTES = -180;
 // no primeiro minuto em que o leilão entra na janela configurada. O mesmo
 // limite vale no planejador puro (utils/bazaarEndingAlerts.ts) — manter os
 // dois iguais.
+//
+// ZERO = DESATIVADO (explícito): com antecedência 0 NENHUMA notificação de
+// encerramento é agendada/emitida (inicial E repetições) — o planejador puro
+// retorna vazio e o motor de repetições não agenda nada. Voltar para um
+// valor positivo reativa o comportamento normal.
 // ============================================================================
-export const BAZAR_NOTIFY_MINUTES_MIN = 1;
+export const BAZAR_NOTIFY_MINUTES_MIN = 0;
 export const BAZAR_NOTIFY_MINUTES_MAX = 60;
 export const BAZAR_NOTIFY_MINUTES_DEFAULT = 3;
 
-/** Restringe qualquer entrada ao intervalo permitido (1 a 60, inteiro). */
+/** Restringe qualquer entrada ao intervalo permitido (0 a 60, inteiro; 0 = desativado). */
 export function clampBazarNotifyMinutes(value: unknown): number {
   const numeric = Math.round(Number(value));
   if (!Number.isFinite(numeric)) return BAZAR_NOTIFY_MINUTES_DEFAULT;
@@ -53,8 +58,51 @@ export function readBazarNotifyBeforeMs(): number {
  * a antecedência configurada pelo usuário.
  */
 export function formatBazarNotifyTitle(minutes: number): string {
-  const safe = clampBazarNotifyMinutes(minutes);
+  // Antecedência 0 nunca chega aqui (0 = desativado → nenhum alerta é
+  // emitido); o mínimo 1 abaixo é apenas salvaguarda textual.
+  const safe = Math.max(1, clampBazarNotifyMinutes(minutes));
   return `Leilão encerrando em ${safe} ${safe === 1 ? "minuto" : "minutos"}`;
+}
+
+// ============================================================================
+// "REPETIR ALERTA" — preferência LOCAL (por dispositivo) do Bazaar.
+//
+// Quando ativa, após o alerta INICIAL de encerramento de um leilão com
+// "Tenho Interesse", o SOM do alerta é repetido a cada 30 segundos (tocado
+// 2× em sequência rápida a cada repetição), com a última repetição
+// EXATAMENTE 30 segundos antes do encerramento — sem NENHUMA notificação
+// adicional no centro/desktop. O motor vive no agendador local
+// (services/bazaarInterestNotificationService.ts) e vale para os DOIS
+// painéis (quests e itens). Alterações são propagadas na hora pelo evento
+// abaixo (desativar interrompe imediatamente as repetições pendentes).
+// ============================================================================
+const BAZAR_REPEAT_ALERT_KEY = "rubinot_bazaar_repeat_alert";
+/** Disparado sempre que a preferência "Repetir Alerta" muda neste app. */
+export const BAZAR_REPEAT_ALERT_CHANGED_EVENT = "bazaar-repeat-alert-changed";
+/**
+ * Disparado quando as preferências de notificação do Bazaar persistidas
+ * (antecedência/fuso, no objeto de filtros) acabaram de ser regravadas —
+ * o agendador local re-varre na hora (ex.: antecedência 0 cancela tudo).
+ */
+export const BAZAR_NOTIFY_SETTINGS_CHANGED_EVENT = "bazaar-notify-settings-changed";
+
+/** Lê a preferência "Repetir Alerta" (padrão: desativada). */
+export function readBazarRepeatAlert(): boolean {
+  try {
+    return JSON.parse(localStorage.getItem(BAZAR_REPEAT_ALERT_KEY) || "false") === true;
+  } catch {
+    return false;
+  }
+}
+
+/** Grava a preferência "Repetir Alerta" e avisa o app (evento síncrono). */
+export function saveBazarRepeatAlert(value: boolean): void {
+  try {
+    localStorage.setItem(BAZAR_REPEAT_ALERT_KEY, JSON.stringify(value === true));
+  } catch {}
+  try {
+    window.dispatchEvent(new Event(BAZAR_REPEAT_ALERT_CHANGED_EVENT));
+  } catch {}
 }
 
 export function readBazarTimezoneOffsetMinutes(): number {

@@ -27,7 +27,8 @@ import { FilterDateMax, FilterInline, FilterMulti, FilterNumber } from "./Filter
 // segunda implementação): as colunas SW/SG desta guia apenas os alimentam com
 // as quests já derivadas pela consulta de itens (mesmo payload, mesma função
 // do Electron — zero consultas extras).
-import { STICKY_FILTER_CELL_CLASS, STICKY_HEAD_CELL_CLASS, closeRubinotBrowserFromRenderer, isAuctionVisibleWithEndedGrace, isQuestSuspicious, QuestBossCounter, QuestStatusIndicator, type BazaarQuestStatusDetail } from "./BazarPanel";
+import { BazaarNotifySettingsControl, STICKY_FILTER_CELL_CLASS, STICKY_HEAD_CELL_CLASS, closeRubinotBrowserFromRenderer, isAuctionVisibleWithEndedGrace, isQuestSuspicious, QuestBossCounter, QuestStatusIndicator, type BazaarQuestStatusDetail } from "./BazarPanel";
+import { copyTextToClipboard } from "../utils/clipboard";
 import type { BazaarQuestSource, BazaarRetryCounts, BazaarSpeedMode } from "./BazaarBrowserModal";
 import { loadUIState, saveUIState, loadNotifications } from "../storage";
 import { computeItemRC, formatKkValue as formatKkValueBase } from "../utils/itemSale";
@@ -225,6 +226,14 @@ interface Props {
    * (ex.: duplicado) é exibido inline na própria linha.
    */
   onOpenPurchaseModal?: (prefill: BazaarItemsPurchasePrefill) => { ok: boolean; error?: string };
+  /**
+   * Seção "Notificar" do quadro "Última Consulta" — MESMO controle e MESMA
+   * configuração da guia de quests (antecedência + "Repetir Alerta"; 0 =
+   * notificações de encerramento desativadas). O valor em vigor e a
+   * persistência pertencem ao BazarPanel (dono dos filtros do Bazaar).
+   */
+  notifyBeforeMinutes?: number;
+  onApplyNotifyMinutes?: (minutes: number) => void;
 }
 
 /** Entrada em edição no modal da Lista de Itens. */
@@ -570,7 +579,7 @@ interface ItemsLocalNotification {
   auctionId?: string;
 }
 
-export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffsetMinutes, getLinkState, openLink, getViewState, markViewed, onRunningChange, isQuestsQueryRunning, personalCharacterNames, onOpenPurchaseModal }: Props) {
+export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffsetMinutes, getLinkState, openLink, getViewState, markViewed, onRunningChange, isQuestsQueryRunning, personalCharacterNames, onOpenPurchaseModal, notifyBeforeMinutes, onApplyNotifyMinutes }: Props) {
   const { currentUser } = useAuth();
   const currentUid = currentUser?.uid || "";
 
@@ -941,6 +950,22 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
   // Feedback "Copiado!" (1,5s) — mesmo padrão dos demais botões de copiar do
   // aplicativo (AvailableCharacter/CharTable). Uma chave por origem da cópia.
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
+
+  // ── CLIQUE DIREITO no botão "Abrir" → COPIA a URL do personagem ──────────
+  // Nunca abre o link nem exibe o menu de contexto; feedback discreto no
+  // próprio botão ("Copiado!"/"Falhou" por 1,5s). O estado de
+  // "Aberto/Último Aberto" não muda. MESMO comportamento da guia de quests.
+  const [linkCopyFeedback, setLinkCopyFeedback] = useState<{ key: string; ok: boolean } | null>(null);
+  const linkCopyTimerRef = useRef<number | null>(null);
+  function handleAuctionLinkContextMenu(event: { preventDefault: () => void; stopPropagation: () => void }, feedbackKey: string, url: string) {
+    event.preventDefault();
+    event.stopPropagation();
+    void copyTextToClipboard(url).then(ok => {
+      setLinkCopyFeedback({ key: feedbackKey, ok });
+      if (linkCopyTimerRef.current) window.clearTimeout(linkCopyTimerRef.current);
+      linkCopyTimerRef.current = window.setTimeout(() => setLinkCopyFeedback(null), 1500);
+    });
+  }
 
   // ── "Tenho Interesse" — 100% LOCAL (localStorage por uid, ZERO Firestore) ─
   const [itemInterests, setItemInterests] = useState<string[]>(() => loadItemsInterests(currentUid));
@@ -2215,8 +2240,9 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                   if (openLink && notifAuctionKey) openLink(notifAuctionKey, notification.url);
                   else openExternalUrl(notification.url);
                 }}
+                onContextMenu={event => handleAuctionLinkContextMenu(event, `notif_${notification.id}`, notification.url || "")}
                 className="w-full rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-left text-[11px] leading-tight text-amber-200 flex items-center justify-between gap-2 hover:bg-amber-500/20 transition-colors cursor-pointer"
-                title={notifLinkState === "open" ? "Abrir personagem no Bazaar" : "Link já aberto neste dispositivo"}
+                title={`${notifLinkState === "open" ? "Abrir personagem no Bazaar" : "Link já aberto neste dispositivo"}. Clique direito: copiar a URL do personagem (não abre).`}
               >
                 <span className="inline-flex items-center gap-1.5 min-w-0">
                   <AlertTriangle size={12} className="flex-shrink-0" />
@@ -2235,7 +2261,7 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                       <Check size={9} strokeWidth={3} />{notifLinkState === "last" ? "Último aberto" : "Aberto"}
                     </span>
                   )}
-                  <span className="text-[9px] font-black underline">Abrir</span>
+                  <span className={`text-[9px] font-black underline ${linkCopyFeedback?.key === `notif_${notification.id}` ? (linkCopyFeedback.ok ? "text-emerald-300" : "text-red-300") : ""}`}>{linkCopyFeedback?.key === `notif_${notification.id}` ? (linkCopyFeedback.ok ? "Copiado!" : "Falhou") : "Abrir"}</span>
                 </span>
               </button>
             );
@@ -2319,6 +2345,15 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                 <span className="text-[9px] font-bold text-fuchsia-300">
                   {visibleResults.length} de {results.length} {results.length === 1 ? "personagem" : "personagens"}
                 </span>
+              )}
+
+              {/* Seção "Notificar" — MESMO controle da guia de quests
+                  (antecedência da notificação de encerramento + "Repetir
+                  Alerta"); configuração ÚNICA compartilhada entre as guias
+                  (0 = desativado). Os alertas desta guia usam os leilões com
+                  "Tenho Interesse" da última consulta local. */}
+              {typeof notifyBeforeMinutes === "number" && onApplyNotifyMinutes && (
+                <BazaarNotifySettingsControl appliedMinutes={notifyBeforeMinutes} onApplyMinutes={onApplyNotifyMinutes} />
               )}
             </div>
 
@@ -2950,10 +2985,11 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                       <button
                         type="button"
                         onClick={() => (openLink ? openLink(auctionKey, result.url) : openExternalUrl(result.url))}
-                        title={linkState === "last" ? "Último personagem aberto" : linkState === "opened" ? "Este link já foi aberto neste dispositivo" : "Abrir personagem no Bazaar"}
+                        onContextMenu={event => handleAuctionLinkContextMenu(event, `link_${auctionKey}`, result.url)}
+                        title={`${linkState === "last" ? "Último personagem aberto" : linkState === "opened" ? "Este link já foi aberto neste dispositivo" : "Abrir personagem no Bazaar"}. Clique direito: copiar a URL do personagem (não abre).`}
                         className={`inline-flex h-7 max-w-full min-w-0 items-center justify-center gap-0.5 rounded-lg px-1.5 py-1 border text-[9px] font-black transition-colors cursor-pointer ${linkButtonClass}`}
                       >
-                        <ExternalLink size={11} className="flex-shrink-0" /> <span className="truncate">{linkButtonLabel}</span>
+                        <ExternalLink size={11} className="flex-shrink-0" /> <span className={`truncate ${linkCopyFeedback?.key === `link_${auctionKey}` ? (linkCopyFeedback.ok ? "text-emerald-300" : "text-red-300") : ""}`}>{linkCopyFeedback?.key === `link_${auctionKey}` ? (linkCopyFeedback.ok ? "Copiado!" : "Falhou") : linkButtonLabel}</span>
                       </button>
                     ) : <span className="text-slate-600">—</span>}
                   </td>
@@ -3354,10 +3390,11 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                     <button
                       type="button"
                       onClick={() => (openLink ? openLink(detailAuctionKey, detailResult.url) : openExternalUrl(detailResult.url))}
-                      title={detailLinkState === "last" ? "Último personagem aberto" : detailLinkState === "opened" ? "Este link já foi aberto neste dispositivo" : "Abrir personagem no Bazaar (navegador padrão)"}
+                      onContextMenu={event => handleAuctionLinkContextMenu(event, `view_${detailAuctionKey}`, detailResult.url)}
+                      title={`${detailLinkState === "last" ? "Último personagem aberto" : detailLinkState === "opened" ? "Este link já foi aberto neste dispositivo" : "Abrir personagem no Bazaar (navegador padrão)"}. Clique direito: copiar a URL do personagem (não abre).`}
                       className={`inline-flex items-center gap-0.5 rounded-lg border px-1.5 py-0.5 text-[9px] font-black transition-colors cursor-pointer flex-shrink-0 ${detailLinkClass}`}
                     >
-                      <ExternalLink size={10} className="flex-shrink-0" /> {detailLinkLabel}
+                      <ExternalLink size={10} className="flex-shrink-0" /> {linkCopyFeedback?.key === `view_${detailAuctionKey}` ? <span className={linkCopyFeedback.ok ? "text-emerald-300" : "text-red-300"}>{linkCopyFeedback.ok ? "Copiado!" : "Falhou"}</span> : detailLinkLabel}
                     </button>
                   );
                 })()}
