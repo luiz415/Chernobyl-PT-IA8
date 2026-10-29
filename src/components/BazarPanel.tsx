@@ -44,6 +44,7 @@ import {
   buildCharacterMatches,
   buildWatchlistIndex,
   canonicalServerKey,
+  deriveWatchedBaseKkFromTotal,
   collectAllWatchKeys,
   effectiveTotalKk,
   getServerWatchedItems,
@@ -2006,6 +2007,32 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
       setQuestsViewRateSaving(false);
     }
   }
+  /**
+   * Valor BASE (kk, 1 casa) que os botões "Todos"/"Servidor" do modal "Ver"
+   * gravam para uma linha — FONTE ÚNICA do render (títulos/confirmação) e da
+   * gravação (correção da 72ª: os dois exibem e gravam o MESMO número).
+   *
+   * CAUSA DO BUG CORRIGIDO: a gravação usava sempre `match.baseValueKk` (o
+   * base vindo da CONSULTA), ignorando o valor que o Boss acabara de digitar
+   * no campo Total (kk) da linha — o sistema regravava o valor antigo. Como
+   * o modal só apresenta o TOTAL considerado (sem coluna de base), a edição
+   * do Boss agora é convertida em valor base pela operação INVERSA oficial
+   * do Tier (deriveWatchedBaseKkFromTotal: total ÷ QTD ÷ (1 + 0,3 × tier)) —
+   * ex.: item sem tier e QTD 1 salvo como 35kk editado para 25kk grava 25kk.
+   * SEM edição na linha, comportamento anterior intacto (base da consulta).
+   */
+  function questsViewUpdateBaseKk(view: QuestsItemsDetailView, index: number): number {
+    const match = view.matches[index];
+    if (!match) return 0;
+    const officialBaseKk = Number(match.baseValueKk || 0);
+    // Valor em edição AGORA no campo da linha (mesma leitura do effItemKk do
+    // render) — texto inválido/vazio = sem edição = total automático.
+    const parsed = parseQuestsViewNumber(questsViewInputs.items[questsViewItemKey(index, match.foundName)] ?? "");
+    const effectiveTotal = parsed !== null ? parsed : Number(match.totalKk || 0);
+    const edited = Math.abs(effectiveTotal - Number(match.totalKk || 0)) > 0.0001;
+    if (!edited) return officialBaseKk;
+    return deriveWatchedBaseKkFromTotal(effectiveTotal, match.amount, match.tier);
+  }
   function confirmQuestsViewOfficialUpdate() {
     const pending = questsViewUpdateConfirm;
     const view = questsItemsDetailResult;
@@ -2019,7 +2046,9 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
         scope: pending.scope,
         server: view.server,
         itemName: match.watchedName || parseTieredItemName(match.foundName).baseName,
-        valueKk: Number(match.baseValueKk || 0),
+        // 72ª: valor efetivamente informado pelo Boss no modal (base derivado
+        // do Total editado na linha); sem edição, o base da consulta.
+        valueKk: questsViewUpdateBaseKk(view, pending.index),
         serverUniverse: SERVER_OPTIONS,
       });
       const touched = result.changedServers.length + result.addedServers.length;
@@ -5580,10 +5609,12 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
                     const itemKk = effItemKk(index, match);
                     const overridden = Math.abs(itemKk - Number(match.totalKk || 0)) > 0.0001;
                     // Coluna "Atualizar" (Boss): valor BASE que será gravado
-                    // na Lista de Itens — vem da consulta (fonte local) ou é
-                    // reconstruído do resumo embutido (fórmula oficial do
-                    // Tier). Sem base válida, os botões ficam desabilitados.
-                    const rowBaseKk = Number(match.baseValueKk || 0);
+                    // na Lista de Itens — FONTE ÚNICA questsViewUpdateBaseKk
+                    // (72ª): com o Total da linha EDITADO, o base é derivado
+                    // do valor digitado (total ÷ QTD ÷ (1 + 0,3 × tier));
+                    // sem edição, o base da consulta (comportamento antigo).
+                    // Sem base válida, os botões ficam desabilitados.
+                    const rowBaseKk = questsViewUpdateBaseKk(view, index);
                     const rowCanUpdate = rowBaseKk >= 0.1;
                     const rowItemLabel = match.watchedName || parseTieredItemName(match.foundName).baseName;
                     const rowConfirm = questsViewUpdateConfirm?.index === index ? questsViewUpdateConfirm : null;
@@ -5642,7 +5673,7 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
                                 disabled={!rowCanUpdate || questsViewUpdateBusy}
                                 onClick={() => setQuestsViewUpdateConfirm(prev => (prev?.index === index && prev.scope === "all" ? null : { index, scope: "all" }))}
                                 className={`rounded border px-1 py-0.5 inline-flex items-center gap-0.5 text-[8px] font-black uppercase tracking-wide transition-colors ${rowConfirm?.scope === "all" ? "border-amber-500/60 bg-amber-500/20 text-amber-200" : "border-amber-500/35 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20"} disabled:opacity-40 disabled:cursor-not-allowed`}
-                                title={rowCanUpdate ? `Atualizar em todos os servidores: gravar ${formatItemsKk(rowBaseKk)} como valor base de "${rowItemLabel}" na Lista de Itens (guia Personagens com Itens) de TODOS os servidores.` : "Valor base indisponível para este item — nada a atualizar."}
+                                title={rowCanUpdate ? `Atualizar em todos os servidores: gravar ${formatItemsKk(rowBaseKk)} como valor base de "${rowItemLabel}" na Lista de Itens (guia Personagens com Itens) de TODOS os servidores.${overridden ? " Valor derivado do Total editado nesta linha (total ÷ QTD ÷ Tier)." : ""}` : "Valor base indisponível para este item — nada a atualizar."}
                               >
                                 <Globe size={9} className="flex-shrink-0" /> Todos
                               </button>
@@ -5651,7 +5682,7 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
                                 disabled={!rowCanUpdate || questsViewUpdateBusy}
                                 onClick={() => setQuestsViewUpdateConfirm(prev => (prev?.index === index && prev.scope === "server" ? null : { index, scope: "server" }))}
                                 className={`rounded border px-1 py-0.5 inline-flex items-center gap-0.5 text-[8px] font-black uppercase tracking-wide transition-colors ${rowConfirm?.scope === "server" ? "border-amber-500/60 bg-amber-500/20 text-amber-200" : "border-amber-500/35 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20"} disabled:opacity-40 disabled:cursor-not-allowed`}
-                                title={rowCanUpdate ? `Atualizar neste servidor: gravar ${formatItemsKk(rowBaseKk)} como valor base de "${rowItemLabel}" SOMENTE na lista de ${view.server} — os demais servidores não são alterados.` : "Valor base indisponível para este item — nada a atualizar."}
+                                title={rowCanUpdate ? `Atualizar neste servidor: gravar ${formatItemsKk(rowBaseKk)} como valor base de "${rowItemLabel}" SOMENTE na lista de ${view.server} — os demais servidores não são alterados.${overridden ? " Valor derivado do Total editado nesta linha (total ÷ QTD ÷ Tier)." : ""}` : "Valor base indisponível para este item — nada a atualizar."}
                               >
                                 <RefreshCw size={9} className="flex-shrink-0" /> Servidor
                               </button>

@@ -102,23 +102,38 @@ function readNumericField(node, keys) {
 /**
  * Todos os itens monitorados citados no JSON do leilão.
  *
- * Estratégia defensiva (o schema real não é assumido):
- *   • OBJETOS com um campo de nome ({ name: "Falcon Coif [Tier 3]", amount: 1 })
- *     — cobre inventário/equipamentos/store no formato mais comum;
- *   • STRINGS que são elementos diretos de um array (["falcon coif", ...])
- *     — cobre listas simples de nomes. Strings em OUTRAS posições (ex.: a
- *     própria propriedade `name` de um objeto já contado) são ignoradas para
- *     não duplicar a contagem.
+ * CORREÇÃO (72ª tarefa) — SOMENTE AS SEÇÕES DE ITENS CONTAM: a estratégia
+ * anterior era "defensiva" (qualquer objeto com campo de nome em QUALQUER
+ * seção do payload, e qualquer string direta de array). Isso produzia
+ * FALSOS POSITIVOS confirmados: um PERSONAGEM com o mesmo nome de um item
+ * monitorado era contado como ocorrência do item (`player.name` tem um
+ * campo `name` como os itens), e o mesmo valia para nomes de montarias
+ * (`mounts[].name`), bosses (`bosstiaries[].name`), outfits
+ * (`outfits[].info.name`), blessings (`blessings[].name`) e imbuements
+ * (`items[].details.imbuements[].name`).
+ *
+ * O schema REAL da rota `/api/bazaar/{ID}` está confirmado por DUAS
+ * amostras (leilão 283062 e leilão 292172 — `amostras/Exemplo1.json`): os
+ * itens do personagem aparecem EXCLUSIVAMENTE como elementos diretos de
+ * `items[]` (inventário/equipamentos/depot; `itemsTotal` = tamanho da
+ * lista) e `storeItems[]` (itens de store), ambos no formato
+ * { name, count, tier, ... }. A contagem agora considera APENAS esses
+ * elementos (caminhos `items[n]`/`storeItems[n]` — sem descer a
+ * `details`, onde moram os imbuements). `highlightItems`/
+ * `highlightAugments` continuam fora, como antes (vitrine que repete a
+ * lista normal); a regra de strings diretas de arrays foi removida —
+ * nenhuma seção real de itens usa esse formato e ela só gerava falso
+ * positivo.
  *
  * Casamento SEMPRE por igualdade do nome normalizado SEM o sufixo de Tier —
  * exatamente a regra da Lista de Itens no renderer.
  *
  * Ocorrências idênticas (mesma chave base + tier + nome) são somadas.
- *
- * EXCLUSÃO: nós dentro das seções de DESTAQUE (`highlightItems`/
- * `highlightAugments`) são pulados — são vitrine do proprietário e repetem
- * itens que já constam na lista normal (ver IGNORED_SECTION_KEYS).
  */
+
+/** Seções do payload que contêm ITENS DE VERDADE (ver comentário acima). */
+const ITEM_SECTION_PATTERN = /^(?:items|storeItems)\[\d+\]$/;
+
 function collectItemMatches(payload, watchKeySet) {
   const found = new Map();
 
@@ -140,16 +155,11 @@ function collectItemMatches(payload, watchKeySet) {
   };
 
   walkJson(payload, (node, path) => {
-    // Seções de DESTAQUE ignoradas por inteiro: qualquer nó cujo caminho
-    // comece em "highlightItems"/"highlightAugments" não conta. O walkJson
-    // não permite podar a descida, então o corte é feito aqui, por caminho —
-    // vale para o nó raiz da seção e para todos os descendentes.
-    if (IGNORED_SECTION_KEYS.has(pathRootSegment(path))) return;
-    if (typeof node === 'string') {
-      // Somente elementos DIRETOS de arrays: o caminho termina em "[n]".
-      if (/\]$/.test(path)) register(node, 0, 0);
-      return;
-    }
+    // SÓ os elementos DIRETOS das listas de itens contam (`items[n]` /
+    // `storeItems[n]`) — nem descendentes (details/imbuements), nem
+    // qualquer outra seção (player/mounts/bosstiaries/...): é o corte que
+    // elimina o falso positivo do personagem com nome de item.
+    if (!ITEM_SECTION_PATTERN.test(path)) return;
     if (!node || typeof node !== 'object' || Array.isArray(node)) return;
     for (const nameKey of ITEM_NAME_KEYS) {
       const value = node[nameKey];

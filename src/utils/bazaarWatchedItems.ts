@@ -192,6 +192,25 @@ export function computeTieredValueKk(baseValueKk: number, tier: number): number 
   return Math.round(base * (1 + 0.3 * safeTier) * 100) / 100;
 }
 
+/**
+ * OPERAÇÃO INVERSA do Tier (72ª): valor BASE (kk) derivado de um TOTAL
+ * considerado — base = total ÷ quantidade ÷ (1 + 0,3 × tier), arredondado a
+ * UMA casa (a precisão aceita pela Lista de Itens, a mesma que o núcleo
+ * applyOfficialWatchedItemUpdate grava). É a regra que permite ao Boss
+ * editar o valor base a partir do TOTAL exibido no modal "Ver" da guia de
+ * quests (que não apresenta o base): o que ele digita como total vira o
+ * base equivalente — nunca o valor antigo da consulta. Entradas inválidas
+ * (total/quantia não positivos) devolvem 0 (botões de atualização
+ * desabilitam; nada é gravado).
+ */
+export function deriveWatchedBaseKkFromTotal(totalKk: number, amount: number, tier: number): number {
+  const total = Number(totalKk);
+  if (!Number.isFinite(total) || total <= 0) return 0;
+  const safeAmount = Number.isFinite(amount) && amount > 0 ? Math.floor(amount) : 1;
+  const safeTier = Number.isFinite(tier) && tier > 0 ? Math.floor(tier) : 0;
+  return Math.round((total / safeAmount / (1 + 0.3 * safeTier)) * 10) / 10;
+}
+
 /** Índice nome-normalizado -> item monitorado, para casamento O(1). */
 export function buildWatchlistIndex(items: WatchedItem[]): Map<string, WatchedItem> {
   const index = new Map<string, WatchedItem>();

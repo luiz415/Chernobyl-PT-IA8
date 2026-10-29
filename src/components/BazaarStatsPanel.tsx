@@ -231,6 +231,15 @@ export default function BazaarStatsPanel({ isBossUser, isElectron, isOtherQueryR
   // ── Estado analítico (métricas) ───────────────────────────────────────────
   const [syncState, setSyncState] = useState<HistorySyncState | null>(null);
   const [metricDocs, setMetricDocs] = useState<MetricsDocData[]>([]);
+  // CARREGAMENTO DAS ESTATÍSTICAS (72ª): enquanto o estado de sincronização e
+  // os documentos de métricas são lidos (Firestore/cache local), a área de
+  // resultados exibe um indicador "As estatísticas estão sendo carregadas..."
+  // — antes, a leitura pendente caía no ramo "Base histórica vazia" (mensagem
+  // errada durante o carregamento). Começa true: a primeira leitura dispara
+  // no mount. Erro de leitura encerra o indicador (finally) e mostra aviso
+  // com "Tentar novamente" — nunca fica carregando indefinidamente.
+  const [isMetricsLoading, setIsMetricsLoading] = useState(true);
+  const [metricsError, setMetricsError] = useState<string | null>(null);
   const [filters, setFilters] = useState<HistoryMetricsFilters>(() => defaultHistoryFilters());
   // ── Estado da consulta (exclusiva Boss + Electron) ────────────────────────
   const [isRunning, setIsRunning] = useState(false);
@@ -257,12 +266,22 @@ export default function BazaarStatsPanel({ isBossUser, isElectron, isOtherQueryR
 
   /** Carrega estado + TODOS os docs de métricas (cache local absorve custo). */
   async function refreshMetrics(options: { force?: boolean } = {}) {
-    const { state } = await loadHistorySyncState(options);
-    setSyncState(state);
-    if (!state) { setMetricDocs([]); return; }
-    const months = Object.keys(state.months || {});
-    const { docs } = await fetchHistoryMetricDocs(months, state);
-    setMetricDocs(docs);
+    setIsMetricsLoading(true);
+    setMetricsError(null);
+    try {
+      const { state } = await loadHistorySyncState(options);
+      setSyncState(state);
+      if (!state) { setMetricDocs([]); return; }
+      const months = Object.keys(state.months || {});
+      const { docs } = await fetchHistoryMetricDocs(months, state);
+      setMetricDocs(docs);
+    } catch (error) {
+      // Falha de leitura (rede/Firestore): mantém o que já estava carregado e
+      // sai do estado de carregamento com aviso + "Tentar novamente".
+      setMetricsError(String((error as Error)?.message || "Falha ao carregar as estatísticas."));
+    } finally {
+      setIsMetricsLoading(false);
+    }
   }
 
   useEffect(() => {
@@ -885,7 +904,34 @@ export default function BazaarStatsPanel({ isBossUser, isElectron, isOtherQueryR
       {/* ── ESTATÍSTICAS (somente métricas agregadas) — rolam JUNTO com o
           quadro de filtros acima (contêiner único). ─────────────────────── */}
       <div className="space-y-1.5">
-        {metricDocs.length === 0 ? (
+        {isMetricsLoading ? (
+          /* CARREGANDO (72ª): indicador visível durante TODA a leitura das
+             métricas — só sai quando a leitura termina (sucesso ou erro). */
+          <div className="rounded-xl border border-sky-500/30 bg-[var(--th-n-base)]/80 px-4 py-8 text-center text-xs text-slate-300" role="status" aria-live="polite">
+            <div className="flex flex-col items-center justify-center gap-2">
+              <RefreshCw size={18} className="animate-spin text-sky-300" aria-hidden="true" />
+              <span className="font-bold text-sky-200">As estatísticas estão sendo carregadas...</span>
+              <span className="text-[10px] text-slate-500">Lendo a base histórica (estado de sincronização + métricas mensais).</span>
+            </div>
+          </div>
+        ) : metricsError ? (
+          /* ERRO DE LEITURA: nunca fica carregando para sempre — aviso claro
+             e nova tentativa pelo MESMO refreshMetrics (fluxo único). */
+          <div className="rounded-xl border border-rose-500/40 bg-rose-500/10 px-4 py-6 text-center text-xs text-rose-200">
+            <div className="flex flex-col items-center justify-center gap-2">
+              <AlertTriangle size={16} className="text-rose-300" aria-hidden="true" />
+              <span className="font-bold">Não foi possível carregar as estatísticas.</span>
+              <span className="text-[10px] text-rose-300/80 break-all">{metricsError}</span>
+              <button
+                type="button"
+                onClick={() => { void refreshMetrics({ force: true }); }}
+                className="mt-1 inline-flex h-7 items-center gap-1 rounded-md border border-rose-400/40 bg-rose-500/15 px-3 text-[10px] font-black text-rose-200 transition-colors hover:bg-rose-500/25 cursor-pointer"
+              >
+                <RefreshCw size={11} /> Tentar novamente
+              </button>
+            </div>
+          </div>
+        ) : metricDocs.length === 0 ? (
           <div className="rounded-xl border border-[var(--th-line)]/60 bg-[var(--th-n-base)]/80 px-4 py-8 text-center text-xs text-slate-400">
             {isBossUser && isElectron
               ? "Base histórica vazia. Clique em “Consultar Histórico” para a primeira carga dos 30 dias disponíveis no site."
