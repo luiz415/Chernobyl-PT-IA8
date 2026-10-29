@@ -110,3 +110,26 @@ export function derivePresence(entry: PresenceUserEntry | null | undefined, nowM
   const lastSeen = Math.max(Number(safe.lastSeen) || 0, maxBeat);
   return { online, lastSeen, lastLoginAt: Number(safe.lastLoginAt) || 0 };
 }
+
+/**
+ * CONTADOR DO RODAPÉ (74ª) — número exibível de usuários online.
+ *
+ * O agregado `presence/count` é um RETRATO ATRASADO: a Cloud Function
+ * `presenceSync` só o escreve nas transições, e o cliente o lê por polling
+ * de 10 min — logo após o login, a leitura quase sempre acontece ANTES de a
+ * CF processar a conexão recém-criada (o doc ainda carrega o total SEM o
+ * próprio usuário; com um único usuário, `0`).
+ *
+ * O único dado de presença que o cliente conhece com CERTEZA, em tempo
+ * real, é o da PRÓPRIA sessão (conexão RTDB ativa + heartbeat desta aba —
+ * a mesma regra única de "online" deste módulo). Quando essa sessão conta
+ * como online (`selfCountsAsOnline`), o usuário faz parte do conjunto por
+ * definição e o total exibido nunca pode ser menor que 1 — não é ajuste
+ * cosmético: é a contabilização do próprio usuário, exigida pela regra.
+ * Sessão própria OCIOSA/deslogada não força nada (ociosa não conta como
+ * online — consistente com o painel Boss e com a CF).
+ */
+export function displayOnlineCount(aggregatedCount: number, selfCountsAsOnline: boolean): number {
+  const safe = Number.isFinite(aggregatedCount) ? Math.max(0, Math.floor(Number(aggregatedCount))) : 0;
+  return selfCountsAsOnline ? Math.max(1, safe) : safe;
+}

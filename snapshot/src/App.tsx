@@ -48,6 +48,7 @@ import { registerTourCommands } from "./tutorial/commands";
 import { isDemoId } from "./tutorial/demo";
 import { setLoggerPaused, setLoggerRemoteConfig } from "./utils/firestoreLogger";
 import { setPresenceGovernance } from "./utils/presenceGovernance";
+import { displayOnlineCount } from "./utils/presenceStatus";
 import { setIdleGovernance } from "./utils/idleGovernance";
 import { NOTIFICATION_NAVIGATE_EVENT, dispatchNotificationNavigate, resolveNotificationDestination, type NotificationNavigateDetail } from "./utils/notificationNavigation";
 import {
@@ -1669,6 +1670,25 @@ export default function App() {
     let cancelled = false;
     let lastFetchMs = 0;
 
+    // CONVERGÊNCIA PÓS-LOGIN (74ª): o doc `presence/count` é escrito pela CF
+    // `presenceSync` SÓ nas transições — a leitura feita na montagem quase
+    // sempre chega ANTES de a CF processar a conexão recém-criada DESTA
+    // sessão (com um único usuário, o doc ainda guarda o 0 do logout
+    // anterior; a releitura seguinte só viria em 10 min). Quando a leitura
+    // devolve um total em que a própria sessão claramente ainda não entrou
+    // (count < 1 com este usuário online), duas releituras curtas (15s/45s)
+    // capturam o write da CF e CORRIGEM O DADO exibido — no máximo +2 reads,
+    // apenas nessa situação, sem loop (agendadas uma única vez por execução).
+    let convergenceTimers: number[] = [];
+    const scheduleConvergenceRefetch = () => {
+      if (convergenceTimers.length > 0) return;
+      [15_000, 45_000].forEach(delay => {
+        convergenceTimers.push(window.setTimeout(() => {
+          if (!cancelled) fetchAggregatedCount();
+        }, delay));
+      });
+    };
+
     const fetchAggregatedCount = async () => {
       lastFetchMs = Date.now();
       try {
@@ -1679,6 +1699,9 @@ export default function App() {
           setOnlineCount(count);
           setPresenceCountUnavailable(false);
           try { localStorage.setItem("presence_count_fallback", String(count)); } catch {}
+          // Agregado ainda sem NENHUM usuário com esta sessão ativa — a CF
+          // ainda não processou este login: agenda a convergência curta.
+          if (count < 1) scheduleConvergenceRefetch();
           return;
         }
         // Doc ainda não criado (CF nunca rodou): indisponível, sem fallback caro.
@@ -1712,10 +1735,22 @@ export default function App() {
     };
     window.addEventListener("focus", onFocus);
 
+    // RECONEXÃO DE REDE (74ª): ao voltar a internet, o agregado pode ter
+    // mudado enquanto estávamos fora (nossa conexão RTDB expirou/renasceu) —
+    // revalida com o MESMO throttle do foco (nenhum read extra em rajadas).
+    const onNetworkOnline = () => {
+      if (Date.now() - lastFetchMs < FOCUS_THROTTLE_MS) return;
+      fetchAggregatedCount();
+    };
+    window.addEventListener("online", onNetworkOnline);
+
     return () => {
       cancelled = true;
       clearInterval(interval);
+      convergenceTimers.forEach(timer => window.clearTimeout(timer));
+      convergenceTimers = [];
       window.removeEventListener("focus", onFocus);
+      window.removeEventListener("online", onNetworkOnline);
     };
   }, [currentUser?.uid, userProfile?.role, isSimulation, isUserIdle, isIdleMode, globalSettings.presenceEnabled, globalSettings.presenceMode]);
 
@@ -6187,13 +6222,40 @@ export default function App() {
 
           <span className="h-4 w-px bg-red-900/30" />
 
-          {/* Usuários online */}
-          <div className="flex items-center gap-1.5 text-slate-400">
-            <Users size={13} className={globalSettings.presenceEnabled ? "text-violet-400" : "text-slate-500"} />
-            <span className="font-medium" title={!globalSettings.presenceEnabled ? "Presence pausado pelo Boss" : presenceCountUnavailable ? "Presence indisponível no modo econômico" : undefined}>
-              {globalSettings.presenceEnabled && !presenceCountUnavailable ? onlineCount : "-"}
-            </span>
-          </div>
+          {/* Usuários online — agregado presence/count (CF presenceSync) +
+              a PRÓPRIA sessão (74ª): o único dado de presença conhecido em
+              tempo real no cliente é o desta aba (conexão RTDB ativa +
+              heartbeat). Autenticado, aprovado e NÃO ocioso ⇒ este usuário
+              está online pela regra única (a mesma do painel Boss/CF) e o
+              total exibido nunca fica abaixo de 1 — mesmo enquanto o
+              agregado (retrato atrasado, polling de 10 min) ainda não
+              refletiu o login. Ocioso/simulação não forçam nada. */}
+          {(() => {
+            const selfCountsAsOnline = !!currentUser
+              && userProfile?.status === "aprovado"
+              && !isSimulation
+              && !isUserIdle
+              && !isIdleMode
+              && globalSettings.presenceEnabled;
+            const shown = !globalSettings.presenceEnabled
+              ? "-"
+              : presenceCountUnavailable
+                ? (selfCountsAsOnline ? displayOnlineCount(0, true) : "-")
+                : displayOnlineCount(onlineCount, selfCountsAsOnline);
+            const tooltip = !globalSettings.presenceEnabled
+              ? "Presence pausado pelo Boss"
+              : presenceCountUnavailable
+                ? (selfCountsAsOnline ? "Contagem agregada indisponível — exibindo o mínimo conhecido (você está online)" : "Presence indisponível no modo econômico")
+                : "Usuários online agora (inclui você enquanto estiver ativo)";
+            return (
+              <div className="flex items-center gap-1.5 text-slate-400">
+                <Users size={13} className={globalSettings.presenceEnabled ? "text-violet-400" : "text-slate-500"} />
+                <span className="font-medium" title={tooltip}>
+                  {shown}
+                </span>
+              </div>
+            );
+          })()}
 
         </div>
         <div className="flex items-center gap-3 flex-wrap">
