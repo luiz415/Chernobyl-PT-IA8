@@ -1,10 +1,19 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { X, Coins, Check, PackageOpen, Globe, Search, Swords, Briefcase, ArrowDownAZ, ArrowUpAZ, CalendarPlus } from "lucide-react";
+import { AlertTriangle, X, Coins, Check, PackageOpen, Globe, Pencil, Search, Swords, Briefcase, ArrowDownAZ, ArrowUpAZ, CalendarPlus } from "lucide-react";
 import type { Character, CharacterAcquisition, CharacterAcquisitionBuyerDetails, ItemSaleRecord } from "../types";
 import { formatRC } from "../types";
-import { serverLabel } from "../constants/servers";
-import { formatItemSaleSummary, isItemSaleConcluded } from "../utils/itemSale";
+import { SERVER_OPTIONS, serverLabel } from "../constants/servers";
+import {
+  BAZAAR_WATCHED_ITEMS_UPDATED_EVENT,
+  applyOfficialWatchedItemUpdate,
+  findServerWatchedItem,
+  loadWatchedItemsByServer,
+  parseDecimalKkText,
+  sanitizeDecimalKkText,
+  updateSnapshotMatchTotalKk,
+} from "../utils/bazaarWatchedItems";
+import { formatItemSaleSummary, formatKkValue as formatKkValueBase, isItemSaleConcluded } from "../utils/itemSale";
 import { questBadgeColorBySigla } from "../constants/questBadges";
 import { isPaymentConfirmed } from "../services/characterAcquisitionService";
 import ItemSoldModal from "./ItemSoldModal";
@@ -96,6 +105,23 @@ export interface MySaleItem {
   saleSummary: string;
   /** Registro completo persistido (só source=character) — edição com initial. */
   saleRecord: ItemSaleRecord | null;
+  /** Nome do item na Lista de Itens (só source=bazaar) — lookup/edição da base. */
+  watchedName?: string;
+  /** Tier do match do snapshot (só source=bazaar). */
+  tier?: number;
+  /** Quantidade do match do snapshot (só source=bazaar). */
+  amount?: number;
+  /** Valor BASE registrado na compra (kk, só source=bazaar) — fallback de
+   *  exibição quando o item não está (mais) na Lista de Itens do servidor. */
+  snapshotBaseKk?: number;
+  /** Valor CONSIDERADO atual do item (kk, só source=bazaar) — o totalKk do
+   *  match do snapshot (editável; null/ausente nas demais origens). */
+  consideredKk?: number | null;
+}
+
+/** kk com até 1 casa, sem zeros à direita — mesmo formato do modal "Ver". */
+function formatKk(value: number): string {
+  return formatKkValueBase(value, "kk", true);
 }
 
 const QUEST_FIELDS: Array<{
@@ -190,6 +216,13 @@ export function collectMySaleItems(
           soldAtMs: concluded && (sale?.soldAt || 0) > 0 ? sale?.soldAt ?? null : null,
           saleSummary: concluded && sale ? formatItemSaleSummary(sale) : "",
           saleRecord: sale,
+          // Valores do match do snapshot (73ª): base da compra (fallback de
+          // exibição) e total CONSIDERADO atual (editável no modal).
+          watchedName: String(match.watchedName || "").trim(),
+          tier: Number(match.tier || 0),
+          amount: Number(match.amount || 0),
+          snapshotBaseKk: Number(match.baseValueKk || 0),
+          consideredKk: Number(match.totalKk || 0),
         });
       });
     }
@@ -318,6 +351,13 @@ interface Props {
   onCharacterInlineChange: (character: Character) => void;
   /** MESMO canal da guia Negociados (updateCharacterAcquisitionQuestProfit). */
   onUpdateQuestProfit: (input: { acquisitionId: string; questProfit: number }) => Promise<{ ok: boolean; error?: string }>;
+  /**
+   * Edição do valor BASE na Lista de Itens (73ª — EXCLUSIVA DO BOSS): o App
+   * passa `role === "Boss"`. Sem a prop, os demais usuários apenas VEEM os
+   * valores base — mas podem ajustar o valor considerado dos itens do
+   * Bazaar dos próprios personagens.
+   */
+  canUpdateOfficialList?: boolean;
   onClose: () => void;
 }
 
@@ -329,6 +369,7 @@ export default function MyItemsForSaleModal({
   lockedQuestFinancialIds,
   onCharacterInlineChange,
   onUpdateQuestProfit,
+  canUpdateOfficialList,
   onClose,
 }: Props) {
   // Recalculado a cada mudança nas listas vivas do App — tempo real.
@@ -407,6 +448,78 @@ export default function MyItemsForSaleModal({
       averageRC: valued.length > 0 ? Math.round(totalRC / valued.length) : 0,
     };
   }, [tab, filteredItems]);
+
+  // ── Copiar nome do item (73ª) — MESMO padrão do CharTable/"Itens
+  //    Encontrados": clique copia SÓ o nome exato, ✓ verde por 1,5s. ───────
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  async function copyText(text: string, key: string) {
+    try { await navigator.clipboard.writeText(text); } catch { /* fallback */ }
+    setCopiedKey(key);
+    setTimeout(() => setCopiedKey(null), 1500);
+  }
+
+  // ── VALOR BASE vivo da Lista de Itens por servidor (73ª) ─────────────────
+  // Mesma fonte oficial da guia Itens; o evento recarrega o mapa quando
+  // QUALQUER tela grava um valor — a base exibida reflete na hora.
+  const [watchedVersion, setWatchedVersion] = useState(0);
+  useEffect(() => {
+    const bump = () => setWatchedVersion(v => v + 1);
+    window.addEventListener(BAZAAR_WATCHED_ITEMS_UPDATED_EVENT, bump);
+    return () => window.removeEventListener(BAZAAR_WATCHED_ITEMS_UPDATED_EVENT, bump);
+  }, []);
+  const watchedByServer = useMemo(() => loadWatchedItemsByServer(), [watchedVersion]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Edição inline de valores (73ª) ────────────────────────────────────────
+  // `baseEdit` (SÓ Boss): novo valor BASE → Lista de Itens do SERVIDOR do
+  // item (núcleo único applyOfficialWatchedItemUpdate — demais servidores
+  // intactos). `totalEdit` (TODOS; só itens do Bazaar): novo valor
+  // CONSIDERADO → match do snapshot do próprio personagem
+  // (updateSnapshotMatchTotalKk, canal existente onCharacterInlineChange).
+  const [baseEdit, setBaseEdit] = useState<{ key: string; value: string } | null>(null);
+  const [totalEdit, setTotalEdit] = useState<{ key: string; value: string } | null>(null);
+  const [editDone, setEditDone] = useState<{ key: string; ok: boolean; message: string } | null>(null);
+  const editTimerRef = useRef<number | null>(null);
+  useEffect(() => () => { if (editTimerRef.current !== null) window.clearTimeout(editTimerRef.current); }, []);
+  function flashEditDone(key: string, ok: boolean, message: string) {
+    setEditDone({ key, ok, message });
+    if (editTimerRef.current !== null) window.clearTimeout(editTimerRef.current);
+    editTimerRef.current = window.setTimeout(() => { setEditDone(null); editTimerRef.current = null; }, ok ? 2500 : 4000);
+  }
+
+  /** BASE (Boss): grava na Lista de Itens SÓ do servidor do item. */
+  function confirmBaseEdit(item: MySaleItem, fieldKey: string) {
+    // Dupla checagem de autorização (o backend não é tocado: a Lista de
+    // Itens é a mesma fonte local/compartilhada já usada pela guia Itens).
+    if (!canUpdateOfficialList || !baseEdit || baseEdit.key !== fieldKey) return;
+    const valueKk = parseDecimalKkText(baseEdit.value);
+    if (valueKk === null) { flashEditDone(fieldKey, false, "Valor base inválido — kk maior que zero, com até 1 casa decimal (ex.: 1,5)."); return; }
+    const result = applyOfficialWatchedItemUpdate({
+      scope: "server",
+      server: item.serverName,
+      itemName: item.watchedName || item.itemName,
+      valueKk,
+      serverUniverse: SERVER_OPTIONS,
+    });
+    setBaseEdit(null);
+    const touched = result.changedServers.length + result.addedServers.length;
+    flashEditDone(fieldKey, result.ok, !result.ok
+      ? (result.error || "Falha ao atualizar a Lista de Itens.")
+      : touched === 0 ? "Já atualizado" : `${item.serverName} atualizado`);
+  }
+
+  /** CONSIDERADO (todos; só itens do Bazaar): grava no snapshot do personagem. */
+  function confirmTotalEdit(item: MySaleItem, fieldKey: string) {
+    if (item.source !== "bazaar" || item.matchIndex === undefined || !totalEdit || totalEdit.key !== fieldKey) return;
+    const valueKk = parseDecimalKkText(totalEdit.value);
+    if (valueKk === null) { flashEditDone(fieldKey, false, "Valor inválido — kk maior que zero, com até 1 casa decimal (ex.: 1,5)."); return; }
+    const character = characters.find(c => c.id === item.sourceId);
+    const snap = character?.bazaarItems;
+    const next = snap ? updateSnapshotMatchTotalKk(snap, item.matchIndex, valueKk) : null;
+    if (!character || !snap || !next) { flashEditDone(fieldKey, false, "Não foi possível atualizar o valor deste item."); return; }
+    if (next !== snap) onCharacterInlineChange({ ...character, bazaarItems: next });
+    setTotalEdit(null);
+    flashEditDone(fieldKey, true, next === snap ? "Já atualizado" : "Valor atualizado");
+  }
 
   // ── Venda/edição via ItemSoldModal (calculadora oficial) ──────────────────
   const [saleTarget, setSaleTarget] = useState<MySaleItem | null>(null);
@@ -676,12 +789,151 @@ export default function MyItemsForSaleModal({
                 <ul className="divide-y divide-white/5">
                   {list.map(item => {
                     const saving = savingKey === item.key;
+                    // Valores do item (73ª): BASE vivo da Lista de Itens do
+                    // SERVIDOR do item (fallback: base da compra, só Bazaar);
+                    // CONSIDERADO = total do snapshot (Bazaar, editável) ou o
+                    // próprio valor da lista (itens de Quest — sem Tier/qtd).
+                    const listedItem = item.serverName ? findServerWatchedItem(watchedByServer, item.serverName, item.watchedName || item.itemName) : null;
+                    const liveBaseKk = listedItem ? listedItem.valueKk : null;
+                    const shownBaseKk = liveBaseKk !== null ? liveBaseKk : (item.source === "bazaar" && (item.snapshotBaseKk || 0) > 0 ? (item.snapshotBaseKk as number) : null);
+                    const canEditConsidered = item.source === "bazaar" && item.matchIndex !== undefined;
+                    const consideredKk = item.source === "bazaar" ? (item.consideredKk ?? null) : liveBaseKk;
+                    const baseKey = `${item.key}:base`;
+                    const totalKey = `${item.key}:total`;
+                    const rowDone = editDone && (editDone.key === baseKey || editDone.key === totalKey) ? editDone : null;
                     return (
                       <li key={item.key} className="px-3 py-2 flex items-center gap-2 flex-wrap">
                         <div className="flex items-center gap-1.5 min-w-0 flex-1 basis-40">
                           <Swords size={11} className="text-slate-500 flex-shrink-0" />
-                          <span className="text-[11px] text-slate-200 font-semibold truncate" title={item.itemName}>{item.itemName}</span>
+                          {/* Nome do item — botão de COPIAR (73ª; mesmo padrão
+                              do CharTable: clique copia SÓ o nome exato do
+                              item, ✓ verde por 1,5s) */}
+                          <button
+                            type="button"
+                            onClick={() => copyText(item.itemName, `${item.key}:name`)}
+                            className="inline-flex items-center gap-1 min-w-0 rounded px-0.5 py-0.5 hover:bg-white/5 transition-colors cursor-pointer"
+                            title="Clique para copiar o nome do item"
+                          >
+                            <span className="text-[11px] text-slate-200 font-semibold truncate">{item.itemName}</span>
+                            {copiedKey === `${item.key}:name` && <Check size={12} className="text-emerald-400 flex-shrink-0" />}
+                          </button>
+                          {(item.tier || 0) > 0 && (
+                            <span className="text-[8px] font-black px-1 py-px rounded border border-fuchsia-500/40 bg-fuchsia-500/15 text-fuchsia-300 flex-shrink-0" title={`Tier ${item.tier} — +${(item.tier || 0) * 30}% sobre o valor base`}>T{item.tier}</span>
+                          )}
+                          {(item.amount || 0) > 1 && (
+                            <span className="text-[9px] font-bold text-slate-500 tabular-nums flex-shrink-0" title={`${item.amount} unidades`}>×{item.amount}</span>
+                          )}
                         </div>
+                        {/* VALOR BASE (73ª) — Lista de Itens do servidor do
+                            item (vivo). O lápis (SÓ Boss) grava na lista SÓ
+                            deste servidor; demais usuários apenas veem. */}
+                        <span className="inline-flex items-center gap-1 flex-shrink-0 text-[10px] tabular-nums">
+                          <span className="text-[8px] font-black uppercase tracking-wide text-slate-500">Base</span>
+                          {canUpdateOfficialList && baseEdit?.key === baseKey ? (
+                            <span className="inline-flex items-center gap-1">
+                              <input
+                                type="text"
+                                inputMode="numeric"
+                                autoFocus
+                                value={baseEdit.value}
+                                onChange={e => setBaseEdit(prev => (prev ? { ...prev, value: sanitizeDecimalKkText(e.target.value) } : prev))}
+                                onKeyDown={e => {
+                                  if (e.key === "Enter") { e.preventDefault(); confirmBaseEdit(item, baseKey); }
+                                  if (e.key === "Escape") { e.preventDefault(); setBaseEdit(null); }
+                                }}
+                                placeholder="Base (kk)"
+                                title={`Novo valor BASE (kk, até 1 casa decimal) de "${item.watchedName || item.itemName}" na Lista de Itens de ${item.serverName || "—"}. Enter salva, Esc cancela.`}
+                                className="h-6 w-16 rounded-md border border-sky-500/60 bg-black/35 px-1.5 text-right font-mono text-[10px] text-sky-200 outline-none focus:border-sky-400"
+                              />
+                              <button type="button" onClick={() => confirmBaseEdit(item, baseKey)} className="p-0.5 rounded text-emerald-300 hover:bg-emerald-500/15 transition-colors cursor-pointer" title={`Salvar o novo valor base na Lista de Itens de ${item.serverName || "—"} — SOMENTE este servidor é alterado`}>
+                                <Check size={12} strokeWidth={3} />
+                              </button>
+                              <button type="button" onClick={() => setBaseEdit(null)} className="p-0.5 rounded text-slate-400 hover:text-white hover:bg-white/10 transition-colors cursor-pointer" title="Cancelar">
+                                <X size={12} />
+                              </button>
+                            </span>
+                          ) : (
+                            <>
+                              <span
+                                className="font-mono font-bold text-sky-200"
+                                title={liveBaseKk !== null
+                                  ? `Valor BASE de "${item.watchedName || item.itemName}" na Lista de Itens de ${item.serverName || "—"} — reflete edições na hora`
+                                  : shownBaseKk !== null
+                                    ? `Valor base registrado na compra — o item não está (mais) na Lista de Itens de ${item.serverName || "—"}`
+                                    : `Sem valor base — o item não está na Lista de Itens de ${item.serverName || "este servidor"}`}
+                              >
+                                {shownBaseKk !== null ? formatKk(shownBaseKk) : "—"}
+                              </span>
+                              {liveBaseKk === null && shownBaseKk !== null && (
+                                <span className="rounded border border-white/15 bg-white/5 px-1 py-px text-[7px] font-black uppercase tracking-wide text-slate-400" title={`Base registrada na compra — o item não está na Lista de Itens de ${item.serverName || "—"}`}>compra</span>
+                              )}
+                              {canUpdateOfficialList && !!item.serverName && (
+                                <button
+                                  type="button"
+                                  onClick={() => setBaseEdit({ key: baseKey, value: shownBaseKk !== null ? String(shownBaseKk).replace(".", ",") : "" })}
+                                  className="p-0.5 rounded text-sky-300 hover:bg-sky-500/15 transition-colors cursor-pointer"
+                                  title={`Editar o valor BASE de "${item.watchedName || item.itemName}" na Lista de Itens de ${item.serverName} — grava SOMENTE neste servidor (os demais não mudam).`}
+                                >
+                                  <Pencil size={10} />
+                                </button>
+                              )}
+                            </>
+                          )}
+                        </span>
+                        {/* VALOR CONSIDERADO (73ª) — itens do Bazaar: total do
+                            snapshot da compra, ajustável por QUALQUER usuário
+                            (grava no registro do próprio personagem); itens de
+                            Quest: o valor da lista do servidor (sem Tier/qtd). */}
+                        <span className="inline-flex items-center gap-1 flex-shrink-0 text-[10px] tabular-nums">
+                          <span className="text-[8px] font-black uppercase tracking-wide text-slate-500">Consid.</span>
+                          {canEditConsidered && totalEdit?.key === totalKey ? (
+                            <span className="inline-flex items-center gap-1">
+                              <input
+                                type="text"
+                                inputMode="numeric"
+                                autoFocus
+                                value={totalEdit.value}
+                                onChange={e => setTotalEdit(prev => (prev ? { ...prev, value: sanitizeDecimalKkText(e.target.value) } : prev))}
+                                onKeyDown={e => {
+                                  if (e.key === "Enter") { e.preventDefault(); confirmTotalEdit(item, totalKey); }
+                                  if (e.key === "Escape") { e.preventDefault(); setTotalEdit(null); }
+                                }}
+                                placeholder="Total (kk)"
+                                title={`Novo valor CONSIDERADO (kk, até 1 casa decimal) de "${item.itemName}" para este personagem. Enter salva, Esc cancela.`}
+                                className="h-6 w-16 rounded-md border border-amber-500/60 bg-black/35 px-1.5 text-right font-mono text-[10px] text-amber-200 outline-none focus:border-amber-400"
+                              />
+                              <button type="button" onClick={() => confirmTotalEdit(item, totalKey)} className="p-0.5 rounded text-emerald-300 hover:bg-emerald-500/15 transition-colors cursor-pointer" title="Salvar o valor considerado no registro deste personagem (o modal “Ver” e os totais refletem na hora)">
+                                <Check size={12} strokeWidth={3} />
+                              </button>
+                              <button type="button" onClick={() => setTotalEdit(null)} className="p-0.5 rounded text-slate-400 hover:text-white hover:bg-white/10 transition-colors cursor-pointer" title="Cancelar">
+                                <X size={12} />
+                              </button>
+                            </span>
+                          ) : (
+                            <>
+                              <span
+                                className="font-mono font-bold text-amber-200"
+                                title={item.source === "bazaar"
+                                  ? "Valor considerado do item para este personagem (snapshot da compra)"
+                                  : consideredKk !== null
+                                    ? `Valor considerado = valor da Lista de Itens de ${item.serverName || "—"} (item de Quest — sem Tier/quantidade)`
+                                    : `Sem valor considerado — o item não está na Lista de Itens de ${item.serverName || "este servidor"}`}
+                              >
+                                {consideredKk !== null && consideredKk > 0 ? formatKk(consideredKk) : "—"}
+                              </span>
+                              {canEditConsidered && (
+                                <button
+                                  type="button"
+                                  onClick={() => setTotalEdit({ key: totalKey, value: consideredKk !== null && consideredKk > 0 ? String(consideredKk).replace(".", ",") : "" })}
+                                  className="p-0.5 rounded text-amber-300 hover:bg-amber-500/15 transition-colors cursor-pointer"
+                                  title={`Ajustar o valor CONSIDERADO de "${item.itemName}" para este personagem — gravado no registro do próprio personagem (o modal “Ver” e os totais refletem na hora; a Lista de Itens não muda).`}
+                                >
+                                  <Pencil size={10} />
+                                </button>
+                              )}
+                            </>
+                          )}
+                        </span>
                         <div className="flex items-center gap-1 flex-shrink-0">
                           {item.quest === "bazaar" ? (
                             /* Item do Bazaar (58ª): veio na COMPRA do
@@ -737,6 +989,12 @@ export default function MyItemsForSaleModal({
                             </button>
                           )}
                         </div>
+                        {/* Feedback das edições de valor (73ª) — some sozinho */}
+                        {rowDone && (
+                          <p className={`w-full text-[9px] leading-snug pl-[18px] flex items-center gap-1 ${rowDone.ok ? "text-emerald-300" : "text-rose-300"}`} title={rowDone.message}>
+                            {rowDone.ok ? <Check size={9} className="flex-shrink-0" /> : <AlertTriangle size={9} className="flex-shrink-0" />} {rowDone.message}
+                          </p>
+                        )}
                         {item.sold && item.saleSummary && (
                           <p className="w-full text-[9px] text-slate-500 leading-snug pl-[18px]" title={item.saleSummary}>
                             {item.saleSummary}

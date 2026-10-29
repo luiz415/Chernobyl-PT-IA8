@@ -6392,6 +6392,8 @@ export default function App() {
           characters={data.characters}
           lockedQuestFinancialIds={negotiatedOriginalCharacterIds}
           onCharacterInlineChange={handleCharacterInlineChange}
+          /* Edição do valor BASE na Lista de Itens (73ª) — SÓ Boss. */
+          canUpdateOfficialList={userProfile?.role === "Boss"}
           onClose={() => setIsFoundItemsOpen(false)}
         />
       )}
@@ -6408,6 +6410,10 @@ export default function App() {
           lockedQuestFinancialIds={negotiatedOriginalCharacterIds}
           onCharacterInlineChange={handleCharacterInlineChange}
           onUpdateQuestProfit={updateCharacterAcquisitionQuestProfit}
+          /* Edição do valor BASE na Lista de Itens (73ª) — SÓ Boss; demais
+             usuários apenas veem a base (e ajustam o considerado dos itens
+             do Bazaar dos próprios personagens). */
+          canUpdateOfficialList={userProfile?.role === "Boss"}
           onClose={() => setIsMyItemsSaleOpen(false)}
         />
       )}

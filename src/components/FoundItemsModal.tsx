@@ -1,9 +1,18 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { X, Package, Globe, Search, User, Coins, Check, Trash2, Swords } from "lucide-react";
+import { AlertTriangle, X, Package, Globe, Search, User, Coins, Check, Pencil, Trash2, Swords } from "lucide-react";
 import type { Character, ItemSaleRecord } from "../types";
 import { formatRC } from "../types";
-import { serverLabel } from "../constants/servers";
+import { SERVER_OPTIONS, serverLabel } from "../constants/servers";
+import {
+  BAZAAR_WATCHED_ITEMS_UPDATED_EVENT,
+  applyOfficialWatchedItemUpdate,
+  findServerWatchedItem,
+  loadWatchedItemsByServer,
+  parseDecimalKkText,
+  sanitizeDecimalKkText,
+  updateSnapshotMatchTotalKk,
+} from "../utils/bazaarWatchedItems";
 import { formatItemSaleSummary, formatKkValue as formatKkValueBase, isItemSaleConcluded } from "../utils/itemSale";
 import ItemSoldModal from "./ItemSoldModal";
 
@@ -58,6 +67,9 @@ export interface FoundItemEntry {
   tier: number;
   amount: number;
   unitValueKk: number;
+  /** Valor BASE do item na compra (kk) — fallback quando o item não está
+   *  (mais) na Lista de Itens do servidor do personagem. */
+  baseValueKk: number;
   /** VALOR CONSIDERADO do item (kk) — o mesmo da consulta/modal "Ver". */
   totalKk: number;
   forSale: boolean;
@@ -117,6 +129,7 @@ export function collectFoundItemGroups(
           tier: m.tier,
           amount: m.amount,
           unitValueKk: m.unitValueKk,
+          baseValueKk: Number(m.baseValueKk || 0),
           totalKk: m.totalKk,
           forSale: !!m.forSale,
           sold: concluded,
@@ -137,6 +150,12 @@ interface Props {
   lockedQuestFinancialIds: ReadonlySet<string>;
   /** MESMO canal do CharTable: setData do App → persistência existente. */
   onCharacterInlineChange: (character: Character) => void;
+  /**
+   * Edição do valor BASE na Lista de Itens (73ª — EXCLUSIVA DO BOSS): o App
+   * passa `role === "Boss"`. Dupla garantia: além de o modal só ser montado
+   * para o Boss, o lápis da base só existe com esta prop ativa.
+   */
+  canUpdateOfficialList?: boolean;
   onClose: () => void;
 }
 
@@ -144,6 +163,7 @@ export default function FoundItemsModal({
   characters,
   lockedQuestFinancialIds,
   onCharacterInlineChange,
+  canUpdateOfficialList,
   onClose,
 }: Props) {
   // Recalculado a cada mudança na lista viva do App — tempo real.
@@ -189,6 +209,69 @@ export default function FoundItemsModal({
     try { await navigator.clipboard.writeText(text); } catch { /* fallback */ }
     setCopiedKey(key);
     setTimeout(() => setCopiedKey(null), 1500);
+  }
+
+  // ── VALOR BASE vivo da Lista de Itens por servidor (73ª) ─────────────────
+  // Mesma fonte oficial da guia Itens (rubinot_bazaar_watched_items_by_server);
+  // o evento BAZAAR_WATCHED_ITEMS_UPDATED_EVENT recarrega o mapa quando
+  // QUALQUER tela grava um valor — a base exibida reflete na hora.
+  const [watchedVersion, setWatchedVersion] = useState(0);
+  useEffect(() => {
+    const bump = () => setWatchedVersion(v => v + 1);
+    window.addEventListener(BAZAAR_WATCHED_ITEMS_UPDATED_EVENT, bump);
+    return () => window.removeEventListener(BAZAAR_WATCHED_ITEMS_UPDATED_EVENT, bump);
+  }, []);
+  const watchedByServer = useMemo(() => loadWatchedItemsByServer(), [watchedVersion]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Edição inline de valores (73ª) ────────────────────────────────────────
+  // `baseEdit` (SÓ Boss): novo valor BASE → Lista de Itens do SERVIDOR do
+  // personagem (núcleo único applyOfficialWatchedItemUpdate — demais
+  // servidores intactos). `totalEdit` (TODOS): novo valor CONSIDERADO →
+  // match do snapshot do próprio personagem (updateSnapshotMatchTotalKk,
+  // canal existente onCharacterInlineChange). Feedback por campo (2,5s/4s).
+  const [baseEdit, setBaseEdit] = useState<{ key: string; value: string } | null>(null);
+  const [totalEdit, setTotalEdit] = useState<{ key: string; value: string } | null>(null);
+  const [editDone, setEditDone] = useState<{ key: string; ok: boolean; message: string } | null>(null);
+  const editTimerRef = useRef<number | null>(null);
+  useEffect(() => () => { if (editTimerRef.current !== null) window.clearTimeout(editTimerRef.current); }, []);
+  function flashEditDone(key: string, ok: boolean, message: string) {
+    setEditDone({ key, ok, message });
+    if (editTimerRef.current !== null) window.clearTimeout(editTimerRef.current);
+    editTimerRef.current = window.setTimeout(() => { setEditDone(null); editTimerRef.current = null; }, ok ? 2500 : 4000);
+  }
+
+  /** BASE (Boss): grava na Lista de Itens SÓ do servidor do personagem. */
+  function confirmBaseEdit(group: FoundItemGroup, item: FoundItemEntry, fieldKey: string) {
+    // Dupla checagem de autorização (além da montagem Boss-only do App).
+    if (!canUpdateOfficialList || !baseEdit || baseEdit.key !== fieldKey) return;
+    const valueKk = parseDecimalKkText(baseEdit.value);
+    if (valueKk === null) { flashEditDone(fieldKey, false, "Valor base inválido — kk maior que zero, com até 1 casa decimal (ex.: 1,5)."); return; }
+    const result = applyOfficialWatchedItemUpdate({
+      scope: "server",
+      server: group.serverName,
+      itemName: item.watchedName || item.foundName,
+      valueKk,
+      serverUniverse: SERVER_OPTIONS,
+    });
+    setBaseEdit(null);
+    const touched = result.changedServers.length + result.addedServers.length;
+    flashEditDone(fieldKey, result.ok, !result.ok
+      ? (result.error || "Falha ao atualizar a Lista de Itens.")
+      : touched === 0 ? "Já atualizado" : `${group.serverName} atualizado`);
+  }
+
+  /** CONSIDERADO (todos): grava o total do match no snapshot do personagem. */
+  function confirmTotalEdit(group: FoundItemGroup, item: FoundItemEntry, fieldKey: string) {
+    if (!totalEdit || totalEdit.key !== fieldKey) return;
+    const valueKk = parseDecimalKkText(totalEdit.value);
+    if (valueKk === null) { flashEditDone(fieldKey, false, "Valor inválido — kk maior que zero, com até 1 casa decimal (ex.: 1,5)."); return; }
+    const character = characters.find(c => c.id === group.characterId);
+    const snap = character?.bazaarItems;
+    const next = snap ? updateSnapshotMatchTotalKk(snap, item.matchIndex, valueKk) : null;
+    if (!character || !snap || !next) { flashEditDone(fieldKey, false, "Não foi possível atualizar o valor deste item."); return; }
+    if (next !== snap) onCharacterInlineChange({ ...character, bazaarItems: next });
+    setTotalEdit(null);
+    flashEditDone(fieldKey, true, next === snap ? "Já atualizado" : "Valor atualizado");
   }
 
   // ── Remoção: confirmação em 2 cliques (expira sozinha) ────────────────────
@@ -370,11 +453,31 @@ export default function FoundItemsModal({
                 <ul className="divide-y divide-white/5">
                   {group.items.map(item => {
                     const itemKey = `${group.characterId}:${item.matchIndex}`;
+                    // Valor BASE vivo da Lista de Itens do SERVIDOR do
+                    // personagem (73ª); sem registro na lista, cai no base da
+                    // compra (snapshot); sem nenhum dos dois, "—".
+                    const listedItem = findServerWatchedItem(watchedByServer, group.serverName, item.watchedName || item.foundName);
+                    const liveBaseKk = listedItem ? listedItem.valueKk : null;
+                    const shownBaseKk = liveBaseKk !== null ? liveBaseKk : (item.baseValueKk > 0 ? item.baseValueKk : null);
+                    const baseKey = `${itemKey}:base`;
+                    const totalKey = `${itemKey}:total`;
+                    const rowDone = editDone && (editDone.key === baseKey || editDone.key === totalKey) ? editDone : null;
                     return (
                       <li key={itemKey} className="px-3 py-2 flex items-center gap-2 flex-wrap">
                         <div className="flex items-center gap-1.5 min-w-0 flex-1 basis-40">
                           <Package size={11} className="text-slate-500 flex-shrink-0" />
-                          <span className="text-[11px] text-slate-200 font-semibold truncate" title={`${item.foundName} — item da lista: ${item.watchedName}`}>{item.foundName}</span>
+                          {/* Nome do item — botão de COPIAR (73ª; mesmo padrão
+                              do CharTable: clique copia SÓ o nome exato do
+                              item, ✓ verde por 1,5s) */}
+                          <button
+                            type="button"
+                            onClick={() => copyText(item.foundName, `${itemKey}:name`)}
+                            className="inline-flex items-center gap-1 min-w-0 rounded px-0.5 py-0.5 hover:bg-white/5 transition-colors cursor-pointer"
+                            title={`Clique para copiar o nome do item — item da lista: ${item.watchedName}`}
+                          >
+                            <span className="text-[11px] text-slate-200 font-semibold truncate">{item.foundName}</span>
+                            {copiedKey === `${itemKey}:name` && <Check size={12} className="text-emerald-400 flex-shrink-0" />}
+                          </button>
                           {item.tier > 0 && (
                             <span className="text-[8px] font-black px-1 py-px rounded border border-fuchsia-500/40 bg-fuchsia-500/15 text-fuchsia-300 flex-shrink-0" title={`Tier ${item.tier} — +${item.tier * 30}% sobre o valor base`}>T{item.tier}</span>
                           )}
@@ -382,9 +485,105 @@ export default function FoundItemsModal({
                             <span className="text-[9px] font-bold text-slate-500 tabular-nums flex-shrink-0" title={`${item.amount} unidades × ${formatKk(item.unitValueKk)}`}>×{item.amount}</span>
                           )}
                         </div>
-                        {/* VALOR CONSIDERADO — o mesmo kk da consulta/"Ver" */}
-                        <span className="text-[10px] font-mono font-bold text-amber-200 tabular-nums flex-shrink-0" title={item.amount > 1 ? `Valor considerado: ${item.amount} × ${formatKk(item.unitValueKk)} = ${formatKk(item.totalKk)}` : "Valor considerado do item (da consulta de origem)"}>
-                          {formatKk(item.totalKk)}
+                        {/* VALOR BASE (73ª) — Lista de Itens do servidor do
+                            personagem (vivo); fallback: base da compra. O
+                            lápis (SÓ Boss) grava na lista SÓ deste servidor. */}
+                        <span className="inline-flex items-center gap-1 flex-shrink-0 text-[10px] tabular-nums">
+                          <span className="text-[8px] font-black uppercase tracking-wide text-slate-500">Base</span>
+                          {canUpdateOfficialList && baseEdit?.key === baseKey ? (
+                            <span className="inline-flex items-center gap-1">
+                              <input
+                                type="text"
+                                inputMode="numeric"
+                                autoFocus
+                                value={baseEdit.value}
+                                onChange={e => setBaseEdit(prev => (prev ? { ...prev, value: sanitizeDecimalKkText(e.target.value) } : prev))}
+                                onKeyDown={e => {
+                                  if (e.key === "Enter") { e.preventDefault(); confirmBaseEdit(group, item, baseKey); }
+                                  if (e.key === "Escape") { e.preventDefault(); setBaseEdit(null); }
+                                }}
+                                placeholder="Base (kk)"
+                                title={`Novo valor BASE (kk, até 1 casa decimal) de "${item.watchedName || item.foundName}" na Lista de Itens de ${group.serverName || "—"}. Enter salva, Esc cancela.`}
+                                className="h-6 w-16 rounded-md border border-sky-500/60 bg-black/35 px-1.5 text-right font-mono text-[10px] text-sky-200 outline-none focus:border-sky-400"
+                              />
+                              <button type="button" onClick={() => confirmBaseEdit(group, item, baseKey)} className="p-0.5 rounded text-emerald-300 hover:bg-emerald-500/15 transition-colors cursor-pointer" title={`Salvar o novo valor base na Lista de Itens de ${group.serverName || "—"} — SOMENTE este servidor é alterado`}>
+                                <Check size={12} strokeWidth={3} />
+                              </button>
+                              <button type="button" onClick={() => setBaseEdit(null)} className="p-0.5 rounded text-slate-400 hover:text-white hover:bg-white/10 transition-colors cursor-pointer" title="Cancelar">
+                                <X size={12} />
+                              </button>
+                            </span>
+                          ) : (
+                            <>
+                              <span
+                                className="font-mono font-bold text-sky-200"
+                                title={liveBaseKk !== null
+                                  ? `Valor BASE de "${item.watchedName || item.foundName}" na Lista de Itens de ${group.serverName || "—"} — reflete edições na hora`
+                                  : shownBaseKk !== null
+                                    ? `Valor base registrado na compra — o item não está (mais) na Lista de Itens de ${group.serverName || "—"}`
+                                    : `Sem valor base — o item não está na Lista de Itens de ${group.serverName || "—"} nem trouxe base na compra`}
+                              >
+                                {shownBaseKk !== null ? formatKk(shownBaseKk) : "—"}
+                              </span>
+                              {liveBaseKk === null && shownBaseKk !== null && (
+                                <span className="rounded border border-white/15 bg-white/5 px-1 py-px text-[7px] font-black uppercase tracking-wide text-slate-400" title={`Base registrada na compra — o item não está na Lista de Itens de ${group.serverName || "—"}`}>compra</span>
+                              )}
+                              {canUpdateOfficialList && (
+                                <button
+                                  type="button"
+                                  onClick={() => setBaseEdit({ key: baseKey, value: shownBaseKk !== null ? String(shownBaseKk).replace(".", ",") : "" })}
+                                  className="p-0.5 rounded text-sky-300 hover:bg-sky-500/15 transition-colors cursor-pointer"
+                                  title={`Editar o valor BASE de "${item.watchedName || item.foundName}" na Lista de Itens de ${group.serverName || "—"} — grava SOMENTE neste servidor (os demais não mudam).`}
+                                >
+                                  <Pencil size={10} />
+                                </button>
+                              )}
+                            </>
+                          )}
+                        </span>
+                        {/* VALOR CONSIDERADO — o mesmo kk da consulta/"Ver";
+                            o lápis (TODOS os usuários) ajusta o valor DESTE
+                            item no snapshot do personagem. */}
+                        <span className="inline-flex items-center gap-1 flex-shrink-0 text-[10px] tabular-nums">
+                          <span className="text-[8px] font-black uppercase tracking-wide text-slate-500">Consid.</span>
+                          {totalEdit?.key === totalKey ? (
+                            <span className="inline-flex items-center gap-1">
+                              <input
+                                type="text"
+                                inputMode="numeric"
+                                autoFocus
+                                value={totalEdit.value}
+                                onChange={e => setTotalEdit(prev => (prev ? { ...prev, value: sanitizeDecimalKkText(e.target.value) } : prev))}
+                                onKeyDown={e => {
+                                  if (e.key === "Enter") { e.preventDefault(); confirmTotalEdit(group, item, totalKey); }
+                                  if (e.key === "Escape") { e.preventDefault(); setTotalEdit(null); }
+                                }}
+                                placeholder="Total (kk)"
+                                title={`Novo valor CONSIDERADO (kk, até 1 casa decimal) de "${item.foundName}" para este personagem. Enter salva, Esc cancela.`}
+                                className="h-6 w-16 rounded-md border border-amber-500/60 bg-black/35 px-1.5 text-right font-mono text-[10px] text-amber-200 outline-none focus:border-amber-400"
+                              />
+                              <button type="button" onClick={() => confirmTotalEdit(group, item, totalKey)} className="p-0.5 rounded text-emerald-300 hover:bg-emerald-500/15 transition-colors cursor-pointer" title="Salvar o valor considerado no registro deste personagem (o modal “Ver” e os totais refletem na hora)">
+                                <Check size={12} strokeWidth={3} />
+                              </button>
+                              <button type="button" onClick={() => setTotalEdit(null)} className="p-0.5 rounded text-slate-400 hover:text-white hover:bg-white/10 transition-colors cursor-pointer" title="Cancelar">
+                                <X size={12} />
+                              </button>
+                            </span>
+                          ) : (
+                            <>
+                              <span className="font-mono font-bold text-amber-200" title={item.amount > 1 ? `Valor considerado: ${item.amount} × ${formatKk(item.unitValueKk)} = ${formatKk(item.totalKk)}` : "Valor considerado do item (da consulta de origem)"}>
+                                {formatKk(item.totalKk)}
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => setTotalEdit({ key: totalKey, value: String(item.totalKk).replace(".", ",") })}
+                                className="p-0.5 rounded text-amber-300 hover:bg-amber-500/15 transition-colors cursor-pointer"
+                                title={`Ajustar o valor CONSIDERADO de "${item.foundName}" para este personagem — gravado no registro do próprio personagem (o modal “Ver” e os totais refletem na hora; a Lista de Itens não muda).`}
+                              >
+                                <Pencil size={10} />
+                              </button>
+                            </>
+                          )}
                         </span>
                         <div className="flex items-center gap-1.5 ml-auto flex-shrink-0">
                           {/* À VENDA — mesmo toggle do modal "Ver" */}
@@ -439,6 +638,12 @@ export default function FoundItemsModal({
                             <Trash2 size={9} /> {confirmRemoveKey === itemKey ? "Confirmar?" : "Remover"}
                           </button>
                         </div>
+                        {/* Feedback das edições de valor (73ª) — some sozinho */}
+                        {rowDone && (
+                          <p className={`w-full text-[9px] leading-snug pl-[18px] flex items-center gap-1 ${rowDone.ok ? "text-emerald-300" : "text-rose-300"}`} title={rowDone.message}>
+                            {rowDone.ok ? <Check size={9} className="flex-shrink-0" /> : <AlertTriangle size={9} className="flex-shrink-0" />} {rowDone.message}
+                          </p>
+                        )}
                         {item.sold && item.saleSummary && (
                           <p className="w-full text-[9px] text-slate-500 leading-snug pl-[18px]" title={item.saleSummary}>{item.saleSummary}</p>
                         )}

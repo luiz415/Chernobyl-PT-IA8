@@ -211,6 +211,37 @@ export function deriveWatchedBaseKkFromTotal(totalKk: number, amount: number, ti
   return Math.round((total / safeAmount / (1 + 0.3 * safeTier)) * 10) / 10;
 }
 
+// ── ENTRADA DE VALORES EM KK (modais de Meus Personagens — 73ª) ─────────────
+// MESMAS regras dos campos de valor da guia Itens (sanitizeDecimalKk/
+// parseDecimalKk do BazaarItemsPanel): dígitos + um único separador, no
+// máximo 1 casa decimal; válido = número finito > 0. Exportadas daqui para
+// os modais "Itens Encontrados"/"Itens à Venda" usarem a MESMA validação da
+// Lista de Itens sem duplicar a regra em cada componente.
+
+/** Mantém apenas dígitos e UM separador decimal (máx. 1 casa) no campo. */
+export function sanitizeDecimalKkText(raw: string): string {
+  let text = String(raw || "").replace(/[^\d.,]+/g, "").slice(0, 11);
+  // Um único separador (o primeiro vale); demais são removidos.
+  const sepIndex = text.search(/[.,]/);
+  if (sepIndex >= 0) {
+    const head = text.slice(0, sepIndex + 1);
+    const tail = text.slice(sepIndex + 1).replace(/[.,]+/g, "");
+    text = head + tail.slice(0, 1); // no máximo 1 casa decimal
+  }
+  return text;
+}
+
+/**
+ * Converte o texto do campo em número kk com 1 casa decimal.
+ * null = inválido (vazio, zero, formato errado).
+ */
+export function parseDecimalKkText(raw: string): number | null {
+  const text = String(raw || "").trim().replace(",", ".");
+  if (!/^\d+(\.\d)?$/.test(text)) return null;
+  const value = Math.round(Number(text) * 10) / 10;
+  return Number.isFinite(value) && value > 0 ? value : null;
+}
+
 /** Índice nome-normalizado -> item monitorado, para casamento O(1). */
 export function buildWatchlistIndex(items: WatchedItem[]): Map<string, WatchedItem> {
   const index = new Map<string, WatchedItem>();
@@ -372,6 +403,44 @@ export function saveWatchedItemsByServer(map: WatchedItemsByServer): void {
 /** Lista de preços de UM servidor (vazia quando não há nada cadastrado). */
 export function getServerWatchedItems(map: WatchedItemsByServer, server: string): WatchedItem[] {
   return map[canonicalServerKey(server)] || [];
+}
+
+/**
+ * Item da Lista de Itens de UM servidor casado pelo NOME (73ª) — a MESMA
+ * regra de casamento da consulta (nome base sem o sufixo "[Tier x]",
+ * normalizado sem acentos/caixa). null = item não cadastrado na lista
+ * daquele servidor (a exibição mostra o fallback/"—", nunca inventa valor).
+ * Usada pelos modais "Itens Encontrados"/"Itens à Venda" de Meus Personagens
+ * para exibir o valor BASE vivo do servidor do personagem.
+ */
+export function findServerWatchedItem(map: WatchedItemsByServer, server: string, itemName: string): WatchedItem | null {
+  const nameKey = normalizeWatchedItemName(parseTieredItemName(String(itemName || "")).baseName);
+  if (!nameKey) return null;
+  return getServerWatchedItems(map, server).find(item => normalizeWatchedItemName(item.name) === nameKey) || null;
+}
+
+/**
+ * EDIÇÃO DO VALOR CONSIDERADO de um item do snapshot da compra (73ª) —
+ * função PURA usada pelos modais "Itens Encontrados" e "Itens à Venda" de
+ * Meus Personagens: grava o novo total (kk, 1 casa decimal) no PRÓPRIO match
+ * e recalcula o total automático do personagem (matches restantes + Ouro),
+ * EXATAMENTE como a remoção de item já faz. A correção manual da compra
+ * (`manualTotalKk`), quando existe, é PRESERVADA (continua prioritária).
+ * Retorna null quando o índice/valor é inválido; retorna o MESMO objeto
+ * quando o valor já está em vigor (idempotência — nada a gravar).
+ */
+export function updateSnapshotMatchTotalKk<S extends { totalKk: number; goldKk?: number; matches: Array<{ totalKk: number }> }>(
+  snap: S,
+  matchIndex: number,
+  newTotalKk: number,
+): S | null {
+  const value = Math.round(Number(newTotalKk) * 10) / 10;
+  if (!Number.isFinite(value) || value <= 0) return null;
+  if (!snap || !Array.isArray(snap.matches) || matchIndex < 0 || matchIndex >= snap.matches.length) return null;
+  if (snap.matches[matchIndex].totalKk === value) return snap;
+  const matches = snap.matches.map((m, i) => (i === matchIndex ? { ...m, totalKk: value } : m));
+  const autoTotal = Math.round((matches.reduce((sum, m) => sum + (Number(m.totalKk) || 0), 0) + (Number(snap.goldKk) || 0)) * 100) / 100;
+  return { ...snap, matches, totalKk: autoTotal };
 }
 
 /**
