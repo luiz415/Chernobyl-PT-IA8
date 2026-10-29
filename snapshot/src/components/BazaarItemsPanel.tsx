@@ -77,7 +77,12 @@ import {
   exportWatchlistByServerJson,
   exportWatchlistJson,
   getServerWatchedItems,
-  loadItemsInterests,
+  interestedAuctionIdsFrom,
+  isItemsInterestMarked,
+  loadItemsInterestRecords,
+  saveItemsInterestRecords,
+  toggleItemsInterestRecord,
+  upgradeItemsInterestRecords,
   loadItemsLastQuery,
   loadWatchedItemsByServer,
   BAZAAR_WATCHED_ITEMS_UPDATED_EVENT,
@@ -87,10 +92,10 @@ import {
   propagateWatchedItemValueToAllServers,
   repriceAllQueryResults,
   repriceQueryResultsForServerItem,
-  saveItemsInterests,
   saveItemsLastQuery,
   saveWatchedItemsByServer,
   type BazaarItemsCharacterResult,
+  type ItemsInterestRecord,
   type BazaarItemsLastQuery,
   type CharacterItemMatch,
   type ItemsCharacterSkills,
@@ -116,7 +121,11 @@ import {
 } from "../utils/bazaarCoinRates";
 import { syncBazaarItemsEndingAlerts } from "../services/bazaarInterestNotificationService";
 import { useAuth } from "../context/AuthContext";
-import type { BazaarItemsPurchasePrefill } from "../types";
+import type { CharacterBazaarItemsSnapshot } from "../types";
+// Confirmação INLINE do "Comprado" (71ª) — o MESMO formulário compartilhado
+// da guia de quests (conta/valor/validações/última conta usada/checkbox
+// "Descontar valor dos itens"), exibido numa linha logo abaixo do personagem.
+import BazaarInlinePurchaseForm from "./BazaarInlinePurchaseForm";
 
 // ── Tipos mínimos do IPC (mesmo contrato dos handlers existentes) ───────────
 interface ItemsAuction {
@@ -223,11 +232,23 @@ interface Props {
    */
   personalCharacterNames?: ReadonlySet<string>;
   /**
-   * "Comprado": abre o CharacterModal COMPLETO no App, pré-preenchido com os
-   * dados da consulta (quests reais + snapshot dos itens). Retorno com erro
-   * (ex.: duplicado) é exibido inline na própria linha.
+   * "Comprado" (71ª): confirmação INLINE — adiciona o personagem DIRETO a
+   * Meus Personagens (mesmo fluxo/persistência da guia de quests), com as
+   * quests REAIS desta consulta e o snapshot dos itens. Erro (ex.:
+   * duplicado) volta ao formulário inline.
    */
-  onOpenPurchaseModal?: (prefill: BazaarItemsPurchasePrefill) => { ok: boolean; error?: string };
+  onAddPurchasedCharacter?: (character: {
+    name: string; level: number; server: string; vocation: string;
+    account: string; valorPago: number;
+    items?: CharacterBazaarItemsSnapshot; itemsDiscountRc?: number;
+    soulwarCompleted?: boolean | null; sanguineCompleted?: boolean | null; cryptCompleted?: boolean | null;
+  }) => { ok: boolean; error?: string };
+  /** Contas existentes — MESMA lista do formulário inline das quests. */
+  purchaseAccounts?: string[];
+  /** Última conta usada em compras (persistida por usuário no BazarPanel). */
+  getPurchaseInitialAccount?: () => string;
+  /** Persiste a conta escolhida — mesma memória da guia de quests. */
+  onRememberPurchaseAccount?: (account: string) => void;
   /**
    * Seção "Notificar" do quadro "Última Consulta" — MESMO controle e MESMA
    * configuração da guia de quests (antecedência + "Repetir Alerta"; 0 =
@@ -581,7 +602,7 @@ interface ItemsLocalNotification {
   auctionId?: string;
 }
 
-export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffsetMinutes, getLinkState, openLink, getViewState, markViewed, onRunningChange, isQuestsQueryRunning, personalCharacterNames, onOpenPurchaseModal, notifyBeforeMinutes, onApplyNotifyMinutes }: Props) {
+export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffsetMinutes, getLinkState, openLink, getViewState, markViewed, onRunningChange, isQuestsQueryRunning, personalCharacterNames, onAddPurchasedCharacter, purchaseAccounts, getPurchaseInitialAccount, onRememberPurchaseAccount, notifyBeforeMinutes, onApplyNotifyMinutes }: Props) {
   const { currentUser } = useAuth();
   const currentUid = currentUser?.uid || "";
 
@@ -922,9 +943,9 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
     if (detailRateTimerRef.current !== null) window.clearTimeout(detailRateTimerRef.current);
     detailRateTimerRef.current = window.setTimeout(() => setDetailRateSaved(false), 1500);
   };
-  // Erros do fluxo "Comprado" (ex.: personagem já cadastrado) — exibidos
-  // inline na própria célula, por leilão.
-  const [purchaseErrors, setPurchaseErrors] = useState<Record<string, string>>({});
+  // "Comprado" INLINE (71ª): qual linha está com a confirmação aberta e a
+  // conta inicial pré-preenchida na abertura (mesmo contrato das quests).
+  const [inlinePurchase, setInlinePurchase] = useState<{ auctionKey: string; initialAccount: string } | null>(null);
   // Atualização global a partir do modal LISTA DE ITENS — mesma mecânica de
   // confirmação inline do Detalhes, com chave por id do item da lista.
   const [listApply, setListApply] = useState<string | null>(null);
@@ -987,7 +1008,12 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
   }
 
   // ── "Tenho Interesse" — 100% LOCAL (localStorage por uid, ZERO Firestore) ─
-  const [itemInterests, setItemInterests] = useState<string[]>(() => loadItemsInterests(currentUid));
+  // 71ª: a marcação é um REGISTRO {id do leilão, nome, servidor} — o leilão
+  // repostado ganha id novo, então o interesse segue o PERSONAGEM (nome +
+  // servidor) e sobrevive quando ele some de uma consulta e volta em outra.
+  // Mesma chave local por uid de sempre; marcações antigas (só id) continuam
+  // valendo e são promovidas ao formato novo quando reencontradas.
+  const [itemInterests, setItemInterests] = useState<ItemsInterestRecord[]>(() => loadItemsInterestRecords(currentUid));
   // Chips locais de "leilão encerrando" — mesmo formato/comportamento do
   // painel de quests, alimentados pelo canal de ITENS do agendador local.
   const [itemsNotifications, setItemsNotifications] = useState<ItemsLocalNotification[]>([]);
@@ -995,8 +1021,26 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
 
   // Recarrega o interesse local quando o usuário muda (mesma chave por uid).
   useEffect(() => {
-    setItemInterests(loadItemsInterests(currentUid));
+    setItemInterests(loadItemsInterestRecords(currentUid));
   }, [currentUid]);
+
+  // PROMOÇÃO dos registros a cada consulta carregada: marcações legadas (só
+  // id) reencontradas ganham nome+servidor; personagens que voltaram com
+  // leilão NOVO ganham o id atual (alertas de encerramento usam o id vivo).
+  // Regrava SOMENTE quando algo mudou — sem loops e sem escrita ociosa.
+  useEffect(() => {
+    if (!lastQuery) return;
+    setItemInterests(current => {
+      const { records, changed } = upgradeItemsInterestRecords(current, (lastQuery.results || []).map(result => ({
+        id: result.id || result.url || result.name,
+        name: result.name,
+        server: result.server,
+      })));
+      if (!changed) return current;
+      saveItemsInterestRecords(currentUid, records);
+      return records;
+    });
+  }, [currentUid, lastQuery]);
 
   // ── Agendador de alertas do canal de ITENS ────────────────────────────────
   // Alimenta a fila local SEPARADA das quests com os resultados da última
@@ -1004,15 +1048,17 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
   // das quests (centro/som/desktop + chip) — nada disso passa pelo Firestore.
   useEffect(() => {
     if (!currentUid || !lastQuery) return;
+    const characters = (lastQuery.results || []).map(result => ({
+      id: result.id || result.url || result.name,
+      name: result.name,
+      server: result.server,
+      auctionEndTs: result.auctionEndTs ?? null,
+      url: result.url,
+    }));
     syncBazaarItemsEndingAlerts({
-      characters: (lastQuery.results || []).map(result => ({
-        id: result.id || result.url || result.name,
-        name: result.name,
-        server: result.server,
-        auctionEndTs: result.auctionEndTs ?? null,
-        url: result.url,
-      })),
-      interestedAuctionIds: itemInterests,
+      characters,
+      // Registros → ids de leilão VIVOS (bate por id OU nome+servidor).
+      interestedAuctionIds: interestedAuctionIdsFrom(itemInterests, characters),
       currentUserUid: currentUid,
       bazaarVersion: `items_${lastQuery.completedAtMs}`,
     });
@@ -1102,13 +1148,17 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
     return () => setTitleActionsHost(null);
   }, []);
 
-  /** Marca/desmarca "Tenho Interesse" — grava SOMENTE no localStorage. */
-  function toggleItemInterest(auctionKey: string) {
-    const key = String(auctionKey || "").trim();
-    if (!key) return;
+  /**
+   * Marca/desmarca "Tenho Interesse" — grava SOMENTE no localStorage.
+   * 71ª: registro completo {id, nome, servidor}; desmarcar remove TODOS os
+   * registros que batem (inclusive legados por id) — sem duplicação.
+   */
+  function toggleItemInterest(result: BazaarItemsCharacterResult) {
+    const target = { id: result.id || result.url || result.name, name: result.name, server: result.server };
+    if (!target.id && !(target.name && target.server)) return;
     setItemInterests(prev => {
-      const next = prev.includes(key) ? prev.filter(id => id !== key) : [...prev, key];
-      saveItemsInterests(currentUid, next);
+      const next = toggleItemsInterestRecord(prev, target);
+      saveItemsInterestRecords(currentUid, next);
       return next;
     });
   }
@@ -1118,7 +1168,7 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
   // hora. Sem auctionId não há como cruzar — o chip permanece (expira só).
   const visibleItemsNotifications = itemsNotifications.filter(item => {
     if (!item.auctionId) return true;
-    return itemInterests.includes(item.auctionId);
+    return isItemsInterestMarked(itemInterests, { id: item.auctionId });
   });
 
   /** Copia texto e marca o feedback — mesmo mecanismo dos copiar existentes. */
@@ -1966,6 +2016,12 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
    *    personagem ao salvar (`bazaarItems`) — o Boss os revê depois em
    *    Meus Personagens → Disponíveis → Itens → Ver, sem nova consulta.
    *
+   * 71ª: a função passou a devolver SOMENTE o snapshot (CharacterBazaarItems-
+   * Snapshot); a confirmação é INLINE (BazaarInlinePurchaseForm, o mesmo da
+   * guia de quests) e a inclusão vai DIRETO para Meus Personagens — o
+   * CharacterModal não abre mais neste fluxo. O snapshot também alimenta o
+   * desconto "Descontar valor dos itens" (kk efetivo × cotação do servidor).
+   *
    * AJUSTES LOCAIS DO MODAL DETALHES (correção da auditoria): quando o
    * personagem tem ajustes locais de Total (kk) por linha
    * (detailTotalsByChar — a MESMA chave de personagem desta função), o
@@ -1976,8 +2032,7 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
    * — o ajuste é do TOTAL da linha e nunca contamina o valor base. Sem
    * ajustes, comportamento idêntico ao anterior.
    */
-  function openPurchaseModalForResult(result: BazaarItemsCharacterResult) {
-    if (!onOpenPurchaseModal) return;
+  function buildResultPurchaseItems(result: BazaarItemsCharacterResult): CharacterBazaarItemsSnapshot {
     const auctionKey = result.id || result.url || result.name;
     const charOverrides: Record<string, number> = detailTotalsByChar[auctionKey] || {};
     const hasLocalTotals = Object.keys(charOverrides).length > 0;
@@ -1986,29 +2041,14 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
       return { ...match, ...(override !== undefined ? { totalKk: override } : {}) };
     });
     const adjustedTotalKk = Math.round((matches.reduce((acc, m) => acc + Number(m.totalKk || 0), 0) + Number(result.goldKk || 0)) * 10) / 10;
-    const response = onOpenPurchaseModal({
-      name: result.name,
-      level: result.level,
+    return {
       server: result.server,
-      vocation: result.vocation,
-      soulwarCompleted: result.soulwarCompleted ?? null,
-      sanguineCompleted: result.sanguineCompleted ?? null,
-      cryptCompleted: result.cryptCompleted ?? null,
-      items: {
-        server: result.server,
-        totalKk: hasLocalTotals ? adjustedTotalKk : result.totalKk,
-        ...(typeof result.goldKk === "number" && result.goldKk > 0 ? { goldKk: result.goldKk } : {}),
-        manualTotalKk: !hasLocalTotals && typeof result.manualTotalKk === "number" && result.manualTotalKk > 0 ? result.manualTotalKk : null,
-        matches,
-        capturedAtMs: Date.now(),
-      },
-    });
-    setPurchaseErrors(prev => {
-      const next = { ...prev };
-      if (response.ok) delete next[auctionKey];
-      else next[auctionKey] = response.error || "Não foi possível abrir o cadastro.";
-      return next;
-    });
+      totalKk: hasLocalTotals ? adjustedTotalKk : result.totalKk,
+      ...(typeof result.goldKk === "number" && result.goldKk > 0 ? { goldKk: result.goldKk } : {}),
+      manualTotalKk: !hasLocalTotals && typeof result.manualTotalKk === "number" && result.manualTotalKk > 0 ? result.manualTotalKk : null,
+      matches,
+      capturedAtMs: Date.now(),
+    };
   }
 
   /**
@@ -2103,7 +2143,7 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
       }
       if (tableFilters.onlyMyInterests) {
         const auctionKey = result.id || result.url || result.name;
-        if (!itemInterests.includes(auctionKey)) return false;
+        if (!isItemsInterestMarked(itemInterests, { id: auctionKey, name: result.name, server: result.server })) return false;
       }
       const auctionEndTs = normalizeAuctionEndTimestamp(result.auctionEndTs ?? null);
       if (tableEndLimit > 0 && auctionEndTs && auctionEndTs > tableEndLimit) return false;
@@ -2724,7 +2764,9 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                 const auctionKey = result.id || result.url || result.name;
                 const copyKey = `res_${auctionKey}`;
                 // "Tenho Interesse" — estado 100% LOCAL (localStorage por uid).
-                const isInterested = itemInterests.includes(auctionKey);
+                // 71ª: bate por id do leilão OU nome+servidor (registro).
+                const isInterested = isItemsInterestMarked(itemInterests, { id: auctionKey, name: result.name, server: result.server });
+                const isInlinePurchaseOpen = inlinePurchase?.auctionKey === auctionKey;
                 // KK EFETIVO: correção manual (quando ativa) > calculado.
                 // (Usado pela edição manual inline e pelo Potencial.)
                 const effectiveKk = effectiveTotalKk(result);
@@ -2753,22 +2795,25 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                     ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/18"
                     : "border-amber-600/30 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20";
                 return (
-                <tr key={auctionKey} className="border-t border-[var(--th-line)]/40 hover:bg-white/[0.03]">
+                <Fragment key={auctionKey}>
+                <tr className="border-t border-[var(--th-line)]/40 hover:bg-white/[0.03]">
                   {/* CENTRALIZAÇÃO: todas as células da tabela são
                       text-center (cabeçalho, filtros e dados) — EXCETO a
                       coluna "Personagem", a ÚNICA alinhada à esquerda
                       (cabeçalho, filtro, nome, level e demais elementos). */}
                   <td className="px-2 py-1.5 text-left">
-                    {/* Nome + level como botão de copiar — mesmo padrão visual
-                        dos copiar de personagem do app (hover revela o ícone,
-                        1,5s de "Copiado!"). Copia "Nome, Lv X". */}
+                    {/* Nome como botão de copiar — mesmo padrão visual dos
+                        copiar de personagem do app (hover revela o ícone,
+                        1,5s de "Copiado!"). 71ª: copia SOMENTE o nome exato
+                        do personagem — sem level/vocação (pronto para colar
+                        na busca do site). */}
                     <button
                       type="button"
-                      onClick={() => copyText(copyKey, result.level ? `${result.name}, Lv ${result.level}` : result.name)}
+                      onClick={() => copyText(copyKey, result.name || "")}
                       className={`group inline-flex max-w-[220px] items-center justify-start gap-1 rounded px-1 py-0.5 font-bold transition-colors cursor-copy ${
                         copiedKey === copyKey ? "bg-emerald-500/20 text-emerald-300" : "text-slate-100 hover:bg-white/10 hover:text-white"
                       }`}
-                      title={copiedKey === copyKey ? "Copiado" : `Copiar "${result.name}${result.level ? `, Lv ${result.level}` : ""}"`}
+                      title={copiedKey === copyKey ? "Copiado" : `Copiar "${result.name}"`}
                     >
                       {copiedKey === copyKey ? (
                         <><Check size={11} className="flex-shrink-0 text-emerald-400" /><span>Copiado!</span></>
@@ -2781,36 +2826,38 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                     </div>
                   </td>
                   <td className="px-1 py-1.5 text-center align-middle">
-                    {/* COMPRADO — mesmo botão/estados da coluna das quests
-                        (verde +, check quando já cadastrado); aqui o clique
-                        abre o CharacterModal COMPLETO no App, pré-preenchido
-                        com os dados desta consulta (quests reais + itens). */}
+                    {/* COMPRADO (71ª) — MESMO botão/estados/fluxo da coluna das
+                        quests: verde + abre a CONFIRMAÇÃO INLINE logo abaixo
+                        da linha (âmbar X enquanto aberta; check quando já
+                        cadastrado). A inclusão vai DIRETO para Meus
+                        Personagens — nenhum modal é aberto. */}
                     {(() => {
                       const isAlreadyAdded = !!personalCharacterNames?.has(String(result.name || "").trim().toLowerCase());
                       return (
-                        <div className="flex flex-col items-center gap-0.5">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              if (isAlreadyAdded) return;
-                              openPurchaseModalForResult(result);
-                            }}
-                            disabled={isAlreadyAdded}
-                            title={isAlreadyAdded
-                              ? "Personagem já adicionado à minha lista"
-                              : "Adicionar personagem comprado à minha lista (abre o cadastro completo já preenchido com os dados desta consulta)"}
-                            className={`inline-flex h-7 w-7 items-center justify-center rounded-lg border transition-colors shadow-[0_0_10px_rgba(16,185,129,0.08)] ${
-                              isAlreadyAdded
-                                ? "border-emerald-400/45 bg-emerald-500/18 text-emerald-200 cursor-default"
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (isAlreadyAdded) return;
+                            if (isInlinePurchaseOpen) setInlinePurchase(null);
+                            else setInlinePurchase({ auctionKey, initialAccount: getPurchaseInitialAccount?.() || "" });
+                          }}
+                          disabled={isAlreadyAdded}
+                          aria-expanded={isInlinePurchaseOpen}
+                          title={isAlreadyAdded
+                            ? "Personagem já adicionado à minha lista"
+                            : isInlinePurchaseOpen
+                              ? "Fechar formulário de inclusão"
+                              : "Adicionar personagem comprado à minha lista"}
+                          className={`inline-flex h-7 w-7 items-center justify-center rounded-lg border transition-colors shadow-[0_0_10px_rgba(16,185,129,0.08)] ${
+                            isAlreadyAdded
+                              ? "border-emerald-400/45 bg-emerald-500/18 text-emerald-200 cursor-default"
+                              : isInlinePurchaseOpen
+                                ? "border-amber-400/55 bg-amber-500/18 text-amber-200 hover:bg-amber-500/25 cursor-pointer"
                                 : "border-emerald-500/35 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20 hover:text-emerald-200 hover:border-emerald-400/55 cursor-pointer"
-                            }`}
-                          >
-                            {isAlreadyAdded ? <Check size={14} strokeWidth={3} /> : <Plus size={14} strokeWidth={3} />}
-                          </button>
-                          {purchaseErrors[auctionKey] && !isAlreadyAdded && (
-                            <span role="alert" className="max-w-[110px] text-[8px] font-bold leading-tight text-rose-300">{purchaseErrors[auctionKey]}</span>
-                          )}
-                        </div>
+                          }`}
+                        >
+                          {isAlreadyAdded ? <Check size={14} strokeWidth={3} /> : isInlinePurchaseOpen ? <X size={14} strokeWidth={3} /> : <Plus size={14} strokeWidth={3} />}
+                        </button>
                       );
                     })()}
                   </td>
@@ -3025,7 +3072,7 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                     <div className="flex flex-col items-center gap-0.5">
                       <button
                         type="button"
-                        onClick={() => toggleItemInterest(auctionKey)}
+                        onClick={() => toggleItemInterest(result)}
                         className={`inline-flex items-center justify-center gap-1 rounded border px-2 py-1 text-[9px] font-black transition-colors cursor-pointer ${
                           isInterested
                             ? "border-cyan-400/45 bg-cyan-500/20 text-cyan-200 hover:bg-cyan-500/30"
@@ -3059,6 +3106,71 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                     ) : <span className="text-slate-600">—</span>}
                   </td>
                 </tr>
+                {isInlinePurchaseOpen && !personalCharacterNames?.has(String(result.name || "").trim().toLowerCase()) && (
+                  <tr className="border-b border-emerald-500/20 bg-emerald-500/[0.035]">
+                    <td colSpan={15} className="px-2 py-2 sm:px-3">
+                      {(() => {
+                        // ── Confirmação INLINE (71ª) — formulário COMPARTILHADO
+                        // da guia de quests + "Descontar valor dos itens".
+                        // Desconto: kk EFETIVO do snapshot da compra (ajustes
+                        // locais do modal "Ver" > correção manual > calculado —
+                        // exatamente o que será salvo no personagem) × cotação
+                        // OFICIAL do servidor (computeItemRC). Sem valor ou sem
+                        // cotação ⇒ caixa desabilitada com o motivo.
+                        const purchaseItems = buildResultPurchaseItems(result);
+                        const discountKk = typeof purchaseItems.manualTotalKk === "number" && purchaseItems.manualTotalKk > 0
+                          ? purchaseItems.manualTotalKk
+                          : purchaseItems.totalKk;
+                        const discountRate = rateFor(result.server);
+                        const discountInfo = discountKk <= 0
+                          ? { rc: null, reason: "Personagem sem itens com valor nesta consulta — nada a descontar." }
+                          : discountRate <= 0
+                            ? { rc: null, reason: `Servidor ${result.server || "—"} sem cotação de RC configurada — defina em "RC Servidores" para habilitar o desconto.` }
+                            : { rc: computeItemRC(discountRate, discountKk), detail: `${formatKkValue(discountKk, "kk")} a ${formatKkValue(discountRate, "k")} por 1000 RC` };
+                        return (
+                          <BazaarInlinePurchaseForm
+                            formId={`items_${auctionKey}`}
+                            characterName={result.name || ""}
+                            characterSummary={`${result.server || "—"} · ${result.vocation || "—"} · Lv ${result.level || 0}`}
+                            accounts={purchaseAccounts || []}
+                            initialAccount={inlinePurchase?.initialAccount || ""}
+                            currentUid={currentUid}
+                            discount={discountInfo}
+                            onRememberAccount={onRememberPurchaseAccount}
+                            onConfirm={({ account, valorPago, applyItemsDiscount }) => {
+                              const response = onAddPurchasedCharacter?.({
+                                name: result.name,
+                                level: result.level,
+                                server: result.server,
+                                vocation: result.vocation,
+                                account,
+                                valorPago,
+                                // QUESTS REAIS desta consulta (true = já feita ⇒
+                                // indisponível; null = inconclusivo, o App mantém
+                                // o padrão) — mesmos dados do antigo prefill.
+                                soulwarCompleted: result.soulwarCompleted ?? null,
+                                sanguineCompleted: result.sanguineCompleted ?? null,
+                                cryptCompleted: result.cryptCompleted ?? null,
+                                items: purchaseItems,
+                                // Desconto aplicado UMA única vez, pelo App
+                                // (custo final = valor pago − RC dos itens).
+                                ...(applyItemsDiscount && discountInfo.rc ? { itemsDiscountRc: discountInfo.rc } : {}),
+                              });
+                              if (!response?.ok) {
+                                return { ok: false, error: response?.error || "Não foi possível adicionar este personagem." };
+                              }
+                              onRememberPurchaseAccount?.(account);
+                              setInlinePurchase(null);
+                              return { ok: true };
+                            }}
+                            onCancel={() => setInlinePurchase(null)}
+                          />
+                        );
+                      })()}
+                    </td>
+                  </tr>
+                )}
+                </Fragment>
                 );
               })}
             </tbody>

@@ -55,6 +55,22 @@ export function computeItemRC(rateKk: number, totalKk: number): number {
   return Math.floor(raw);
 }
 
+/**
+ * CUSTO FINAL do personagem comprado com "Descontar valor dos itens" (71ª):
+ *   Custo final = Valor pago (RC) − Valor dos itens convertido para RC.
+ * Regra ÚNICA, aplicada em UM só lugar (App.addCharacterFromBazaar) — o
+ * desconto nunca é aplicado duas vezes. `discountRc` ausente/0/inválido ⇒
+ * comportamento anterior (custo = valor pago). O resultado PODE ser negativo:
+ * itens valendo mais que o valor pago deixam o personagem com saldo positivo.
+ */
+export function applyItemsDiscountToCost(valorPagoRc: number, discountRc: number | null | undefined): number {
+  const paid = Number(valorPagoRc);
+  if (!Number.isFinite(paid)) return 0;
+  const discount = Number(discountRc ?? 0);
+  if (!Number.isFinite(discount) || discount <= 0) return paid;
+  return paid - Math.floor(discount);
+}
+
 /** Arredonda a 2 casas — evita ruído de ponto flutuante nos percentuais. */
 function round2(value: number): number {
   return Math.round(value * 100) / 100;

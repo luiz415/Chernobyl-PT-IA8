@@ -861,6 +861,172 @@ export function saveItemsInterests(uid: string, auctionIds: string[]): void {
   saveUIState(itemsInterestsKey(uid), ids);
 }
 
+// ── INTERESSE POR REGISTRO ESTÁVEL (71ª tarefa) ─────────────────────────────
+// A marcação deixa de ser apenas o id do leilão e passa a guardar TAMBÉM o
+// personagem (nome + servidor, normalizados). Motivo: o id do leilão morre
+// quando o leilão encerra — um personagem RE-LEILOADO volta com id NOVO e a
+// marcação antiga nunca mais batia ("perdia" o interesse entre consultas).
+// Com o registro completo, o interesse segue o PERSONAGEM: bate pelo id do
+// leilão OU pelo par nome+servidor (identificadores estáveis), então a
+// marcação sobrevive quando o personagem some de uma consulta e reaparece
+// depois (mesmo leilão ou leilão novo). Continua 100% LOCAL (mesma chave de
+// localStorage por uid — ZERO Firestore) e aceita o formato legado (array de
+// ids puros), que segue batendo por id e é PROMOVIDO ao formato novo quando
+// o personagem é reencontrado em uma consulta.
+
+export interface ItemsInterestRecord {
+  /** Id do leilão no momento da marcação ("" só em registro legado anômalo). */
+  id: string;
+  /** Nome do personagem (como exibido; comparação é normalizada). */
+  name: string;
+  /** Servidor do personagem (comparação pela chave canônica). */
+  server: string;
+}
+
+/** Alvo de comparação: um resultado/linha da consulta. */
+export interface ItemsInterestTarget {
+  id: string;
+  name?: string;
+  server?: string;
+}
+
+function interestNameKey(name: string | undefined): string {
+  return String(name || "").trim().toLowerCase();
+}
+
+/**
+ * Chave de servidor para COMPARAÇÃO de interesses: canônica (fonte única em
+ * constants/servers) e, por segurança, caixa-insensível — o fallback de
+ * canonicalServerKey preserva a caixa de nomes fora da lista oficial.
+ */
+function interestServerKey(server: string | undefined): string {
+  return canonicalServerKey(String(server || "")).toLowerCase();
+}
+
+/** true quando o registro marca este personagem/leilão (id OU nome+servidor). */
+export function itemsInterestMatches(record: ItemsInterestRecord, target: ItemsInterestTarget): boolean {
+  const targetId = String(target.id || "").trim();
+  if (record.id && targetId && record.id === targetId) return true;
+  const recordName = interestNameKey(record.name);
+  const targetName = interestNameKey(target.name);
+  if (!recordName || !targetName || recordName !== targetName) return false;
+  const recordServer = interestServerKey(record.server);
+  const targetServer = interestServerKey(target.server);
+  return !!recordServer && !!targetServer && recordServer === targetServer;
+}
+
+/**
+ * Carrega os registros de interesse (MESMA chave local por uid de sempre),
+ * aceitando o formato legado (strings de id) e o novo (objetos completos).
+ */
+export function loadItemsInterestRecords(uid: string): ItemsInterestRecord[] {
+  const raw = loadUIState<unknown>(itemsInterestsKey(uid), []);
+  if (!Array.isArray(raw)) return [];
+  const records: ItemsInterestRecord[] = [];
+  for (const entry of raw) {
+    if (typeof entry === "string") {
+      const id = entry.trim();
+      if (id) records.push({ id, name: "", server: "" });
+      continue;
+    }
+    if (entry && typeof entry === "object") {
+      const id = String((entry as ItemsInterestRecord).id ?? "").trim();
+      const name = String((entry as ItemsInterestRecord).name ?? "").trim();
+      const server = String((entry as ItemsInterestRecord).server ?? "").trim();
+      if (id || (name && server)) records.push({ id, name, server });
+    }
+  }
+  // Dedup: registros que marcam o mesmo personagem/leilão colapsam no mais
+  // completo (preferência por quem tem nome+servidor preenchidos).
+  const deduped: ItemsInterestRecord[] = [];
+  for (const record of records) {
+    const existingIndex = deduped.findIndex(item =>
+      (record.id && item.id && record.id === item.id) ||
+      (interestNameKey(item.name) && interestNameKey(item.name) === interestNameKey(record.name) &&
+        interestServerKey(item.server) && interestServerKey(item.server) === interestServerKey(record.server)));
+    if (existingIndex < 0) { deduped.push(record); continue; }
+    const existing = deduped[existingIndex];
+    deduped[existingIndex] = {
+      id: existing.id || record.id,
+      name: existing.name || record.name,
+      server: existing.server || record.server,
+    };
+  }
+  return deduped;
+}
+
+export function saveItemsInterestRecords(uid: string, records: ItemsInterestRecord[]): void {
+  const clean = (records || [])
+    .map(record => ({
+      id: String(record?.id ?? "").trim(),
+      name: String(record?.name ?? "").trim(),
+      server: String(record?.server ?? "").trim(),
+    }))
+    .filter(record => record.id || (record.name && record.server));
+  saveUIState(itemsInterestsKey(uid), clean);
+}
+
+/** true quando algum registro marca este personagem/leilão. */
+export function isItemsInterestMarked(records: ItemsInterestRecord[], target: ItemsInterestTarget): boolean {
+  return (records || []).some(record => itemsInterestMatches(record, target));
+}
+
+/**
+ * Marca/desmarca o interesse deste personagem. Desmarcar remove TODOS os
+ * registros que batem (inclusive legados por id e duplicados por nome) —
+ * nunca sobra marcação fantasma.
+ */
+export function toggleItemsInterestRecord(records: ItemsInterestRecord[], target: ItemsInterestTarget): ItemsInterestRecord[] {
+  const current = records || [];
+  if (isItemsInterestMarked(current, target)) {
+    return current.filter(record => !itemsInterestMatches(record, target));
+  }
+  return [...current, {
+    id: String(target.id || "").trim(),
+    name: String(target.name || "").trim(),
+    server: String(target.server || "").trim(),
+  }];
+}
+
+/**
+ * PROMOÇÃO DOS REGISTROS a partir de uma consulta: registros legados (só id)
+ * reencontrados ganham nome+servidor; registros cujo personagem voltou com
+ * LEILÃO NOVO ganham o id atual (os alertas de encerramento usam o id do
+ * leilão vivo). Retorna a lista promovida e se algo mudou (o chamador só
+ * regrava quando `changed`).
+ */
+export function upgradeItemsInterestRecords(
+  records: ItemsInterestRecord[],
+  characters: ItemsInterestTarget[],
+): { records: ItemsInterestRecord[]; changed: boolean } {
+  let changed = false;
+  const upgraded = (records || []).map(record => {
+    const match = (characters || []).find(character => itemsInterestMatches(record, character));
+    if (!match) return record;
+    const nextId = String(match.id || "").trim() || record.id;
+    const nextName = record.name || String(match.name || "").trim();
+    const nextServer = record.server || String(match.server || "").trim();
+    if (nextId === record.id && nextName === record.name && nextServer === record.server) return record;
+    changed = true;
+    return { id: nextId, name: nextName, server: nextServer };
+  });
+  return { records: upgraded, changed };
+}
+
+/**
+ * Ids de leilão VIVOS cobertos pelos interesses — alimenta o agendador de
+ * alertas de encerramento (que trabalha por id de leilão, como sempre).
+ */
+export function interestedAuctionIdsFrom(records: ItemsInterestRecord[], characters: ItemsInterestTarget[]): string[] {
+  const ids = new Set<string>();
+  for (const character of characters || []) {
+    const id = String(character.id || "").trim();
+    if (!id) continue;
+    if (isItemsInterestMarked(records, character)) ids.add(id);
+  }
+  return Array.from(ids);
+}
+
 // ============================================================================
 // EXPORTAR / IMPORTAR a Lista de Itens (arquivo JSON)
 // ============================================================================

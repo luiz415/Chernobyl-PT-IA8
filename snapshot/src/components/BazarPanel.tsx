@@ -2,6 +2,7 @@ import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import bazarBgUrl from "../assets/bazar-bg.webp"; // WebP: 1,78 MB → ~157 KB (mesma imagem)
 import { AlertTriangle, ArrowDownUp, BarChart3, Check, CheckCircle2, ChevronDown, ChevronUp, Coins, Crown, ExternalLink, Eye, EyeOff, Filter, FlagTriangleRight, Flame, Globe, Package, Plus, RefreshCw, RotateCcw, ShieldAlert, ShoppingBag, Sparkles, Star, Target, Users, X } from "lucide-react";
 import BazaarItemsPanel from "./BazaarItemsPanel";
+import BazaarInlinePurchaseForm from "./BazaarInlinePurchaseForm";
 import BazaarStatsPanel from "./BazaarStatsPanel";
 import BazaarSearchFiltersModal from "./BazaarSearchFiltersModal";
 import BazaarUsedFiltersModal from "./BazaarUsedFiltersModal";
@@ -17,7 +18,7 @@ import OverviewFiltersModal from "./OverviewFiltersModal";
 import UserFilterModal from "./UserFilterModal";
 import { DEFAULT_OVERVIEW_FILTERS, useOverviewFilters } from "../hooks/useOverviewFilters";
 import { FilterDateMax, FilterInline, FilterMulti, FilterNumber } from "./FilterTypes";
-import type { BazaarItemsPurchasePrefill, Character, CharacterBazaarItemsSnapshot, PartyTab, WaitingService, Vocation } from "../types";
+import type { Character, CharacterBazaarItemsSnapshot, PartyTab, WaitingService, Vocation } from "../types";
 import { useAuth } from "../context/AuthContext";
 import { getManualSyncCooldownRemainingMs, markManualSyncAttempt, publishOfficialBazaarList, readOfficialBazaarCache, removeBazaarInterest, removeBazaarInterestsForAuctions, setBazaarInterest, syncBazaarInterests, syncOfficialBazaarList, type BazaarInterestMap, type OfficialBazaarMetadata } from "../services/bazaarOfficialService";
 import { applyValueOverlay, buildValueOverlay, clearBazaarValueOverlay, computeAutoRemoveAuctions, parseAutoRemoveLimit, readBazaarValueOverlay, sanitizeAutoRemoveLimit, saveBazaarValueOverlay } from "../utils/bazaarValueRefresh";
@@ -1042,20 +1043,6 @@ function normalizeAuctionServers(auctions: BazaarAuction[]): BazaarAuction[] {
   });
 }
 
-/**
- * Valida os dois únicos campos complementados pelo usuário no fluxo inline.
- * `valorPago` é mantido como texto até a confirmação para distinguir campo
- * vazio de um valor informado explicitamente como zero.
- */
-function getBazaarInlinePurchaseValidationError(account: string, valorPago: string): string | null {
-  if (!account.trim()) return "Informe a conta do personagem.";
-  if (!valorPago.trim()) return "Informe o valor pago em RC.";
-  if (!/^\d+$/.test(valorPago)) return "O valor pago deve conter somente números.";
-  const parsedValue = Number(valorPago);
-  if (!Number.isSafeInteger(parsedValue) || parsedValue < 0) return "Informe um valor pago válido.";
-  return null;
-}
-
 // `normalizeAuctionEndTimestamp`, `formatTimeZoneOffset`,
 // `parseDateTimeLocalWithOffset`, `getBazarEndUntilAtConfiguredTime`,
 // `getDefaultBazarEndUntil`, `formatDuration` e `formatDateTimeWithOffset`
@@ -1539,22 +1526,6 @@ interface BazaarCharacterPurchase {
   items?: CharacterBazaarItemsSnapshot;
 }
 
-interface BazaarInlinePurchaseDraft {
-  auctionKey: string;
-  account: string;
-  valorPago: string;
-  error: string;
-  /**
-   * Somente apresentação (a lógica de seleção/persistência não muda):
-   * `accountPreset` marca a conta pré-preenchida automaticamente com a última
-   * utilizada — o campo continua editável normalmente, mas exibe o aviso
-   * "confira antes de confirmar" até o usuário tocar nele. `accountSelected`
-   * marca a conta escolhida explicitamente na lista de contas.
-   */
-  accountPreset?: boolean;
-  accountSelected?: boolean;
-}
-
 interface BazarPanelProps {
   sharedCharacters?: Character[];
   waitingList?: WaitingService[];
@@ -1563,12 +1534,6 @@ interface BazarPanelProps {
   /** Contas existentes do usuário atual; derivadas em App.tsx de data.characters. */
   accounts?: string[];
   onAddCharacterFromBazaar?: (character: BazaarCharacterPurchase) => { ok: boolean; error?: string };
-  /**
-   * "Comprado" da guia ITENS: abre o CharacterModal COMPLETO no App já
-   * pré-preenchido com os dados da consulta (quests reais + itens). Fluxo
-   * separado do formulário inline das quests — mesma persistência final.
-   */
-  onOpenBazaarItemsPurchase?: (prefill: BazaarItemsPurchasePrefill) => { ok: boolean; error?: string };
   /**
    * MODO DEMONSTRATIVO DO TUTORIAL: leilões/interesses/notificações fictícios
    * exibidos no lugar dos caches reais. Quando presente, o gate VIP é
@@ -1696,7 +1661,7 @@ export function BazaarNotifySettingsControl({ appliedMinutes, onApplyMinutes }: 
   );
 }
 
-function BazarPanelContent({ sharedCharacters = [], waitingList = [], activeParties = [], personalCharacters = [], accounts = [], onAddCharacterFromBazaar, onOpenBazaarItemsPurchase, demoBazaar }: BazarPanelProps) {
+function BazarPanelContent({ sharedCharacters = [], waitingList = [], activeParties = [], personalCharacters = [], accounts = [], onAddCharacterFromBazaar, demoBazaar }: BazarPanelProps) {
   // MODO DEMO (tutorial): dados fictícios, sem consultas nem persistência.
   const demoMode = !!demoBazaar;
   // demo: ref inicia VAZIA — os filtros de consulta persistidos do usuário
@@ -1750,17 +1715,14 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
   // Valor de lance digitado por personagem (rascunho local; nunca persistido
   // e nunca enviado ao RubinOT — serve apenas para montar a URL oficial).
   const [bidDrafts, setBidDrafts] = useState<Record<string, string>>({});
-  // Formulário compacto aberto logo abaixo da linha do personagem escolhido.
-  // Só guarda os dois dados que não existem no Bazaar; o restante é importado.
-  const [inlinePurchase, setInlinePurchase] = useState<BazaarInlinePurchaseDraft | null>(null);
+  // Confirmação inline aberta logo abaixo da linha do personagem escolhido.
+  // Desde a 71ª tarefa o FORMULÁRIO (conta/valor/validações/desconto) é o
+  // componente compartilhado BazaarInlinePurchaseForm — aqui fica somente
+  // QUAL linha está aberta e a conta inicial pré-preenchida na abertura.
+  const [inlinePurchase, setInlinePurchase] = useState<{ auctionKey: string; initialAccount: string } | null>(null);
   // Espelho em memória da última conta do usuário. O valor é carregado e salvo
   // por UID com `loadUIState`/`saveUIState`, sobrevivendo ao reinício do app.
   const [lastBazaarPurchaseAccount, setLastBazaarPurchaseAccount] = useState("");
-  const [isInlineAccountMenuOpen, setIsInlineAccountMenuOpen] = useState(false);
-  const [inlineAccountSearch, setInlineAccountSearch] = useState("");
-  const inlineAccountPickerRef = useRef<HTMLDivElement | null>(null);
-  const inlineAccountInputRef = useRef<HTMLInputElement | null>(null);
-  const inlineValorPagoInputRef = useRef<HTMLInputElement | null>(null);
   const [localBazaarNotifications, setLocalBazaarNotifications] = useState<LocalBazaarNotification[]>([]);
   // `true` após a PRIMEIRA carga real do agregado de interesses. Necessário
   // para o filtro das notificações por interesse: antes da carga o mapa é {}
@@ -1887,11 +1849,6 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
     return Array.from(new Set(accounts.map(account => account.trim()).filter(Boolean)))
       .sort((a, b) => a.localeCompare(b, "pt-BR"));
   }, [accounts]);
-  const filteredInlineAccounts = useMemo(() => {
-    const query = inlineAccountSearch.trim().toLocaleLowerCase("pt-BR");
-    if (!query) return availableInlineAccounts;
-    return availableInlineAccounts.filter(account => account.toLocaleLowerCase("pt-BR").includes(query));
-  }, [availableInlineAccounts, inlineAccountSearch]);
   const isElectron = typeof window !== "undefined" && !!(window as any).require;
   const isBossUser = userProfile?.role === "Boss";
   // ── MODO DO PAINEL: "quests" (SW/SG, intacto), "itens" (só Boss) ou
@@ -2241,34 +2198,7 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
   useEffect(() => {
     setLastBazaarPurchaseAccount(readBazaarLastPurchaseAccount(currentUser?.uid));
     setInlinePurchase(null);
-    setIsInlineAccountMenuOpen(false);
-    setInlineAccountSearch("");
   }, [currentUser?.uid]);
-
-  // O foco acompanha o fluxo: primeira inclusão começa na conta; inclusões
-  // seguintes, com última conta preenchida, começam diretamente no valor pago.
-  useEffect(() => {
-    if (!inlinePurchase) return;
-    const timer = window.setTimeout(() => {
-      const target = inlinePurchase.account.trim()
-        ? inlineValorPagoInputRef.current
-        : inlineAccountInputRef.current;
-      target?.focus();
-    }, 0);
-    return () => window.clearTimeout(timer);
-  }, [inlinePurchase?.auctionKey]);
-
-  useEffect(() => {
-    if (!isInlineAccountMenuOpen) return;
-    function closeOnOutsidePointer(event: MouseEvent) {
-      if (!inlineAccountPickerRef.current?.contains(event.target as Node)) {
-        setIsInlineAccountMenuOpen(false);
-        setInlineAccountSearch("");
-      }
-    }
-    document.addEventListener("mousedown", closeOnOutsidePointer);
-    return () => document.removeEventListener("mousedown", closeOnOutsidePointer);
-  }, [isInlineAccountMenuOpen]);
 
   useEffect(() => {
     // Hidratação inicial concluída a partir daqui: a poda das
@@ -3787,27 +3717,15 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
 
   function closeInlinePurchase() {
     setInlinePurchase(null);
-    setIsInlineAccountMenuOpen(false);
-    setInlineAccountSearch("");
   }
 
   function openInlinePurchase(auctionKey: string) {
     // O fallback de leitura cobre o primeiro clique que ocorrer antes de o
-    // efeito de hidratação do usuário ter sido executado.
+    // efeito de hidratação do usuário ter sido executado. A conta herdada da
+    // última compra chega ao formulário compartilhado como pré-preenchida
+    // (aviso "última usada — confira", mesma apresentação de sempre).
     const persistedAccount = lastBazaarPurchaseAccount || readBazaarLastPurchaseAccount(currentUser?.uid);
-    setInlinePurchase({
-      auctionKey,
-      account: persistedAccount,
-      valorPago: "",
-      error: "",
-      // A conta herdada da última compra fica marcada como pré-preenchida:
-      // o campo pulsa suavemente e carrega o aviso "última usada" até o
-      // usuário conferi-la/alterá-la (prevenção de conta incorreta).
-      accountPreset: !!persistedAccount.trim(),
-      accountSelected: false,
-    });
-    setIsInlineAccountMenuOpen(false);
-    setInlineAccountSearch("");
+    setInlinePurchase({ auctionKey, initialAccount: persistedAccount });
   }
 
   function rememberBazaarPurchaseAccount(account: string) {
@@ -3815,19 +3733,6 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
     if (!normalized) return;
     setLastBazaarPurchaseAccount(normalized);
     saveBazaarLastPurchaseAccount(currentUser?.uid, normalized);
-  }
-
-  function selectInlinePurchaseAccount(auctionKey: string, account: string) {
-    const selectedAccount = account.trim();
-    setInlinePurchase(current => current?.auctionKey === auctionKey
-      ? { ...current, account: selectedAccount, error: "", accountPreset: false, accountSelected: true }
-      : current);
-    // Uma seleção é uma intenção explícita: persiste por usuário imediatamente,
-    // sem precisar aguardar a confirmação da inclusão atual.
-    rememberBazaarPurchaseAccount(selectedAccount);
-    setIsInlineAccountMenuOpen(false);
-    setInlineAccountSearch("");
-    window.setTimeout(() => inlineValorPagoInputRef.current?.focus(), 0);
   }
 
   function resetTableFilters() {
@@ -4172,10 +4077,16 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
               // Consultar) — o navegador de sessão é um só.
               onRunningChange={setIsItemsQueryRunning}
               isQuestsQueryRunning={isLoading || isCheckingDetails || isStatsQueryRunning}
-              // Coluna "Comprado" da guia Itens: nomes já cadastrados (mesma
-              // fonte da guia Quests) + abertura do CharacterModal completo.
+              // Coluna "Comprado" da guia Itens (71ª): nomes já cadastrados
+              // (mesma fonte da guia Quests) + CONFIRMAÇÃO INLINE compartilhada
+              // (mesmo formulário/contas/última conta usada das quests) com
+              // inclusão DIRETA em Meus Personagens — o CharacterModal não
+              // abre mais neste fluxo.
               personalCharacterNames={personalCharacterNameSet}
-              onOpenPurchaseModal={onOpenBazaarItemsPurchase}
+              onAddPurchasedCharacter={onAddCharacterFromBazaar}
+              purchaseAccounts={availableInlineAccounts}
+              getPurchaseInitialAccount={() => lastBazaarPurchaseAccount || readBazaarLastPurchaseAccount(currentUser?.uid)}
+              onRememberPurchaseAccount={rememberBazaarPurchaseAccount}
               // Seção "Notificar" (antecedência + Repetir Alerta) no quadro
               // "Última Consulta" da guia Itens — MESMO controle e MESMA
               // configuração da guia de quests (persistência única, aqui).
@@ -5150,21 +5061,6 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
                   }
                   const inlinePurchaseDraft = inlinePurchase?.auctionKey === auctionKey ? inlinePurchase : null;
                   const isInlinePurchaseOpen = !!inlinePurchaseDraft;
-                  // Estados visuais dos campos Conta/Valor Pago (fluxo "Comprado").
-                  // Matriz: vazio → pulso âmbar "obrigatória"; pré-preenchida pela
-                  // última utilizada → pulso âmbar suave "última usada" (pede
-                  // conferência, continua editável); lista aberta → "escolhendo";
-                  // definida pelo usuário (digitada/selecionada) → esmeralda firme.
-                  // "Pronto" exige conta definida pelo usuário + valor informado.
-                  const inlineAccountValue = inlinePurchaseDraft?.account.trim() ?? "";
-                  const inlineValorValue = inlinePurchaseDraft?.valorPago.trim() ?? "";
-                  const inlineAccountEmpty = isInlinePurchaseOpen && !inlineAccountValue;
-                  const inlineAccountPreset = isInlinePurchaseOpen && !!inlinePurchaseDraft?.accountPreset && !!inlineAccountValue;
-                  const inlineAccountSelected = isInlinePurchaseOpen && !!inlinePurchaseDraft?.accountSelected && !!inlineAccountValue;
-                  const inlineAccountChoosing = isInlinePurchaseOpen && isInlineAccountMenuOpen;
-                  const inlineAccountConfirmed = isInlinePurchaseOpen && !!inlineAccountValue && !inlineAccountPreset;
-                  const inlineValorEmpty = isInlinePurchaseOpen && !inlineValorValue;
-                  const inlineFormReady = inlineAccountConfirmed && !!inlineValorValue;
                   return (
                     <Fragment key={`${auctionKey}_${auction.name}`}>
                     <tr className={`h-12 border-b transition-colors ${rowHighlightClass}`} title={rowHighlightTitle || undefined}>
@@ -5408,232 +5304,70 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
                     {isInlinePurchaseOpen && !isAlreadyAddedToPersonalList && inlinePurchaseDraft && (
                       <tr className="border-b border-emerald-500/20 bg-emerald-500/[0.035]">
                         <td colSpan={14} className="px-2 py-2 sm:px-3">
-                          <form
-                            onSubmit={event => {
-                              event.preventDefault();
-                              const validationError = getBazaarInlinePurchaseValidationError(inlinePurchaseDraft.account, inlinePurchaseDraft.valorPago);
-                              if (validationError) {
-                                setInlinePurchase(current => current?.auctionKey === auctionKey ? { ...current, error: validationError } : current);
-                                return;
-                              }
-                              // ITENS DA CONSULTA: snapshot dos dados já
-                              // obtidos (fonte local da guia Itens > campos
-                              // embutidos na lista oficial) — persistido no
-                              // personagem para o "Ver" da coluna Itens de
-                              // Meus Personagens, sem nova consulta. As
-                              // personalizações LOCAIS do modal "Ver" deste
-                              // leilão (valores de item/Ouro) são importadas
-                              // junto — o que o usuário vê no "Ver" é o que
-                              // chega a Meus Personagens.
-                              const purchaseItems = buildPurchaseItemsSnapshot(itemsResultByAuctionKey.get(auctionKey), auction, questsViewOverrides[auctionKey]);
-                              const response = onAddCharacterFromBazaar?.({
-                                name: auction.name || "",
-                                level: auction.level || 0,
-                                server: auction.server || "",
-                                vocation: auction.vocation || "",
-                                account: inlinePurchaseDraft.account.trim(),
-                                valorPago: Number(inlinePurchaseDraft.valorPago),
-                                ...(purchaseItems ? { items: purchaseItems } : {}),
-                              });
-                              if (!response?.ok) {
-                                setInlinePurchase(current => current?.auctionKey === auctionKey
-                                  ? { ...current, error: response?.error || "Não foi possível adicionar este personagem." }
-                                  : current);
-                                return;
-                              }
-                              rememberBazaarPurchaseAccount(inlinePurchaseDraft.account.trim());
-                              closeInlinePurchase();
-                            }}
-                            className={`mx-auto flex w-full max-w-4xl flex-col gap-2 rounded-xl border bg-[var(--th-bg-raised)]/90 px-3 py-2.5 shadow-lg shadow-black/20 transition-colors sm:flex-row sm:flex-wrap sm:items-end ${inlineFormReady ? "border-emerald-400/50 shadow-emerald-500/10" : "border-emerald-400/25"}`}
-                          >
-                            <div className="min-w-0 flex-1">
-                              <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
-                                <span className="text-[11px] font-black text-emerald-200">Adicionar {auction.name || "personagem"}</span>
-                                <span className="rounded border border-white/10 bg-white/[0.04] px-1.5 py-0.5 font-mono text-[9px] text-slate-400">
-                                  {auction.server || "—"} · {getVocationAbbreviation(auction.vocation)} · Lv {auction.level || 0}
-                                </span>
-                              </div>
-                              <p className="mt-0.5 text-[10px] leading-tight text-slate-500">
-                                {inlineAccountPreset ? (
-                                  <>Os dados do Bazaar serão importados automaticamente. A conta foi <strong className="font-bold text-amber-300">pré-preenchida com a última utilizada</strong> — confira se é a correta antes de confirmar (pode alterar normalmente).</>
-                                ) : (
-                                  "Os dados do Bazaar serão importados automaticamente. Informe somente a conta e o valor pago."
-                                )}
-                              </p>
-                            </div>
-                            <label className="block min-w-0 sm:w-44">
-                              <span className="mb-1 flex flex-wrap items-center gap-1 text-[9px] font-black uppercase tracking-wider text-slate-400">
-                                Conta
-                                {inlineAccountChoosing ? (
-                                  <span className="inline-flex items-center gap-1 rounded border border-emerald-400/40 bg-emerald-500/10 px-1 py-px text-[8px] font-black uppercase tracking-wide text-emerald-300">escolhendo…</span>
-                                ) : inlineAccountEmpty ? (
-                                  <span className="inline-flex items-center gap-1 rounded border border-amber-400/40 bg-amber-500/10 px-1 py-px text-[8px] font-black uppercase tracking-wide text-amber-300" title="Selecione na lista ou digite a conta do personagem"><span className="inline-block h-1.5 w-1.5 rounded-full bg-amber-400" />obrigatória</span>
-                                ) : inlineAccountPreset ? (
-                                  <span className="inline-flex items-center gap-1 rounded border border-amber-400/40 bg-amber-500/10 px-1 py-px text-[8px] font-black uppercase tracking-wide text-amber-300" title="Pré-preenchida com a última conta utilizada — confira antes de confirmar. Você pode alterar normalmente."><span className="inline-block h-1.5 w-1.5 rounded-full bg-amber-400" />última usada — confira</span>
-                                ) : inlineAccountSelected ? (
-                                  <span className="inline-flex items-center gap-1 rounded border border-emerald-400/40 bg-emerald-500/10 px-1 py-px text-[8px] font-black uppercase tracking-wide text-emerald-300" title="Conta escolhida na lista de contas disponíveis">✓ selecionada</span>
-                                ) : (
-                                  <span className="inline-flex items-center gap-1 rounded border border-emerald-400/40 bg-emerald-500/10 px-1 py-px text-[8px] font-black uppercase tracking-wide text-emerald-300" title="Conta digitada manualmente">✓ preenchida</span>
-                                )}
-                              </span>
-                              <div ref={inlineAccountPickerRef} className="relative">
-                                <input
-                                  ref={inlineAccountInputRef}
-                                  type="text"
-                                  role="combobox"
-                                  aria-autocomplete="list"
-                                  aria-expanded={isInlineAccountMenuOpen}
-                                  aria-controls={`bazaar-account-options-${auctionKey}`}
-                                  value={inlinePurchaseDraft.account}
-                                  maxLength={40}
-                                  onClick={() => {
-                                    setInlineAccountSearch("");
-                                    setIsInlineAccountMenuOpen(true);
-                                  }}
-                                  onChange={event => {
-                                    const value = event.target.value;
-                                    setInlinePurchase(current => current?.auctionKey === auctionKey ? { ...current, account: value, error: "", accountPreset: false, accountSelected: false } : current);
-                                    setInlineAccountSearch(value);
-                                    setIsInlineAccountMenuOpen(true);
-                                  }}
-                                  onKeyDown={event => {
-                                    if (event.key === "Escape") {
-                                      event.preventDefault();
-                                      if (isInlineAccountMenuOpen) {
-                                        setIsInlineAccountMenuOpen(false);
-                                        setInlineAccountSearch("");
-                                      } else {
-                                        closeInlinePurchase();
-                                      }
-                                    }
-                                    if (event.key === "ArrowDown") {
-                                      event.preventDefault();
-                                      setInlineAccountSearch("");
-                                      setIsInlineAccountMenuOpen(true);
-                                    }
-                                  }}
-                                  placeholder={availableInlineAccounts.length ? "Selecionar ou digitar" : "Digite uma conta"}
-                                  aria-label={`Conta para ${auction.name}`}
-                                  title={inlineAccountPreset
-                                    ? "Pré-preenchida com a última conta utilizada — confira antes de confirmar. Você pode alterar normalmente."
-                                    : inlineAccountEmpty
-                                      ? "Selecione na lista ou digite a conta do personagem"
-                                      : `Conta selecionada: ${inlineAccountValue}`}
-                                  className={`h-8 w-full rounded-lg border bg-black/30 px-2 pr-7 text-xs outline-none transition-colors focus:border-emerald-400/60 ${
-                                    inlinePurchaseDraft.error && !inlineAccountValue
-                                      ? "border-rose-400/60 text-slate-100 placeholder:text-rose-400/70"
-                                      : inlineAccountChoosing
-                                        ? "border-emerald-400/70 bg-emerald-500/[0.06] text-emerald-100 shadow-[0_0_10px_rgba(16,185,129,0.20)] placeholder:text-emerald-400/60"
-                                        : inlineAccountEmpty
-                                          ? "bz-field-pulse border-amber-400/60 bg-amber-500/[0.04] text-slate-100 placeholder:text-amber-500/80"
-                                          : inlineAccountPreset
-                                            ? "bz-field-pulse bz-field-pulse--soft border-amber-400/50 bg-amber-500/[0.04] text-amber-100 placeholder:text-amber-500/80"
-                                            : "border-emerald-400/55 bg-emerald-500/[0.05] text-emerald-100 font-bold shadow-[0_0_8px_rgba(16,185,129,0.16)] placeholder:text-slate-600"
-                                  }`}
-                                />
-                                <button
-                                  type="button"
-                                  aria-label="Abrir lista de contas"
-                                  aria-expanded={isInlineAccountMenuOpen}
-                                  onClick={() => {
-                                    setInlineAccountSearch("");
-                                    setIsInlineAccountMenuOpen(open => !open);
-                                  }}
-                                  className="absolute inset-y-0 right-0 inline-flex w-7 items-center justify-center text-slate-500 transition-colors hover:text-emerald-200 cursor-pointer"
-                                >
-                                  <ChevronDown size={13} className={`transition-transform ${isInlineAccountMenuOpen ? "rotate-180" : ""}`} />
-                                </button>
-                                {isInlineAccountMenuOpen && (
-                                  <div id={`bazaar-account-options-${auctionKey}`} role="listbox" className="absolute left-0 right-0 z-[80] mt-1 overflow-hidden rounded-lg border border-emerald-400/30 bg-[var(--th-bg-raised)]/95 shadow-xl shadow-black/45 backdrop-blur-md">
-                                    <div className="border-b border-white/10 px-2 py-1 text-[9px] font-black uppercase tracking-wider text-slate-500">
-                                      Contas disponíveis
-                                    </div>
-                                    <div className="max-h-40 overflow-y-auto custom-scrollbar py-1">
-                                      {filteredInlineAccounts.length > 0 ? filteredInlineAccounts.map(account => (
-                                        <button
-                                          key={account}
-                                          type="button"
-                                          role="option"
-                                          aria-selected={account === inlinePurchaseDraft.account}
-                                          onClick={() => selectInlinePurchaseAccount(auctionKey, account)}
-                                          className={`flex w-full items-center justify-between gap-2 px-2.5 py-1.5 text-left text-[11px] transition-colors cursor-pointer ${
-                                            account === inlinePurchaseDraft.account
-                                              ? "bg-emerald-500/15 text-emerald-100 ring-1 ring-inset ring-emerald-400/30"
-                                              : "text-slate-300 hover:bg-white/[0.06] hover:text-white"
-                                          }`}
-                                        >
-                                          <span className="min-w-0 flex-1 truncate font-bold">{account}</span>
-                                          {account === inlinePurchaseDraft.account && (
-                                            <span className="flex flex-shrink-0 items-center gap-1 text-[8px] font-black uppercase tracking-wide text-emerald-300">
-                                              <Check size={12} strokeWidth={3} /> Selecionada
-                                            </span>
-                                          )}
-                                        </button>
-                                      )) : (
-                                        <div className="px-2.5 py-2 text-[10px] leading-tight text-slate-500">
-                                          {availableInlineAccounts.length
-                                            ? "Nenhuma conta cadastrada corresponde. Você pode usar a conta digitada."
-                                            : "Nenhuma conta cadastrada ainda. Digite uma nova conta para continuar."}
-                                        </div>
-                                      )}
-                                    </div>
-                                  </div>
-                                )}
-                              </div>
-                            </label>
-                            <label className="block min-w-0 sm:w-28">
-                              <span className="mb-1 flex flex-wrap items-center gap-1 text-[9px] font-black uppercase tracking-wider text-slate-400">
-                                Valor pago
-                                {inlineValorEmpty ? (
-                                  <span className="inline-flex items-center gap-1 rounded border border-amber-400/40 bg-amber-500/10 px-1 py-px text-[8px] font-black uppercase tracking-wide text-amber-300" title="Informe o valor pago em RC"><span className="inline-block h-1.5 w-1.5 rounded-full bg-amber-400" />obrigatório</span>
-                                ) : (
-                                  <span className="inline-flex items-center gap-1 rounded border border-emerald-400/40 bg-emerald-500/10 px-1 py-px text-[8px] font-black uppercase tracking-wide text-emerald-300" title="Valor informado">✓ informado</span>
-                                )}
-                              </span>
-                              <input
-                                ref={inlineValorPagoInputRef}
-                                type="text"
-                                inputMode="numeric"
-                                pattern="[0-9]*"
-                                value={inlinePurchaseDraft.valorPago}
-                                maxLength={15}
-                                onChange={event => {
-                                  const value = event.target.value.replace(/\D/g, "");
-                                  setInlinePurchase(current => current?.auctionKey === auctionKey ? { ...current, valorPago: value, error: "" } : current);
+                          {(() => {
+                            // ── DESCONTAR VALOR DOS ITENS (71ª) ─────────────
+                            // RC dos itens calculado com as MESMAS fontes e
+                            // regras da compra: snapshot efetivo (inclui as
+                            // personalizações LOCAIS do modal "Ver" — valores
+                            // editados prevalecem sobre a lista global) ×
+                            // cotação OFICIAL do servidor (fonte única) pela
+                            // conversão canônica (computeItemRC). Sem itens
+                            // com valor ou sem cotação ⇒ caixa desabilitada
+                            // com o motivo (nenhum desconto inventado).
+                            const discountSnapshot = buildPurchaseItemsSnapshot(itemsResultByAuctionKey.get(auctionKey), auction, questsViewOverrides[auctionKey]);
+                            const discountKk = discountSnapshot
+                              ? (typeof discountSnapshot.manualTotalKk === "number" && discountSnapshot.manualTotalKk > 0 ? discountSnapshot.manualTotalKk : discountSnapshot.totalKk)
+                              : 0;
+                            const discountRate = getServerCoinRate(readLocalCoinRates(), auction.server);
+                            const discountInfo = discountKk <= 0
+                              ? { rc: null, reason: "Personagem sem itens com valor nesta consulta — nada a descontar." }
+                              : discountRate <= 0
+                                ? { rc: null, reason: `Servidor ${auction.server || "—"} sem cotação de RC configurada — defina em "RC Servidores" para habilitar o desconto.` }
+                                : { rc: computeItemRC(discountRate, discountKk), detail: `${questsViewInputText(discountKk)}kk a ${questsViewInputText(discountRate)}k por 1000 RC` };
+                            return (
+                              <BazaarInlinePurchaseForm
+                                formId={auctionKey}
+                                characterName={auction.name || ""}
+                                characterSummary={`${auction.server || "—"} · ${getVocationAbbreviation(auction.vocation)} · Lv ${auction.level || 0}`}
+                                accounts={availableInlineAccounts}
+                                initialAccount={inlinePurchaseDraft.initialAccount}
+                                currentUid={currentUser?.uid}
+                                discount={discountInfo}
+                                onRememberAccount={rememberBazaarPurchaseAccount}
+                                onConfirm={({ account, valorPago, applyItemsDiscount }) => {
+                                  // ITENS DA CONSULTA: snapshot dos dados já
+                                  // obtidos (fonte local da guia Itens > campos
+                                  // embutidos na lista oficial) — persistido no
+                                  // personagem para o "Ver" da coluna Itens de
+                                  // Meus Personagens, sem nova consulta. As
+                                  // personalizações LOCAIS do modal "Ver" deste
+                                  // leilão (valores de item/Ouro) são importadas
+                                  // junto — o que o usuário vê no "Ver" é o que
+                                  // chega a Meus Personagens.
+                                  const purchaseItems = buildPurchaseItemsSnapshot(itemsResultByAuctionKey.get(auctionKey), auction, questsViewOverrides[auctionKey]);
+                                  const response = onAddCharacterFromBazaar?.({
+                                    name: auction.name || "",
+                                    level: auction.level || 0,
+                                    server: auction.server || "",
+                                    vocation: auction.vocation || "",
+                                    account,
+                                    valorPago,
+                                    ...(purchaseItems ? { items: purchaseItems } : {}),
+                                    // Desconto aplicado UMA única vez, pelo App
+                                    // (custo final = valor pago − RC dos itens).
+                                    ...(applyItemsDiscount && discountInfo.rc ? { itemsDiscountRc: discountInfo.rc } : {}),
+                                  });
+                                  if (!response?.ok) {
+                                    return { ok: false, error: response?.error || "Não foi possível adicionar este personagem." };
+                                  }
+                                  rememberBazaarPurchaseAccount(account);
+                                  closeInlinePurchase();
+                                  return { ok: true };
                                 }}
-                                onKeyDown={event => { if (event.key === "Escape") closeInlinePurchase(); }}
-                                placeholder="0 RC"
-                                aria-label={`Valor pago por ${auction.name}`}
-                                title={inlineValorEmpty ? "Informe o valor pago em RC" : "Valor pago em RC"}
-                                className={`h-8 w-full rounded-lg border bg-black/30 px-2 text-right font-mono text-xs outline-none transition-colors focus:border-emerald-400/60 ${
-                                  inlinePurchaseDraft.error && !inlineValorValue
-                                    ? "border-rose-400/60 text-slate-100 placeholder:text-rose-400/70"
-                                    : inlineValorEmpty
-                                      ? "bz-field-pulse border-amber-400/60 bg-amber-500/[0.04] text-slate-100 placeholder:text-amber-500/80"
-                                      : "border-emerald-400/55 bg-emerald-500/[0.05] text-emerald-200 font-bold shadow-[0_0_8px_rgba(16,185,129,0.16)] placeholder:text-slate-600"
-                                }`}
+                                onCancel={closeInlinePurchase}
                               />
-                            </label>
-                            <div className="flex items-center gap-1.5 sm:flex-shrink-0">
-                              <button
-                                type="submit"
-                                title={inlineFormReady
-                                  ? "Adicionar o personagem à sua lista"
-                                  : "Antes de confirmar, confira a conta selecionada e o valor pago"}
-                                className={`inline-flex h-8 items-center justify-center gap-1 rounded-lg border px-2.5 text-[10px] font-black transition-colors cursor-pointer ${
-                                  inlineFormReady
-                                    ? "border-emerald-400/60 bg-emerald-500/25 text-emerald-100 shadow-[0_0_14px_rgba(16,185,129,0.28)] hover:bg-emerald-500/35"
-                                    : "border-emerald-400/45 bg-emerald-500/15 text-emerald-200 hover:bg-emerald-500/25"
-                                }`}
-                              >
-                                <Check size={12} strokeWidth={3} /> Confirmar
-                              </button>
-                              <button type="button" onClick={closeInlinePurchase} className="inline-flex h-8 items-center justify-center gap-1 rounded-lg border border-white/10 bg-white/[0.04] px-2.5 text-[10px] font-black text-slate-400 transition-colors hover:bg-white/10 hover:text-white cursor-pointer">
-                                <X size={12} strokeWidth={3} /> Cancelar
-                              </button>
-                            </div>
-                            {inlinePurchaseDraft.error && <p role="alert" className="w-full basis-full text-[10px] font-medium text-rose-300">{inlinePurchaseDraft.error}</p>}
-                          </form>
+                            );
+                          })()}
                         </td>
                       </tr>
                     )}

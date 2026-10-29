@@ -5,7 +5,7 @@ import {
   Lock, LockOpen, ArrowUp, ArrowDown, MessageSquareMore, Heart, Cloud, CloudCog, ShoppingBag, Bell, Trophy,
   SlidersHorizontal, ChevronDown, FileSpreadsheet, Briefcase, FileCode2, Coins, Package } from "lucide-react";
 import ExoriLogo from "./components/ExoriLogo";
-import type { AppData, BazaarItemsPurchasePrefill, Character, CharacterAcquisition, CharacterAcquisitionBuyerDetails, CharacterBazaarItemsSnapshot, PartyCustomMember, PartyFinalizationReason, PartyTab, PersonalPartyHistory, PtType, WaitingService, SharedService, DialogOptions, ProbableMarkersMap, Vocation } from "./types";
+import type { AppData, Character, CharacterAcquisition, CharacterAcquisitionBuyerDetails, CharacterBazaarItemsSnapshot, PartyCustomMember, PartyFinalizationReason, PartyTab, PersonalPartyHistory, PtType, WaitingService, SharedService, DialogOptions, ProbableMarkersMap, Vocation } from "./types";
 import { setGlobalDialogHandler, customAlert, customConfirm, formatRC } from "./types";
 import { loadData, saveData, exportCSV, exportJSON, importJSON, buildPersonalBackup, normalizeImportedBackup, saveAutoSaveHandle, loadAutoSaveHandle, loadUIState, saveUIState, saveCloseTray, saveStartWithWindows, saveLowCpuUsage, loadSharedCharsCache, saveSharedCharsCache, isSharedCharsCacheFresh, invalidateSharedCharsCache } from "./storage";
 import { canViewServiceEntry, canViewServiceForViewer, projectServiceForViewer } from "./utils/serviceVisibility";
@@ -26,7 +26,8 @@ import FoundItemsModal, { collectFoundItemGroups } from "./components/FoundItems
 import CharacterBazaarItemsModal from "./components/CharacterBazaarItemsModal";
 // Cotação do coin persistida pela guia Bazaar → Itens (local) — usada apenas
 // para a conversão em RC no modal de itens do personagem (Boss).
-import { loadItemsLastQuery, loadItemsInterests, BAZAAR_ITEMS_LAST_QUERY_UPDATED_EVENT } from "./utils/bazaarWatchedItems";
+import { loadItemsLastQuery, loadItemsInterestRecords, interestedAuctionIdsFrom, BAZAAR_ITEMS_LAST_QUERY_UPDATED_EVENT } from "./utils/bazaarWatchedItems";
+import { applyItemsDiscountToCost } from "./utils/itemSale";
 // Cotação do RC POR SERVIDOR — fonte única GLOBAL (appSettings/global
 // .serverCoinRates, espelhada em localStorage) compartilhada pelo modal
 // "RC Servidores", pela Lista de Itens do Bazaar e por todos os cálculos
@@ -163,6 +164,24 @@ interface BazaarCharacterPurchase {
    * (`bazaarItems`) para o "Ver" da coluna Itens exibir sem nova consulta.
    */
   items?: CharacterBazaarItemsSnapshot;
+  /**
+   * "DESCONTAR VALOR DOS ITENS" (71ª): valor dos itens do personagem JÁ
+   * convertido para RC pela cotação oficial do servidor (com as
+   * personalizações do modal "Ver"/"Detalhes" preservadas). Presente somente
+   * com a caixa marcada na confirmação inline — o App aplica o desconto UMA
+   * única vez (custo final = valorPago − itemsDiscountRc, pode ficar
+   * negativo). Ausente/0 ⇒ comportamento anterior.
+   */
+  itemsDiscountRc?: number;
+  /**
+   * QUESTS REAIS da consulta (fluxo da guia "Personagens com Itens"):
+   * true = quest JÁ FEITA ⇒ indisponível; null/undefined = inconclusivo ⇒
+   * mantém o padrão "disponível" (mesma regra do antigo prefill do modal).
+   * A guia de quests não envia estes campos (comportamento preservado).
+   */
+  soulwarCompleted?: boolean | null;
+  sanguineCompleted?: boolean | null;
+  cryptCompleted?: boolean | null;
 }
 
 interface BazaarCharacterPurchaseResult {
@@ -987,15 +1006,19 @@ export default function App() {
       try {
         const itemsQuery = loadItemsLastQuery();
         if (itemsQuery && Array.isArray(itemsQuery.results)) {
+          const characters = itemsQuery.results.map(result => ({
+            id: result.id || result.url || result.name,
+            name: result.name,
+            server: result.server,
+            auctionEndTs: result.auctionEndTs ?? null,
+            url: result.url,
+          }));
           syncBazaarItemsEndingAlerts({
-            characters: itemsQuery.results.map(result => ({
-              id: result.id || result.url || result.name,
-              name: result.name,
-              server: result.server,
-              auctionEndTs: result.auctionEndTs ?? null,
-              url: result.url,
-            })),
-            interestedAuctionIds: loadItemsInterests(uid),
+            characters,
+            // 71ª: interesses como REGISTROS (id + nome + servidor) — os ids
+            // vivos são derivados cruzando com a consulta (personagem
+            // re-leiloado continua coberto). Mesma chave local por uid.
+            interestedAuctionIds: interestedAuctionIdsFrom(loadItemsInterestRecords(uid), characters),
             currentUserUid: uid,
             bazaarVersion: `items_${itemsQuery.completedAtMs}`,
           });
@@ -4384,74 +4407,6 @@ export default function App() {
   }
 
   /**
-   * "COMPRADO" da guia Bazaar → ITENS: abre o CharacterModal COMPLETO (o
-   * mesmo fluxo real de cadastro — nenhuma versão simplificada) já
-   * pré-preenchido com os dados REAPROVEITADOS da última consulta:
-   * nome/level/servidor/vocação, quests REAIS (bosstiary da própria
-   * consulta — nunca assumidas como disponíveis) e o snapshot dos itens
-   * encontrados (`bazaarItems`), que fica associado ao personagem ao salvar.
-   * O usuário confere/ajusta a CONTA DA COMPRA e o valor pago e confirma —
-   * o salvamento cai no handleSave normal (mesma persistência de sempre).
-   */
-  function openBazaarItemsPurchaseModal(prefill: BazaarItemsPurchasePrefill): BazaarCharacterPurchaseResult {
-    if (!currentUser?.uid) return { ok: false, error: "Entre na sua conta para adicionar um personagem." };
-
-    const personagem = String(prefill.name || "").trim();
-    const servidor = normalizeServerName(String(prefill.server || ""));
-    const voc = mapBazaarVocationToCharacterVocation(String(prefill.vocation || ""));
-    const level = Math.floor(Number(prefill.level));
-    if (!personagem || !servidor || !voc || !Number.isFinite(level) || level <= 0) {
-      return { ok: false, error: "Os dados importados do Bazaar estão incompletos ou inválidos." };
-    }
-
-    const comparableName = normalizeBazaarCharacterNameForCompare(personagem);
-    if (data.characters.some(character => normalizeBazaarCharacterNameForCompare(character.personagem) === comparableName)) {
-      return { ok: false, error: "Este personagem já está na sua lista." };
-    }
-
-    const now = Date.now();
-    const prefilledCharacter: Character = {
-      id: createLocalCharacterId(),
-      account: "",
-      personagem,
-      servidor,
-      voc,
-      level,
-      // QUESTS REAIS da consulta: `soulwarCompleted === true` significa quest
-      // JÁ FEITA ⇒ indisponível (`soulwar = false`). Resultado inconclusivo
-      // (null/undefined) mantém o padrão "disponível" do modal — o usuário
-      // confere no próprio CharacterModal antes de salvar.
-      soulwar: prefill.soulwarCompleted === true ? false : true,
-      sanguine: prefill.sanguineCompleted === true ? false : true,
-      crypt: prefill.cryptCompleted === true ? false : true,
-      valorPago: 0,
-      dropSW: 0,
-      dropBakra: 0,
-      dropCrypt: 0,
-      valorVenda: 0,
-      vendido: false,
-      aVenda: false,
-      shared: true,
-      dataCompra: todayIsoDate(),
-      dataVenda: "",
-      ownerUid: currentUser.uid,
-      ownerName: displayUserName,
-      // ITENS DA CONSULTA associados ao personagem (importação automática):
-      // reaproveitados da última consulta — nenhum fetch/leitura extra. O
-      // Boss os revê depois em Meus Personagens → Disponíveis → Itens → Ver.
-      bazaarItems: prefill.items,
-      createdAt: now,
-      updatedAt: now,
-    };
-
-    setCharacterModalMode("create");
-    setEditing(prefilledCharacter);
-    setBazaarPurchaseModalActive(true);
-    setModalOpen(true);
-    return { ok: true };
-  }
-
-  /**
    * Inclui um personagem comprado diretamente a partir do Bazaar.
    *
    * Mantém os mesmos valores padrão que o antigo rascunho do CharacterModal,
@@ -4470,16 +4425,24 @@ export default function App() {
     const servidor = normalizeServerName(String(purchase.server || ""));
     const voc = mapBazaarVocationToCharacterVocation(String(purchase.vocation || ""));
     const level = Math.floor(Number(purchase.level));
-    const valorPago = Number(purchase.valorPago);
+    const valorPagoInformado = Number(purchase.valorPago);
 
     if (!account) return { ok: false, error: "Informe a conta do personagem." };
     if (account.length > 40) return { ok: false, error: "A conta pode ter no máximo 40 caracteres." };
     if (!personagem || !servidor || !voc || !Number.isFinite(level) || level <= 0) {
       return { ok: false, error: "Os dados importados do Bazaar estão incompletos ou inválidos." };
     }
-    if (!Number.isSafeInteger(valorPago) || valorPago < 0) {
+    if (!Number.isSafeInteger(valorPagoInformado) || valorPagoInformado < 0) {
       return { ok: false, error: "Informe um valor pago válido." };
     }
+    // "DESCONTAR VALOR DOS ITENS" (71ª): desconto validado e aplicado AQUI,
+    // uma única vez (regra única applyItemsDiscountToCost) — o custo final
+    // persistido pode ficar NEGATIVO (itens valem mais que o valor pago).
+    const itemsDiscountRc = Number(purchase.itemsDiscountRc ?? 0);
+    if (!Number.isFinite(itemsDiscountRc) || itemsDiscountRc < 0) {
+      return { ok: false, error: "Desconto dos itens inválido." };
+    }
+    const valorPago = applyItemsDiscountToCost(valorPagoInformado, itemsDiscountRc);
 
     const comparableName = normalizeBazaarCharacterNameForCompare(personagem);
     if (data.characters.some(character => normalizeBazaarCharacterNameForCompare(character.personagem) === comparableName)) {
@@ -4494,11 +4457,13 @@ export default function App() {
       servidor,
       voc,
       level,
-      // Mantém os padrões do fluxo anterior do Bazaar. As quests continuam
-      // disponíveis até que os fluxos próprios da aplicação as atualizem.
-      soulwar: true,
-      sanguine: true,
-      crypt: true,
+      // QUESTS: a guia "Personagens com Itens" envia o estado REAL apurado na
+      // consulta (true = já feita ⇒ indisponível; null/undefined mantém o
+      // padrão "disponível" — o usuário confere depois). A guia de quests não
+      // envia os campos e preserva o comportamento anterior (tudo disponível).
+      soulwar: purchase.soulwarCompleted === true ? false : true,
+      sanguine: purchase.sanguineCompleted === true ? false : true,
+      crypt: purchase.cryptCompleted === true ? false : true,
       valorPago,
       dropSW: 0,
       dropBakra: 0,
@@ -6174,7 +6139,7 @@ export default function App() {
             {demoData ? (
               <BazarPanel key="bazar-demo" sharedCharacters={demoData.bazaarSharedCharacters} waitingList={demoData.waitingList} activeParties={demoData.parties} personalCharacters={demoData.characters} accounts={["Conta 1", "Conta 2", "Conta 3"]} demoBazaar={demoData.bazaar} />
             ) : (
-              <BazarPanel key="bazar-real" sharedCharacters={availableCharactersForParty} waitingList={availableWaitingListForParty} activeParties={cloudParties} personalCharacters={data.characters} accounts={accounts} onAddCharacterFromBazaar={addCharacterFromBazaar} onOpenBazaarItemsPurchase={openBazaarItemsPurchaseModal} />
+              <BazarPanel key="bazar-real" sharedCharacters={availableCharactersForParty} waitingList={availableWaitingListForParty} activeParties={cloudParties} personalCharacters={data.characters} accounts={accounts} onAddCharacterFromBazaar={addCharacterFromBazaar} />
             )}
           </div>
         ) : null}

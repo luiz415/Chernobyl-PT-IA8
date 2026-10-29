@@ -218,26 +218,6 @@ export interface CharacterBazaarItemsSnapshot {
 }
 
 /**
- * Dados que a guia Bazaar → Itens envia ao App no clique em "Comprado":
- * tudo REAPROVEITADO da última consulta (nenhum fetch novo). O App monta o
- * Character pré-preenchido e abre o CharacterModal COMPLETO para o usuário
- * confirmar conta/valor e salvar em Meus Personagens.
- */
-export interface BazaarItemsPurchasePrefill {
-  name: string;
-  level: number;
-  server: string;
-  /** Vocação como veio do Bazaar (ex.: "Elite Knight") — mapeada no App. */
-  vocation: string;
-  /** Quests REAIS da consulta: true = já feita (indisponível); null = inconclusivo. */
-  soulwarCompleted?: boolean | null;
-  sanguineCompleted?: boolean | null;
-  cryptCompleted?: boolean | null;
-  /** Itens encontrados na consulta — associados ao personagem ao salvar. */
-  items: CharacterBazaarItemsSnapshot;
-}
-
-/**
  * VENDA DE ITEM — dados completos da operação (modal "Item Vendido").
  *
  * Persistimos a operação INTEIRA, não apenas o resultado: o "Copiar (WA)" e
