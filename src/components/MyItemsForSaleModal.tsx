@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { AlertTriangle, X, Coins, Check, PackageOpen, Globe, Pencil, Search, Swords, Briefcase, ArrowDownAZ, ArrowUpAZ, CalendarPlus } from "lucide-react";
+import { AlertTriangle, X, Coins, Check, PackageOpen, Globe, Megaphone, Pencil, Search, Swords, Briefcase, ArrowDownAZ, ArrowUpAZ, CalendarPlus, FileText } from "lucide-react";
 import type { Character, CharacterAcquisition, CharacterAcquisitionBuyerDetails, ItemSaleRecord } from "../types";
 import { formatRC } from "../types";
 import { SERVER_OPTIONS, serverLabel } from "../constants/servers";
@@ -14,6 +14,14 @@ import {
   updateSnapshotMatchTotalKk,
 } from "../utils/bazaarWatchedItems";
 import { formatItemSaleSummary, formatKkValue as formatKkValueBase, isItemSaleConcluded } from "../utils/itemSale";
+import {
+  buildSaleAnnouncement,
+  loadSaleTextConfig,
+  saveSaleTextConfig,
+  type SaleTextConfig,
+  type SaleTextItemInput,
+} from "../utils/saleAnnouncement";
+import SaleTextConfigModal from "./SaleTextConfigModal";
 import { questBadgeColorBySigla } from "../constants/questBadges";
 import { isPaymentConfirmed } from "../services/characterAcquisitionService";
 import ItemSoldModal from "./ItemSoldModal";
@@ -521,6 +529,75 @@ export default function MyItemsForSaleModal({
     flashEditDone(fieldKey, true, next === snap ? "Já atualizado" : "Valor atualizado");
   }
 
+  /** Valor CONSIDERADO de um item (kk) — MESMA regra da exibição (73ª):
+   *  Bazaar = total do snapshot da compra; Quest/negociado = valor da Lista
+   *  de Itens do servidor (sem Tier/quantidade); desconhecido = null. É a
+   *  fonte ÚNICA usada pelos chips de valor E pelo Texto de Venda. */
+  function itemConsideredKkOf(item: MySaleItem): number | null {
+    if (item.source === "bazaar") return item.consideredKk ?? null;
+    const listed = item.serverName ? findServerWatchedItem(watchedByServer, item.serverName, item.watchedName || item.itemName) : null;
+    return listed ? listed.valueKk : null;
+  }
+
+  // ── TEXTO DE VENDA POR SERVIDOR (75ª) ─────────────────────────────────────
+  // Config persistida POR USUÁRIO (localStorage — sobrevive a recarregar/
+  // reabrir); padrões úteis quando nunca configurado. O botão de cada
+  // servidor gera o anúncio SÓ com os itens AINDA À VENDA daquele servidor
+  // (itens vendidos e de outros servidores NUNCA entram), na MESMA ordenação
+  // exibida, e copia para a área de transferência com feedback visual.
+  const [saleTextConfig, setSaleTextConfig] = useState<SaleTextConfig>(() => loadSaleTextConfig(currentUserUid));
+  useEffect(() => { setSaleTextConfig(loadSaleTextConfig(currentUserUid)); }, [currentUserUid]);
+  const [isSaleTextConfigOpen, setIsSaleTextConfigOpen] = useState(false);
+  const [saleTextDone, setSaleTextDone] = useState<{ server: string; ok: boolean; message: string } | null>(null);
+  const saleTextTimerRef = useRef<number | null>(null);
+  useEffect(() => () => { if (saleTextTimerRef.current !== null) window.clearTimeout(saleTextTimerRef.current); }, []);
+
+  /** Itens AINDA À VENDA (não vendidos) agrupados por servidor — conjunto
+   *  REAL do anúncio, independente de filtros/aba (deriva da lista viva). */
+  const pendingItemsByServer = useMemo(() => {
+    const map = new Map<string, MySaleItem[]>();
+    for (const item of items) {
+      if (item.sold) continue;
+      const key = item.serverName || "Sem servidor";
+      const list = map.get(key) || [];
+      list.push(item);
+      map.set(key, list);
+    }
+    return map;
+  }, [items]);
+
+  /** Itens do anúncio de UM servidor, na MESMA ordenação exibida no modal. */
+  function saleTextInputsOf(serverKey: string): SaleTextItemInput[] {
+    const pending = [...(pendingItemsByServer.get(serverKey) || [])].sort((a, b) => compareSaleItems(a, b, sortKey, sortDir));
+    return pending.map(item => ({
+      name: item.itemName,
+      valueKk: itemConsideredKkOf(item),
+      amount: Number(item.amount) || 0,
+    }));
+  }
+
+  // Amostra da PRÉVIA do modal de configuração: itens reais do 1º servidor
+  // (alfabético) com itens à venda — o usuário vê o resultado de verdade.
+  const sampleServer = useMemo(() => {
+    const keys = [...pendingItemsByServer.keys()].sort((a, b) => a.localeCompare(b, "pt-BR"));
+    return keys[0] || "";
+  }, [pendingItemsByServer]);
+
+  async function generateSaleText(serverKey: string) {
+    const text = buildSaleAnnouncement(saleTextConfig, saleTextInputsOf(serverKey));
+    let ok = true;
+    let message = "Texto copiado!";
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      ok = false;
+      message = "Falha ao copiar — o navegador bloqueou a área de transferência; tente novamente.";
+    }
+    setSaleTextDone({ server: serverKey, ok, message });
+    if (saleTextTimerRef.current !== null) window.clearTimeout(saleTextTimerRef.current);
+    saleTextTimerRef.current = window.setTimeout(() => { setSaleTextDone(null); saleTextTimerRef.current = null; }, ok ? 2000 : 4000);
+  }
+
   // ── Venda/edição via ItemSoldModal (calculadora oficial) ──────────────────
   const [saleTarget, setSaleTarget] = useState<MySaleItem | null>(null);
   const [savingKey, setSavingKey] = useState<string | null>(null);
@@ -532,14 +609,15 @@ export default function MyItemsForSaleModal({
     [saleTarget, items],
   );
 
-  // Esc fecha (padrão do app) — mas NÃO enquanto a calculadora está aberta
-  // por cima (o ItemSoldModal trata o próprio Esc).
+  // Esc fecha (padrão do app) — mas NÃO enquanto a calculadora ou o
+  // "Configurar Texto de Venda" estão abertos por cima (cada um trata o
+  // próprio Esc).
   useEffect(() => {
-    if (saleTarget) return;
+    if (saleTarget || isSaleTextConfigOpen) return;
     function onKey(e: KeyboardEvent) { if (e.key === "Escape") onClose(); }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose, saleTarget]);
+  }, [onClose, saleTarget, isSaleTextConfigOpen]);
 
   async function commitSale(sale: ItemSaleRecord) {
     const target = liveSaleTarget;
@@ -628,8 +706,8 @@ export default function MyItemsForSaleModal({
           </div>
         </div>
 
-        {/* Abas À VENDA / VENDIDOS */}
-        <div className="flex items-center gap-1.5 px-4 pt-3 flex-shrink-0">
+        {/* Abas À VENDA / VENDIDOS + Configurar Texto de Venda (75ª) */}
+        <div className="flex items-center gap-1.5 px-4 pt-3 flex-shrink-0 flex-wrap">
           <button
             type="button"
             onClick={() => setTab("avenda")}
@@ -655,6 +733,17 @@ export default function MyItemsForSaleModal({
           >
             <Check size={11} /> Vendidos
             <span className="tabular-nums font-mono">({soldCount})</span>
+          </button>
+          {/* CONFIGURAR TEXTO DE VENDA (75ª): personaliza o anúncio copiado
+              pelo botão "Gerar Texto de Venda" de cada servidor — config
+              persistida POR USUÁRIO (local), com prévia ao vivo. */}
+          <button
+            type="button"
+            onClick={() => setIsSaleTextConfigOpen(true)}
+            className="ml-auto inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-amber-500/35 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20 text-[10px] font-black uppercase tracking-wide transition-colors cursor-pointer"
+            title="Personalizar o anúncio gerado pelo botão “Gerar Texto de Venda” de cada servidor (Introdução, formato dos itens e Encerramento) — salvo para o seu usuário."
+          >
+            <FileText size={11} /> Configurar Texto de Venda
           </button>
         </div>
 
@@ -779,9 +868,30 @@ export default function MyItemsForSaleModal({
           ) : (
             groupedByServer.map(([server, list]) => (
               <section key={server} className="rounded-xl border border-white/10 bg-white/[0.02] overflow-hidden">
-                <header className="flex items-center gap-1.5 px-3 py-1.5 bg-white/[0.04] border-b border-white/5">
+                <header className="flex items-center gap-1.5 px-3 py-1.5 bg-white/[0.04] border-b border-white/5 flex-wrap">
                   <Globe size={11} className="text-sky-400 flex-shrink-0" />
                   <span className="text-[10px] font-black uppercase tracking-wider text-sky-300 truncate">{server}</span>
+                  {/* GERAR TEXTO DE VENDA (75ª): anúncio SÓ com os itens
+                      AINDA À VENDA deste servidor (vendidos e outros
+                      servidores ficam de fora), no formato configurado —
+                      copiado direto para a área de transferência. */}
+                  {(pendingItemsByServer.get(server)?.length || 0) > 0 && (
+                    saleTextDone?.server === server ? (
+                      <span className={`inline-flex items-center gap-1 text-[8px] font-black uppercase tracking-wide ${saleTextDone.ok ? "text-emerald-300" : "text-rose-300"}`} title={saleTextDone.message}>
+                        {saleTextDone.ok ? <Check size={10} className="flex-shrink-0" /> : <AlertTriangle size={10} className="flex-shrink-0" />}
+                        <span className="max-w-[220px] truncate">{saleTextDone.message}</span>
+                      </span>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => { void generateSaleText(server); }}
+                        className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-amber-500/35 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20 text-[8px] font-black uppercase tracking-wide transition-colors cursor-pointer"
+                        title={`Gerar e copiar o anúncio com os ${pendingItemsByServer.get(server)?.length || 0} ite${(pendingItemsByServer.get(server)?.length || 0) === 1 ? "m" : "ns"} à venda de ${server} — usa o Texto de Venda configurado; itens já vendidos e de outros servidores NÃO entram.`}
+                      >
+                        <Megaphone size={9} className="flex-shrink-0" /> Gerar Texto de Venda
+                      </button>
+                    )
+                  )}
                   <span className="text-[9px] text-slate-500 tabular-nums ml-auto flex-shrink-0">
                     {list.length} ite{list.length === 1 ? "m" : "ns"}
                   </span>
@@ -797,7 +907,8 @@ export default function MyItemsForSaleModal({
                     const liveBaseKk = listedItem ? listedItem.valueKk : null;
                     const shownBaseKk = liveBaseKk !== null ? liveBaseKk : (item.source === "bazaar" && (item.snapshotBaseKk || 0) > 0 ? (item.snapshotBaseKk as number) : null);
                     const canEditConsidered = item.source === "bazaar" && item.matchIndex !== undefined;
-                    const consideredKk = item.source === "bazaar" ? (item.consideredKk ?? null) : liveBaseKk;
+                    // Fonte ÚNICA do considerado (mesma usada pelo Texto de Venda).
+                    const consideredKk = itemConsideredKkOf(item);
                     const baseKey = `${item.key}:base`;
                     const totalKey = `${item.key}:total`;
                     const rowDone = editDone && (editDone.key === baseKey || editDone.key === totalKey) ? editDone : null;
@@ -1023,6 +1134,22 @@ export default function MyItemsForSaleModal({
           </button>
         </div>
       </div>
+
+      {/* CONFIGURAR TEXTO DE VENDA (75ª) — prévia com itens REAIS do 1º
+          servidor com itens à venda; "Salvar" persiste POR USUÁRIO (local). */}
+      {isSaleTextConfigOpen && (
+        <SaleTextConfigModal
+          initial={saleTextConfig}
+          sampleItems={sampleServer ? saleTextInputsOf(sampleServer) : []}
+          sampleLabel={sampleServer}
+          onSave={config => {
+            saveSaleTextConfig(currentUserUid, config);
+            setSaleTextConfig(config);
+            setIsSaleTextConfigOpen(false);
+          }}
+          onClose={() => setIsSaleTextConfigOpen(false)}
+        />
+      )}
 
       {/* Calculadora OFICIAL (mesmo modal do PartyPanel/CharTable), com os
           dados VIVOS do item. Para negociados não há registro completo
