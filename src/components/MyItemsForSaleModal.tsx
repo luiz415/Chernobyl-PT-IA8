@@ -16,11 +16,13 @@ import {
 import { formatItemSaleSummary, formatKkValue as formatKkValueBase, isItemSaleConcluded } from "../utils/itemSale";
 import {
   buildSaleAnnouncement,
+  filterSaleTextItemsByOrigin,
   loadSaleTextConfig,
   saveSaleTextConfig,
   type SaleTextConfig,
   type SaleTextItemInput,
 } from "../utils/saleAnnouncement";
+import { loadUIState, saveUIState } from "../storage";
 import SaleTextConfigModal from "./SaleTextConfigModal";
 import { questBadgeColorBySigla } from "../constants/questBadges";
 import { isPaymentConfirmed } from "../services/characterAcquisitionService";
@@ -295,24 +297,42 @@ const EMPTY_FILTERS: SaleFilters = { text: "", server: "", quest: "", minRC: "",
 // "server" ordena os GRUPOS de servidor; os demais critérios ordenam os itens
 // DENTRO de cada grupo (com desempate pelo nome). Datas/valores ausentes vão
 // sempre para o fim, em qualquer direção — nunca se inventa valor para ordenar.
-type SaleSortKey = "item" | "server" | "value" | "added" | "sold";
+type SaleSortKey = "item" | "server" | "value" | "base" | "added" | "sold";
 type SaleSortDir = "asc" | "desc";
 
 const SORT_OPTIONS: Array<{ key: SaleSortKey; label: string }> = [
   { key: "item", label: "Nome do item" },
   { key: "server", label: "Servidor" },
   { key: "value", label: "Valor registrado" },
+  { key: "base", label: "Valor base" },
   { key: "added", label: "Data de inclusão" },
   { key: "sold", label: "Data de venda" },
 ];
 
-/** Comparador dos itens DENTRO de um grupo (desempate: nome asc). */
-function compareSaleItems(a: MySaleItem, b: MySaleItem, key: SaleSortKey, dir: SaleSortDir): number {
+const VALID_SORT_KEYS: SaleSortKey[] = ["item", "server", "value", "base", "added", "sold"];
+
+/**
+ * Comparador dos itens DENTRO de um grupo (desempate: nome asc).
+ * `baseKkOf` (76ª) resolve o VALOR BASE real do item (chip "Base" — Lista de
+ * Itens do servidor, fallback base da compra; NUNCA o considerado/ajustado);
+ * itens sem base vão sempre para o fim, como as datas ausentes.
+ */
+function compareSaleItems(a: MySaleItem, b: MySaleItem, key: SaleSortKey, dir: SaleSortDir, baseKkOf?: (item: MySaleItem) => number | null): number {
   const flip = dir === "desc" ? -1 : 1;
   const byName = a.itemName.localeCompare(b.itemName, "pt-BR");
   if (key === "item") return flip * byName;
   if (key === "value") {
     const diff = a.soldValueRC - b.soldValueRC;
+    return diff !== 0 ? flip * diff : byName;
+  }
+  if (key === "base") {
+    const av = baseKkOf ? baseKkOf(a) : null;
+    const bv = baseKkOf ? baseKkOf(b) : null;
+    // Sem valor base -> sempre ao final, independentemente da direção.
+    if (av === null && bv === null) return byName;
+    if (av === null) return 1;
+    if (bv === null) return -1;
+    const diff = av - bv;
     return diff !== 0 ? flip * diff : byName;
   }
   if (key === "added" || key === "sold") {
@@ -327,6 +347,27 @@ function compareSaleItems(a: MySaleItem, b: MySaleItem, key: SaleSortKey, dir: S
   }
   // "server": os grupos já são ordenados fora; dentro, nome asc.
   return byName;
+}
+
+// ── Preferências de visualização POR USUÁRIO (76ª) ──────────────────────────
+// Ordenação (critério + direção) e itens DESMARCADOS do Texto de Venda,
+// persistidos em localStorage por uid (mesmo padrão das demais preferências
+// locais). Guardamos as EXCLUSÕES — item novo entra no anúncio por padrão.
+const SALE_ITEMS_SORT_KEY_PREFIX = "rubinot_sale_items_sort_";
+const SALE_TEXT_EXCLUDED_KEY_PREFIX = "rubinot_sale_text_excluded_";
+const uidKeyPart = (uid: string) => String(uid || "").trim() || "local";
+
+function loadSaleSortPref(uid: string): { key: SaleSortKey; dir: SaleSortDir } {
+  const raw = loadUIState<{ key?: unknown; dir?: unknown }>(`${SALE_ITEMS_SORT_KEY_PREFIX}${uidKeyPart(uid)}`, {});
+  return {
+    key: VALID_SORT_KEYS.includes(raw?.key as SaleSortKey) ? (raw.key as SaleSortKey) : "item",
+    dir: raw?.dir === "desc" ? "desc" : "asc",
+  };
+}
+
+function loadExcludedSaleKeys(uid: string): Set<string> {
+  const raw = loadUIState<unknown>(`${SALE_TEXT_EXCLUDED_KEY_PREFIX}${uidKeyPart(uid)}`, []);
+  return new Set(Array.isArray(raw) ? raw.filter((k): k is string => typeof k === "string") : []);
 }
 
 /** Data de inclusão/venda exibida SÓ com o dia (DD/MM/AAAA). */
@@ -394,8 +435,17 @@ export default function MyItemsForSaleModal({
   const [tab, setTab] = useState<"avenda" | "vendidos">("avenda");
   const [filters, setFilters] = useState<SaleFilters>(EMPTY_FILTERS);
   // Ordenação — também compartilhada entre as abas (nunca descarta filtros).
-  const [sortKey, setSortKey] = useState<SaleSortKey>("item");
-  const [sortDir, setSortDir] = useState<SaleSortDir>("asc");
+  // Persistida POR USUÁRIO (76ª): sobrevive a fechar/reabrir o modal e o app.
+  const [sortKey, setSortKey] = useState<SaleSortKey>(() => loadSaleSortPref(currentUserUid).key);
+  const [sortDir, setSortDir] = useState<SaleSortDir>(() => loadSaleSortPref(currentUserUid).dir);
+  useEffect(() => {
+    const pref = loadSaleSortPref(currentUserUid);
+    setSortKey(pref.key);
+    setSortDir(pref.dir);
+  }, [currentUserUid]);
+  useEffect(() => {
+    saveUIState(`${SALE_ITEMS_SORT_KEY_PREFIX}${uidKeyPart(currentUserUid)}`, { key: sortKey, dir: sortDir });
+  }, [sortKey, sortDir, currentUserUid]);
 
   // Servidores disponíveis para o filtro — somente os presentes nos dados.
   const serverOptions = useMemo(() => {
@@ -423,6 +473,35 @@ export default function MyItemsForSaleModal({
     });
   }, [items, tab, filters]);
 
+  // ── VALOR BASE vivo da Lista de Itens por servidor (73ª) ─────────────────
+  // Mesma fonte oficial da guia Itens; o evento recarrega o mapa quando
+  // QUALQUER tela grava um valor — a base exibida reflete na hora.
+  // (Declarado ANTES do agrupamento porque a ordenação "Valor base" (76ª)
+  // depende dele; apenas movido, sem mudança de comportamento.)
+  const [watchedVersion, setWatchedVersion] = useState(0);
+  useEffect(() => {
+    const bump = () => setWatchedVersion(v => v + 1);
+    window.addEventListener(BAZAAR_WATCHED_ITEMS_UPDATED_EVENT, bump);
+    return () => window.removeEventListener(BAZAAR_WATCHED_ITEMS_UPDATED_EVENT, bump);
+  }, []);
+  const watchedByServer = useMemo(() => loadWatchedItemsByServer(), [watchedVersion]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /** Valor BASE vivo do item na Lista de Itens do SEU servidor (73ª) —
+   *  null = não cadastrado. Fonte única da render e da ordenação. */
+  function itemLiveBaseKk(item: MySaleItem): number | null {
+    const listed = item.serverName ? findServerWatchedItem(watchedByServer, item.serverName, item.watchedName || item.itemName) : null;
+    return listed ? listed.valueKk : null;
+  }
+
+  /** Valor BASE exibido no chip "Base" (73ª): o vivo da lista; fallback =
+   *  base registrada na compra (só Bazaar). É o valor REAL usado pela
+   *  ordenação "Valor base" (76ª) — NUNCA o considerado/ajustado. */
+  function itemShownBaseKk(item: MySaleItem): number | null {
+    const live = itemLiveBaseKk(item);
+    if (live !== null) return live;
+    return item.source === "bazaar" && (item.snapshotBaseKk || 0) > 0 ? (item.snapshotBaseKk as number) : null;
+  }
+
   // Agrupamento por servidor — SEMPRE preservado. "Servidor" ordena os
   // grupos (asc/desc); os demais critérios mantêm os grupos alfabéticos e
   // ordenam os ITENS dentro de cada grupo (desempate pelo nome).
@@ -437,8 +516,8 @@ export default function MyItemsForSaleModal({
     const groupFlip = sortKey === "server" && sortDir === "desc" ? -1 : 1;
     return [...map.entries()]
       .sort((a, b) => groupFlip * a[0].localeCompare(b[0], "pt-BR"))
-      .map(([server, list]) => [server, [...list].sort((a, b) => compareSaleItems(a, b, sortKey, sortDir))] as const);
-  }, [filteredItems, sortKey, sortDir]);
+      .map(([server, list]) => [server, [...list].sort((a, b) => compareSaleItems(a, b, sortKey, sortDir, itemShownBaseKk))] as const);
+  }, [filteredItems, sortKey, sortDir, watchedByServer]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Resumo financeiro da aba VENDIDOS — calculado SOMENTE sobre os itens
   // EXIBIDOS (pós-filtros) e recalculado a cada mudança de filtro/ordenação.
@@ -465,17 +544,6 @@ export default function MyItemsForSaleModal({
     setCopiedKey(key);
     setTimeout(() => setCopiedKey(null), 1500);
   }
-
-  // ── VALOR BASE vivo da Lista de Itens por servidor (73ª) ─────────────────
-  // Mesma fonte oficial da guia Itens; o evento recarrega o mapa quando
-  // QUALQUER tela grava um valor — a base exibida reflete na hora.
-  const [watchedVersion, setWatchedVersion] = useState(0);
-  useEffect(() => {
-    const bump = () => setWatchedVersion(v => v + 1);
-    window.addEventListener(BAZAAR_WATCHED_ITEMS_UPDATED_EVENT, bump);
-    return () => window.removeEventListener(BAZAAR_WATCHED_ITEMS_UPDATED_EVENT, bump);
-  }, []);
-  const watchedByServer = useMemo(() => loadWatchedItemsByServer(), [watchedVersion]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Edição inline de valores (73ª) ────────────────────────────────────────
   // `baseEdit` (SÓ Boss): novo valor BASE → Lista de Itens do SERVIDOR do
@@ -535,8 +603,7 @@ export default function MyItemsForSaleModal({
    *  fonte ÚNICA usada pelos chips de valor E pelo Texto de Venda. */
   function itemConsideredKkOf(item: MySaleItem): number | null {
     if (item.source === "bazaar") return item.consideredKk ?? null;
-    const listed = item.serverName ? findServerWatchedItem(watchedByServer, item.serverName, item.watchedName || item.itemName) : null;
-    return listed ? listed.valueKk : null;
+    return itemLiveBaseKk(item);
   }
 
   // ── TEXTO DE VENDA POR SERVIDOR (75ª) ─────────────────────────────────────
@@ -552,6 +619,22 @@ export default function MyItemsForSaleModal({
   const saleTextTimerRef = useRef<number | null>(null);
   useEffect(() => () => { if (saleTextTimerRef.current !== null) window.clearTimeout(saleTextTimerRef.current); }, []);
 
+  // ── SELEÇÃO INDIVIDUAL (76ª) — caixa de seleção por item ─────────────────
+  // Guardamos as EXCLUSÕES (chaves ESTÁVEIS de MySaleItem.key — personagem/
+  // negociação + quest/índice, imunes a reordenar/filtrar/reabrir): item novo
+  // entra no anúncio por padrão; desmarcado NUNCA aparece no texto gerado.
+  // Persistido POR USUÁRIO em localStorage, salvo a cada clique.
+  const [excludedSaleKeys, setExcludedSaleKeys] = useState<Set<string>>(() => loadExcludedSaleKeys(currentUserUid));
+  useEffect(() => { setExcludedSaleKeys(loadExcludedSaleKeys(currentUserUid)); }, [currentUserUid]);
+  function toggleSaleItemIncluded(itemKey: string) {
+    setExcludedSaleKeys(prev => {
+      const next = new Set(prev);
+      if (next.has(itemKey)) next.delete(itemKey); else next.add(itemKey);
+      saveUIState(`${SALE_TEXT_EXCLUDED_KEY_PREFIX}${uidKeyPart(currentUserUid)}`, [...next]);
+      return next;
+    });
+  }
+
   /** Itens AINDA À VENDA (não vendidos) agrupados por servidor — conjunto
    *  REAL do anúncio, independente de filtros/aba (deriva da lista viva). */
   const pendingItemsByServer = useMemo(() => {
@@ -566,14 +649,29 @@ export default function MyItemsForSaleModal({
     return map;
   }, [items]);
 
-  /** Itens do anúncio de UM servidor, na MESMA ordenação exibida no modal. */
+  /**
+   * Itens CANDIDATOS ao anúncio de UM servidor, na MESMA ordenação exibida:
+   * pendentes do servidor, SEM os desmarcados na seleção individual (76ª).
+   * A origem de cada um segue junto (`origin` = MySaleItem.quest — Quest e
+   * Bazaar nunca se misturam); o filtro de ORIGENS é aplicado depois, pelo
+   * núcleo (`filterSaleTextItemsByOrigin`/`buildSaleAnnouncement`) — assim a
+   * prévia do modal de configuração reage às origens AINDA NÃO salvas.
+   */
   function saleTextInputsOf(serverKey: string): SaleTextItemInput[] {
-    const pending = [...(pendingItemsByServer.get(serverKey) || [])].sort((a, b) => compareSaleItems(a, b, sortKey, sortDir));
+    const pending = [...(pendingItemsByServer.get(serverKey) || [])]
+      .filter(item => !excludedSaleKeys.has(item.key))
+      .sort((a, b) => compareSaleItems(a, b, sortKey, sortDir, itemShownBaseKk));
     return pending.map(item => ({
       name: item.itemName,
       valueKk: itemConsideredKkOf(item),
       amount: Number(item.amount) || 0,
+      origin: item.quest,
     }));
+  }
+
+  /** Quantos itens do servidor REALMENTE entram no texto (seleção ∧ origem). */
+  function saleTextEligibleCount(serverKey: string): number {
+    return filterSaleTextItemsByOrigin(saleTextConfig, saleTextInputsOf(serverKey)).length;
   }
 
   // Amostra da PRÉVIA do modal de configuração: itens reais do 1º servidor
@@ -584,7 +682,17 @@ export default function MyItemsForSaleModal({
   }, [pendingItemsByServer]);
 
   async function generateSaleText(serverKey: string) {
-    const text = buildSaleAnnouncement(saleTextConfig, saleTextInputsOf(serverKey));
+    const inputs = saleTextInputsOf(serverKey);
+    // Seleção individual ∧ origens habilitadas (76ª): sem nenhum item
+    // elegível, NADA é copiado — o aviso orienta o usuário (em vez de um
+    // anúncio silenciosamente vazio na área de transferência).
+    if (filterSaleTextItemsByOrigin(saleTextConfig, inputs).length === 0) {
+      setSaleTextDone({ server: serverKey, ok: false, message: "Nenhum item entra no anúncio — confira as caixas de seleção dos itens e as origens em Configurar Texto de Venda." });
+      if (saleTextTimerRef.current !== null) window.clearTimeout(saleTextTimerRef.current);
+      saleTextTimerRef.current = window.setTimeout(() => { setSaleTextDone(null); saleTextTimerRef.current = null; }, 4000);
+      return;
+    }
+    const text = buildSaleAnnouncement(saleTextConfig, inputs);
     let ok = true;
     let message = "Texto copiado!";
     try {
@@ -886,7 +994,7 @@ export default function MyItemsForSaleModal({
                         type="button"
                         onClick={() => { void generateSaleText(server); }}
                         className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-amber-500/35 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20 text-[8px] font-black uppercase tracking-wide transition-colors cursor-pointer"
-                        title={`Gerar e copiar o anúncio com os ${pendingItemsByServer.get(server)?.length || 0} ite${(pendingItemsByServer.get(server)?.length || 0) === 1 ? "m" : "ns"} à venda de ${server} — usa o Texto de Venda configurado; itens já vendidos e de outros servidores NÃO entram.`}
+                        title={`Gerar e copiar o anúncio de ${server}: ${saleTextEligibleCount(server)} de ${pendingItemsByServer.get(server)?.length || 0} ite${(pendingItemsByServer.get(server)?.length || 0) === 1 ? "m" : "ns"} à venda entra${saleTextEligibleCount(server) === 1 ? "" : "m"} no texto (caixas de seleção + origens configuradas) — itens já vendidos e de outros servidores NUNCA entram.`}
                       >
                         <Megaphone size={9} className="flex-shrink-0" /> Gerar Texto de Venda
                       </button>
@@ -903,9 +1011,9 @@ export default function MyItemsForSaleModal({
                     // SERVIDOR do item (fallback: base da compra, só Bazaar);
                     // CONSIDERADO = total do snapshot (Bazaar, editável) ou o
                     // próprio valor da lista (itens de Quest — sem Tier/qtd).
-                    const listedItem = item.serverName ? findServerWatchedItem(watchedByServer, item.serverName, item.watchedName || item.itemName) : null;
-                    const liveBaseKk = listedItem ? listedItem.valueKk : null;
-                    const shownBaseKk = liveBaseKk !== null ? liveBaseKk : (item.source === "bazaar" && (item.snapshotBaseKk || 0) > 0 ? (item.snapshotBaseKk as number) : null);
+                    // Fonte ÚNICA (76ª): os MESMOS helpers da ordenação.
+                    const liveBaseKk = itemLiveBaseKk(item);
+                    const shownBaseKk = itemShownBaseKk(item);
                     const canEditConsidered = item.source === "bazaar" && item.matchIndex !== undefined;
                     // Fonte ÚNICA do considerado (mesma usada pelo Texto de Venda).
                     const consideredKk = itemConsideredKkOf(item);
@@ -914,6 +1022,22 @@ export default function MyItemsForSaleModal({
                     const rowDone = editDone && (editDone.key === baseKey || editDone.key === totalKey) ? editDone : null;
                     return (
                       <li key={item.key} className="px-3 py-2 flex items-center gap-2 flex-wrap">
+                        {/* SELEÇÃO INDIVIDUAL (76ª) — só itens AINDA À VENDA
+                            (vendidos nunca entram no anúncio): marcado =
+                            entra no Texto de Venda; desmarcado = fica de
+                            fora. Persistida POR USUÁRIO a cada clique. */}
+                        {!item.sold && (
+                          <input
+                            type="checkbox"
+                            checked={!excludedSaleKeys.has(item.key)}
+                            onChange={() => toggleSaleItemIncluded(item.key)}
+                            className="accent-amber-500 flex-shrink-0 cursor-pointer"
+                            aria-label={`Incluir "${item.itemName}" no Texto de Venda de ${item.serverName || "—"}`}
+                            title={excludedSaleKeys.has(item.key)
+                              ? `Fora do Texto de Venda — marque para voltar a incluir "${item.itemName}" no anúncio de ${item.serverName || "—"}.`
+                              : `Entra no Texto de Venda de ${item.serverName || "—"} — desmarque para deixar "${item.itemName}" fora do anúncio.`}
+                          />
+                        )}
                         <div className="flex items-center gap-1.5 min-w-0 flex-1 basis-40">
                           <Swords size={11} className="text-slate-500 flex-shrink-0" />
                           {/* Nome do item — botão de COPIAR (73ª; mesmo padrão

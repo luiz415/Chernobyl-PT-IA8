@@ -25,6 +25,21 @@ import { formatKkValue } from "./itemSale";
 /** Organização dos itens no texto gerado. */
 export type SaleTextLayout = "lines" | "inline";
 
+/**
+ * Origem de UM item à venda (76ª) — espelha `MySaleItem.quest`, que já
+ * distingue sem ambiguidade itens de Quest (SW/SG/GB) de itens vindos de
+ * personagens do Bazaar ("bazaar"). Nenhuma identificação nova é inventada.
+ */
+export type SaleTextOrigin = "soulwar" | "sanguine" | "crypt" | "bazaar";
+
+/** Origens na ordem exibida na UI (siglas oficiais do app — GB, nunca "Crypt"). */
+export const SALE_TEXT_ORIGINS: Array<{ key: SaleTextOrigin; label: string; title: string }> = [
+  { key: "soulwar", label: "SW", title: "Itens de Quest — Soul War" },
+  { key: "sanguine", label: "SG", title: "Itens de Quest — Sanguine" },
+  { key: "crypt", label: "GB", title: "Itens de Quest — Graveborn" },
+  { key: "bazaar", label: "Bazaar", title: "Itens à venda de personagens comprados no Bazaar" },
+];
+
 /** Destaque aplicado ao NOME de cada item (caracteres, não formatação real). */
 export type SaleTextHighlight = "none" | "asterisks" | "double-asterisks" | "caps";
 
@@ -47,6 +62,9 @@ export interface SaleTextConfig {
   blankLineBetweenItems: boolean;
   /** Linhas em branco entre as seções (Introdução/Itens/Encerramento): 0-3. */
   sectionBlankLines: number;
+  /** Origens incluídas no anúncio (76ª) — item só entra se a sua origem
+   *  estiver habilitada. Configs antigas (sem o campo) habilitam TODAS. */
+  origins: Record<SaleTextOrigin, boolean>;
 }
 
 /** Padrões úteis — a funcionalidade funciona imediatamente, sem configurar. */
@@ -60,6 +78,7 @@ export const DEFAULT_SALE_TEXT_CONFIG: SaleTextConfig = {
   includeAmount: true,
   blankLineBetweenItems: false,
   sectionBlankLines: 1,
+  origins: { soulwar: true, sanguine: true, crypt: true, bazaar: true },
 };
 
 const VALID_LAYOUTS: SaleTextLayout[] = ["lines", "inline"];
@@ -71,6 +90,13 @@ export function sanitizeSaleTextConfig(raw: unknown): SaleTextConfig {
   const text = (value: unknown, fallback: string) => (typeof value === "string" ? value : fallback);
   const bool = (value: unknown, fallback: boolean) => (typeof value === "boolean" ? value : fallback);
   const sectionBlankLines = Number(source.sectionBlankLines);
+  // Origens (76ª): campo ausente/corrompido -> TODAS habilitadas (configs da
+  // 75ª continuam gerando exatamente o mesmo anúncio de antes).
+  const rawOrigins = (source.origins && typeof source.origins === "object" ? source.origins : {}) as Partial<Record<SaleTextOrigin, unknown>>;
+  const origins = {} as Record<SaleTextOrigin, boolean>;
+  for (const { key } of SALE_TEXT_ORIGINS) {
+    origins[key] = typeof rawOrigins[key] === "boolean" ? (rawOrigins[key] as boolean) : true;
+  }
   return {
     intro: text(source.intro, DEFAULT_SALE_TEXT_CONFIG.intro),
     outro: text(source.outro, DEFAULT_SALE_TEXT_CONFIG.outro),
@@ -81,6 +107,7 @@ export function sanitizeSaleTextConfig(raw: unknown): SaleTextConfig {
     includeAmount: bool(source.includeAmount, DEFAULT_SALE_TEXT_CONFIG.includeAmount),
     blankLineBetweenItems: bool(source.blankLineBetweenItems, DEFAULT_SALE_TEXT_CONFIG.blankLineBetweenItems),
     sectionBlankLines: Number.isFinite(sectionBlankLines) ? Math.min(3, Math.max(0, Math.floor(sectionBlankLines))) : DEFAULT_SALE_TEXT_CONFIG.sectionBlankLines,
+    origins,
   };
 }
 
@@ -113,6 +140,19 @@ export interface SaleTextItemInput {
   valueKk: number | null;
   /** Quantidade (xN no texto quando > 1 e habilitado). */
   amount?: number;
+  /** Origem do item (76ª) — usada pelo filtro de origens da config.
+   *  Ausente = o item passa sempre (compatibilidade com a 75ª). */
+  origin?: SaleTextOrigin;
+}
+
+/**
+ * Filtro de ORIGENS (76ª) — fonte ÚNICA usada pela prévia do modal de
+ * configuração E pela geração/cópia: mantém apenas os itens cuja origem
+ * está habilitada na config (itens sem origem declarada passam sempre).
+ */
+export function filterSaleTextItemsByOrigin(config: SaleTextConfig, items: SaleTextItemInput[]): SaleTextItemInput[] {
+  const cfg = sanitizeSaleTextConfig(config);
+  return (Array.isArray(items) ? items : []).filter(item => !item.origin || cfg.origins[item.origin]);
 }
 
 /** Aplica o destaque escolhido ao nome (caracteres, nunca formatação real). */
@@ -143,7 +183,9 @@ export function formatSaleTextItem(item: SaleTextItemInput, config: SaleTextConf
 export function buildSaleAnnouncement(config: SaleTextConfig, items: SaleTextItemInput[]): string {
   const cfg = sanitizeSaleTextConfig(config);
   const sectionJoin = "\n".repeat(1 + cfg.sectionBlankLines);
-  const itemTexts = (Array.isArray(items) ? items : [])
+  // Filtro de origens (76ª) aplicado AQUI: prévia e cópia passam pelo mesmo
+  // caminho — nenhum gerador paralelo.
+  const itemTexts = filterSaleTextItemsByOrigin(cfg, items)
     .map(item => formatSaleTextItem(item, cfg))
     .filter(text => text.length > 0);
   const body = cfg.layout === "inline"

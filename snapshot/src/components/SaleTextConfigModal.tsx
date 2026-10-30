@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { AlignLeft, Check, FileText, RotateCcw, X } from "lucide-react";
 import {
   DEFAULT_SALE_TEXT_CONFIG,
+  SALE_TEXT_ORIGINS,
   buildSaleAnnouncement,
   sanitizeSaleTextConfig,
   type SaleTextConfig,
@@ -38,9 +39,9 @@ interface Props {
 
 /** Itens FICTÍCIOS para a prévia quando o usuário ainda não tem itens. */
 const FALLBACK_SAMPLE_ITEMS: SaleTextItemInput[] = [
-  { name: "Falcon Coif", valueKk: 25, amount: 1 },
-  { name: "Spiritthorn Helmet [Tier 2]", valueKk: 40.5, amount: 1 },
-  { name: "Gold Token", valueKk: 1.5, amount: 3 },
+  { name: "Falcon Coif", valueKk: 25, amount: 1, origin: "soulwar" },
+  { name: "Spiritthorn Helmet [Tier 2]", valueKk: 40.5, amount: 1, origin: "bazaar" },
+  { name: "Gold Token", valueKk: 1.5, amount: 3, origin: "sanguine" },
 ];
 
 export default function SaleTextConfigModal({ initial, sampleItems, sampleLabel, onSave, onClose }: Props) {
@@ -172,6 +173,29 @@ export default function SaleTextConfigModal({ initial, sampleItems, sampleLabel,
                 <input type="checkbox" checked={draft.blankLineBetweenItems} disabled={draft.layout !== "lines"} onChange={e => patch({ blankLineBetweenItems: e.target.checked })} className="accent-amber-500" />
                 Linha em branco entre itens
               </label>
+            </div>
+            {/* ── ORIGENS INCLUÍDAS (76ª) — quais origens de itens entram no
+                anúncio. SW/SG/GB = itens de Quest; Bazaar = itens à venda de
+                personagens do Bazaar (a identificação vem de MySaleItem.quest
+                — Quest e Bazaar nunca se misturam). Nenhuma marcada = o
+                anúncio sai sem itens (a prévia mostra o efeito na hora). */}
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 pt-1.5 border-t border-white/5">
+              <span className={labelCls} title="Somente itens das origens marcadas entram no texto gerado — vale para todos os servidores.">Origens incluídas</span>
+              {SALE_TEXT_ORIGINS.map(origin => (
+                <label key={origin.key} className="inline-flex items-center gap-1.5 cursor-pointer text-[10px] text-slate-300" title={origin.title}>
+                  <input
+                    type="checkbox"
+                    checked={draft.origins[origin.key]}
+                    onChange={e => patch({ origins: { ...draft.origins, [origin.key]: e.target.checked } })}
+                    className="accent-amber-500"
+                    aria-label={`Incluir itens de origem ${origin.label}`}
+                  />
+                  {origin.label}
+                </label>
+              ))}
+              {!SALE_TEXT_ORIGINS.some(origin => draft.origins[origin.key]) && (
+                <span className="text-[9px] font-bold text-rose-300" role="alert">Nenhuma origem marcada — o anúncio sairá sem itens.</span>
+              )}
             </div>
           </section>
 
