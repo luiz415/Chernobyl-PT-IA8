@@ -3604,12 +3604,24 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                         (o cadastrado na Lista de Itens do servidor) é editável
                         AQUI, na própria coluna Base; o Total é só calculado. */}
                     <th className="px-1.5 py-1.5 text-left">Item encontrado</th>
-                    <th className="px-1.5 py-1.5 text-right">Base (kk)</th>
+                    {/* LARGURA RESERVADA (78ª): as colunas EDITÁVEIS (Base e
+                        Total) já nascem com a largura do estado de EDIÇÃO
+                        (input w-16 + ✓ + ✗ ≈ 104px + paddings). Sem a
+                        reserva, clicar no lápis alargava a célula ~50px e,
+                        como a tabela usa layout automático, TODAS as outras
+                        colunas eram redistribuídas na hora (datas quebravam,
+                        botões empilhavam) — o modal inteiro "refluía" como se
+                        tivesse sofrido zoom. Com a reserva, entrar/sair da
+                        edição NÃO muda a geometria de nenhuma coluna. */}
+                    <th className="px-1.5 py-1.5 text-right w-[116px] min-w-[116px]">Base (kk)</th>
                     <th className="px-1.5 py-1.5 text-center">Tier</th>
                     <th className="px-1.5 py-1.5 text-center">Qtd</th>
-                    <th className="px-1.5 py-1.5 text-right">Total (kk)</th>
+                    <th className="px-1.5 py-1.5 text-right w-[132px] min-w-[132px]">Total (kk)</th>
                     <th className="px-1.5 py-1.5 text-center">Última Atualização</th>
-                    <th className="px-1.5 py-1.5 text-center">Atualizar</th>
+                    {/* Reserva também aqui (78ª): o feedback de sucesso/erro
+                        substitui os botões Todos/Servidor por 2,5s — sem a
+                        largura fixa, a troca refluía a tabela da mesma forma. */}
+                    <th className="px-1.5 py-1.5 text-center w-[130px] min-w-[130px]">Atualizar</th>
                   </tr>
                 </thead>
                 <tbody>

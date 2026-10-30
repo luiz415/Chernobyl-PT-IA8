@@ -5597,7 +5597,10 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
                         BASE do item na Lista de Itens oficial (guia
                         Personagens com Itens) — todos os servidores ou só o
                         do personagem. Demais usuários: modal inalterado. */}
-                    {isBossUser && <th className="px-1.5 py-1.5 text-center">Atualizar</th>}
+                    {/* Largura reservada (78ª): o feedback substitui os botões
+                        Todos/Servidor por 2,5s — a reserva evita que a troca
+                        redistribua as demais colunas (efeito de "zoom"). */}
+                    {isBossUser && <th className="px-1.5 py-1.5 text-center w-[130px] min-w-[130px]">Atualizar</th>}
                   </tr>
                 </thead>
                 <tbody>
