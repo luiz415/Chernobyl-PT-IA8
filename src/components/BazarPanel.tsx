@@ -27,6 +27,7 @@ import { copyTextToClipboard } from "../utils/clipboard";
 import { syncNotificationPrefsToCloud } from "../services/notificationPrefsSyncService";
 import { syncBazaarEndingAlerts } from "../services/bazaarInterestNotificationService";
 import { buildBazaarBidUrl, extractBazaarAuctionId, parseBidAmount, sanitizeBidInput } from "../utils/bazaarBid";
+import { buildBazaarCharacterDescription, vocationAbbreviation } from "../utils/bazaarCharacterDescription";
 import { readBazaarDefaultBid, resolveBazaarBid, saveBazaarDefaultBid } from "../utils/bazaarDefaultBid";
 import { loadUIState, saveUIState, loadNotifications } from "../storage";
 import { SERVER_OPTIONS, normalizeServerName, serverKey } from "../constants/servers";
@@ -981,13 +982,9 @@ function mergeVocationFilters(saved?: VocationLevelFilters): VocationLevelFilter
 }
 
 function getVocationAbbreviation(vocation: string): string {
-  const normalized = vocation.trim().toLowerCase();
-  if (normalized === "elder druid" || normalized === "druid") return "ED";
-  if (normalized === "elite knight" || normalized === "knight") return "EK";
-  if (normalized === "master sorcerer" || normalized === "sorcerer") return "MS";
-  if (normalized === "royal paladin" || normalized === "paladin") return "RP";
-  if (normalized === "exalted monk" || normalized === "monk") return "MK";
-  return vocation || "—";
+  // Tabela movida para vocationAbbreviation (fonte única com a mini
+  // descrição do clique direito — 81ª); o badge preserva o "—" para vazio.
+  return vocationAbbreviation(vocation) || "—";
 }
 
 function getVocationBadgeClass(vocation: string): string {
@@ -1945,6 +1942,27 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
   // vai para a área de transferência; nenhuma outra ação do modal muda.
   const [copiedQuestsViewItemKey, setCopiedQuestsViewItemKey] = useState<string | null>(null);
   useEffect(() => { setCopiedQuestsViewItemKey(null); }, [questsItemsDetailResult]);
+  // ── MINI DESCRIÇÃO DO PERSONAGEM (81ª — clique DIREITO no nome) ──────────
+  // Botão direito sobre o nome na tabela copia "Nome, VOC Level, Servidor,
+  // encerra às HH:MM DD/MM." + link direto do anúncio (ID REAL — nunca
+  // derivado do nome). Núcleo único buildBazaarCharacterDescription + helper
+  // único copyTextToClipboard. Feedback DISCRETO no próprio lugar do nome
+  // (verde 1,5s no sucesso; vermelho 2,5s com o motivo na falha) — layout da
+  // célula intacto. O clique ESQUERDO não é tocado.
+  const [auctionDescFeedback, setAuctionDescFeedback] = useState<{ key: string; ok: boolean; message: string } | null>(null);
+  const auctionDescTimerRef = useRef<number | null>(null);
+  useEffect(() => () => { if (auctionDescTimerRef.current !== null) window.clearTimeout(auctionDescTimerRef.current); }, []);
+  async function copyAuctionDescription(auction: BazaarAuction, key: string) {
+    const built = buildBazaarCharacterDescription(
+      { name: auction.name, vocation: auction.vocation, level: auction.level, server: auction.server, auctionEndTs: auction.auctionEndTs, url: auction.url, id: auction.id },
+      timezoneOffsetMinutes,
+    );
+    const copied = built.ok ? await copyTextToClipboard(built.text) : false;
+    const message = !built.ok ? built.error : copied ? "Descrição copiada!" : "Falha ao copiar.";
+    setAuctionDescFeedback({ key, ok: built.ok && copied, message });
+    if (auctionDescTimerRef.current !== null) window.clearTimeout(auctionDescTimerRef.current);
+    auctionDescTimerRef.current = window.setTimeout(() => { setAuctionDescFeedback(null); auctionDescTimerRef.current = null; }, built.ok && copied ? 1500 : 2500);
+  }
   // ── COLUNA "ATUALIZAR" DO MODAL "VER" (66ª tarefa — EXCLUSIVA DO BOSS) ───
   // Confirmação inline por linha/escopo (1º clique NUNCA executa), guard de
   // execução e feedback de sucesso/erro — mesmo padrão do "Atualizar" do
@@ -5108,7 +5126,10 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
                       </td>
                       {/* Selos: o de Quest suspeita é PERMANENTE (independe da legenda);
                           os de prioridade seguem o controle Mostrar/Ocultar Legenda. */}
-                      <td className="h-12 px-1.5 py-2 align-middle font-bold text-white"><div className="flex items-center gap-1.5 min-w-0"><span className="truncate" title={auction.name || ""}>{auction.name || "—"}</span>{hasSuspiciousQuest && <span aria-label="Quest suspeita" title="Quest suspeita — contador de bosses muito próximo do total: alta chance de quest indisponível" className="bazaar-badge bazaar-badge-suspicious"><ShieldAlert size={12} strokeWidth={2.5} /></span>}{showLegendEffects && isMaxPriorityPurchase && <span aria-label="Prioridade Máxima" title="Prioridade Máxima — nenhum personagem desta vocação neste servidor" className="bazaar-badge bazaar-badge-max"><Flame size={12} strokeWidth={2.5} /></span>}{showLegendEffects && isPriorityPurchase && <span aria-label="Prioridade" title="Prioridade — menor quantidade desta vocação neste servidor" className="bazaar-badge bazaar-badge-priority"><Star size={11} strokeWidth={2.5} /></span>}{showLegendEffects && isUserPriorityServer && <span aria-label="Prioridade para você" title="Prioridade para você — você não possui personagem neste servidor" className="bazaar-badge bazaar-badge-you"><Star size={11} strokeWidth={2.5} /></span>}</div></td>
+                      <td className="h-12 px-1.5 py-2 align-middle font-bold text-white"><div className="flex items-center gap-1.5 min-w-0">{/* Clique DIREITO (81ª): copia a mini descrição + link do anúncio;
+                          o menu de contexto padrão é suprimido SÓ aqui. Clique esquerdo
+                          segue sem nenhuma ação (comportamento atual). O feedback ocupa
+                          o próprio espaço do nome por 1,5s/2,5s — nada muda no layout. */}<span className={`truncate ${auctionDescFeedback?.key === auctionKey ? (auctionDescFeedback.ok ? "text-emerald-300" : "text-rose-300") : ""}`} title={auctionDescFeedback?.key === auctionKey ? auctionDescFeedback.message : `${auction.name || ""} — clique direito copia a mini descrição + link do anúncio`} onContextMenu={event => { event.preventDefault(); void copyAuctionDescription(auction, auctionKey); }}>{auctionDescFeedback?.key === auctionKey ? auctionDescFeedback.message : (auction.name || "—")}</span>{hasSuspiciousQuest && <span aria-label="Quest suspeita" title="Quest suspeita — contador de bosses muito próximo do total: alta chance de quest indisponível" className="bazaar-badge bazaar-badge-suspicious"><ShieldAlert size={12} strokeWidth={2.5} /></span>}{showLegendEffects && isMaxPriorityPurchase && <span aria-label="Prioridade Máxima" title="Prioridade Máxima — nenhum personagem desta vocação neste servidor" className="bazaar-badge bazaar-badge-max"><Flame size={12} strokeWidth={2.5} /></span>}{showLegendEffects && isPriorityPurchase && <span aria-label="Prioridade" title="Prioridade — menor quantidade desta vocação neste servidor" className="bazaar-badge bazaar-badge-priority"><Star size={11} strokeWidth={2.5} /></span>}{showLegendEffects && isUserPriorityServer && <span aria-label="Prioridade para você" title="Prioridade para você — você não possui personagem neste servidor" className="bazaar-badge bazaar-badge-you"><Star size={11} strokeWidth={2.5} /></span>}</div></td>
                       {/* Comprado — fluxo de inclusão do personagem comprado
                           (mesma ação/botão, agora posicionado após Personagem). */}
                       <td className="h-12 px-1 py-2 text-center align-middle">

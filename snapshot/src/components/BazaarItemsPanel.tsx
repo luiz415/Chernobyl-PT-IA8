@@ -29,6 +29,7 @@ import { FilterDateMax, FilterInline, FilterMulti, FilterNumber } from "./Filter
 // do Electron — zero consultas extras).
 import { BazaarNotifySettingsControl, STICKY_FILTER_CELL_CLASS, STICKY_HEAD_CELL_CLASS, closeRubinotBrowserFromRenderer, isAuctionVisibleWithEndedGrace, isQuestSuspicious, QuestBossCounter, QuestStatusIndicator, type BazaarQuestStatusDetail } from "./BazarPanel";
 import { copyTextToClipboard } from "../utils/clipboard";
+import { buildBazaarCharacterDescription } from "../utils/bazaarCharacterDescription";
 import type { BazaarQuestSource, BazaarRetryCounts, BazaarSpeedMode } from "./BazaarBrowserModal";
 import { loadUIState, saveUIState, loadNotifications } from "../storage";
 import { computeItemRC, formatKkValue as formatKkValueBase } from "../utils/itemSale";
@@ -1004,6 +1005,35 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
       setLinkCopyFeedback({ key: feedbackKey, ok });
       if (linkCopyTimerRef.current) window.clearTimeout(linkCopyTimerRef.current);
       linkCopyTimerRef.current = window.setTimeout(() => setLinkCopyFeedback(null), 1500);
+    });
+  }
+
+  // ── MINI DESCRIÇÃO DO PERSONAGEM (81ª — clique DIREITO no nome) ──────────
+  // Botão direito sobre o nome copia "Nome, VOC Level, Servidor, encerra às
+  // HH:MM DD/MM." + link direto do anúncio (ID REAL — nunca derivado do
+  // nome). Núcleo único buildBazaarCharacterDescription (o MESMO da guia de
+  // quests) + helper único copyTextToClipboard. O menu de contexto padrão é
+  // suprimido SÓ sobre o nome; o clique ESQUERDO continua copiando somente o
+  // nome (71ª), intacto. Feedback discreto no lugar do nome: verde 1,5s no
+  // sucesso, vermelho 2,5s com o motivo na falha — layout preservado.
+  const [descCopyFeedback, setDescCopyFeedback] = useState<{ key: string; ok: boolean; message: string } | null>(null);
+  const descCopyTimerRef = useRef<number | null>(null);
+  function handleCharacterDescriptionContextMenu(
+    event: { preventDefault: () => void; stopPropagation: () => void },
+    feedbackKey: string,
+    result: BazaarItemsCharacterResult,
+  ) {
+    event.preventDefault();
+    event.stopPropagation();
+    const built = buildBazaarCharacterDescription(
+      { name: result.name, vocation: result.vocation, level: result.level, server: result.server, auctionEndTs: result.auctionEndTs ?? null, url: result.url, id: result.id },
+      timezoneOffsetMinutes,
+    );
+    void (built.ok ? copyTextToClipboard(built.text) : Promise.resolve(false)).then(copied => {
+      const message = !built.ok ? built.error : copied ? "Descrição copiada!" : "Falha ao copiar.";
+      setDescCopyFeedback({ key: feedbackKey, ok: built.ok && copied, message });
+      if (descCopyTimerRef.current) window.clearTimeout(descCopyTimerRef.current);
+      descCopyTimerRef.current = window.setTimeout(() => setDescCopyFeedback(null), built.ok && copied ? 1500 : 2500);
     });
   }
 
@@ -2807,15 +2837,25 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                         1,5s de "Copiado!"). 71ª: copia SOMENTE o nome exato
                         do personagem — sem level/vocação (pronto para colar
                         na busca do site). */}
+                    {/* Clique DIREITO (81ª): copia a mini descrição + link do
+                        anúncio (menu de contexto suprimido só aqui); o clique
+                        ESQUERDO segue copiando somente o nome, intacto. */}
                     <button
                       type="button"
                       onClick={() => copyText(copyKey, result.name || "")}
+                      onContextMenu={event => handleCharacterDescriptionContextMenu(event, copyKey, result)}
                       className={`group inline-flex max-w-[220px] items-center justify-start gap-1 rounded px-1 py-0.5 font-bold transition-colors cursor-copy ${
-                        copiedKey === copyKey ? "bg-emerald-500/20 text-emerald-300" : "text-slate-100 hover:bg-white/10 hover:text-white"
+                        descCopyFeedback?.key === copyKey
+                          ? (descCopyFeedback.ok ? "bg-emerald-500/20 text-emerald-300" : "bg-rose-500/20 text-rose-300")
+                          : copiedKey === copyKey ? "bg-emerald-500/20 text-emerald-300" : "text-slate-100 hover:bg-white/10 hover:text-white"
                       }`}
-                      title={copiedKey === copyKey ? "Copiado" : `Copiar "${result.name}"`}
+                      title={descCopyFeedback?.key === copyKey ? descCopyFeedback.message : copiedKey === copyKey ? "Copiado" : `Copiar "${result.name}" — clique direito copia a mini descrição + link do anúncio`}
                     >
-                      {copiedKey === copyKey ? (
+                      {descCopyFeedback?.key === copyKey ? (
+                        descCopyFeedback.ok
+                          ? <><Check size={11} className="flex-shrink-0 text-emerald-400" /><span className="truncate">Descrição copiada!</span></>
+                          : <><AlertTriangle size={11} className="flex-shrink-0 text-rose-400" /><span className="truncate">{descCopyFeedback.message}</span></>
+                      ) : copiedKey === copyKey ? (
                         <><Check size={11} className="flex-shrink-0 text-emerald-400" /><span>Copiado!</span></>
                       ) : (
                         <><span className="truncate">{result.name || "—"}</span><Copy size={10} className="flex-shrink-0 opacity-0 group-hover:opacity-70 transition-opacity" /></>
