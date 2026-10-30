@@ -3188,7 +3188,12 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
           className="app-modal-overlay fixed inset-0 z-[1200] flex items-center justify-center bg-black/70 backdrop-blur-sm"
           onMouseDown={event => { if (event.target === event.currentTarget) setIsItemsModalOpen(false); }}
         >
-          <div className="app-modal-frame w-full max-w-lg max-h-[88vh] flex flex-col rounded-xl border border-fuchsia-500/30 bg-[var(--th-bg-raised)] shadow-2xl shadow-black/60 overflow-hidden">
+          {/* LARGURA (77ª): sem `.app-modal-size-*` o frame ficava nos 36rem
+              padrão e as linhas densas (nome + data de atualização + valor +
+              ações) espremiam o nome do item. `lg` (40rem) dá fôlego sem
+              transformar a lista em painel largo; em telas estreitas o
+              frame continua ocupando 100%. */}
+          <div className="app-modal-frame app-modal-size-lg w-full max-h-[88vh] flex flex-col rounded-xl border border-fuchsia-500/30 bg-[var(--th-bg-raised)] shadow-2xl shadow-black/60 overflow-hidden">
             <div className="flex-shrink-0 flex items-center justify-between gap-2 px-4 py-3 border-b border-[var(--th-line)]/40">
               <div className="flex items-center gap-2 min-w-0">
                 <ListChecks size={16} className="text-fuchsia-400 flex-shrink-0" />
@@ -3540,7 +3545,14 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
           className="app-modal-overlay fixed inset-0 z-[1200] flex items-center justify-center bg-black/70 backdrop-blur-sm"
           onMouseDown={event => { if (event.target === event.currentTarget) { setDetailResult(null); setDetailEdit(null); setDetailEditError(null); setDetailApply(null); setDetailApplyDone(null); resetDetailLocalState(); } }}
         >
-          <div className="app-modal-frame w-full max-w-xl max-h-[88vh] flex flex-col rounded-xl border border-fuchsia-500/30 bg-[var(--th-bg-raised)] shadow-2xl shadow-black/60 overflow-hidden">
+          {/* LARGURA (77ª): o CSS de `.app-modal-frame` dimensiona pelo
+              `.app-modal-size-*` (o max-w-* do Tailwind é ignorado pelo
+              !important do frame) — sem a classe, este modal ficava nos
+              36rem padrão com 7 colunas, forçando rolagem horizontal
+              constante. `xl` (48rem) exibe todas as colunas sem rolagem;
+              em telas estreitas o frame vira 100% e a rolagem continua
+              disponível como último recurso. */}
+          <div className="app-modal-frame app-modal-size-xl w-full max-h-[88vh] flex flex-col rounded-xl border border-fuchsia-500/30 bg-[var(--th-bg-raised)] shadow-2xl shadow-black/60 overflow-hidden">
             <div className="flex-shrink-0 flex items-center justify-between gap-2 px-4 py-3 border-b border-[var(--th-line)]/40">
               <div className="flex items-center gap-2 min-w-0">
                 <Package size={16} className="text-fuchsia-400 flex-shrink-0" />
@@ -3780,7 +3792,10 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                             legado sem registro (ou removido da lista) mostra
                             "—" — nunca uma data inventada. */}
                         {rowListedItem?.updatedAtMs ? (
-                          <span className="font-mono text-[9px] leading-tight text-amber-300 whitespace-nowrap" title={`Última alteração do valor de "${match.watchedName}" na Lista de Itens de ${detailResult.server}`}>
+                          /* Sem nowrap (77ª): sob aperto, data e hora quebram
+                             em duas linhas em vez de alargar a tabela e
+                             forçar rolagem horizontal. */
+                          <span className="font-mono text-[9px] leading-tight text-amber-300" title={`Última alteração do valor de "${match.watchedName}" na Lista de Itens de ${detailResult.server}`}>
                             {formatItemUpdatedAt(rowListedItem.updatedAtMs, timezoneOffsetMinutes)}
                           </span>
                         ) : (
@@ -3799,7 +3814,10 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                             <span className="max-w-[90px] truncate">{applyDone.message}</span>
                           </span>
                         ) : (
-                          <span className="inline-flex items-center justify-center gap-1">
+                          /* flex-wrap (77ª): sem espaço, "Servidor" desce
+                             para a linha de baixo em vez de alargar a
+                             coluna e cortar o restante da tabela. */
+                          <span className="flex flex-wrap items-center justify-center gap-1">
                             <button
                               type="button"
                               disabled={detailApplyBusy}

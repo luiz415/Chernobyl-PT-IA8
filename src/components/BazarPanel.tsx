@@ -5469,7 +5469,14 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
           className="app-modal-overlay fixed inset-0 z-[1200] flex items-center justify-center bg-black/70 backdrop-blur-sm"
           onMouseDown={event => { if (event.target === event.currentTarget) setQuestsItemsDetailResult(null); }}
         >
-          <div className="app-modal-frame w-full max-w-lg max-h-[88vh] flex flex-col rounded-xl border border-fuchsia-500/30 bg-[var(--th-bg-raised)] shadow-2xl shadow-black/60 overflow-hidden">
+          {/* LARGURA (77ª): `.app-modal-frame` dimensiona pelo
+              `.app-modal-size-*` (o max-w-* do Tailwind é ignorado) — sem a
+              classe, o modal ficava nos 36rem padrão e a tabela (Item/Tier/
+              QTD/Total/RC, + "Atualizar" para o Boss) rolava na horizontal.
+              `lg` exibe as 5 colunas; o Boss ganha `xl` para acomodar os
+              botões Todos/Servidor sem rolagem. Em telas estreitas o frame
+              vira 100% e a rolagem segue como último recurso. */}
+          <div className={`app-modal-frame ${isBossUser ? "app-modal-size-xl" : "app-modal-size-lg"} w-full max-h-[88vh] flex flex-col rounded-xl border border-fuchsia-500/30 bg-[var(--th-bg-raised)] shadow-2xl shadow-black/60 overflow-hidden`}>
             <div className="flex-shrink-0 flex items-center justify-between gap-2 px-4 py-3 border-b border-[var(--th-line)]/40">
               <div className="flex items-center gap-2 min-w-0">
                 <Package size={16} className="text-fuchsia-400 flex-shrink-0" />
@@ -5667,7 +5674,10 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
                               <span className="max-w-[90px] truncate">{rowDone.message}</span>
                             </span>
                           ) : (
-                            <span className="inline-flex items-center justify-center gap-1">
+                            /* flex-wrap (77ª): sem espaço, "Servidor" desce
+                               para a linha de baixo em vez de alargar a
+                               coluna e forçar rolagem horizontal. */
+                            <span className="flex flex-wrap items-center justify-center gap-1">
                               <button
                                 type="button"
                                 disabled={!rowCanUpdate || questsViewUpdateBusy}
