@@ -424,12 +424,22 @@ export function findServerWatchedItem(map: WatchedItemsByServer, server: string,
  * função PURA usada pelos modais "Itens Encontrados" e "Itens à Venda" de
  * Meus Personagens: grava o novo total (kk, 1 casa decimal) no PRÓPRIO match
  * e recalcula o total automático do personagem (matches restantes + Ouro),
- * EXATAMENTE como a remoção de item já faz. A correção manual da compra
- * (`manualTotalKk`), quando existe, é PRESERVADA (continua prioritária).
+ * EXATAMENTE como a remoção de item já faz.
+ *
+ * CORREÇÃO MANUAL (83ª tarefa — auditoria do Valor Itens): a edição
+ * individual LIMPA a correção manual da compra (`manualTotalKk`). Antes ela
+ * era preservada E continuava prioritária no total efetivo — ou seja, o
+ * valor editado pelo usuário era IGNORADO nos cálculos (Valor Itens (RC),
+ * rodapé do modal "Ver"). A precedência agora é a MESMA do modal "Ver" do
+ * Painel Bazaar (`hasValueOverride`/buildPurchaseItemsSnapshot): a
+ * personalização mais recente por item prevalece e o total efetivo passa a
+ * ser o recalculado (itens + Ouro). Snapshots sem correção manual seguem
+ * idênticos ao comportamento anterior.
+ *
  * Retorna null quando o índice/valor é inválido; retorna o MESMO objeto
  * quando o valor já está em vigor (idempotência — nada a gravar).
  */
-export function updateSnapshotMatchTotalKk<S extends { totalKk: number; goldKk?: number; matches: Array<{ totalKk: number }> }>(
+export function updateSnapshotMatchTotalKk<S extends { totalKk: number; goldKk?: number; manualTotalKk?: number | null; matches: Array<{ totalKk: number }> }>(
   snap: S,
   matchIndex: number,
   newTotalKk: number,
@@ -440,7 +450,10 @@ export function updateSnapshotMatchTotalKk<S extends { totalKk: number; goldKk?:
   if (snap.matches[matchIndex].totalKk === value) return snap;
   const matches = snap.matches.map((m, i) => (i === matchIndex ? { ...m, totalKk: value } : m));
   const autoTotal = Math.round((matches.reduce((sum, m) => sum + (Number(m.totalKk) || 0), 0) + (Number(snap.goldKk) || 0)) * 100) / 100;
-  return { ...snap, matches, totalKk: autoTotal };
+  // Edição individual > correção manual antiga (nunca o contrário): o manual
+  // é zerado para o total recalculado — com o valor que o usuário acabou de
+  // definir — valer em TODOS os cálculos e exibições.
+  return { ...snap, matches, totalKk: autoTotal, manualTotalKk: null };
 }
 
 /**

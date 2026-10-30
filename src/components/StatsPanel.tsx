@@ -179,7 +179,7 @@ type ValueFilter = {
   /** Valor Itens (RC) — 82ª: ganho dos itens do Bazaar (vendidos pelo RC
    *  real + pendentes pela cotação vigente). Opcional no estado salvo
    *  (legado): o merge com o DEFAULT liga a parcela, como no dropCrypt.
-   *  Personagens sem o modelo novo contribuem 0 — nada é inventado. */
+   *  Personagens sem snapshot de itens contribuem 0 — nada é inventado. */
   itensRc: boolean;
 };
 
@@ -366,7 +366,8 @@ function charDateMs(c: Character): number {
 
 // Resultado financeiro líquido de um personagem segundo o filtro de Cálculo.
 // `itemsRcOf` (82ª) resolve o Valor Itens (RC) do personagem — vendidos pelo
-// RC real + pendentes pela cotação vigente; legados/sem itens retornam 0.
+// RC real + pendentes pela cotação vigente; sem snapshot de itens = 0
+// (83ª: personagens adicionados antes da 82ª CONTAM — gate por snapshot).
 function calcResult(c: Character, vf: ValueFilter, itemsRcOf?: (c: Character) => number): number {
   let total = 0;
   if (vf.dropSW) total += c.dropSW || 0;
@@ -411,7 +412,7 @@ export default function StatsPanel({ characters, parties = [], partyHistory = []
   const valueFilter = useMemo<ValueFilter>(() => ({ ...DEFAULT_VALUE_FILTER, ...valueFilterStored }), [valueFilterStored]);
   // ── VALOR ITENS (RC) — 82ª: resolver compartilhado pelos KPIs/Servidor ──
   // Cotações oficiais pelo espelho local + evento global (sem leituras novas
-  // ao Firestore). Personagens legados (sem `itemsValueRc`) retornam 0.
+  // ao Firestore). Personagens sem snapshot de itens retornam 0.
   const [coinRatesVersion, setCoinRatesVersion] = useState(0);
   useEffect(() => {
     const bump = () => setCoinRatesVersion(v => v + 1);
@@ -1201,7 +1202,7 @@ export default function StatsPanel({ characters, parties = [], partyHistory = []
                 <button onClick={() => setValueFilter((f) => ({ ...f, dropSW: !f.dropSW }))} className={`px-2 py-0.5 rounded-md text-[9px] font-bold border transition-all ${valueFilter.dropSW ? "border-purple-500/60 bg-purple-500/20 text-purple-300" : `${pillIdle} opacity-50`}`} title="Drop SW (soma)">Drop SW</button>
                 <button onClick={() => setValueFilter((f) => ({ ...f, dropBakra: !f.dropBakra }))} className={`px-2 py-0.5 rounded-md text-[9px] font-bold border transition-all ${valueFilter.dropBakra ? "border-orange-500/60 bg-orange-500/20 text-orange-300" : `${pillIdle} opacity-50`}`} title="Drop SG (soma)">Drop SG</button>
                 <button onClick={() => setValueFilter((f) => ({ ...f, dropCrypt: !(f.dropCrypt ?? true) }))} className={`px-2 py-0.5 rounded-md text-[9px] font-bold border transition-all ${valueFilter.dropCrypt ? "border-cyan-500/60 bg-cyan-500/20 text-cyan-300" : `${pillIdle} opacity-50`}`} title="Drop GB (soma)">Drop GB</button>
-                <button onClick={() => setValueFilter((f) => ({ ...f, itensRc: !(f.itensRc ?? true) }))} className={`px-2 py-0.5 rounded-md text-[9px] font-bold border transition-all ${valueFilter.itensRc ? "border-teal-500/60 bg-teal-500/20 text-teal-300" : `${pillIdle} opacity-50`}`} title="Valor Itens (RC) — itens do Bazaar: vendidos pelo valor real + pendentes pela cotação vigente (soma; personagens legados contribuem 0)">Itens</button>
+                <button onClick={() => setValueFilter((f) => ({ ...f, itensRc: !(f.itensRc ?? true) }))} className={`px-2 py-0.5 rounded-md text-[9px] font-bold border transition-all ${valueFilter.itensRc ? "border-teal-500/60 bg-teal-500/20 text-teal-300" : `${pillIdle} opacity-50`}`} title="Valor Itens (RC) — itens do Bazaar: vendidos pelo valor real + pendentes pela cotação vigente (soma; personagens sem itens registrados contribuem 0)">Itens</button>
                 <button onClick={() => setValueFilter((f) => ({ ...f, valorVenda: !f.valorVenda }))} className={`px-2 py-0.5 rounded-md text-[9px] font-bold border transition-all ${valueFilter.valorVenda ? "border-emerald-500/60 bg-emerald-500/20 text-emerald-300" : `${pillIdle} opacity-50`}`} title="Venda (soma)">Venda</button>
               </div>
             </StatsFilterBox>

@@ -332,7 +332,11 @@ export default function FoundItemsModal({
     updateSnapshot(characterId, snap => {
       const matches = snap.matches.filter((_, i) => i !== matchIndex);
       const autoTotal = Math.round((matches.reduce((sum, m) => sum + (Number(m.totalKk) || 0), 0) + (snap.goldKk || 0)) * 100) / 100;
-      return { ...snap, matches, totalKk: autoTotal };
+      // 83ª (mesma regra de updateSnapshotMatchTotalKk): mexer nos ITENS
+      // limpa a correção manual antiga do total — sem isso o manual
+      // continuaria prioritário e a remoção não teria NENHUM efeito no
+      // valor considerado/Valor Itens (RC).
+      return { ...snap, matches, totalKk: autoTotal, manualTotalKk: null };
     });
   }
 

@@ -180,15 +180,16 @@ export interface Character {
    * modal "Ver"/correção manual preservados). É SEPARADO do custo: o
    * `valorPago` é SEMPRE o valor integral informado pelo usuário.
    *
-   * A PRESENÇA deste campo marca o personagem no MODELO NOVO ("itens = ganho
-   * potencial"): a coluna "Valor Itens (RC)" e o Total passam a somar os
-   * itens (dinâmico — vendidos pelo valor REAL da venda, pendentes pela
-   * cotação vigente; fonte única em utils/characterItemsValue.ts).
-   *
-   * AUSENTE = registro LEGADO (importado quando existia o desconto "Descontar
-   * valor dos itens"): como não dá para saber se o custo já foi reduzido
-   * pelos itens, NADA é recalculado — Total e custo permanecem exatamente
-   * como sempre foram (sem dupla contagem, sem valores inventados).
+   * 83ª tarefa: o gate do modelo "itens = ganho potencial" é a PRESENÇA do
+   * SNAPSHOT (`bazaarItems`) — TODO personagem com itens registrados conta
+   * na coluna "Valor Itens (RC)" e no Total (dinâmico — vendidos pelo valor
+   * REAL da venda, pendentes pela cotação vigente; fonte única em
+   * utils/characterItemsValue.ts), inclusive os adicionados ANTES da 82ª.
+   * Este campo é o REGISTRO HISTÓRICO da conversão feita na importação e o
+   * FALLBACK de exibição quando o servidor está sem cotação configurada e
+   * nenhuma venda foi registrada; personagens anteriores à 82ª não o têm
+   * (sem cotação, a parcela pendente deles vale 0 — nada é inventado).
+   * O `valorPago` NUNCA é recalculado por este campo.
    */
   itemsValueRc?: number;
   createdAt: number;

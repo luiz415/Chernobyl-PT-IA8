@@ -29,6 +29,7 @@ import { SERVER_OPTIONS } from "../constants/servers";
 import { SERVER_COIN_RATES_EVENT, coinRateText, getServerCoinRate, readLocalCoinRates, saveOfficialServerCoinRate } from "../utils/bazaarCoinRates";
 import { applyOfficialWatchedItemUpdate, parseTieredItemName } from "../utils/bazaarWatchedItems";
 import { computeItemRC, formatItemSaleSummary, formatKkValue as formatKkValueBase, isItemSaleConcluded } from "../utils/itemSale";
+import { computeCharacterItemsRc } from "../utils/characterItemsValue";
 
 /**
  * Formatação de kk da modal de itens do personagem: valores têm até 1 casa decimal,
@@ -189,9 +190,16 @@ export default function CharacterBazaarItemsModal({ character, onToggleForSale, 
   }
 
   // Valor EFETIVO: correção manual da consulta (quando havia) tem prioridade
-  // sobre o calculado — mesma regra da tabela da guia Itens.
+  // sobre o calculado — mesma regra da tabela da guia Itens. 83ª: editar um
+  // item individual (Itens à Venda/Itens Encontrados) LIMPA o manual — a
+  // personalização mais recente prevalece (updateSnapshotMatchTotalKk).
   const isManual = typeof snapshot.manualTotalKk === "number" && snapshot.manualTotalKk > 0;
   const effectiveKk = isManual ? (snapshot.manualTotalKk as number) : snapshot.totalKk;
+  // VALOR ITENS (RC) — 83ª: MESMA fonte única da coluna de Meus Personagens
+  // (computeCharacterItemsRc): itens VENDIDOS entram pelo RC REAL gravado na
+  // venda; pendentes pela cotação vigente. Antes o rodapé convertia o total
+  // considerado INTEIRO (ignorando vendas) e divergia da tabela.
+  const itemsBreakdown = computeCharacterItemsRc(character, coinRate);
 
   return (
     <div
@@ -419,8 +427,33 @@ export default function CharacterBazaarItemsModal({ character, onToggleForSale, 
               </span>
             )}
             {coinRate > 0 ? (
-              <span className="text-slate-300" title={`floor((${effectiveKk} / ${coinRate}) × 1000) — mesma fórmula de conversão do restante do aplicativo`}>
-                Em RC (coin a {String(coinRate).replace(".", ",")}k): <span className="font-mono font-bold text-emerald-300">{computeItemRC(coinRate, effectiveKk).toLocaleString("de-DE")} RC</span>
+              /* VALOR ITENS (RC) — 83ª: o MESMO número da coluna "Valor
+                 Itens (RC)" de Meus Personagens (fonte única
+                 computeCharacterItemsRc): vendidos pelo RC REAL registrado
+                 na venda + pendentes convertidos pela cotação vigente
+                 (floor(kk ÷ cotação × 1000)). Sem vendas registradas o valor
+                 é idêntico à conversão simples do total considerado. */
+              <span
+                className="text-slate-300"
+                title={itemsBreakdown && itemsBreakdown.soldCount > 0
+                  ? `Mesmo valor da coluna "Valor Itens (RC)" de Meus Personagens: ${itemsBreakdown.realizedRc.toLocaleString("de-DE")} RC reais de ${itemsBreakdown.soldCount} item(ns) vendido(s) + ${itemsBreakdown.potentialRc.toLocaleString("de-DE")} RC dos pendentes (${String(itemsBreakdown.pendingKk).replace(".", ",")}kk a ${String(coinRate).replace(".", ",")}k por 1000 RC).`
+                  : `floor((${effectiveKk} / ${coinRate}) × 1000) — mesma fórmula de conversão do restante do aplicativo`}
+              >
+                Valor Itens (RC) (coin a {String(coinRate).replace(".", ",")}k): <span className="font-mono font-bold text-emerald-300">{(itemsBreakdown ? itemsBreakdown.totalRc : computeItemRC(coinRate, effectiveKk)).toLocaleString("de-DE")} RC</span>
+                {itemsBreakdown && itemsBreakdown.soldCount > 0 && (
+                  <span className="ml-1 rounded border border-emerald-500/40 bg-emerald-500/15 px-1 py-px text-[7px] font-black uppercase tracking-wide text-emerald-300" title="Inclui o valor REAL das vendas registradas no lugar do estimado — nenhum item é contado duas vezes.">
+                    c/ vendas
+                  </span>
+                )}
+              </span>
+            ) : itemsBreakdown && itemsBreakdown.totalRc > 0 ? (
+              /* Sem cotação, mas com valor REAL já realizado (vendas) e/ou o
+                 RC registrado na importação — exibe o mesmo número da coluna
+                 de Meus Personagens; a conversão dos pendentes continua
+                 dependendo da cotação. */
+              <span className="text-slate-300" title="Sem cotação de RC configurada para o servidor — valor composto apenas pelas vendas registradas (RC real) e/ou pelo RC registrado na importação. Defina a cotação na guia Bazaar → Itens (Lista de Itens) para converter os pendentes.">
+                Valor Itens (RC): <span className="font-mono font-bold text-emerald-300">{itemsBreakdown.totalRc.toLocaleString("de-DE")} RC</span>
+                <span className="ml-1 text-[9px] text-slate-500">(sem cotação p/ {snapshot.server || "o servidor"})</span>
               </span>
             ) : (
               <span className="text-slate-500">Sem cotação do RC para {snapshot.server || "este servidor"} — defina na guia Bazaar → Itens (Lista de Itens) para ver a conversão.</span>

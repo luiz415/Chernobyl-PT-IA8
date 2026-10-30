@@ -598,7 +598,9 @@ export default function CharTable({ characters, activeParties = [], readOnly, sh
   const coinRates = useMemo(() => readLocalCoinRates(), [coinRatesVersion]); // eslint-disable-line react-hooks/exhaustive-deps
   // Decomposição do Valor Itens (RC) do personagem — fonte única
   // (computeCharacterItemsRc): vendidos pelo RC REAL da venda + pendentes
-  // pela cotação vigente. null = legado/sem itens (coluna "—", Total intacto).
+  // pela cotação vigente. null SÓ para personagem sem snapshot de itens
+  // (coluna "—", Total intacto) — 83ª: ter sido adicionado antes da 82ª
+  // NÃO exclui o personagem do cálculo.
   const itemsRcOf = useCallback(
     (c: Character) => computeCharacterItemsRc(c, getServerCoinRate(coinRates, c.bazaarItems?.server)),
     [coinRates]
@@ -922,10 +924,12 @@ export default function CharTable({ characters, activeParties = [], readOnly, sh
       // (importados quando existia o desconto no custo) exibem "—" e nada é
       // recalculado — valores históricos preservados.
       key: "itensRc", label: "Valor Itens (RC)", align: "center",
+      // 83ª: TODO personagem com snapshot de itens entra no cálculo —
+      // inclusive os adicionados antes da 82ª (a inclusão na lista nunca
+      // faz os itens deixarem de contar). "—" apenas sem snapshot.
       get: (c: Character) => {
         if (lockedQuestFinancialIds.has(c.id)) return 0;
-        const breakdown = itemsRcOf(c);
-        return breakdown ? breakdown.totalRc : c.bazaarItems ? -1 : 0;
+        return itemsRcOf(c)?.totalRc ?? 0;
       },
       render: (c: Character) => {
         if (lockedQuestFinancialIds.has(c.id)) {
@@ -934,12 +938,7 @@ export default function CharTable({ characters, activeParties = [], readOnly, sh
         const breakdown = itemsRcOf(c);
         if (!breakdown) {
           return (
-            <span
-              className="text-slate-600 text-[11px]"
-              title={c.bazaarItems
-                ? "Registro anterior à separação Valor Pago × Valor Itens (o antigo desconto pode ter sido aplicado ao custo) — valores históricos preservados, sem recálculo."
-                : "Personagem sem itens do Bazaar associados."}
-            >
+            <span className="text-slate-600 text-[11px]" title="Personagem sem itens do Bazaar associados.">
               —
             </span>
           );
@@ -967,9 +966,10 @@ export default function CharTable({ characters, activeParties = [], readOnly, sh
       key: "total", label: "Total", align: "center",
       // A negociação transfere a perspectiva financeira ao comprador; o dono
       // original não pode ver nem usar um Total normal para esse Character.
-      // 82ª: no modelo novo o Total soma o Valor Itens (RC) — vendidos pelo
-      // RC real, pendentes pela cotação vigente; legados seguem no calcTotal
-      // de sempre (fonte única computeCharacterItemsRc ⇒ zero dupla contagem).
+      // 82ª/83ª: o Total soma o Valor Itens (RC) de TODO personagem com
+      // snapshot de itens — vendidos pelo RC real, pendentes pela cotação
+      // vigente; sem snapshot segue o calcTotal de sempre (fonte única
+      // computeCharacterItemsRc ⇒ zero dupla contagem).
       get: (c) => lockedQuestFinancialIds.has(c.id) ? 0 : calcTotal(c) + (itemsRcOf(c)?.totalRc || 0),
       render: (c) => {
         if (lockedQuestFinancialIds.has(c.id)) {

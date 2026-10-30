@@ -138,8 +138,8 @@ export default function CharacterModal({ open, initial, accounts, servers, onSav
   // ── VALOR ITENS (RC) — 82ª tarefa (somente EXIBIÇÃO; nunca editável) ──────
   // Mesma fonte única das tabelas (computeCharacterItemsRc): itens vendidos
   // pelo RC REAL registrado na venda + pendentes pela cotação oficial vigente
-  // do servidor. Personagens legados (sem `itemsValueRc`) não exibem o bloco
-  // e permanecem intactos. Hooks declarados ANTES do `if (!open) return null`.
+  // do servidor. 83ª: o bloco aparece para TODO personagem com snapshot de
+  // itens (mesmo os adicionados antes da 82ª); sem snapshot nada é exibido. Hooks declarados ANTES do `if (!open) return null`.
   const [coinRatesVersion, setCoinRatesVersion] = useState(0);
   useEffect(() => {
     const bump = () => setCoinRatesVersion(v => v + 1);

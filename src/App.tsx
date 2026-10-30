@@ -6081,10 +6081,11 @@ export default function App() {
             onImport={handleImport}
             onExport={() => exportJSON(buildPersonalBackup(data.characters, data.notes, [], displayUserName))}
             onExportCSV={() => exportCSV(data, (c) => {
-              // 82ª — resolvedor do "Valor itens (RC)" p/ o CSV: MESMA fonte
-              // única das tabelas (computeCharacterItemsRc) com a cotação
-              // oficial vigente do servidor do snapshot; legado/sem itens →
-              // null (coluna vazia, Total sem a parcela — histórico intacto).
+              // 82ª/83ª — resolvedor do "Valor itens (RC)" p/ o CSV: MESMA
+              // fonte única das tabelas (computeCharacterItemsRc) com a
+              // cotação oficial vigente do servidor do snapshot. TODO
+              // personagem com snapshot de itens conta (83ª); sem snapshot →
+              // null (coluna vazia, Total sem a parcela).
               if (!isItemsProfitModel(c)) return null;
               const rates = readLocalCoinRates();
               return computeCharacterItemsRc(c, getServerCoinRate(rates, c.bazaarItems?.server))?.totalRc ?? null;
