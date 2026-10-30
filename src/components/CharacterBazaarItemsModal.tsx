@@ -28,7 +28,7 @@ import type { Character } from "../types";
 import { SERVER_OPTIONS } from "../constants/servers";
 import { SERVER_COIN_RATES_EVENT, coinRateText, getServerCoinRate, readLocalCoinRates, saveOfficialServerCoinRate } from "../utils/bazaarCoinRates";
 import { applyOfficialWatchedItemUpdate, parseTieredItemName } from "../utils/bazaarWatchedItems";
-import { computeItemRC, formatKkValue as formatKkValueBase, isItemSaleConcluded } from "../utils/itemSale";
+import { computeItemRC, formatItemSaleSummary, formatKkValue as formatKkValueBase, isItemSaleConcluded } from "../utils/itemSale";
 
 /**
  * Formatação de kk da modal de itens do personagem: valores têm até 1 casa decimal,
@@ -302,8 +302,29 @@ export default function CharacterBazaarItemsModal({ character, onToggleForSale, 
                         <Coins size={8} /> {match.forSale ? "À venda" : "Vender"}
                       </button>
                       {isItemSaleConcluded(match.sale || null) && (
-                        <span className="inline-flex items-center gap-0.5 text-[7px] font-black uppercase tracking-wide text-emerald-400/90" title="Venda registrada em “Itens à Venda” — o registro permanece mesmo se o item for desmarcado.">
-                          <Check size={7} strokeWidth={3} /> Vendido
+                        /* VENDIDO (80ª): além do selo, os VALORES EFETIVOS da
+                           venda registrada — kk bruto informado no modal
+                           "Item Vendido" e o RC resultante GRAVADO no próprio
+                           registro (resultRC, calculado na época com a
+                           cotação rateKk então vigente do servidor, pela
+                           regra única floor(netKk ÷ cotação × 1000)). NADA é
+                           recalculado com a cotação atual — exibição pura do
+                           histórico. Venda "sem valor informado" (noValue)
+                           mantém só o selo, como antes. O title reconstrói a
+                           operação pelo MESMO formatItemSaleSummary do
+                           restante do app (fonte única). */
+                        <span
+                          className="inline-flex flex-col items-center gap-px"
+                          title={`${match.sale ? formatItemSaleSummary(match.sale) : ""}\nVenda registrada em “Itens à Venda” — o registro permanece mesmo se o item for desmarcado.`}
+                        >
+                          <span className="inline-flex items-center gap-0.5 text-[7px] font-black uppercase tracking-wide text-emerald-400/90">
+                            <Check size={7} strokeWidth={3} /> Vendido
+                          </span>
+                          {match.sale && match.sale.noValue !== true && (
+                            <span className="font-mono text-[8px] leading-tight text-emerald-300 whitespace-nowrap">
+                              {formatKkValue(Number(match.sale.vendaKk || 0), "kk")} · {Number(match.sale.resultRC || 0).toLocaleString("de-DE")} RC
+                            </span>
+                          )}
                         </span>
                       )}
                     </div>
