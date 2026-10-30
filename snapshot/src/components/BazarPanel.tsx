@@ -5355,25 +5355,27 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
                       <tr className="border-b border-emerald-500/20 bg-emerald-500/[0.035]">
                         <td colSpan={14} className="px-2 py-2 sm:px-3">
                           {(() => {
-                            // ── DESCONTAR VALOR DOS ITENS (71ª) ─────────────
+                            // ── VALOR ITENS (RC) — 82ª ──────────────────────
                             // RC dos itens calculado com as MESMAS fontes e
-                            // regras da compra: snapshot efetivo (inclui as
+                            // regras de sempre: snapshot efetivo (inclui as
                             // personalizações LOCAIS do modal "Ver" — valores
                             // editados prevalecem sobre a lista global) ×
                             // cotação OFICIAL do servidor (fonte única) pela
-                            // conversão canônica (computeItemRC). Sem itens
-                            // com valor ou sem cotação ⇒ caixa desabilitada
-                            // com o motivo (nenhum desconto inventado).
-                            const discountSnapshot = buildPurchaseItemsSnapshot(itemsResultByAuctionKey.get(auctionKey), auction, questsViewOverrides[auctionKey]);
-                            const discountKk = discountSnapshot
-                              ? (typeof discountSnapshot.manualTotalKk === "number" && discountSnapshot.manualTotalKk > 0 ? discountSnapshot.manualTotalKk : discountSnapshot.totalKk)
+                            // conversão canônica (computeItemRC). O valor é
+                            // REGISTRADO SEPARADO do custo (ganho potencial)
+                            // — o valor pago nunca é reduzido. Sem itens com
+                            // valor ou sem cotação ⇒ linha informativa com o
+                            // motivo (nenhum valor inventado).
+                            const itemsSnapshotPreview = buildPurchaseItemsSnapshot(itemsResultByAuctionKey.get(auctionKey), auction, questsViewOverrides[auctionKey]);
+                            const itemsKk = itemsSnapshotPreview
+                              ? (typeof itemsSnapshotPreview.manualTotalKk === "number" && itemsSnapshotPreview.manualTotalKk > 0 ? itemsSnapshotPreview.manualTotalKk : itemsSnapshotPreview.totalKk)
                               : 0;
-                            const discountRate = getServerCoinRate(readLocalCoinRates(), auction.server);
-                            const discountInfo = discountKk <= 0
-                              ? { rc: null, reason: "Personagem sem itens com valor nesta consulta — nada a descontar." }
-                              : discountRate <= 0
-                                ? { rc: null, reason: `Servidor ${auction.server || "—"} sem cotação de RC configurada — defina em "RC Servidores" para habilitar o desconto.` }
-                                : { rc: computeItemRC(discountRate, discountKk), detail: `${questsViewInputText(discountKk)}kk a ${questsViewInputText(discountRate)}k por 1000 RC` };
+                            const itemsRate = getServerCoinRate(readLocalCoinRates(), auction.server);
+                            const itemsValueInfo = itemsKk <= 0
+                              ? { rc: null, reason: "Personagem sem itens com valor nesta consulta." }
+                              : itemsRate <= 0
+                                ? { rc: null, reason: `Servidor ${auction.server || "—"} sem cotação de RC configurada — defina em "RC Servidores" para registrar o valor em RC.` }
+                                : { rc: computeItemRC(itemsRate, itemsKk), detail: `${questsViewInputText(itemsKk)}kk a ${questsViewInputText(itemsRate)}k por 1000 RC` };
                             return (
                               <BazaarInlinePurchaseForm
                                 formId={auctionKey}
@@ -5381,10 +5383,9 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
                                 characterSummary={`${auction.server || "—"} · ${getVocationAbbreviation(auction.vocation)} · Lv ${auction.level || 0}`}
                                 accounts={availableInlineAccounts}
                                 initialAccount={inlinePurchaseDraft.initialAccount}
-                                currentUid={currentUser?.uid}
-                                discount={discountInfo}
+                                itemsValue={itemsValueInfo}
                                 onRememberAccount={rememberBazaarPurchaseAccount}
-                                onConfirm={({ account, valorPago, applyItemsDiscount }) => {
+                                onConfirm={({ account, valorPago }) => {
                                   // ITENS DA CONSULTA: snapshot dos dados já
                                   // obtidos (fonte local da guia Itens > campos
                                   // embutidos na lista oficial) — persistido no
@@ -5403,9 +5404,11 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
                                     account,
                                     valorPago,
                                     ...(purchaseItems ? { items: purchaseItems } : {}),
-                                    // Desconto aplicado UMA única vez, pelo App
-                                    // (custo final = valor pago − RC dos itens).
-                                    ...(applyItemsDiscount && discountInfo.rc ? { itemsDiscountRc: discountInfo.rc } : {}),
+                                    // VALOR ITENS (82ª): registrado SEPARADO do
+                                    // custo, como ganho potencial (0 = sem
+                                    // cotação no momento; o dinâmico assume
+                                    // quando ela existir). Só com snapshot.
+                                    ...(purchaseItems ? { itemsValueRc: itemsValueInfo.rc ?? 0 } : {}),
                                   });
                                   if (!response?.ok) {
                                     return { ok: false, error: response?.error || "Não foi possível adicionar este personagem." };

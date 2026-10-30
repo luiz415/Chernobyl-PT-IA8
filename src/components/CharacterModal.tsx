@@ -5,6 +5,8 @@ import { VOCATIONS, VOC_COLORS, todayISO } from "../types";
 import { SERVER_OPTIONS, normalizeServerName } from "../constants/servers";
 import { describeSgCooldown, formatSgCooldownRemaining, isSgCooldownActive } from "../utils/sanguineRotation";
 import SgCooldownModal from "./SgCooldownModal";
+import { computeCharacterItemsRc, isItemsProfitModel } from "../utils/characterItemsValue";
+import { SERVER_COIN_RATES_EVENT, getServerCoinRate, readLocalCoinRates } from "../utils/bazaarCoinRates";
 
 interface Props {
   open: boolean;
@@ -132,6 +134,24 @@ export default function CharacterModal({ open, initial, accounts, servers, onSav
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [open, onClose, isSaving]);
+
+  // ── VALOR ITENS (RC) — 82ª tarefa (somente EXIBIÇÃO; nunca editável) ──────
+  // Mesma fonte única das tabelas (computeCharacterItemsRc): itens vendidos
+  // pelo RC REAL registrado na venda + pendentes pela cotação oficial vigente
+  // do servidor. Personagens legados (sem `itemsValueRc`) não exibem o bloco
+  // e permanecem intactos. Hooks declarados ANTES do `if (!open) return null`.
+  const [coinRatesVersion, setCoinRatesVersion] = useState(0);
+  useEffect(() => {
+    const bump = () => setCoinRatesVersion(v => v + 1);
+    window.addEventListener(SERVER_COIN_RATES_EVENT, bump);
+    return () => window.removeEventListener(SERVER_COIN_RATES_EVENT, bump);
+  }, []);
+  const itemsBreakdown = useMemo(() => {
+    void coinRatesVersion; // re-deriva quando qualquer tela atualiza a cotação
+    const c = data as unknown as Character;
+    if (!isItemsProfitModel(c)) return null;
+    return computeCharacterItemsRc(c, getServerCoinRate(readLocalCoinRates(), c.bazaarItems?.server));
+  }, [data, coinRatesVersion]);
 
   if (!open) return null;
 
@@ -708,6 +728,29 @@ export default function CharacterModal({ open, initial, accounts, servers, onSav
               )}
             </div>
           </div>
+
+          {itemsBreakdown && (
+            <div className="rounded-lg border border-teal-500/20 bg-teal-500/[0.05] px-3 py-2">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-teal-300/90" title="Valor dos itens do Bazaar considerado como ganho potencial — compõe o Total sem reduzir o Valor Pago. Somente leitura: alterações acontecem pelas regras já existentes (edição dos itens no modal 'Ver' e registro de vendas).">
+                  Valor Itens (RC)
+                </span>
+                <span className={`tabular-nums text-sm font-bold ${itemsBreakdown.totalRc > 0 ? "text-teal-300" : "text-slate-500"}`}>
+                  {itemsBreakdown.totalRc.toLocaleString("de-DE")} RC
+                </span>
+              </div>
+              <p className="mt-1 text-[10px] leading-relaxed text-slate-400">
+                {itemsBreakdown.soldCount > 0 && (
+                  <>Vendidos ({itemsBreakdown.soldCount}): <span className="text-emerald-400 font-semibold tabular-nums">{itemsBreakdown.realizedRc.toLocaleString("de-DE")} RC</span> (valor real das vendas registradas). </>
+                )}
+                {itemsBreakdown.pendingKk > 0 ? (
+                  itemsBreakdown.rateKk > 0
+                    ? <>Pendentes: <span className="text-teal-300 font-semibold tabular-nums">{itemsBreakdown.potentialRc.toLocaleString("de-DE")} RC</span> ({String(itemsBreakdown.pendingKk).replace(".", ",")}kk pela cotação vigente de {String(itemsBreakdown.rateKk).replace(".", ",")}k por 1000 RC).</>
+                    : <>Pendentes sem cotação de RC do servidor{itemsBreakdown.potentialRc > 0 ? <> — exibindo o valor registrado na importação (<span className="text-teal-300 font-semibold tabular-nums">{itemsBreakdown.potentialRc.toLocaleString("de-DE")} RC</span>)</> : null}.</>
+                ) : itemsBreakdown.soldCount === 0 ? "Sem itens pendentes com valor." : "Todos os itens com valor já foram vendidos."}
+              </p>
+            </div>
+          )}
 
           {lockedQuestFinancialFields && (
             <p className="flex items-start gap-1.5 rounded-lg border border-violet-500/20 bg-violet-500/[0.055] px-3 py-2 text-[10px] leading-relaxed text-violet-100">

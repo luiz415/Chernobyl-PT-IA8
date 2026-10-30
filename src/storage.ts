@@ -222,21 +222,34 @@ function csvEscape(v: unknown): string {
   return s;
 }
 
-export function exportCSV(data: AppData): void {
+/**
+ * Exporta os personagens em CSV.
+ *
+ * 82ª — `itemsRcOf` (opcional) resolve o "Valor itens (RC)" do personagem no
+ * MODELO NOVO (itens como ganho potencial: vendidos pelo RC real + pendentes
+ * pela cotação oficial vigente). O resolvedor é injetado pelo chamador (App)
+ * porque a cotação vive em utils/bazaarCoinRates — importá-la aqui criaria
+ * dependência desnecessária do storage. Retorno `null` = personagem legado ou
+ * sem itens: coluna vazia e Total SEM parcela de itens (histórico intacto).
+ */
+export function exportCSV(data: AppData, itemsRcOf?: (c: Character) => number | null): void {
   const headers = [
     "Account", "Personagem", "Servidor", "Voc", "Level",
-    "SoulWar", "Sanguine", "Graveborn", "Valor pago", "Drop SW", "Drop Bakra", "Drop GB",
-    "Valor de venda", "Total", "Data de compra", "Vendido", "Data de venda"
+    "SoulWar", "Sanguine", "Graveborn", "Valor pago (RC)", "Drop SW", "Drop Bakra", "Drop GB",
+    "Valor itens (RC)", "Valor de venda", "Total", "Data de compra", "Vendido", "Data de venda"
   ];
   const rows = (data.characters || []).map((c: Character) => {
     // Mesma regra do calcTotal: `dropCrypt` é opcional (legado = 0).
-    const total = (c.dropSW + c.dropBakra + (c.dropCrypt || 0) + c.valorVenda) - c.valorPago;
+    const itemsRc = itemsRcOf ? itemsRcOf(c) : null;
+    const total = (c.dropSW + c.dropBakra + (c.dropCrypt || 0) + c.valorVenda + (itemsRc || 0)) - c.valorPago;
     return [
       c.account, c.personagem, c.servidor, c.voc, c.level,
       c.soulwar ? "Sim" : "Não",
       c.sanguine ? "Sim" : "Não",
       c.crypt !== false ? "Sim" : "Não",
-      c.valorPago, c.dropSW, c.dropBakra, c.dropCrypt || 0, c.valorVenda, total,
+      c.valorPago, c.dropSW, c.dropBakra, c.dropCrypt || 0,
+      itemsRc === null ? "" : itemsRc,
+      c.valorVenda, total,
       c.dataCompra || "", c.vendido ? "Sim" : "Não", c.dataVenda || "",
     ].map(csvEscape).join(",");
   });

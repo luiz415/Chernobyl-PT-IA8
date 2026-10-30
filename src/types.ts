@@ -173,6 +173,24 @@ export interface Character {
    * este campo (usuários comuns nunca recebem os dados).
    */
   bazaarItems?: CharacterBazaarItemsSnapshot;
+  /**
+   * VALOR ITENS (RC) REGISTRADO NA IMPORTAÇÃO (82ª tarefa) — valor dos itens
+   * do snapshot convertido para RC pela cotação OFICIAL do servidor NO
+   * MOMENTO da compra (mesmas regras/efetivos do antigo desconto: ajustes do
+   * modal "Ver"/correção manual preservados). É SEPARADO do custo: o
+   * `valorPago` é SEMPRE o valor integral informado pelo usuário.
+   *
+   * A PRESENÇA deste campo marca o personagem no MODELO NOVO ("itens = ganho
+   * potencial"): a coluna "Valor Itens (RC)" e o Total passam a somar os
+   * itens (dinâmico — vendidos pelo valor REAL da venda, pendentes pela
+   * cotação vigente; fonte única em utils/characterItemsValue.ts).
+   *
+   * AUSENTE = registro LEGADO (importado quando existia o desconto "Descontar
+   * valor dos itens"): como não dá para saber se o custo já foi reduzido
+   * pelos itens, NADA é recalculado — Total e custo permanecem exatamente
+   * como sempre foram (sem dupla contagem, sem valores inventados).
+   */
+  itemsValueRc?: number;
   createdAt: number;
   updatedAt: number;
 }

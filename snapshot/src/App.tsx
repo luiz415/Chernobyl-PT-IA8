@@ -27,12 +27,12 @@ import CharacterBazaarItemsModal from "./components/CharacterBazaarItemsModal";
 // Cotação do coin persistida pela guia Bazaar → Itens (local) — usada apenas
 // para a conversão em RC no modal de itens do personagem (Boss).
 import { loadItemsLastQuery, loadItemsInterestRecords, interestedAuctionIdsFrom, BAZAAR_ITEMS_LAST_QUERY_UPDATED_EVENT } from "./utils/bazaarWatchedItems";
-import { applyItemsDiscountToCost } from "./utils/itemSale";
+import { computeCharacterItemsRc, isItemsProfitModel } from "./utils/characterItemsValue";
 // Cotação do RC POR SERVIDOR — fonte única GLOBAL (appSettings/global
 // .serverCoinRates, espelhada em localStorage) compartilhada pelo modal
 // "RC Servidores", pela Lista de Itens do Bazaar e por todos os cálculos
 // kk ⇄ RC. Substitui a antiga taxa fixa única e as taxas por usuário.
-import { sanitizeCoinRateHistory, sanitizeCoinRates, writeLocalCoinRateHistory, writeLocalCoinRates } from "./utils/bazaarCoinRates";
+import { getServerCoinRate, readLocalCoinRates, sanitizeCoinRateHistory, sanitizeCoinRates, writeLocalCoinRateHistory, writeLocalCoinRates } from "./utils/bazaarCoinRates";
 import { applySanguineOutcomeToOwnServices, fetchAllSharedServicesAsWaiting, isServiceProbablyDone, readAllSharedServicesCache, readServiceRequestsCache, readSharedServicesCache, replaceOwnerSharedServicesInWaitingCache } from "./services/sharedServicesService";
 import { backfillServiceQueueEntries, buildServiceQueueKey, freeServiceQueueEntry, registerServiceQueueEntry } from "./services/serviceQueueIndexService";
 import NotesPanel from "./components/NotesPanel";
@@ -166,14 +166,16 @@ interface BazaarCharacterPurchase {
    */
   items?: CharacterBazaarItemsSnapshot;
   /**
-   * "DESCONTAR VALOR DOS ITENS" (71ª): valor dos itens do personagem JÁ
-   * convertido para RC pela cotação oficial do servidor (com as
-   * personalizações do modal "Ver"/"Detalhes" preservadas). Presente somente
-   * com a caixa marcada na confirmação inline — o App aplica o desconto UMA
-   * única vez (custo final = valorPago − itemsDiscountRc, pode ficar
-   * negativo). Ausente/0 ⇒ comportamento anterior.
+   * VALOR ITENS (RC) — 82ª tarefa: valor dos itens do personagem JÁ
+   * convertido para RC pela cotação oficial do servidor no momento da compra
+   * (com as personalizações do modal "Ver"/"Detalhes" preservadas — o MESMO
+   * cálculo que o antigo desconto fazia). É REGISTRADO SEPARADAMENTE no
+   * personagem (`Character.itemsValueRc`) como GANHO POTENCIAL: o custo
+   * (`valorPago`) permanece INTEGRAL, nunca reduzido pelos itens. Enviado
+   * somente junto de `items`; 0 = itens sem cotação configurada no momento
+   * (o valor dinâmico passa a valer quando a cotação existir).
    */
-  itemsDiscountRc?: number;
+  itemsValueRc?: number;
   /**
    * QUESTS REAIS da consulta (fluxo da guia "Personagens com Itens"):
    * true = quest JÁ FEITA ⇒ indisponível; null/undefined = inconclusivo ⇒
@@ -1763,8 +1765,9 @@ export default function App() {
     // PRIVACIDADE (itens do Bazaar): `bazaarItems` é dado EXCLUSIVO do Boss
     // dono do personagem — NUNCA publicado no documento compartilhado.
     // Usuários comuns com acesso ao personagem não recebem essas informações.
+    // `itemsValueRc` (82ª) também sai: é dado financeiro derivado dos itens.
     const charactersToShare = data.characters.filter(c => c.shared === true && !c.vendido).map(c => {
-      const { bazaarItems: _bazaarItems, ...publicCharacter } = c;
+      const { bazaarItems: _bazaarItems, itemsValueRc: _itemsValueRc, ...publicCharacter } = c;
       return {
         ...publicCharacter,
         ownerUid: currentUser.uid,
@@ -4470,14 +4473,13 @@ export default function App() {
     if (!Number.isSafeInteger(valorPagoInformado) || valorPagoInformado < 0) {
       return { ok: false, error: "Informe um valor pago válido." };
     }
-    // "DESCONTAR VALOR DOS ITENS" (71ª): desconto validado e aplicado AQUI,
-    // uma única vez (regra única applyItemsDiscountToCost) — o custo final
-    // persistido pode ficar NEGATIVO (itens valem mais que o valor pago).
-    const itemsDiscountRc = Number(purchase.itemsDiscountRc ?? 0);
-    if (!Number.isFinite(itemsDiscountRc) || itemsDiscountRc < 0) {
-      return { ok: false, error: "Desconto dos itens inválido." };
-    }
-    const valorPago = applyItemsDiscountToCost(valorPagoInformado, itemsDiscountRc);
+    // VALOR PAGO INTEGRAL (82ª): o antigo desconto "Descontar valor dos
+    // itens" foi removido — o custo persistido é EXATAMENTE o valor
+    // informado. Os itens entram como GANHO POTENCIAL, registrados à parte
+    // em `itemsValueRc` (validado abaixo; só existe junto do snapshot).
+    const valorPago = valorPagoInformado;
+    const itemsValueRcRaw = Number(purchase.itemsValueRc ?? 0);
+    const itemsValueRc = Number.isFinite(itemsValueRcRaw) && itemsValueRcRaw > 0 ? Math.floor(itemsValueRcRaw) : 0;
 
     const comparableName = normalizeBazaarCharacterNameForCompare(personagem);
     if (data.characters.some(character => normalizeBazaarCharacterNameForCompare(character.personagem) === comparableName)) {
@@ -4518,6 +4520,12 @@ export default function App() {
       // em Meus Personagens → Disponíveis → Itens → Ver. A publicação em
       // sharedCharacters continua REMOVENDO o campo (privacidade preservada).
       ...(purchase.items ? { bazaarItems: purchase.items } : {}),
+      // MODELO NOVO (82ª): com snapshot de itens, o RC dos itens registrado
+      // na importação é persistido SEPARADO do custo — a PRESENÇA do campo
+      // (mesmo 0, servidor sem cotação) marca o personagem no modelo "itens
+      // = ganho potencial" (coluna "Valor Itens (RC)" + Total). Sem itens,
+      // o campo não existe e nada muda.
+      ...(purchase.items ? { itemsValueRc } : {}),
       createdAt: now,
       updatedAt: now,
     };
@@ -6072,7 +6080,15 @@ export default function App() {
           <OptionsMenu
             onImport={handleImport}
             onExport={() => exportJSON(buildPersonalBackup(data.characters, data.notes, [], displayUserName))}
-            onExportCSV={() => exportCSV(data)}
+            onExportCSV={() => exportCSV(data, (c) => {
+              // 82ª — resolvedor do "Valor itens (RC)" p/ o CSV: MESMA fonte
+              // única das tabelas (computeCharacterItemsRc) com a cotação
+              // oficial vigente do servidor do snapshot; legado/sem itens →
+              // null (coluna vazia, Total sem a parcela — histórico intacto).
+              if (!isItemsProfitModel(c)) return null;
+              const rates = readLocalCoinRates();
+              return computeCharacterItemsRc(c, getServerCoinRate(rates, c.bazaarItems?.server))?.totalRc ?? null;
+            })}
           />
         </div>
       </header>

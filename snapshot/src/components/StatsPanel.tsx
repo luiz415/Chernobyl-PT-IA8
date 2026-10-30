@@ -1,4 +1,4 @@
-import { useMemo, useState, useEffect } from "react";
+import { useCallback, useMemo, useState, useEffect } from "react";
 import {
   TrendingUp,
   TrendingDown,
@@ -27,6 +27,8 @@ import { serverLabel } from "../constants/servers";
 import { formatRC, VOCATIONS } from "../types";
 import { FilterMulti } from "./FilterTypes";
 import { sumServiceProfit } from "../services/sharedServicesService";
+import { computeCharacterItemsRc } from "../utils/characterItemsValue";
+import { SERVER_COIN_RATES_EVENT, getServerCoinRate, readLocalCoinRates } from "../utils/bazaarCoinRates";
 import { toFirestoreMillis } from "../utils/firestoreTimestamp";
 
 // ============================================================================
@@ -174,6 +176,11 @@ type ValueFilter = {
    *  mescla com o DEFAULT para o filtro antigo continuar incluindo a Crypt. */
   dropCrypt: boolean;
   valorVenda: boolean;
+  /** Valor Itens (RC) — 82ª: ganho dos itens do Bazaar (vendidos pelo RC
+   *  real + pendentes pela cotação vigente). Opcional no estado salvo
+   *  (legado): o merge com o DEFAULT liga a parcela, como no dropCrypt.
+   *  Personagens sem o modelo novo contribuem 0 — nada é inventado. */
+  itensRc: boolean;
 };
 
 type StatusFilter = {
@@ -259,6 +266,7 @@ const DEFAULT_VALUE_FILTER: ValueFilter = {
   dropBakra: true,
   dropCrypt: true,
   valorVenda: true,
+  itensRc: true,
 };
 
 const DEFAULT_STATUS: StatusFilter = {
@@ -357,12 +365,15 @@ function charDateMs(c: Character): number {
 }
 
 // Resultado financeiro líquido de um personagem segundo o filtro de Cálculo.
-function calcResult(c: Character, vf: ValueFilter): number {
+// `itemsRcOf` (82ª) resolve o Valor Itens (RC) do personagem — vendidos pelo
+// RC real + pendentes pela cotação vigente; legados/sem itens retornam 0.
+function calcResult(c: Character, vf: ValueFilter, itemsRcOf?: (c: Character) => number): number {
   let total = 0;
   if (vf.dropSW) total += c.dropSW || 0;
   if (vf.dropBakra) total += c.dropBakra || 0;
   if (vf.dropCrypt) total += c.dropCrypt || 0;
   if (vf.valorVenda) total += c.valorVenda || 0;
+  if (vf.itensRc && itemsRcOf) total += itemsRcOf(c) || 0;
   if (vf.valorPago) total -= c.valorPago || 0;
   return total;
 }
@@ -398,6 +409,20 @@ export default function StatsPanel({ characters, parties = [], partyHistory = []
   // `dropCrypt` — o merge com o DEFAULT liga a Crypt neles (mesmo
   // comportamento que o usuário tinha: todos os componentes somando).
   const valueFilter = useMemo<ValueFilter>(() => ({ ...DEFAULT_VALUE_FILTER, ...valueFilterStored }), [valueFilterStored]);
+  // ── VALOR ITENS (RC) — 82ª: resolver compartilhado pelos KPIs/Servidor ──
+  // Cotações oficiais pelo espelho local + evento global (sem leituras novas
+  // ao Firestore). Personagens legados (sem `itemsValueRc`) retornam 0.
+  const [coinRatesVersion, setCoinRatesVersion] = useState(0);
+  useEffect(() => {
+    const bump = () => setCoinRatesVersion(v => v + 1);
+    window.addEventListener(SERVER_COIN_RATES_EVENT, bump);
+    return () => window.removeEventListener(SERVER_COIN_RATES_EVENT, bump);
+  }, []);
+  const coinRates = useMemo(() => readLocalCoinRates(), [coinRatesVersion]); // eslint-disable-line react-hooks/exhaustive-deps
+  const itemsRcOf = useCallback(
+    (c: Character) => computeCharacterItemsRc(c, getServerCoinRate(coinRates, c.bazaarItems?.server))?.totalRc || 0,
+    [coinRates]
+  );
   const [statusFilter, setStatusFilter] = usePersistedState<StatusFilter>("stats_statusFilter", DEFAULT_STATUS);
   const [period, setPeriod] = usePersistedState<PeriodKey>("stats_period_v2", "all");
   // "Apenas personagens completos" — filtra para personagens com Custo preenchido
@@ -583,7 +608,7 @@ export default function StatsPanel({ characters, parties = [], partyHistory = []
     const totalDropCrypt = sum(baseFiltered.map((c) => c.dropCrypt || 0)) + acquisitionFinance.questProfitCrypt;
     const totalVendas = sum(vendidos.map((c) => c.valorVenda)) + acquisitionFinance.saleRevenue;
 
-    const filteredResults = baseFiltered.map((c) => calcResult(c, valueFilter));
+    const filteredResults = baseFiltered.map((c) => calcResult(c, valueFilter, itemsRcOf));
     const totalGeral = sum(filteredResults) + acquisitionFinance.net;
     const lucroMedio = avgNonZero([...filteredResults, ...acquisitionFinance.netEntries]);
     const soldWithCost = vendidos.filter((c) => c.valorPago > 0);
@@ -600,7 +625,7 @@ export default function StatsPanel({ characters, parties = [], partyHistory = []
       totalGeral, lucroMedio, desvalorizacaoMedia, roiGlobal,
       acquisitionFinance,
     };
-  }, [baseFiltered, valueFilter, acquisitionFinance]);
+  }, [baseFiltered, valueFilter, acquisitionFinance, itemsRcOf]);
 
   // ── PT's do usuário, filtradas pelo mesmo período ───────────────────────
   // Uma PT pertence ao usuário quando ele a criou, tem personagem próprio nela,
@@ -838,7 +863,7 @@ export default function StatsPanel({ characters, parties = [], partyHistory = []
       if (!srv) return;
       const e = map.get(srv) || { ptCount: 0, charCount: 0, totalProfit: 0 };
       e.charCount += 1;
-      e.totalProfit += calcResult(c, valueFilter);
+      e.totalProfit += calcResult(c, valueFilter, itemsRcOf);
       map.set(srv, e);
     });
     // A perspectiva do adquirente não possui um Character duplicado. Incluímos
@@ -856,7 +881,7 @@ export default function StatsPanel({ characters, parties = [], partyHistory = []
       .filter(([, e]) => e.ptCount > 0)
       .map(([srv, e]) => ({ srv, ...e, avgProfit: e.charCount > 0 ? e.totalProfit / e.charCount : 0 }))
       .sort((a, b) => b.totalProfit - a.totalProfit || b.ptCount - a.ptCount);
-  }, [acquisitionFinance.buyerEntries, baseFiltered, completedParties, characters, valueFilter]);
+  }, [acquisitionFinance.buyerEntries, baseFiltered, completedParties, characters, valueFilter, itemsRcOf]);
 
   // ── Drops (Soulwar / Sanguine / Crypt) ───────────────────────────────────
   const itemStats = useMemo(() => {
@@ -983,7 +1008,7 @@ export default function StatsPanel({ characters, parties = [], partyHistory = []
     if (period !== "all" && (period !== "custom" || periodRange !== null)) n += 1;
     if (!statusFilter.ativos || !statusFilter.historico) n += 1;
     if (onlyComplete) n += 1;
-    if (!valueFilter.valorPago || !valueFilter.dropSW || !valueFilter.dropBakra || !valueFilter.dropCrypt || !valueFilter.valorVenda) n += 1;
+    if (!valueFilter.valorPago || !valueFilter.dropSW || !valueFilter.dropBakra || !valueFilter.dropCrypt || !valueFilter.valorVenda || !valueFilter.itensRc) n += 1;
     if (adv.servers.length > 0) n += 1;
     if (adv.vocations.length > 0) n += 1;
     for (const range of [adv.level, adv.cost, adv.sale]) if (rangeOn(range)) n += 1;
@@ -1176,6 +1201,7 @@ export default function StatsPanel({ characters, parties = [], partyHistory = []
                 <button onClick={() => setValueFilter((f) => ({ ...f, dropSW: !f.dropSW }))} className={`px-2 py-0.5 rounded-md text-[9px] font-bold border transition-all ${valueFilter.dropSW ? "border-purple-500/60 bg-purple-500/20 text-purple-300" : `${pillIdle} opacity-50`}`} title="Drop SW (soma)">Drop SW</button>
                 <button onClick={() => setValueFilter((f) => ({ ...f, dropBakra: !f.dropBakra }))} className={`px-2 py-0.5 rounded-md text-[9px] font-bold border transition-all ${valueFilter.dropBakra ? "border-orange-500/60 bg-orange-500/20 text-orange-300" : `${pillIdle} opacity-50`}`} title="Drop SG (soma)">Drop SG</button>
                 <button onClick={() => setValueFilter((f) => ({ ...f, dropCrypt: !(f.dropCrypt ?? true) }))} className={`px-2 py-0.5 rounded-md text-[9px] font-bold border transition-all ${valueFilter.dropCrypt ? "border-cyan-500/60 bg-cyan-500/20 text-cyan-300" : `${pillIdle} opacity-50`}`} title="Drop GB (soma)">Drop GB</button>
+                <button onClick={() => setValueFilter((f) => ({ ...f, itensRc: !(f.itensRc ?? true) }))} className={`px-2 py-0.5 rounded-md text-[9px] font-bold border transition-all ${valueFilter.itensRc ? "border-teal-500/60 bg-teal-500/20 text-teal-300" : `${pillIdle} opacity-50`}`} title="Valor Itens (RC) — itens do Bazaar: vendidos pelo valor real + pendentes pela cotação vigente (soma; personagens legados contribuem 0)">Itens</button>
                 <button onClick={() => setValueFilter((f) => ({ ...f, valorVenda: !f.valorVenda }))} className={`px-2 py-0.5 rounded-md text-[9px] font-bold border transition-all ${valueFilter.valorVenda ? "border-emerald-500/60 bg-emerald-500/20 text-emerald-300" : `${pillIdle} opacity-50`}`} title="Venda (soma)">Venda</button>
               </div>
             </StatsFilterBox>

@@ -8,38 +8,19 @@
 // lista de contas com busca, foco automático, Esc para fechar) — uma única
 // implementação, zero duplicação entre as guias.
 //
-// NOVIDADE (71ª tarefa): caixa "Descontar valor dos itens" — quando MARCADA,
-// o custo final persistido do personagem passa a ser
-//   Valor pago − Valor dos itens convertido para RC
-// (conversão calculada pelo CHAMADOR com a taxa oficial do servidor e os
-// valores efetivos — personalizações do modal "Ver"/"Detalhes" preservadas).
-// O desconto é aplicado UMA única vez, pelo App (addCharacterFromBazaar) —
-// este formulário apenas informa a escolha; desmarcada ⇒ comportamento
-// anterior inalterado. A preferência (marcada/desmarcada) é persistida POR
-// USUÁRIO no mesmo mecanismo de preferências do app (loadUIState/saveUIState,
-// chave por uid — nunca compartilhada entre contas) e sobrevive a fechar/
-// reabrir o fluxo e recarregar a página.
+// 82ª TAREFA — "Descontar valor dos itens" REMOVIDO: o valor pago informado
+// é registrado INTEGRAL como custo do personagem e o valor dos itens (RC,
+// calculado pelo CHAMADOR com a cotação oficial do servidor e os efetivos —
+// personalizações do modal "Ver"/"Detalhes" preservadas) é REGISTRADO
+// SEPARADAMENTE como GANHO POTENCIAL (`Character.itemsValueRc`). O
+// formulário exibe a linha informativa "Valor Itens (RC)" para deixar a
+// separação transparente na confirmação. A antiga preferência por usuário
+// da caixa de desconto deixou de existir (a chave local antiga é apenas
+// ignorada — nada é migrado nem apagado).
 // ============================================================================
 
 import { useEffect, useRef, useState } from "react";
 import { Check, ChevronDown, X } from "lucide-react";
-import { loadUIState, saveUIState } from "../storage";
-
-/** Chave POR USUÁRIO da preferência "Descontar valor dos itens" (71ª). */
-const PURCHASE_DISCOUNT_PREF_KEY_PREFIX = "rubinot_bazaar_purchase_discount_items";
-
-function discountPrefKey(uid: string | undefined): string {
-  return `${PURCHASE_DISCOUNT_PREF_KEY_PREFIX}_${String(uid || "").trim() || "local"}`;
-}
-
-/** Lê a última escolha persistida do usuário para a caixa de desconto. */
-export function readPurchaseDiscountPreference(uid: string | undefined): boolean {
-  return loadUIState<unknown>(discountPrefKey(uid), false) === true;
-}
-
-export function savePurchaseDiscountPreference(uid: string | undefined, enabled: boolean): void {
-  saveUIState(discountPrefKey(uid), enabled === true);
-}
 
 /**
  * Validação ÚNICA do fluxo inline (movida do BazarPanel — regra idêntica).
@@ -56,15 +37,17 @@ export function getBazaarInlinePurchaseValidationError(account: string, valorPag
 }
 
 /**
- * Situação do DESCONTO DOS ITENS para o personagem do formulário, calculada
- * pelo chamador (cada guia conhece a própria fonte de itens/personalizações):
- * `rc` = valor dos itens já convertido para RC pela taxa oficial do servidor
- * (regras canônicas do app); `null` = desconto indisponível (sem itens com
- * valor ou servidor sem cotação) — a caixa aparece desabilitada com o motivo.
+ * VALOR DOS ITENS do personagem do formulário, calculado pelo chamador
+ * (cada guia conhece a própria fonte de itens/personalizações):
+ * `rc` = valor dos itens já convertido para RC pela cotação oficial do
+ * servidor (regras canônicas do app); `null` = indisponível (sem itens com
+ * valor ou servidor sem cotação) — a linha informativa explica o motivo.
+ * Este valor é REGISTRADO SEPARADO do custo (ganho potencial — 82ª); o
+ * valor pago nunca é reduzido por ele.
  */
-export interface BazaarPurchaseDiscountInfo {
+export interface BazaarPurchaseItemsValueInfo {
   rc: number | null;
-  /** Descrição exibida no título da caixa (como o RC foi obtido). */
+  /** Descrição exibida no título da linha (como o RC foi obtido). */
   detail?: string;
   /** Motivo de indisponibilidade (quando `rc` é null). */
   reason?: string;
@@ -80,18 +63,16 @@ interface BazaarInlinePurchaseFormProps {
   accounts: string[];
   /** Conta pré-preenchida (última utilizada pelo usuário; "" = nenhuma). */
   initialAccount: string;
-  /** Uid do usuário — persistência POR USUÁRIO da preferência de desconto. */
-  currentUid?: string;
-  /** Situação do desconto dos itens calculada pelo chamador. */
-  discount: BazaarPurchaseDiscountInfo;
+  /** Valor dos itens (registrado como ganho potencial) calculado pelo chamador. */
+  itemsValue: BazaarPurchaseItemsValueInfo;
   /** Persiste a conta como "última utilizada" (seleção explícita/confirmação). */
   onRememberAccount?(account: string): void;
   /**
-   * Confirmação com dados VÁLIDOS. `applyItemsDiscount` só vem `true` com a
-   * caixa marcada E desconto disponível. Retorno com erro (ex.: personagem
-   * duplicado) é exibido inline no próprio formulário.
+   * Confirmação com dados VÁLIDOS. O valor pago é registrado INTEGRAL (82ª —
+   * sem desconto dos itens). Retorno com erro (ex.: personagem duplicado) é
+   * exibido inline no próprio formulário.
    */
-  onConfirm(input: { account: string; valorPago: number; applyItemsDiscount: boolean }): { ok: boolean; error?: string } | undefined;
+  onConfirm(input: { account: string; valorPago: number }): { ok: boolean; error?: string } | undefined;
   onCancel(): void;
 }
 
@@ -101,8 +82,7 @@ export default function BazaarInlinePurchaseForm({
   characterSummary,
   accounts,
   initialAccount,
-  currentUid,
-  discount,
+  itemsValue,
   onRememberAccount,
   onConfirm,
   onCancel,
@@ -121,11 +101,8 @@ export default function BazaarInlinePurchaseForm({
   const accountInputRef = useRef<HTMLInputElement | null>(null);
   const valorPagoInputRef = useRef<HTMLInputElement | null>(null);
 
-  // ── DESCONTO DOS ITENS (71ª): preferência persistida POR USUÁRIO ─────────
-  const discountAvailable = discount.rc !== null && (discount.rc as number) > 0;
-  const [applyDiscount, setApplyDiscount] = useState(() => readPurchaseDiscountPreference(currentUid));
-  // Troca de usuário (raro com o form aberto): relê a preferência DELE.
-  useEffect(() => { setApplyDiscount(readPurchaseDiscountPreference(currentUid)); }, [currentUid]);
+  // ── VALOR DOS ITENS (82ª): só informativo — registrado à parte do custo ──
+  const itemsValueAvailable = itemsValue.rc !== null && (itemsValue.rc as number) > 0;
 
   // Foco acompanha o fluxo (mesma regra do BazarPanel): primeira inclusão
   // começa na conta; com a última conta pré-preenchida, direto no valor pago.
@@ -168,13 +145,6 @@ export default function BazaarInlinePurchaseForm({
   const valorEmpty = !valorValue;
   const formReady = accountConfirmed && !!valorValue;
 
-  // Resumo do CUSTO FINAL com o desconto aplicado — prévia transparente do
-  // que será persistido (mesma conta feita pelo App: valor pago − RC dos
-  // itens; o resultado pode ser NEGATIVO = personagem com saldo positivo).
-  const previewDiscountRc = discountAvailable && applyDiscount ? (discount.rc as number) : 0;
-  const parsedValor = /^\d+$/.test(valorValue) ? Number(valorValue) : null;
-  const finalCostPreview = parsedValor !== null && previewDiscountRc > 0 ? parsedValor - previewDiscountRc : null;
-
   function selectAccount(selected: string) {
     const normalized = selected.trim();
     setAccount(normalized);
@@ -201,7 +171,6 @@ export default function BazaarInlinePurchaseForm({
         const response = onConfirm({
           account: account.trim(),
           valorPago: Number(valorPago),
-          applyItemsDiscount: discountAvailable && applyDiscount,
         });
         if (response && !response.ok) {
           setError(response.error || "Não foi possível adicionar este personagem.");
@@ -399,41 +368,23 @@ export default function BazaarInlinePurchaseForm({
           <X size={12} strokeWidth={3} /> Cancelar
         </button>
       </div>
-      {/* ── DESCONTAR VALOR DOS ITENS (71ª) — disponível nas DUAS guias ──────
-          Caixa persistida POR USUÁRIO; desabilitada (com o motivo no título)
-          quando o personagem não tem itens com valor ou o servidor está sem
-          cotação. A prévia mostra exatamente o custo final que será salvo. */}
+      {/* ── VALOR ITENS (RC) — linha SÓ INFORMATIVA (82ª) ────────────────────
+          O valor dos itens (cotação oficial do servidor + efetivos do "Ver")
+          é REGISTRADO SEPARADO do custo, como ganho potencial do personagem
+          — o Valor Pago informado acima é salvo INTEGRAL, sem desconto. */}
       <div className="w-full basis-full flex flex-wrap items-center gap-x-3 gap-y-1">
-        <label
-          className={`inline-flex items-center gap-1.5 text-[10px] font-bold ${discountAvailable ? "text-slate-300 cursor-pointer" : "text-slate-600 cursor-not-allowed"}`}
-          title={discountAvailable
-            ? `Custo final = Valor pago − ${(discount.rc as number).toLocaleString("de-DE")} RC (valor dos itens convertido pela cotação oficial do servidor${discount.detail ? ` — ${discount.detail}` : ""}). O desconto é aplicado uma única vez, ao confirmar.`
-            : (discount.reason || "Desconto indisponível para este personagem.")}
-        >
-          <input
-            type="checkbox"
-            checked={discountAvailable && applyDiscount}
-            disabled={!discountAvailable}
-            onChange={event => {
-              const checked = event.target.checked;
-              setApplyDiscount(checked);
-              // Última escolha do usuário persistida (volta marcada/desmarcada
-              // ao reabrir o fluxo e após recarregar a página).
-              savePurchaseDiscountPreference(currentUid, checked);
-            }}
-            className="h-3.5 w-3.5 accent-emerald-500 cursor-pointer disabled:cursor-not-allowed"
-          />
-          <span>Descontar valor dos itens</span>
-          {discountAvailable && (
-            <span className="font-mono text-emerald-300">(−{(discount.rc as number).toLocaleString("de-DE")} RC)</span>
-          )}
-        </label>
-        {finalCostPreview !== null && (
+        {itemsValueAvailable ? (
           <span
-            className={`text-[10px] font-bold ${finalCostPreview < 0 ? "text-emerald-300" : "text-slate-400"}`}
-            title="Valor que será salvo como custo do personagem (Valor pago − valor dos itens em RC). Negativo = os itens valem mais do que o valor pago (saldo positivo)."
+            className="inline-flex items-center gap-1.5 text-[10px] font-bold text-slate-300"
+            title={`Valor dos itens convertido pela cotação oficial do servidor${itemsValue.detail ? ` — ${itemsValue.detail}` : ""}. Registrado SEPARADO do custo, como ganho potencial: compõe a coluna "Valor Itens (RC)" e o Total em Meus Personagens. O Valor Pago informado é salvo integral, sem nenhum desconto.`}
           >
-            Custo final: <span className="font-mono">{finalCostPreview.toLocaleString("de-DE")} RC</span>
+            <span>Valor Itens (RC):</span>
+            <span className="font-mono text-emerald-300">{(itemsValue.rc as number).toLocaleString("de-DE")} RC</span>
+            <span className="font-normal text-slate-500">— registrado como ganho potencial (não desconta do valor pago)</span>
+          </span>
+        ) : (
+          <span className="inline-flex items-center gap-1.5 text-[10px] text-slate-600" title={itemsValue.reason || "Personagem sem itens com valor nesta consulta."}>
+            Valor Itens (RC): — <span className="font-normal">({itemsValue.reason || "sem itens com valor nesta consulta"})</span>
           </span>
         )}
       </div>

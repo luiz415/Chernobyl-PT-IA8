@@ -241,7 +241,7 @@ interface Props {
   onAddPurchasedCharacter?: (character: {
     name: string; level: number; server: string; vocation: string;
     account: string; valorPago: number;
-    items?: CharacterBazaarItemsSnapshot; itemsDiscountRc?: number;
+    items?: CharacterBazaarItemsSnapshot; itemsValueRc?: number;
     soulwarCompleted?: boolean | null; sanguineCompleted?: boolean | null; cryptCompleted?: boolean | null;
   }) => { ok: boolean; error?: string };
   /** Contas existentes — MESMA lista do formulário inline das quests. */
@@ -3151,22 +3151,23 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                     <td colSpan={15} className="px-2 py-2 sm:px-3">
                       {(() => {
                         // ── Confirmação INLINE (71ª) — formulário COMPARTILHADO
-                        // da guia de quests + "Descontar valor dos itens".
-                        // Desconto: kk EFETIVO do snapshot da compra (ajustes
-                        // locais do modal "Ver" > correção manual > calculado —
-                        // exatamente o que será salvo no personagem) × cotação
-                        // OFICIAL do servidor (computeItemRC). Sem valor ou sem
-                        // cotação ⇒ caixa desabilitada com o motivo.
+                        // da guia de quests. VALOR ITENS (82ª): kk EFETIVO do
+                        // snapshot da compra (ajustes locais do modal "Ver" >
+                        // correção manual > calculado — exatamente o que será
+                        // salvo no personagem) × cotação OFICIAL do servidor
+                        // (computeItemRC), REGISTRADO SEPARADO do custo como
+                        // ganho potencial — o valor pago nunca é reduzido.
+                        // Sem valor ou sem cotação ⇒ linha com o motivo.
                         const purchaseItems = buildResultPurchaseItems(result);
-                        const discountKk = typeof purchaseItems.manualTotalKk === "number" && purchaseItems.manualTotalKk > 0
+                        const itemsKk = typeof purchaseItems.manualTotalKk === "number" && purchaseItems.manualTotalKk > 0
                           ? purchaseItems.manualTotalKk
                           : purchaseItems.totalKk;
-                        const discountRate = rateFor(result.server);
-                        const discountInfo = discountKk <= 0
-                          ? { rc: null, reason: "Personagem sem itens com valor nesta consulta — nada a descontar." }
-                          : discountRate <= 0
-                            ? { rc: null, reason: `Servidor ${result.server || "—"} sem cotação de RC configurada — defina em "RC Servidores" para habilitar o desconto.` }
-                            : { rc: computeItemRC(discountRate, discountKk), detail: `${formatKkValue(discountKk, "kk")} a ${formatKkValue(discountRate, "k")} por 1000 RC` };
+                        const itemsRate = rateFor(result.server);
+                        const itemsValueInfo = itemsKk <= 0
+                          ? { rc: null, reason: "Personagem sem itens com valor nesta consulta." }
+                          : itemsRate <= 0
+                            ? { rc: null, reason: `Servidor ${result.server || "—"} sem cotação de RC configurada — defina em "RC Servidores" para registrar o valor em RC.` }
+                            : { rc: computeItemRC(itemsRate, itemsKk), detail: `${formatKkValue(itemsKk, "kk")} a ${formatKkValue(itemsRate, "k")} por 1000 RC` };
                         return (
                           <BazaarInlinePurchaseForm
                             formId={`items_${auctionKey}`}
@@ -3174,10 +3175,9 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                             characterSummary={`${result.server || "—"} · ${result.vocation || "—"} · Lv ${result.level || 0}`}
                             accounts={purchaseAccounts || []}
                             initialAccount={inlinePurchase?.initialAccount || ""}
-                            currentUid={currentUid}
-                            discount={discountInfo}
+                            itemsValue={itemsValueInfo}
                             onRememberAccount={onRememberPurchaseAccount}
-                            onConfirm={({ account, valorPago, applyItemsDiscount }) => {
+                            onConfirm={({ account, valorPago }) => {
                               const response = onAddPurchasedCharacter?.({
                                 name: result.name,
                                 level: result.level,
@@ -3192,9 +3192,11 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                                 sanguineCompleted: result.sanguineCompleted ?? null,
                                 cryptCompleted: result.cryptCompleted ?? null,
                                 items: purchaseItems,
-                                // Desconto aplicado UMA única vez, pelo App
-                                // (custo final = valor pago − RC dos itens).
-                                ...(applyItemsDiscount && discountInfo.rc ? { itemsDiscountRc: discountInfo.rc } : {}),
+                                // VALOR ITENS (82ª): registrado SEPARADO do
+                                // custo, como ganho potencial (0 = sem cotação
+                                // no momento; o dinâmico assume quando ela
+                                // existir).
+                                itemsValueRc: itemsValueInfo.rc ?? 0,
                               });
                               if (!response?.ok) {
                                 return { ok: false, error: response?.error || "Não foi possível adicionar este personagem." };

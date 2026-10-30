@@ -6,6 +6,8 @@ import ItemSoldModal from "./ItemSoldModal";
 import { FilterMulti, FilterToggle, FilterNumber, FilterInline, type ToggleState } from "./FilterTypes";
 import { serverLabel } from "../constants/servers";
 import { isItemSaleConcluded } from "../utils/itemSale";
+import { computeCharacterItemsRc } from "../utils/characterItemsValue";
+import { SERVER_COIN_RATES_EVENT, getServerCoinRate, readLocalCoinRates } from "../utils/bazaarCoinRates";
 import { completedSgRotations, describeSgCooldown, formatSgCooldownRemaining, isSgCooldownActive } from "../utils/sanguineRotation";
 
 type NumericOp = "gte" | "lte";
@@ -52,7 +54,7 @@ interface Props {
   onViewBazaarItems?: (c: Character) => void;
 }
 
-const NUMERIC_COLUMNS = new Set(["level", "valorPago", "dropSW", "dropBakra", "dropCrypt", "valorVenda", "total"]);
+const NUMERIC_COLUMNS = new Set(["level", "valorPago", "itensRc", "dropSW", "dropBakra", "dropCrypt", "valorVenda", "total"]);
 const BOOLEAN_COLUMNS = new Set(["soulwar", "sanguine", "crypt", "vendido"]);
 const TEXT_FILTER_COLUMNS = new Set(["personagem", "dataCompra", "dataVenda", "notes"]);
 // Colunas de MÚLTIPLA seleção (FilterMulti, padrão do Painel Bazaar):
@@ -65,8 +67,8 @@ const COLLAPSED_WIDTH = 22;
 
 const DEFAULT_COL_WIDTHS: Record<string, number> = {
   account: 95, personagem: 100, servidor: 65, voc: 42, level: 48,
-  soulwar: 45, sanguine: 45, sgRot: 90, crypt: 45, pt: 45, dropSW: 70, dropBakra: 75, dropCrypt: 75, total: 75,
-  dataCompra: 80, valorPago: 75, dataVenda: 80, vendido: 55, shared: 40,
+  soulwar: 45, sanguine: 45, sgRot: 90, crypt: 45, pt: 45, dropSW: 70, dropBakra: 75, dropCrypt: 75, itensRc: 95, total: 75,
+  dataCompra: 80, valorPago: 90, dataVenda: 80, vendido: 55, shared: 40,
   itemDropadoSW: 140, itemDropadoSG: 140, itemDropadoCrypt: 150, bazaarItems: 55,
 };
 
@@ -437,12 +439,12 @@ export default function CharTable({ characters, activeParties = [], readOnly, sh
     setHiddenColumns((prev) => prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key]);
   }
 
-  // v9: nova coluna "Rot SG" (rotação atual da Sanguine + contador do
-  // cooldown do Bakragore) imediatamente após SG. O bump da chave reinicia a
+  // v10: nova coluna "Valor Itens (RC)" (82ª — valor dos itens do Bazaar
+  // como ganho potencial) entre Drop GB e Total. O bump da chave reinicia a
   // ordem personalizada UMA vez — mesmo mecanismo dos bumps anteriores
-  // (v1..v8) quando o conjunto de colunas mudou.
-  const [columnsOrder, setColumnsOrder] = usePersistedState<string[]>(storageKey("columnsOrder_v9"), [
-    "account", "personagem", "servidor", "voc", "level", "soulwar", "sanguine", "sgRot", "crypt", "pt", "itemDropadoSW", "itemDropadoSG", "itemDropadoCrypt", "dropSW", "dropBakra", "dropCrypt", "total", "dataCompra", "valorPago", "dataVenda", "vendido", "shared"
+  // (v1..v9) quando o conjunto de colunas mudou.
+  const [columnsOrder, setColumnsOrder] = usePersistedState<string[]>(storageKey("columnsOrder_v10"), [
+    "account", "personagem", "servidor", "voc", "level", "soulwar", "sanguine", "sgRot", "crypt", "pt", "itemDropadoSW", "itemDropadoSG", "itemDropadoCrypt", "dropSW", "dropBakra", "dropCrypt", "itensRc", "total", "dataCompra", "valorPago", "dataVenda", "vendido", "shared"
   ]);
 
   const characterInParty = useMemo(() => {
@@ -581,6 +583,26 @@ export default function CharTable({ characters, activeParties = [], readOnly, sh
       </span>
     );
   }
+
+  // ── VALOR ITENS (RC) — 82ª tarefa ──────────────────────────────────────────
+  // Cotações OFICIAIS lidas do espelho local (mesma fonte do restante do
+  // app); o evento global re-renderiza quando qualquer tela grava uma
+  // cotação — o potencial dos itens acompanha em tempo real, sem nenhuma
+  // leitura nova ao Firestore.
+  const [coinRatesVersion, setCoinRatesVersion] = useState(0);
+  useEffect(() => {
+    const bump = () => setCoinRatesVersion(v => v + 1);
+    window.addEventListener(SERVER_COIN_RATES_EVENT, bump);
+    return () => window.removeEventListener(SERVER_COIN_RATES_EVENT, bump);
+  }, []);
+  const coinRates = useMemo(() => readLocalCoinRates(), [coinRatesVersion]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Decomposição do Valor Itens (RC) do personagem — fonte única
+  // (computeCharacterItemsRc): vendidos pelo RC REAL da venda + pendentes
+  // pela cotação vigente. null = legado/sem itens (coluna "—", Total intacto).
+  const itemsRcOf = useCallback(
+    (c: Character) => computeCharacterItemsRc(c, getServerCoinRate(coinRates, c.bazaarItems?.server)),
+    [coinRates]
+  );
 
   const columns: ColumnDef[] = useMemo(() => [
     {
@@ -894,17 +916,72 @@ export default function CharTable({ characters, activeParties = [], readOnly, sh
       },
     },
     {
+      // ── VALOR ITENS (RC) — 82ª: itens do Bazaar como GANHO POTENCIAL ─────
+      // Vendidos entram pelo RC REAL da venda (registro da época); pendentes
+      // pela cotação oficial VIGENTE do servidor. Personagens LEGADOS
+      // (importados quando existia o desconto no custo) exibem "—" e nada é
+      // recalculado — valores históricos preservados.
+      key: "itensRc", label: "Valor Itens (RC)", align: "center",
+      get: (c: Character) => {
+        if (lockedQuestFinancialIds.has(c.id)) return 0;
+        const breakdown = itemsRcOf(c);
+        return breakdown ? breakdown.totalRc : c.bazaarItems ? -1 : 0;
+      },
+      render: (c: Character) => {
+        if (lockedQuestFinancialIds.has(c.id)) {
+          return <span title="Valor dos itens não se aplica ao dono original: os resultados financeiros pertencem ao comprador" className="inline-flex items-center gap-1 text-[11px] font-bold text-slate-500"><Lock size={10} className="text-violet-300" /> —</span>;
+        }
+        const breakdown = itemsRcOf(c);
+        if (!breakdown) {
+          return (
+            <span
+              className="text-slate-600 text-[11px]"
+              title={c.bazaarItems
+                ? "Registro anterior à separação Valor Pago × Valor Itens (o antigo desconto pode ter sido aplicado ao custo) — valores históricos preservados, sem recálculo."
+                : "Personagem sem itens do Bazaar associados."}
+            >
+              —
+            </span>
+          );
+        }
+        const parts = [
+          breakdown.soldCount > 0 ? `${breakdown.realizedRc.toLocaleString("de-DE")} RC realizados na venda de ${breakdown.soldCount} item(ns)` : "",
+          breakdown.pendingKk > 0
+            ? breakdown.rateKk > 0
+              ? `${breakdown.potentialRc.toLocaleString("de-DE")} RC potenciais (${String(breakdown.pendingKk).replace(".", ",")}kk pendentes a ${String(breakdown.rateKk).replace(".", ",")}k por 1000 RC)`
+              : `pendentes sem cotação de RC para ${c.bazaarItems?.server || "o servidor"}${breakdown.potentialRc > 0 ? ` — exibindo o valor registrado na importação (${breakdown.potentialRc.toLocaleString("de-DE")} RC)` : ""}`
+            : "",
+        ].filter(Boolean).join(" + ");
+        return (
+          <span
+            className={`tabular-nums text-[11px] font-medium ${breakdown.totalRc > 0 ? "text-teal-300" : "text-slate-500"}`}
+            title={`Ganho potencial dos itens do Bazaar — compõe o Total sem reduzir o Valor Pago. ${parts || "Sem itens com valor."}`}
+          >
+            {displayRC(breakdown.totalRc)}
+            {breakdown.soldCount > 0 && <Check size={9} className="inline-block ml-0.5 text-emerald-400" aria-label="Inclui vendas registradas" />}
+          </span>
+        );
+      },
+    },
+    {
       key: "total", label: "Total", align: "center",
       // A negociação transfere a perspectiva financeira ao comprador; o dono
       // original não pode ver nem usar um Total normal para esse Character.
-      get: (c) => lockedQuestFinancialIds.has(c.id) ? 0 : calcTotal(c),
+      // 82ª: no modelo novo o Total soma o Valor Itens (RC) — vendidos pelo
+      // RC real, pendentes pela cotação vigente; legados seguem no calcTotal
+      // de sempre (fonte única computeCharacterItemsRc ⇒ zero dupla contagem).
+      get: (c) => lockedQuestFinancialIds.has(c.id) ? 0 : calcTotal(c) + (itemsRcOf(c)?.totalRc || 0),
       render: (c) => {
         if (lockedQuestFinancialIds.has(c.id)) {
           return <span title="Total não se aplica ao dono original: os resultados financeiros pertencem ao comprador" className="inline-flex items-center gap-1 text-[11px] font-bold text-slate-500"><Lock size={10} className="text-violet-300" /> —</span>;
         }
-        const t = calcTotal(c);
+        const itemsRc = itemsRcOf(c)?.totalRc || 0;
+        const t = calcTotal(c) + itemsRc;
         return (
-          <span className={`tabular-nums font-bold text-[11px] ${t === 0 ? "text-slate-500" : t > 0 ? "text-emerald-400" : "text-rose-400"}`}>
+          <span
+            className={`tabular-nums font-bold text-[11px] ${t === 0 ? "text-slate-500" : t > 0 ? "text-emerald-400" : "text-rose-400"}`}
+            title={itemsRc > 0 ? `Inclui ${itemsRc.toLocaleString("de-DE")} RC do Valor Itens (vendidos pelo valor real + pendentes pela cotação vigente)` : undefined}
+          >
             {displayRC(t)}
           </span>
         );
@@ -917,7 +994,7 @@ export default function CharTable({ characters, activeParties = [], readOnly, sh
         <span className="tabular-nums text-slate-200 font-medium text-[10px]">{formatDateBR(c.dataCompra)}</span>
       ),
     }, {
-      key: "valorPago", label: "Custo", align: "center" as const,
+      key: "valorPago", label: "Valor Pago (RC)", align: "center" as const,
       get: (c: Character) => c.valorPago,
       render: (c: Character) => <span className="tabular-nums text-slate-300 text-[11px]">{displayRC(c.valorPago)}</span>,
     }] : []),
@@ -934,7 +1011,7 @@ export default function CharTable({ characters, activeParties = [], readOnly, sh
         <span className="tabular-nums text-amber-400 font-medium text-[11px]">{displayRC(c.valorVenda)}</span>
       ),
     }, {
-      key: "valorPago", label: "Custo", align: "center" as const,
+      key: "valorPago", label: "Valor Pago (RC)", align: "center" as const,
       get: (c: Character) => c.valorPago,
       render: (c: Character) => <span className="tabular-nums text-slate-300 text-[11px]">{displayRC(c.valorPago)}</span>,
     }] : []),
@@ -1009,7 +1086,7 @@ export default function CharTable({ characters, activeParties = [], readOnly, sh
       ),
     }] : []),
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  ], [accountVisible, personagemVisible, showSaleDate, copiedId, copiedCharId, onToggleShare, characterInParty, onCharacterInlineChange, probableMarkers, negotiatedCharacterIds, lockedQuestFinancialIds, showBazaarItemsColumn, onViewBazaarItems, questConfirm, readOnly]);
+  ], [accountVisible, personagemVisible, showSaleDate, copiedId, copiedCharId, onToggleShare, characterInParty, onCharacterInlineChange, probableMarkers, negotiatedCharacterIds, lockedQuestFinancialIds, showBazaarItemsColumn, onViewBazaarItems, questConfirm, readOnly, itemsRcOf]);
 
   const orderedColumns = useMemo(() => {
     const baseCols = [...columns];
