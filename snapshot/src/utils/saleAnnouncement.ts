@@ -21,6 +21,7 @@
 // ============================================================================
 
 import { formatKkValue } from "./itemSale";
+import { parseTieredItemName } from "./bazaarWatchedItems";
 
 /** Organização dos itens no texto gerado. */
 export type SaleTextLayout = "lines" | "inline";
@@ -143,6 +144,35 @@ export interface SaleTextItemInput {
   /** Origem do item (76ª) — usada pelo filtro de origens da config.
    *  Ausente = o item passa sempre (compatibilidade com a 75ª). */
   origin?: SaleTextOrigin;
+  /** Tier do item (79ª) — exibido como "T1"/"T2"… após o nome. Também é
+   *  reconhecido o sufixo "[Tier x]" embutido no próprio nome (snapshot do
+   *  Bazaar) — nunca duplicado na apresentação. */
+  tier?: number;
+}
+
+/**
+ * Title Case de APRESENTAÇÃO (79ª): primeira letra de cada palavra em
+ * maiúscula ("winged boots" → "Winged Boots"). Só eleva a inicial — o
+ * restante do texto permanece como está (nada é convertido para minúscula),
+ * e o dado original armazenado nunca é modificado.
+ */
+export function titleCaseItemName(name: string): string {
+  return String(name || "").replace(/(^|[\s(])\p{L}/gu, part => part.toLocaleUpperCase("pt-BR"));
+}
+
+/**
+ * Nome de APRESENTAÇÃO de um item do anúncio (79ª): Title Case + Tier no
+ * formato "T<n>" após o nome, quando houver. O Tier vem do campo `tier` OU
+ * do sufixo "[Tier x]" embutido no nome (itens do Bazaar) — as duas fontes
+ * são unificadas para NUNCA duplicar ("Spiritthorn Helmet [Tier 2]" com
+ * tier=2 sai como "Spiritthorn Helmet T2", uma única vez). Sem Tier, sai
+ * apenas o nome. Pura apresentação: o item original não é alterado.
+ */
+export function saleTextDisplayName(item: SaleTextItemInput): string {
+  const parsed = parseTieredItemName(String(item.name || "").trim());
+  const tier = Math.max(Math.floor(Number(item.tier) || 0), parsed.tier);
+  const base = titleCaseItemName(parsed.baseName);
+  return tier > 0 ? `${base} T${tier}` : base;
 }
 
 /**
@@ -163,9 +193,11 @@ function applyHighlight(name: string, highlight: SaleTextHighlight): string {
   return name;
 }
 
-/** Linha/trecho de UM item conforme a config (nome [xN] [— valor]). */
+/** Linha/trecho de UM item conforme a config (nome [T<n>] [xN] [— valor]).
+ *  O nome apresentado (79ª) sai em Title Case com o Tier integrado — o
+ *  destaque escolhido envolve o conjunto ("*Winged Boots T1*"). */
 export function formatSaleTextItem(item: SaleTextItemInput, config: SaleTextConfig): string {
-  let text = applyHighlight(String(item.name || "").trim(), config.highlight);
+  let text = applyHighlight(saleTextDisplayName(item), config.highlight);
   const amount = Number(item.amount) || 0;
   if (config.includeAmount && amount > 1) text += ` x${amount}`;
   const valueKk = Number(item.valueKk) || 0;

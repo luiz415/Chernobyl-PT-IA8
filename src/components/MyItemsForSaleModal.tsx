@@ -666,6 +666,10 @@ export default function MyItemsForSaleModal({
       valueKk: itemConsideredKkOf(item),
       amount: Number(item.amount) || 0,
       origin: item.quest,
+      // Tier (79ª) — apresentado como "T<n>" após o nome no texto gerado.
+      // O núcleo também reconhece o sufixo "[Tier x]" do próprio nome
+      // (snapshot do Bazaar) e unifica as duas fontes sem duplicar.
+      tier: Number(item.tier) || 0,
     }));
   }
 
