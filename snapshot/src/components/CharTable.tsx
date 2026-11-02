@@ -54,7 +54,7 @@ interface Props {
   onViewBazaarItems?: (c: Character) => void;
 }
 
-const NUMERIC_COLUMNS = new Set(["level", "valorPago", "itensRc", "dropSW", "dropBakra", "dropCrypt", "valorVenda", "total"]);
+const NUMERIC_COLUMNS = new Set(["level", "valorPago", "dropSW", "dropBakra", "dropCrypt", "valorVenda", "total"]);
 const BOOLEAN_COLUMNS = new Set(["soulwar", "sanguine", "crypt", "vendido"]);
 const TEXT_FILTER_COLUMNS = new Set(["personagem", "dataCompra", "dataVenda", "notes"]);
 // Colunas de MÚLTIPLA seleção (FilterMulti, padrão do Painel Bazaar):
@@ -67,9 +67,9 @@ const COLLAPSED_WIDTH = 22;
 
 const DEFAULT_COL_WIDTHS: Record<string, number> = {
   account: 95, personagem: 100, servidor: 65, voc: 42, level: 48,
-  soulwar: 45, sanguine: 45, sgRot: 90, crypt: 45, pt: 45, dropSW: 70, dropBakra: 75, dropCrypt: 75, itensRc: 95, total: 75,
+  soulwar: 45, sanguine: 45, sgRot: 90, crypt: 45, pt: 45, dropSW: 70, dropBakra: 75, dropCrypt: 75, total: 75,
   dataCompra: 80, valorPago: 90, dataVenda: 80, vendido: 55, shared: 40,
-  itemDropadoSW: 140, itemDropadoSG: 140, itemDropadoCrypt: 150, bazaarItems: 55,
+  itemDropadoSW: 140, itemDropadoSG: 140, itemDropadoCrypt: 150, bazaarItems: 105,
 };
 
 export const SOULWAR_ITEMS = [
@@ -439,12 +439,13 @@ export default function CharTable({ characters, activeParties = [], readOnly, sh
     setHiddenColumns((prev) => prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key]);
   }
 
-  // v10: nova coluna "Valor Itens (RC)" (82ª — valor dos itens do Bazaar
-  // como ganho potencial) entre Drop GB e Total. O bump da chave reinicia a
-  // ordem personalizada UMA vez — mesmo mecanismo dos bumps anteriores
-  // (v1..v9) quando o conjunto de colunas mudou.
-  const [columnsOrder, setColumnsOrder] = usePersistedState<string[]>(storageKey("columnsOrder_v10"), [
-    "account", "personagem", "servidor", "voc", "level", "soulwar", "sanguine", "sgRot", "crypt", "pt", "itemDropadoSW", "itemDropadoSG", "itemDropadoCrypt", "dropSW", "dropBakra", "dropCrypt", "itensRc", "total", "dataCompra", "valorPago", "dataVenda", "vendido", "shared"
+  // v11 (84ª): a coluna independente "Valor Itens (RC)" foi REMOVIDA — o
+  // valor passou a ser exibido dentro da coluna "Itens", à frente do botão
+  // "Ver". O bump da chave reinicia a ordem personalizada UMA vez — mesmo
+  // mecanismo dos bumps anteriores (v1..v10) quando o conjunto de colunas
+  // mudou.
+  const [columnsOrder, setColumnsOrder] = usePersistedState<string[]>(storageKey("columnsOrder_v11"), [
+    "account", "personagem", "servidor", "voc", "level", "soulwar", "sanguine", "sgRot", "crypt", "pt", "itemDropadoSW", "itemDropadoSG", "itemDropadoCrypt", "dropSW", "dropBakra", "dropCrypt", "total", "dataCompra", "valorPago", "dataVenda", "vendido", "shared"
   ]);
 
   const characterInParty = useMemo(() => {
@@ -918,51 +919,6 @@ export default function CharTable({ characters, activeParties = [], readOnly, sh
       },
     },
     {
-      // ── VALOR ITENS (RC) — 82ª: itens do Bazaar como GANHO POTENCIAL ─────
-      // Vendidos entram pelo RC REAL da venda (registro da época); pendentes
-      // pela cotação oficial VIGENTE do servidor. Personagens LEGADOS
-      // (importados quando existia o desconto no custo) exibem "—" e nada é
-      // recalculado — valores históricos preservados.
-      key: "itensRc", label: "Valor Itens (RC)", align: "center",
-      // 83ª: TODO personagem com snapshot de itens entra no cálculo —
-      // inclusive os adicionados antes da 82ª (a inclusão na lista nunca
-      // faz os itens deixarem de contar). "—" apenas sem snapshot.
-      get: (c: Character) => {
-        if (lockedQuestFinancialIds.has(c.id)) return 0;
-        return itemsRcOf(c)?.totalRc ?? 0;
-      },
-      render: (c: Character) => {
-        if (lockedQuestFinancialIds.has(c.id)) {
-          return <span title="Valor dos itens não se aplica ao dono original: os resultados financeiros pertencem ao comprador" className="inline-flex items-center gap-1 text-[11px] font-bold text-slate-500"><Lock size={10} className="text-violet-300" /> —</span>;
-        }
-        const breakdown = itemsRcOf(c);
-        if (!breakdown) {
-          return (
-            <span className="text-slate-600 text-[11px]" title="Personagem sem itens do Bazaar associados.">
-              —
-            </span>
-          );
-        }
-        const parts = [
-          breakdown.soldCount > 0 ? `${breakdown.realizedRc.toLocaleString("de-DE")} RC realizados na venda de ${breakdown.soldCount} item(ns)` : "",
-          breakdown.pendingKk > 0
-            ? breakdown.rateKk > 0
-              ? `${breakdown.potentialRc.toLocaleString("de-DE")} RC potenciais (${String(breakdown.pendingKk).replace(".", ",")}kk pendentes a ${String(breakdown.rateKk).replace(".", ",")}k por 1000 RC)`
-              : `pendentes sem cotação de RC para ${c.bazaarItems?.server || "o servidor"}${breakdown.potentialRc > 0 ? ` — exibindo o valor registrado na importação (${breakdown.potentialRc.toLocaleString("de-DE")} RC)` : ""}`
-            : "",
-        ].filter(Boolean).join(" + ");
-        return (
-          <span
-            className={`tabular-nums text-[11px] font-medium ${breakdown.totalRc > 0 ? "text-teal-300" : "text-slate-500"}`}
-            title={`Ganho potencial dos itens do Bazaar — compõe o Total sem reduzir o Valor Pago. ${parts || "Sem itens com valor."}`}
-          >
-            {displayRC(breakdown.totalRc)}
-            {breakdown.soldCount > 0 && <Check size={9} className="inline-block ml-0.5 text-emerald-400" aria-label="Inclui vendas registradas" />}
-          </span>
-        );
-      },
-    },
-    {
       key: "total", label: "Total", align: "center",
       // A negociação transfere a perspectiva financeira ao comprador; o dono
       // original não pode ver nem usar um Total normal para esse Character.
@@ -1071,19 +1027,55 @@ export default function CharTable({ characters, activeParties = [], readOnly, sh
     // Sem snapshot associado, exibe "—".
     ...(showBazaarItemsColumn && !showSaleDate ? [{
       key: "bazaarItems", label: "Itens", align: "center" as const,
-      get: (c: Character) => (c.bazaarItems ? 1 : 0),
-      render: (c: Character) => c.bazaarItems ? (
-        <button
-          type="button"
-          onClick={(e) => { e.stopPropagation(); onViewBazaarItems?.(c); }}
-          className="inline-flex items-center gap-1 rounded border border-fuchsia-500/30 bg-fuchsia-500/10 px-1.5 py-0.5 text-[9px] font-black text-fuchsia-300 hover:bg-fuchsia-500/20 transition-colors cursor-pointer"
-          title="Ver os itens do Bazaar associados a este personagem na compra (sem nova consulta)"
-        >
-          <Eye size={10} /> Ver
-        </button>
-      ) : (
-        <span className="text-slate-600" title="Sem itens do Bazaar associados a este personagem">—</span>
-      ),
+      // 84ª: a coluna independente "Valor Itens (RC)" foi removida — o valor
+      // total dos itens em RC passou a ser exibido AQUI, imediatamente à
+      // frente do botão "Ver" (fonte única computeCharacterItemsRc: vendidos
+      // pelo RC REAL da venda + pendentes pela cotação vigente, respeitando
+      // os valores personalizados). Ordenação da coluna = valor em RC.
+      get: (c: Character) => {
+        if (!c.bazaarItems) return -1;
+        if (lockedQuestFinancialIds.has(c.id)) return 0;
+        return itemsRcOf(c)?.totalRc ?? 0;
+      },
+      render: (c: Character) => {
+        if (!c.bazaarItems) {
+          return <span className="text-slate-600" title="Sem itens do Bazaar associados a este personagem">—</span>;
+        }
+        const locked = lockedQuestFinancialIds.has(c.id);
+        const breakdown = locked ? null : itemsRcOf(c);
+        const parts = breakdown ? [
+          breakdown.soldCount > 0 ? `${breakdown.realizedRc.toLocaleString("de-DE")} RC realizados na venda de ${breakdown.soldCount} item(ns)` : "",
+          breakdown.pendingKk > 0
+            ? breakdown.rateKk > 0
+              ? `${breakdown.potentialRc.toLocaleString("de-DE")} RC potenciais (${String(breakdown.pendingKk).replace(".", ",")}kk pendentes a ${String(breakdown.rateKk).replace(".", ",")}k por 1000 RC)`
+              : `pendentes sem cotação de RC para ${c.bazaarItems?.server || "o servidor"}${breakdown.potentialRc > 0 ? ` — exibindo o valor registrado na importação (${breakdown.potentialRc.toLocaleString("de-DE")} RC)` : ""}`
+            : "",
+        ].filter(Boolean).join(" + ") : "";
+        return (
+          <span className="inline-flex flex-wrap items-center justify-center gap-x-1.5 gap-y-0.5 min-w-0">
+            {/* Valor Itens (RC) — compacto, ANTES do botão "Ver" (84ª). */}
+            {locked ? (
+              <span title="Valor dos itens não se aplica ao dono original: os resultados financeiros pertencem ao comprador" className="inline-flex items-center gap-0.5 text-[10px] font-bold text-slate-500"><Lock size={9} className="text-violet-300" /> —</span>
+            ) : breakdown && (
+              <span
+                className={`tabular-nums text-[10px] font-semibold whitespace-nowrap ${breakdown.totalRc > 0 ? "text-teal-300" : "text-slate-500"}`}
+                title={`Valor Itens (RC) — ganho potencial dos itens do Bazaar; compõe o Total sem reduzir o Valor Pago. ${parts || "Sem itens com valor."}`}
+              >
+                {displayRC(breakdown.totalRc)}
+                {breakdown.soldCount > 0 && <Check size={8} className="inline-block ml-0.5 text-emerald-400" aria-label="Inclui vendas registradas" />}
+              </span>
+            )}
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); onViewBazaarItems?.(c); }}
+              className="inline-flex items-center gap-1 rounded border border-fuchsia-500/30 bg-fuchsia-500/10 px-1.5 py-0.5 text-[9px] font-black text-fuchsia-300 hover:bg-fuchsia-500/20 transition-colors cursor-pointer"
+              title="Ver os itens do Bazaar associados a este personagem na compra (sem nova consulta)"
+            >
+              <Eye size={10} /> Ver
+            </button>
+          </span>
+        );
+      },
     }] : []),
   // eslint-disable-next-line react-hooks/exhaustive-deps
   ], [accountVisible, personagemVisible, showSaleDate, copiedId, copiedCharId, onToggleShare, characterInParty, onCharacterInlineChange, probableMarkers, negotiatedCharacterIds, lockedQuestFinancialIds, showBazaarItemsColumn, onViewBazaarItems, questConfirm, readOnly, itemsRcOf]);

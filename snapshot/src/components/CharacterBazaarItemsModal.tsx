@@ -152,6 +152,21 @@ export default function CharacterBazaarItemsModal({ character, onToggleForSale, 
   // Troca de personagem: descarta confirmação/feedback pendentes.
   useEffect(() => { setUpdateConfirm(null); setUpdateDone(null); }, [character]);
 
+  // ── COPIAR NOME DO ITEM (84ª tarefa) ───────────────────────────────────────
+  // O nome de cada item é um botão de cópia: copia SOMENTE o nome EXATO
+  // exibido (sem valores/infos extras) — MESMO padrão visual/comportamental
+  // do modal "Itens à Venda" (hover discreto + ✓ verde por 1,5s). Hook
+  // declarado ANTES do retorno condicional, como os demais.
+  const [copiedItemIndex, setCopiedItemIndex] = useState<number | null>(null);
+  const copyTimerRef = useRef<number | null>(null);
+  useEffect(() => () => { if (copyTimerRef.current !== null) window.clearTimeout(copyTimerRef.current); }, []);
+  async function copyItemName(name: string, index: number) {
+    try { await navigator.clipboard.writeText(name); } catch { /* clipboard bloqueado — sem feedback de sucesso */ return; }
+    setCopiedItemIndex(index);
+    if (copyTimerRef.current !== null) window.clearTimeout(copyTimerRef.current);
+    copyTimerRef.current = window.setTimeout(() => { setCopiedItemIndex(null); copyTimerRef.current = null; }, 1500);
+  }
+
   if (!character || !snapshot) return null;
 
   function confirmOfficialUpdate() {
@@ -280,7 +295,21 @@ export default function CharacterBazaarItemsModal({ character, onToggleForSale, 
                 return (
                 <Fragment key={`${match.foundName}-${index}`}>
                 <tr className={`border-b border-[var(--th-line)]/25 ${rowConfirm ? "!border-b-0 bg-amber-500/5" : ""}`}>
-                  <td className="px-1.5 py-1.5 text-left font-bold text-slate-100">{match.foundName}</td>
+                  <td className="px-1.5 py-1.5 text-left">
+                    {/* COPIAR NOME (84ª): copia SÓ o nome exato do item —
+                        mesmo padrão do modal "Itens à Venda" (✓ 1,5s). Não
+                        interfere nas demais ações da linha (À venda/
+                        Atualizar seguem em células próprias). */}
+                    <button
+                      type="button"
+                      onClick={() => { void copyItemName(match.foundName, index); }}
+                      className="inline-flex items-center gap-1 min-w-0 max-w-full rounded px-0.5 py-0.5 text-left font-bold text-slate-100 hover:bg-white/5 transition-colors cursor-pointer"
+                      title="Clique para copiar o nome do item"
+                    >
+                      <span className="truncate">{match.foundName}</span>
+                      {copiedItemIndex === index && <Check size={12} className="text-emerald-400 flex-shrink-0" />}
+                    </button>
+                  </td>
                   <td className="px-1.5 py-1.5 text-slate-300">{match.watchedName}</td>
                   <td className="px-1.5 py-1.5 text-right font-mono text-slate-200">{formatKkValue(match.baseValueKk, "kk")}</td>
                   <td className="px-1.5 py-1.5 text-center font-mono">
