@@ -135,6 +135,12 @@ interface Props {
     retryCounts: BazaarRetryCounts,
     method: BazaarMethod,
     questSource: BazaarQuestSource,
+    /**
+     * "Forçar Consulta": quando true, ESTA consulta inicia sem verificar a
+     * quantidade de jogadores online. Sempre false quando o fluxo não exibe
+     * a opção (`allowForceQuery` ausente) ou quando a caixa está desmarcada.
+     */
+    forceQuery: boolean,
   ) => void;
   onCancel: () => void;
   /**
@@ -144,6 +150,13 @@ interface Props {
    * Ausente/undefined = comportamento atual, intacto.
    */
   forcedMethod?: BazaarMethod;
+  /**
+   * Exibe a caixa "Forçar Consulta" — SOMENTE nos fluxos cuja listagem passa
+   * pela verificação de jogadores online (Quests e Itens). O Histórico não a
+   * possui, então a opção não aparece lá (não teria efeito algum).
+   * Ausente/undefined = caixa oculta e comportamento atual, intacto.
+   */
+  allowForceQuery?: boolean;
 }
 
 /**
@@ -161,7 +174,7 @@ const BROWSER_NOTES: Record<string, string> = {
 /** Ordem de exibição, do mais eficaz para o menos eficaz. */
 const BROWSER_ORDER = ["webkit", "firefox", "edge", "chrome"];
 
-export default function BazaarBrowserModal({ open, onConfirm, onCancel, forcedMethod }: Props) {
+export default function BazaarBrowserModal({ open, onConfirm, onCancel, forcedMethod, allowForceQuery }: Props) {
   const [browsers, setBrowsers] = useState<BazaarBrowserOption[]>([]);
   const [selected, setSelected] = useState<string>(() => loadUIState(BAZAAR_BROWSER_KEY, "webkit"));
   // Ordem de preferência para o RETRY (independente do navegador principal).
@@ -203,6 +216,10 @@ export default function BazaarBrowserModal({ open, onConfirm, onCancel, forcedMe
   const [loadError, setLoadError] = useState("");
   // Perfil limpo: desativado por padrão, vale só para esta consulta.
   const [cleanProfile, setCleanProfile] = useState(false);
+  // "Forçar Consulta": desativado por padrão e NUNCA persistido — a opção
+  // vale exclusivamente para a consulta iniciada agora pelo usuário; a
+  // próxima abertura do modal volta sempre desmarcada (regra global intacta).
+  const [forceQuery, setForceQuery] = useState(false);
   const [clearState, setClearState] = useState<"idle" | "working" | "done">("idle");
   // Estado da sessão do RubinOT no perfil do navegador escolhido.
   // Apenas metadados — nenhum valor de cookie e nenhuma credencial.
@@ -222,6 +239,8 @@ export default function BazaarBrowserModal({ open, onConfirm, onCancel, forcedMe
       setLoadError("");
       setClearState("idle");
       setCleanProfile(false);
+      // Cada consulta começa SEM o force: a opção é por consulta, nunca global.
+      setForceQuery(false);
       setPrepareState("idle");
       try {
         const { ipcRenderer } = (window as any).require("electron");
@@ -304,7 +323,9 @@ export default function BazaarBrowserModal({ open, onConfirm, onCancel, forcedMe
     // Histórico) e é uma preferência ÚNICA compartilhada — gravar sempre
     // mantém as consultas consistentes entre si.
     saveUIState(BAZAAR_QUEST_SOURCE_KEY, questSource);
-    onConfirm(selected, order, cleanProfile, retryBrowsers, speedMode, retryCounts, forcedMethod || method, questSource);
+    // "Forçar Consulta" só é repassado quando o fluxo exibe a opção — fluxos
+    // sem a caixa (ex.: Histórico) enviam sempre false, preservando o padrão.
+    onConfirm(selected, order, cleanProfile, retryBrowsers, speedMode, retryCounts, forcedMethod || method, questSource, allowForceQuery === true && forceQuery);
   }
 
   /**
@@ -859,6 +880,33 @@ export default function BazaarBrowserModal({ open, onConfirm, onCancel, forcedMe
                   <Globe size={11} /> {prepareState === "checking" ? "Abrindo..." : "Preparar sessão do RubinOT"}
                 </button>
               )}
+            </div>
+          )}
+
+          {/* FORÇAR CONSULTA — exibida SOMENTE nos fluxos que passam pela
+              verificação de jogadores online (Quests e Itens). Vale só para a
+              consulta iniciada agora: nunca é persistida e ignora
+              EXCLUSIVAMENTE a checagem de jogadores online — Cloudflare,
+              carregamento da página do Bazaar e API continuam obrigatórios. */}
+          {!isLoading && !loadError && allowForceQuery === true && (
+            <div className="rounded-lg border border-amber-500/30 bg-amber-500/[0.04] px-3 py-2">
+              <label className="flex items-start gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={forceQuery}
+                  onChange={event => setForceQuery(event.target.checked)}
+                  className="mt-0.5 h-3.5 w-3.5 flex-shrink-0 accent-amber-500 cursor-pointer"
+                />
+                <span className="min-w-0">
+                  <span className="block text-[11px] font-bold text-amber-300">Forçar Consulta</span>
+                  <span className="block text-[10px] leading-snug text-slate-500">
+                    Inicia esta consulta sem verificar a quantidade de jogadores
+                    online (mínimo de 1000). Todas as demais validações continuam
+                    ativas. Vale somente para esta consulta — a próxima volta ao
+                    comportamento padrão.
+                  </span>
+                </span>
+              </label>
             </div>
           )}
 

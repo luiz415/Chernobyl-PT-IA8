@@ -3124,7 +3124,7 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
     }
   }
 
-  async function handleFetchBazaar(options?: { filtersOverride?: Partial<BazarConsultationFilters>; browserKey?: string; browserOrder?: string[]; cleanProfile?: boolean; retryBrowsers?: string[]; retryCounts?: BazaarRetryCounts; speedMode?: BazaarSpeedMode; method?: BazaarMethod; questSource?: BazaarQuestSource; autoRun?: boolean }) {
+  async function handleFetchBazaar(options?: { filtersOverride?: Partial<BazarConsultationFilters>; browserKey?: string; browserOrder?: string[]; cleanProfile?: boolean; retryBrowsers?: string[]; retryCounts?: BazaarRetryCounts; speedMode?: BazaarSpeedMode; method?: BazaarMethod; questSource?: BazaarQuestSource; autoRun?: boolean; forceQuery?: boolean }) {
     if (!isBossUser) {
       setError("Apenas usuários Boss podem iniciar uma nova consulta do Bazaar.");
       return;
@@ -3222,6 +3222,10 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
         // Auto-Bazaar: a pré-validação de disponibilidade aguarda o servidor
         // (recarga a cada 1 min) em vez de abortar; manual aborta e informa.
         autoRun: options?.autoRun === true,
+        // "Forçar Consulta" (checkbox do modal): SOMENTE esta consulta pula a
+        // verificação de jogadores online. Auto-Bazaar e consultas sem a
+        // caixa marcada seguem o fluxo padrão (flag ausente/false).
+        forceQuery: options?.forceQuery === true,
       }) as BazaarFetchResult;
       // Qualquer falha aqui (rede, Cloudflare, janela fechada, cancelamento)
       // encerra o fluxo ANTES de qualquer escrita no Firestore.
@@ -5856,10 +5860,11 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
           escolhido. */}
       <BazaarBrowserModal
         open={isBrowserModalOpen}
+        allowForceQuery
         onCancel={() => setIsBrowserModalOpen(false)}
-        onConfirm={(browserKey, browserOrder, cleanProfile, retryBrowsers, speedMode, retryCounts, method, questSource) => {
+        onConfirm={(browserKey, browserOrder, cleanProfile, retryBrowsers, speedMode, retryCounts, method, questSource, forceQuery) => {
           setIsBrowserModalOpen(false);
-          void handleFetchBazaar({ browserKey, browserOrder, cleanProfile, retryBrowsers, speedMode, retryCounts, method, questSource });
+          void handleFetchBazaar({ browserKey, browserOrder, cleanProfile, retryBrowsers, speedMode, retryCounts, method, questSource, forceQuery });
         }}
       />
 

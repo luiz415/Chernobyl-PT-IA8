@@ -4457,7 +4457,7 @@ async function readRubinotOnlineCountWithGrace(page, maxWaitMs = 5000) {
  * consulta prossegue sozinha, sem qualquer ação manual. O botão "Concluir
  * agora" continua funcionando durante a espera (parada cooperativa).
  */
-async function ensureRubinotServerAvailability(progressSender, context, { autoRun = false } = {}) {
+async function ensureRubinotServerAvailability(progressSender, context, { autoRun = false, skipOnlineCheck = false } = {}) {
   const label = 'bazaar-availability';
   const startedAt = Date.now();
   let attempt = 0;
@@ -4474,6 +4474,23 @@ async function ensureRubinotServerAvailability(progressSender, context, { autoRu
     // reutilizamos como parte da verificação de disponibilidade.
     const session = await ensureRubinotSessionReady(context, null, attempt === 1 ? 'bazaar-session' : `${label}-retry-${attempt}`);
     lastSession = session;
+
+    // FORÇAR CONSULTA (opção marcada pelo Boss no modal, válida SOMENTE para
+    // esta consulta): pula EXCLUSIVAMENTE a verificação de jogadores online
+    // (leitura do número na página + mínimo exigido). A validação de sessão
+    // acima (Cloudflare + DOM do Bazaar + API da listagem) NÃO é afetada —
+    // sem ela a consulta é tecnicamente impossível — e o restante do fluxo
+    // (fila, retries, parada manual) permanece idêntico.
+    if (session.ok && skipOnlineCheck) {
+      rubinotDiag(label, 'Forçar Consulta: verificação de jogadores online IGNORADA a pedido do Boss (vale só para esta consulta).', {
+        attempt,
+        autoRun,
+        sessionOk: true,
+        minimo: RUBINOT_MIN_ONLINE_PLAYERS,
+        elapsedMs: Date.now() - startedAt,
+      });
+      return { ok: true, session, onlineCount: null, onlineCheckSkipped: true };
+    }
 
     let online = { found: false, count: NaN, source: '' };
     if (session.ok) {
@@ -4561,7 +4578,7 @@ async function ensureRubinotServerAvailability(progressSender, context, { autoRu
   }
 }
 
-async function fetchRubinotBazaarWithPlaywright(progressSender = null, browserKey = rubinotSelectedBrowser, endUntilTs = 0, cleanProfile = false, autoRun = false) {
+async function fetchRubinotBazaarWithPlaywright(progressSender = null, browserKey = rubinotSelectedBrowser, endUntilTs = 0, cleanProfile = false, autoRun = false, forceQuery = false) {
   if (rubinotFetchInFlight) return rubinotFetchInFlight;
 
   rubinotFetchInFlight = (async () => {
@@ -4573,7 +4590,9 @@ async function fetchRubinotBazaarWithPlaywright(progressSender = null, browserKe
       // ordem) e acrescenta a checagem de jogadores online >= 1000. Manual:
       // aborta e informa o Boss. Auto-Bazaar: espera com recarga a cada 1 min
       // até liberar, então segue naturalmente para o fluxo atual.
-      const readiness = await ensureRubinotServerAvailability(progressSender, context, { autoRun });
+      // "Forçar Consulta": ignora SOMENTE a checagem de jogadores online;
+      // a validação de sessão e todo o restante continuam obrigatórios.
+      const readiness = await ensureRubinotServerAvailability(progressSender, context, { autoRun, skipOnlineCheck: forceQuery === true });
       if (!readiness.ok) {
         return {
           ok: false,
@@ -4589,7 +4608,7 @@ async function fetchRubinotBazaarWithPlaywright(progressSender = null, browserKe
       }
       const session = readiness.session;
       rubinotDiag('bazaar', 'Servidor disponível: prosseguindo com a consulta normal.', {
-        jogadoresOnline: readiness.onlineCount,
+        jogadoresOnline: readiness.onlineCheckSkipped ? 'ignorado (Forçar Consulta)' : readiness.onlineCount,
         minimo: RUBINOT_MIN_ONLINE_PLAYERS,
       });
 
@@ -5003,15 +5022,20 @@ ipcMain.handle('rubinot-bazaar-fetch', async (event, payload = {}) => {
   // entra em modo de espera inteligente (recarga a cada 1 min) em vez de
   // abortar. Consulta manual mantém o aborto imediato com aviso ao Boss.
   const autoRun = payload?.autoRun === true;
+  // "Forçar Consulta" (checkbox do modal, válido SÓ para esta execução):
+  // pula exclusivamente a verificação de jogadores online. Nenhum estado
+  // global é alterado — consultas seguintes voltam ao comportamento padrão.
+  const forceQuery = payload?.forceQuery === true;
   rubinotDiag('context', 'Configuração desta consulta.', {
     modo: rubinotSpeedMode,
     intervaloEntrePersonagensMs: speed().detailsGapMs,
     autoRun,
+    forcarConsulta: forceQuery,
     retry: rubinotRunRetryPlan.length > 0
       ? rubinotRunRetryPlan.map(step => `${step.browser} ${step.attempt}/${step.attempts}`)
       : '(nenhum)',
   });
-  return runRubinotQueued('bazaar-fetch', () => fetchRubinotBazaarWithPlaywright(event.sender, rubinotSelectedBrowser, endUntilTs, rubinotUseCleanProfile, autoRun));
+  return runRubinotQueued('bazaar-fetch', () => fetchRubinotBazaarWithPlaywright(event.sender, rubinotSelectedBrowser, endUntilTs, rubinotUseCleanProfile, autoRun, forceQuery));
 });
 
 // --- Rubinot Bazaar: detalhes sob demanda por personagem ---

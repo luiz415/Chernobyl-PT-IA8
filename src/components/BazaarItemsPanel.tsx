@@ -1517,6 +1517,12 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
      * e não pode depender do valor possivelmente antigo do input.
      */
     endUntilOverride?: string;
+    /**
+     * "Forçar Consulta" (checkbox do modal): SOMENTE esta consulta pula a
+     * verificação de jogadores online. Encadeamentos sem modal (Auto-Bazaar)
+     * não informam — fluxo padrão, com todas as verificações.
+     */
+    forceQuery?: boolean;
   }) {
     // Reconferência do gate: o painel nunca deveria estar montado sem Boss,
     // mas a restrição é REAL, não apenas visual. A guarda contra consulta de
@@ -1549,6 +1555,9 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
         // Carimba a listagem como consulta da GUIA ITENS: o progresso dela
         // aparece SÓ aqui (a guia de quests ignora eventos scope 'itens').
         progressScope: "itens",
+        // "Forçar Consulta": vale só para esta execução; ausente/false = fluxo
+        // padrão com a verificação de jogadores online ativa.
+        forceQuery: options.forceQuery === true,
       }) as ItemsFetchResult;
 
       if (!response?.ok || response?.cancelled) {
@@ -4035,12 +4044,13 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
       <BazaarBrowserModal
         open={isBrowserModalOpen}
         forcedMethod="novo"
+        allowForceQuery
         onCancel={() => setIsBrowserModalOpen(false)}
-        onConfirm={(browserKey, browserOrder, cleanProfile, retryBrowsers, speedMode, retryCounts, _method, questSource) => {
+        onConfirm={(browserKey, browserOrder, cleanProfile, retryBrowsers, speedMode, retryCounts, _method, questSource, forceQuery) => {
           setIsBrowserModalOpen(false);
           // `questSource`: identificação das quests (Bosstiary × Quests)
           // escolhida no modal — respeitada na consulta inteira.
-          void executeItemsQuery({ browserKey, browserOrder, cleanProfile, retryBrowsers, speedMode, retryCounts, questSource });
+          void executeItemsQuery({ browserKey, browserOrder, cleanProfile, retryBrowsers, speedMode, retryCounts, questSource, forceQuery });
         }}
       />
     </div>
