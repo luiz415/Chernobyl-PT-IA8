@@ -27,7 +27,7 @@ import { FilterDateMax, FilterInline, FilterMulti, FilterNumber } from "./Filter
 // segunda implementação): as colunas SW/SG desta guia apenas os alimentam com
 // as quests já derivadas pela consulta de itens (mesmo payload, mesma função
 // do Electron — zero consultas extras).
-import { BazaarNotifySettingsControl, STICKY_FILTER_CELL_CLASS, STICKY_HEAD_CELL_CLASS, closeRubinotBrowserFromRenderer, isAuctionVisibleWithEndedGrace, isQuestSuspicious, QuestBossCounter, QuestStatusIndicator, type BazaarQuestStatusDetail } from "./BazarPanel";
+import { AuctionEndBadge, BazaarNotifySettingsControl, STICKY_FILTER_CELL_CLASS, STICKY_HEAD_CELL_CLASS, closeRubinotBrowserFromRenderer, isAuctionVisibleWithEndedGrace, isQuestSuspicious, QuestBossCounter, QuestStatusIndicator, type BazaarQuestStatusDetail } from "./BazarPanel";
 import { copyTextToClipboard } from "../utils/clipboard";
 import { buildBazaarCharacterDescription } from "../utils/bazaarCharacterDescription";
 import type { BazaarQuestSource, BazaarRetryCounts, BazaarSpeedMode } from "./BazaarBrowserModal";
@@ -48,7 +48,6 @@ function formatKkValue(value: number, suffix: "k" | "kk" = "kk"): string {
 // estão; aqui a aplicação é sobre os resultados LOCAIS da última consulta.
 import { applyValueOverlay, buildValueOverlay } from "../utils/bazaarValueRefresh";
 import {
-  formatAuctionEnd,
   formatDateTimeWithOffset,
   formatDuration,
   formatTimeZoneOffset,
@@ -2995,8 +2994,12 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                     })()}
                   </td>
                   <td className="px-2 py-1.5 text-center text-slate-300">{result.server || "—"}</td>
-                  <td className="px-2 py-1.5 text-center font-mono text-slate-300">
-                    {formatAuctionEnd(result.auctionEndTs ?? null, timezoneOffsetMinutes)}
+                  <td className="px-2 py-1.5 text-center font-mono">
+                    {/* "ENCERRA" (87ª): MESMO badge da tabela "Personagens
+                        Para SW/SG/GB" (AuctionEndBadge, fonte única) — ≤5min
+                        = destaque âmbar + ícone + tooltip; encerrado = texto
+                        apagado com tachado; ativo = texto padrão. */}
+                    <AuctionEndBadge auctionEndTs={result.auctionEndTs ?? null} nowUnixTs={currentUnixTs} timezoneOffsetMinutes={timezoneOffsetMinutes} />
                   </td>
                   <td className="px-2 py-1.5 text-center font-mono text-emerald-300" title="Valor do personagem no momento da consulta">
                     {Number.isFinite(result.bid) && (result.bid || 0) > 0 ? `${(result.bid || 0).toLocaleString("de-DE")} coins` : "—"}

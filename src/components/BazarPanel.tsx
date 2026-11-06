@@ -1143,8 +1143,12 @@ function formatEndUntilForDisplay(value: string): string {
 // o painel "Personagens com Itens" exibe a coluna "Encerra" com exatamente a
 // mesma formatação. Corpo idêntico ao que vivia aqui.
 
-function isAuctionStillActive(auction: BazaarAuction, nowUnixTs: number): boolean {
-  const auctionEndTs = normalizeAuctionEndTimestamp(auction.auctionEndTs);
+// Assinatura ESTRUTURAL (87ª — mesma estratégia da
+// isAuctionVisibleWithEndedGrace): aceita qualquer objeto com
+// `auctionEndTs`, para a MESMA regra valer também na coluna "Encerra" da
+// guia "Personagens com Itens". Corpo idêntico ao anterior.
+function isAuctionStillActive(auction: { auctionEndTs?: number | null }, nowUnixTs: number): boolean {
+  const auctionEndTs = normalizeAuctionEndTimestamp(auction.auctionEndTs ?? null);
   if (!auctionEndTs) return true;
   return auctionEndTs > nowUnixTs;
 }
@@ -1159,11 +1163,38 @@ export function isAuctionVisibleWithEndedGrace(auction: { auctionEndTs?: number 
   return auctionEndTs + BAZAR_ENDED_VISIBILITY_GRACE_SECONDS > nowUnixTs;
 }
 
-function isAuctionEndingSoon(auction: BazaarAuction, nowUnixTs: number): boolean {
-  const auctionEndTs = normalizeAuctionEndTimestamp(auction.auctionEndTs);
+// Assinatura ESTRUTURAL (87ª) — ver nota da isAuctionStillActive acima.
+function isAuctionEndingSoon(auction: { auctionEndTs?: number | null }, nowUnixTs: number): boolean {
+  const auctionEndTs = normalizeAuctionEndTimestamp(auction.auctionEndTs ?? null);
   if (!auctionEndTs) return false;
   const secondsLeft = auctionEndTs - nowUnixTs;
   return secondsLeft > 0 && secondsLeft <= 5 * 60;
+}
+
+/**
+ * CÉLULA "ENCERRA" — FONTE ÚNICA VISUAL (87ª tarefa): o badge usado pela
+ * tabela "Personagens Para SW/SG/GB" (este painel) e, por importação, pela
+ * coluna "Encerra" da guia "Personagens com Itens" — MESMOS indicadores,
+ * cores e critérios, sem lógica visual duplicada:
+ *   • encerra em ≤ 5 minutos → destaque âmbar (borda + fundo), ícone de
+ *     alerta, negrito e tooltip "Leilão encerra em menos de 5 minutos";
+ *   • ativo → texto padrão (slate-300);
+ *   • JÁ ENCERRADO → texto apagado (slate-600) com tachado.
+ * Exportado no mesmo padrão estrutural da isAuctionVisibleWithEndedGrace.
+ */
+export function AuctionEndBadge({ auctionEndTs, nowUnixTs, timezoneOffsetMinutes }: {
+  auctionEndTs?: number | null;
+  nowUnixTs: number;
+  timezoneOffsetMinutes: number;
+}) {
+  const probe = { auctionEndTs: auctionEndTs ?? null };
+  const endingSoon = isAuctionEndingSoon(probe, nowUnixTs);
+  return (
+    <span className={`inline-flex items-center justify-center gap-1 rounded-md px-1.5 py-0.5 ${endingSoon ? "border border-amber-500/35 bg-amber-500/10 text-amber-300 font-black" : isAuctionStillActive(probe, nowUnixTs) ? "text-slate-300" : "text-slate-600 line-through"}`} title={endingSoon ? "Leilão encerra em menos de 5 minutos" : undefined}>
+      {endingSoon && <AlertTriangle size={10} className="text-amber-300" />}
+      {formatAuctionEnd(auctionEndTs ?? null, timezoneOffsetMinutes)}
+    </span>
+  );
 }
 
 function formatTimeOfDayWithOffset(ms: number | null | undefined, offsetMinutes: number): string {
@@ -5258,10 +5289,10 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
                       <td className="h-12 px-1 py-2 text-center align-middle text-slate-300">{auction.server || "—"}</td>
                       <td className="h-12 px-1 py-2 text-center align-middle font-mono text-emerald-300">{auction.bid?.toLocaleString("de-DE") || 0} coins</td>
                       <td className="h-12 px-1 py-2 text-center align-middle font-mono">
-                        <span className={`inline-flex items-center justify-center gap-1 rounded-md px-1.5 py-0.5 ${isAuctionEndingSoon(auction, currentUnixTs) ? "border border-amber-500/35 bg-amber-500/10 text-amber-300 font-black" : isAuctionStillActive(auction, currentUnixTs) ? "text-slate-300" : "text-slate-600 line-through"}`} title={isAuctionEndingSoon(auction, currentUnixTs) ? "Leilão encerra em menos de 5 minutos" : undefined}>
-                          {isAuctionEndingSoon(auction, currentUnixTs) && <AlertTriangle size={10} className="text-amber-300" />}
-                          {formatAuctionEnd(auction.auctionEndTs, timezoneOffsetMinutes)}
-                        </span>
+                        {/* FONTE ÚNICA (87ª): mesmo badge importado pela guia
+                            "Personagens com Itens" — markup idêntico ao que
+                            vivia inline aqui. */}
+                        <AuctionEndBadge auctionEndTs={auction.auctionEndTs} nowUnixTs={currentUnixTs} timezoneOffsetMinutes={timezoneOffsetMinutes} />
                       </td>
                       <td className="h-12 px-1 py-2 text-center align-middle">
                         {/* VALOR ITENS (KK) — DUAS fontes, mesma exibição:
