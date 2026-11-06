@@ -1974,8 +1974,21 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
   const [questsViewUpdateDone, setQuestsViewUpdateDone] = useState<{ index: number; ok: boolean; message: string } | null>(null);
   const questsViewUpdateTimerRef = useRef<number | null>(null);
   useEffect(() => () => { if (questsViewUpdateTimerRef.current !== null) window.clearTimeout(questsViewUpdateTimerRef.current); }, []);
-  // Troca de personagem no modal: descarta confirmação/feedback pendentes.
-  useEffect(() => { setQuestsViewUpdateConfirm(null); setQuestsViewUpdateDone(null); }, [questsItemsDetailResult]);
+  // ── ATUALIZAÇÃO EM LOTE DO MODAL "VER" (86ª — EXCLUSIVA DO BOSS) ────────
+  // Grava o valor base de TODOS os itens encontrados NESTE personagem na
+  // Lista de Itens, no escopo escolhido ("server" = só o servidor dele;
+  // "all" = todos os servidores), reutilizando o MESMO núcleo por item dos
+  // botões individuais (runQuestsViewOfficialUpdate). Itens sem valor base
+  // válido são ignorados (mesma regra que desabilita o botão individual);
+  // itens de OUTROS personagens/listas nunca são tocados. 1º clique NUNCA
+  // executa — sempre abre a confirmação; feedback agregado por 5s.
+  const [questsViewBulkConfirm, setQuestsViewBulkConfirm] = useState<"all" | "server" | null>(null);
+  const [questsViewBulkDone, setQuestsViewBulkDone] = useState<{ ok: boolean; message: string } | null>(null);
+  const questsViewBulkTimerRef = useRef<number | null>(null);
+  useEffect(() => () => { if (questsViewBulkTimerRef.current !== null) window.clearTimeout(questsViewBulkTimerRef.current); }, []);
+  // Troca de personagem no modal: descarta confirmação/feedback pendentes
+  // (individuais E do lote).
+  useEffect(() => { setQuestsViewUpdateConfirm(null); setQuestsViewUpdateDone(null); setQuestsViewBulkConfirm(null); setQuestsViewBulkDone(null); }, [questsItemsDetailResult]);
   // ── RC DO SERVIDOR — EDIÇÃO GLOBAL PELO MODAL "VER" (69ª — SÓ BOSS) ─────
   // Promove o valor digitado no campo "Valor do Coin" à cotação OFICIAL do
   // SERVIDOR do personagem exibido — a MESMA fonte única do app inteiro
@@ -2051,6 +2064,29 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
     if (!edited) return officialBaseKk;
     return deriveWatchedBaseKkFromTotal(effectiveTotal, match.amount, match.tier);
   }
+  /**
+   * NÚCLEO ÚNICO da gravação de UMA linha (86ª): reutilizado pelos botões
+   * individuais "Todos"/"Servidor" E pela atualização EM LOTE — mesma
+   * identificação do item (watchedName/baseName), mesmo valor base
+   * (questsViewUpdateBaseKk: edição do Total da linha respeitada, 72ª) e o
+   * mesmo applyOfficialWatchedItemUpdate. Nenhuma lógica paralela: o lote é
+   * literalmente a execução deste núcleo item a item.
+   */
+  function runQuestsViewOfficialUpdate(view: QuestsItemsDetailView, index: number, scope: "all" | "server") {
+    const match = view.matches[index];
+    if (!match) {
+      return { ok: false as const, error: "Item inexistente.", changedServers: [] as string[], addedServers: [] as string[] };
+    }
+    return applyOfficialWatchedItemUpdate({
+      scope,
+      server: view.server,
+      itemName: match.watchedName || parseTieredItemName(match.foundName).baseName,
+      // 72ª: valor efetivamente informado pelo Boss no modal (base derivado
+      // do Total editado na linha); sem edição, o base da consulta.
+      valueKk: questsViewUpdateBaseKk(view, index),
+      serverUniverse: SERVER_OPTIONS,
+    });
+  }
   function confirmQuestsViewOfficialUpdate() {
     const pending = questsViewUpdateConfirm;
     const view = questsItemsDetailResult;
@@ -2060,15 +2096,9 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
     if (!match) { setQuestsViewUpdateConfirm(null); return; }
     setQuestsViewUpdateBusy(true);
     try {
-      const result = applyOfficialWatchedItemUpdate({
-        scope: pending.scope,
-        server: view.server,
-        itemName: match.watchedName || parseTieredItemName(match.foundName).baseName,
-        // 72ª: valor efetivamente informado pelo Boss no modal (base derivado
-        // do Total editado na linha); sem edição, o base da consulta.
-        valueKk: questsViewUpdateBaseKk(view, pending.index),
-        serverUniverse: SERVER_OPTIONS,
-      });
+      // MESMO núcleo de antes, agora compartilhado com o lote (86ª) —
+      // comportamento e mensagens desta linha permanecem idênticos.
+      const result = runQuestsViewOfficialUpdate(view, pending.index, pending.scope);
       const touched = result.changedServers.length + result.addedServers.length;
       const message = !result.ok
         ? (result.error || "Falha ao atualizar a Lista de Itens.")
@@ -2085,6 +2115,51 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
       setQuestsViewUpdateConfirm(null);
       if (questsViewUpdateTimerRef.current !== null) window.clearTimeout(questsViewUpdateTimerRef.current);
       questsViewUpdateTimerRef.current = window.setTimeout(() => { setQuestsViewUpdateDone(null); questsViewUpdateTimerRef.current = null; }, 2500);
+    }
+  }
+  /**
+   * EXECUÇÃO DO LOTE (86ª): roda o MESMO núcleo dos botões individuais
+   * (runQuestsViewOfficialUpdate) para CADA item encontrado no personagem
+   * aberto, no escopo confirmado. Somente os itens deste personagem entram;
+   * itens sem valor base válido são pulados (mesma regra do individual);
+   * valores editados nas linhas são respeitados (72ª). Feedback agregado:
+   * atualizados / já atualizados / ignorados / falhas.
+   */
+  function confirmQuestsViewBulkUpdate() {
+    const scope = questsViewBulkConfirm;
+    const view = questsItemsDetailResult;
+    // Dupla checagem de cargo (defesa além da visibilidade dos botões).
+    if (!scope || !view || !isBossUser || questsViewUpdateBusy) return;
+    setQuestsViewUpdateBusy(true);
+    try {
+      let updated = 0, already = 0, skipped = 0, failed = 0;
+      let firstError = "";
+      view.matches.forEach((_match, index) => {
+        // Mesma regra que desabilita o botão individual: sem base válida
+        // (>= 0,1kk) não há o que gravar — o item é ignorado, não falha.
+        if (questsViewUpdateBaseKk(view, index) < 0.1) { skipped += 1; return; }
+        const result = runQuestsViewOfficialUpdate(view, index, scope);
+        if (!result.ok) { failed += 1; if (!firstError) firstError = String(result.error || ""); return; }
+        if (result.changedServers.length + result.addedServers.length > 0) updated += 1;
+        else already += 1; // idempotência do núcleo: valor vigente não regrava
+      });
+      const parts: string[] = [];
+      if (updated > 0) parts.push(`${updated} atualizado(s)`);
+      if (already > 0) parts.push(`${already} já atualizado(s)`);
+      if (skipped > 0) parts.push(`${skipped} sem valor base`);
+      if (failed > 0) parts.push(`${failed} falha(s)${firstError ? `: ${firstError}` : ""}`);
+      const where = scope === "all" ? "todos os servidores" : `somente ${view.server}`;
+      setQuestsViewBulkDone({
+        ok: failed === 0,
+        message: parts.length > 0 ? `${parts.join(" · ")} (${where}).` : "Nada a atualizar.",
+      });
+    } catch (error) {
+      setQuestsViewBulkDone({ ok: false, message: String((error as Error)?.message || "Falha ao atualizar a Lista de Itens.") });
+    } finally {
+      setQuestsViewUpdateBusy(false);
+      setQuestsViewBulkConfirm(null);
+      if (questsViewBulkTimerRef.current !== null) window.clearTimeout(questsViewBulkTimerRef.current);
+      questsViewBulkTimerRef.current = window.setTimeout(() => { setQuestsViewBulkDone(null); questsViewBulkTimerRef.current = null; }, 5000);
     }
   }
   async function copyQuestsViewItemName(name: string, key: string) {
@@ -5610,6 +5685,75 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
                   </button>
                 )}
               </div>
+
+              {/* ATUALIZAÇÃO EM LOTE (86ª — EXCLUSIVA DO BOSS): grava o valor
+                  base de TODOS os itens encontrados NESTE personagem na Lista
+                  de Itens, pelo MESMO núcleo dos botões individuais
+                  "Todos"/"Servidor" (runQuestsViewOfficialUpdate) — valores
+                  editados nas linhas respeitados (72ª), itens sem base válida
+                  ignorados, itens de outros personagens NUNCA tocados.
+                  1º clique NUNCA executa — sempre abre a confirmação. */}
+              {isBossUser && view.matches.length > 0 && (() => {
+                const bulkEligible = view.matches.filter((_, bulkIndex) => questsViewUpdateBaseKk(view, bulkIndex) >= 0.1).length;
+                const bulkSkipped = view.matches.length - bulkEligible;
+                return (
+                  <div className="mb-2 rounded border border-amber-500/25 bg-amber-500/[0.04] px-2 py-1.5">
+                    {questsViewBulkDone ? (
+                      <span className={`inline-flex items-center gap-1 text-[8px] font-black uppercase tracking-wide ${questsViewBulkDone.ok ? "text-emerald-300" : "text-rose-300"}`} title={questsViewBulkDone.message}>
+                        {questsViewBulkDone.ok ? <Check size={10} className="flex-shrink-0" /> : <AlertTriangle size={10} className="flex-shrink-0" />}
+                        <span className="min-w-0">{questsViewBulkDone.message}</span>
+                      </span>
+                    ) : questsViewBulkConfirm ? (
+                      <span className="inline-flex flex-wrap items-center gap-1.5 text-[9px] text-amber-200">
+                        <AlertTriangle size={10} className="flex-shrink-0 text-amber-300" />
+                        <span>
+                          Gravar o valor base de <span className="font-bold">{bulkEligible} item(ns)</span> encontrados em <span className="font-bold">“{view.name}”</span> {questsViewBulkConfirm === "all" ? "na Lista de Itens de TODOS os servidores" : <>SOMENTE na lista de <span className="font-bold">{view.server}</span> (demais servidores intactos)</>}?
+                          {bulkSkipped > 0 && <> <span className="text-slate-400">({bulkSkipped} sem valor base será(ão) ignorado(s).)</span></>}
+                          {" "}Somente os itens deste personagem são alterados.
+                        </span>
+                        <button
+                          type="button"
+                          disabled={questsViewUpdateBusy}
+                          onClick={confirmQuestsViewBulkUpdate}
+                          className="rounded border border-emerald-500/40 bg-emerald-500/15 px-1.5 py-0.5 inline-flex items-center gap-1 font-black uppercase tracking-wide text-emerald-300 hover:bg-emerald-500/25 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                        >
+                          {questsViewUpdateBusy ? <RefreshCw size={9} className="animate-spin flex-shrink-0" /> : <Check size={9} className="flex-shrink-0" />} {questsViewUpdateBusy ? "Atualizando…" : "Confirmar"}
+                        </button>
+                        <button
+                          type="button"
+                          disabled={questsViewUpdateBusy}
+                          onClick={() => setQuestsViewBulkConfirm(null)}
+                          className="rounded border border-slate-500/40 bg-slate-500/10 px-1.5 py-0.5 inline-flex items-center gap-1 font-black uppercase tracking-wide text-slate-300 hover:bg-slate-500/20 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                        >
+                          <X size={9} className="flex-shrink-0" /> Cancelar
+                        </button>
+                      </span>
+                    ) : (
+                      <span className="flex flex-wrap items-center gap-1.5">
+                        <span className="text-[8px] font-black uppercase tracking-wider text-slate-400">Atualizar em lote ({bulkEligible} de {view.matches.length} item(ns) com valor base):</span>
+                        <button
+                          type="button"
+                          disabled={bulkEligible === 0 || questsViewUpdateBusy}
+                          onClick={() => { setQuestsViewUpdateConfirm(null); setQuestsViewBulkConfirm(prev => (prev === "server" ? null : "server")); }}
+                          className={`rounded border px-1.5 py-0.5 inline-flex items-center gap-1 text-[8px] font-black uppercase tracking-wide transition-colors ${questsViewBulkConfirm === "server" ? "border-amber-500/60 bg-amber-500/20 text-amber-200" : "border-amber-500/35 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20"} disabled:opacity-40 disabled:cursor-not-allowed`}
+                          title={bulkEligible > 0 ? `Gravar o valor base dos ${bulkEligible} item(ns) deste personagem SOMENTE na Lista de Itens de ${view.server} — demais servidores e itens de outros personagens não são alterados. Valores editados nas linhas são respeitados.` : "Nenhum item com valor base válido — nada a atualizar."}
+                        >
+                          <RefreshCw size={9} className="flex-shrink-0" /> Atualizar todos neste servidor
+                        </button>
+                        <button
+                          type="button"
+                          disabled={bulkEligible === 0 || questsViewUpdateBusy}
+                          onClick={() => { setQuestsViewUpdateConfirm(null); setQuestsViewBulkConfirm(prev => (prev === "all" ? null : "all")); }}
+                          className={`rounded border px-1.5 py-0.5 inline-flex items-center gap-1 text-[8px] font-black uppercase tracking-wide transition-colors ${questsViewBulkConfirm === "all" ? "border-amber-500/60 bg-amber-500/20 text-amber-200" : "border-amber-500/35 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20"} disabled:opacity-40 disabled:cursor-not-allowed`}
+                          title={bulkEligible > 0 ? `Gravar o valor base dos ${bulkEligible} item(ns) deste personagem na Lista de Itens de TODOS os servidores. Itens de outros personagens não são alterados. Valores editados nas linhas são respeitados.` : "Nenhum item com valor base válido — nada a atualizar."}
+                        >
+                          <Globe size={9} className="flex-shrink-0" /> Atualizar todos em todos os servidores
+                        </button>
+                      </span>
+                    )}
+                  </div>
+                );
+              })()}
 
               <table className="w-full text-[10px]">
                 <thead>
