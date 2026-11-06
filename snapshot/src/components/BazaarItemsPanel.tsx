@@ -3732,74 +3732,6 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
             </div>
 
             <div className="flex-1 min-h-0 overflow-auto custom-scrollbar px-4 py-3 space-y-2">
-              {/* ATUALIZAÇÃO EM LOTE (86ª — EXCLUSIVA DO BOSS): grava o valor
-                  base de TODOS os itens encontrados NESTE personagem na Lista
-                  de Itens, pelo MESMO núcleo dos botões individuais
-                  "Todos"/"Servidor" (runDetailOfficialUpdate) — valor BASE
-                  oficial de cada linha (lista do servidor > snapshot), itens
-                  sem base válida ignorados, itens de outros personagens NUNCA
-                  tocados. 1º clique NUNCA executa — sempre abre a confirmação. */}
-              {isBossUser && detailResult.matches.length > 0 && (() => {
-                const bulkEligible = detailResult.matches.filter(match => resolveDetailBaseValueKk(match) >= 0.1).length;
-                const bulkSkipped = detailResult.matches.length - bulkEligible;
-                return (
-                  <div className="rounded border border-amber-500/25 bg-amber-500/[0.04] px-2 py-1.5">
-                    {detailBulkDone ? (
-                      <span className={`inline-flex items-center gap-1 text-[8px] font-black uppercase tracking-wide ${detailBulkDone.ok ? "text-emerald-300" : "text-rose-300"}`} title={detailBulkDone.message}>
-                        {detailBulkDone.ok ? <Check size={10} className="flex-shrink-0" /> : <AlertTriangle size={10} className="flex-shrink-0" />}
-                        <span className="min-w-0">{detailBulkDone.message}</span>
-                      </span>
-                    ) : detailBulkConfirm ? (
-                      <span className="inline-flex flex-wrap items-center gap-1.5 text-[9px] text-amber-200">
-                        <AlertTriangle size={10} className="flex-shrink-0 text-amber-300" />
-                        <span>
-                          Gravar o valor base de <span className="font-bold">{bulkEligible} item(ns)</span> encontrados em <span className="font-bold">“{detailResult.name}”</span> {detailBulkConfirm === "all" ? "na Lista de Itens de TODOS os servidores" : <>SOMENTE na lista de <span className="font-bold">{detailResult.server}</span> (demais servidores intactos)</>}?
-                          {bulkSkipped > 0 && <> <span className="text-slate-400">({bulkSkipped} sem valor base será(ão) ignorado(s).)</span></>}
-                          {" "}Somente os itens deste personagem são alterados.
-                        </span>
-                        <button
-                          type="button"
-                          disabled={detailApplyBusy}
-                          onClick={confirmDetailBulkUpdate}
-                          className="rounded border border-emerald-500/40 bg-emerald-500/15 px-1.5 py-0.5 inline-flex items-center gap-1 font-black uppercase tracking-wide text-emerald-300 hover:bg-emerald-500/25 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
-                        >
-                          {detailApplyBusy ? <RefreshCw size={9} className="animate-spin flex-shrink-0" /> : <Check size={9} className="flex-shrink-0" />} {detailApplyBusy ? "Atualizando…" : "Confirmar"}
-                        </button>
-                        <button
-                          type="button"
-                          disabled={detailApplyBusy}
-                          onClick={() => setDetailBulkConfirm(null)}
-                          className="rounded border border-slate-500/40 bg-slate-500/10 px-1.5 py-0.5 inline-flex items-center gap-1 font-black uppercase tracking-wide text-slate-300 hover:bg-slate-500/20 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
-                        >
-                          <X size={9} className="flex-shrink-0" /> Cancelar
-                        </button>
-                      </span>
-                    ) : (
-                      <span className="flex flex-wrap items-center gap-1.5">
-                        <span className="text-[8px] font-black uppercase tracking-wider text-slate-400">Atualizar em lote ({bulkEligible} de {detailResult.matches.length} item(ns) com valor base):</span>
-                        <button
-                          type="button"
-                          disabled={bulkEligible === 0 || detailApplyBusy}
-                          onClick={() => { setDetailApply(null); setDetailBulkConfirm(prev => (prev === "server" ? null : "server")); }}
-                          className={`rounded border px-1.5 py-0.5 inline-flex items-center gap-1 text-[8px] font-black uppercase tracking-wide transition-colors cursor-pointer ${detailBulkConfirm === "server" ? "border-amber-500/60 bg-amber-500/20 text-amber-200" : "border-amber-500/35 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20"} disabled:opacity-40 disabled:cursor-not-allowed`}
-                          title={bulkEligible > 0 ? `Gravar o valor base dos ${bulkEligible} item(ns) deste personagem SOMENTE na Lista de Itens de ${detailResult.server} — demais servidores e itens de outros personagens não são alterados.` : "Nenhum item com valor base válido — nada a atualizar."}
-                        >
-                          <RefreshCw size={9} className="flex-shrink-0" /> Atualizar todos neste servidor
-                        </button>
-                        <button
-                          type="button"
-                          disabled={bulkEligible === 0 || detailApplyBusy}
-                          onClick={() => { setDetailApply(null); setDetailBulkConfirm(prev => (prev === "all" ? null : "all")); }}
-                          className={`rounded border px-1.5 py-0.5 inline-flex items-center gap-1 text-[8px] font-black uppercase tracking-wide transition-colors cursor-pointer ${detailBulkConfirm === "all" ? "border-amber-500/60 bg-amber-500/20 text-amber-200" : "border-amber-500/35 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20"} disabled:opacity-40 disabled:cursor-not-allowed`}
-                          title={bulkEligible > 0 ? `Gravar o valor base dos ${bulkEligible} item(ns) deste personagem na Lista de Itens de TODOS os servidores (cria o item onde ainda não existir). Itens de outros personagens não são alterados.` : "Nenhum item com valor base válido — nada a atualizar."}
-                        >
-                          <Globe size={9} className="flex-shrink-0" /> Atualizar todos em todos os servidores
-                        </button>
-                      </span>
-                    )}
-                  </div>
-                );
-              })()}
               <table className="w-full text-[10px]">
                 <thead>
                   <tr className="text-[8px] uppercase tracking-wider text-slate-400 border-b border-[var(--th-line)]/40">
@@ -3827,10 +3759,89 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                     {/* Reserva também aqui (78ª): o feedback de sucesso/erro
                         substitui os botões Todos/Servidor por 2,5s — sem a
                         largura fixa, a troca refluía a tabela da mesma forma. */}
-                    <th className="px-1.5 py-1.5 text-center w-[130px] min-w-[130px]">Atualizar</th>
+                    {/* EM LOTE (88ª): os MESMOS dois escopos dos botões
+                        individuais, na MESMA ordem/estilo (Todos | Servidor),
+                        integrados ao CABEÇALHO da própria coluna — aplicam o
+                        valor BASE oficial de TODOS os itens deste personagem.
+                        1º clique NUNCA executa (confirmação em linha no topo
+                        da tabela); feedback agregado substitui por 5s. */}
+                    <th className="px-1.5 py-1.5 text-center w-[130px] min-w-[130px]">
+                      {(() => {
+                        const bulkEligible = detailResult.matches.filter(match => resolveDetailBaseValueKk(match) >= 0.1).length;
+                        return (
+                          <span className="flex flex-col items-center gap-1">
+                            <span>Atualizar</span>
+                            {isBossUser && detailResult.matches.length > 0 && (detailBulkDone ? (
+                              <span className={`inline-flex items-center gap-1 text-[8px] font-black tracking-wide ${detailBulkDone.ok ? "text-emerald-300" : "text-rose-300"}`} title={detailBulkDone.message}>
+                                {detailBulkDone.ok ? <Check size={10} className="flex-shrink-0" /> : <AlertTriangle size={10} className="flex-shrink-0" />}
+                                <span className="max-w-[104px] truncate">{detailBulkDone.message}</span>
+                              </span>
+                            ) : (
+                              <span className="flex flex-wrap items-center justify-center gap-1">
+                                <button
+                                  type="button"
+                                  disabled={bulkEligible === 0 || detailApplyBusy}
+                                  onClick={() => { setDetailApply(null); setDetailBulkConfirm(prev => (prev === "all" ? null : "all")); }}
+                                  className={`rounded border px-1 py-0.5 inline-flex items-center gap-0.5 text-[8px] font-black uppercase tracking-wide transition-colors cursor-pointer ${detailBulkConfirm === "all" ? "border-amber-500/60 bg-amber-500/20 text-amber-200" : "border-amber-500/35 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20"} disabled:opacity-40 disabled:cursor-not-allowed`}
+                                  title={bulkEligible > 0 ? `EM LOTE — atualizar em todos os servidores: gravar o valor base dos ${bulkEligible} item(ns) deste personagem na Lista de Itens de TODOS os servidores (cria o item onde ainda não existir). Itens de outros personagens não são alterados.` : "Nenhum item com valor base válido — nada a atualizar."}
+                                >
+                                  <Globe size={9} className="flex-shrink-0" /> Todos
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={bulkEligible === 0 || detailApplyBusy}
+                                  onClick={() => { setDetailApply(null); setDetailBulkConfirm(prev => (prev === "server" ? null : "server")); }}
+                                  className={`rounded border px-1 py-0.5 inline-flex items-center gap-0.5 text-[8px] font-black uppercase tracking-wide transition-colors cursor-pointer ${detailBulkConfirm === "server" ? "border-amber-500/60 bg-amber-500/20 text-amber-200" : "border-amber-500/35 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20"} disabled:opacity-40 disabled:cursor-not-allowed`}
+                                  title={bulkEligible > 0 ? `EM LOTE — atualizar neste servidor: gravar o valor base dos ${bulkEligible} item(ns) deste personagem SOMENTE na Lista de Itens de ${detailResult.server} — demais servidores e itens de outros personagens não são alterados.` : "Nenhum item com valor base válido — nada a atualizar."}
+                                >
+                                  <RefreshCw size={9} className="flex-shrink-0" /> Servidor
+                                </button>
+                              </span>
+                            ))}
+                          </span>
+                        );
+                      })()}
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
+                  {/* Confirmação do LOTE (88ª) — mesmo padrão visual das
+                      confirmações individuais (linha âmbar inline): o 1º
+                      clique nos botões do cabeçalho NUNCA executa. */}
+                  {isBossUser && detailBulkConfirm && !detailBulkDone && (() => {
+                    const bulkEligible = detailResult.matches.filter(match => resolveDetailBaseValueKk(match) >= 0.1).length;
+                    const bulkSkipped = detailResult.matches.length - bulkEligible;
+                    return (
+                      <tr className="border-b border-[var(--th-line)]/25 bg-amber-500/5">
+                        <td colSpan={7} className="px-1.5 py-1.5">
+                          <span className="inline-flex flex-wrap items-center gap-1.5 text-[9px] text-amber-200">
+                            <AlertTriangle size={10} className="flex-shrink-0 text-amber-300" />
+                            <span>
+                              Gravar o valor base de <span className="font-bold">{bulkEligible} item(ns)</span> encontrados em <span className="font-bold">“{detailResult.name}”</span> {detailBulkConfirm === "all" ? "na Lista de Itens de TODOS os servidores" : <>SOMENTE na lista de <span className="font-bold">{detailResult.server}</span> (demais servidores intactos)</>}?
+                              {bulkSkipped > 0 && <> <span className="text-slate-400">({bulkSkipped} sem valor base será(ão) ignorado(s).)</span></>}
+                              {" "}Somente os itens deste personagem são alterados.
+                            </span>
+                            <button
+                              type="button"
+                              disabled={detailApplyBusy}
+                              onClick={confirmDetailBulkUpdate}
+                              className="rounded border border-emerald-500/40 bg-emerald-500/15 px-1.5 py-0.5 inline-flex items-center gap-1 font-black uppercase tracking-wide text-emerald-300 hover:bg-emerald-500/25 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                            >
+                              {detailApplyBusy ? <RefreshCw size={9} className="animate-spin flex-shrink-0" /> : <Check size={9} className="flex-shrink-0" />} {detailApplyBusy ? "Atualizando…" : "Confirmar"}
+                            </button>
+                            <button
+                              type="button"
+                              disabled={detailApplyBusy}
+                              onClick={() => setDetailBulkConfirm(null)}
+                              className="rounded border border-slate-500/40 bg-slate-500/10 px-1.5 py-0.5 inline-flex items-center gap-1 font-black uppercase tracking-wide text-slate-300 hover:bg-slate-500/20 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                            >
+                              <X size={9} className="flex-shrink-0" /> Cancelar
+                            </button>
+                          </span>
+                        </td>
+                      </tr>
+                    );
+                  })()}
                   {detailResult.matches.length === 0 && (
                     <tr>
                       {/* Personagem com Ouro relevante (> 1kk) e nenhum item
