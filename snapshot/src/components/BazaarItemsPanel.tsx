@@ -813,6 +813,17 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
   const [detailApplyBusy, setDetailApplyBusy] = useState(false);
   const [detailApplyDone, setDetailApplyDone] = useState<{ matchIndex: number; ok: boolean; message: string } | null>(null);
   const detailApplyTimerRef = useRef<number | null>(null);
+  // ── ATUALIZAÇÃO EM LOTE DO MODAL "DETALHES" (86ª — EXCLUSIVA DO BOSS) ────
+  // Mesmo recurso do modal "Ver" do Painel Bazaar (quests): grava o valor
+  // base de TODOS os itens encontrados NESTE personagem na Lista de Itens,
+  // no escopo escolhido, reutilizando o MESMO núcleo por item dos botões
+  // individuais (runDetailOfficialUpdate). Itens sem valor base válido são
+  // ignorados; itens de OUTROS personagens/listas nunca são tocados.
+  // 1º clique NUNCA executa — sempre abre a confirmação; feedback por 5s.
+  const [detailBulkConfirm, setDetailBulkConfirm] = useState<"all" | "server" | null>(null);
+  const [detailBulkDone, setDetailBulkDone] = useState<{ ok: boolean; message: string } | null>(null);
+  const detailBulkTimerRef = useRef<number | null>(null);
+  useEffect(() => () => { if (detailBulkTimerRef.current !== null) window.clearTimeout(detailBulkTimerRef.current); }, []);
   // ── TOTAL (KK) LOCAL no modal "Detalhes" — PERSISTIDO por consulta ───────
   // Itens com Tier nem sempre seguem o acréscimo padrão de +30%/nível: o
   // Boss pode AJUSTAR o Total (kk) de cada linha do modal "Ver". Os ajustes
@@ -1919,6 +1930,39 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
    * BAZAAR_ITEMS_LAST_QUERY_UPDATED_EVENT); somente o personagem ABERTO no
    * modal é recarregado aqui para refletir sem fechar/reabrir.
    */
+  /**
+   * NÚCLEO ÚNICO da gravação de UMA linha (86ª): reutilizado pelos botões
+   * individuais "Todos"/"Servidor" E pela atualização EM LOTE do modal
+   * Detalhes — mesma identificação do item (watchedName), mesmo valor BASE
+   * oficial (resolveDetailBaseValueKk: lista do servidor > snapshot) e o
+   * mesmo applyOfficialWatchedItemUpdate. O lote é literalmente a execução
+   * deste núcleo item a item — zero lógica paralela.
+   */
+  function runDetailOfficialUpdate(detail: BazaarItemsCharacterResult, matchIndex: number, scope: "all" | "server") {
+    const match = detail.matches[matchIndex];
+    if (!match) {
+      return { ok: false as const, error: "Item inexistente.", changedServers: [] as string[], addedServers: [] as string[] };
+    }
+    return applyOfficialWatchedItemUpdate({
+      scope,
+      server: detail.server,
+      itemName: match.watchedName,
+      valueKk: resolveDetailBaseValueKk(match),
+      serverUniverse: SERVER_OPTIONS,
+    });
+  }
+  /**
+   * Personagem ABERTO no modal: recarrega os números dele da última consulta
+   * reprecificada (os demais estados do painel se realinham pelos eventos do
+   * núcleo). Compartilhado pelo individual e pelo lote (86ª).
+   */
+  function refreshOpenDetailResult(detail: BazaarItemsCharacterResult) {
+    const stored = loadItemsLastQuery();
+    if (!stored) return;
+    const detailKey = detail.id || detail.url || detail.name;
+    const refreshed = stored.results.find(r => (r.id || r.url || r.name) === detailKey);
+    if (refreshed) setDetailResult(refreshed);
+  }
   function confirmDetailOfficialUpdate() {
     const pending = detailApply;
     // Dupla checagem de autorização (além de a guia ser exclusiva do Boss).
@@ -1928,13 +1972,9 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
     setDetailApplyBusy(true);
     let done: { matchIndex: number; ok: boolean; message: string };
     try {
-      const result = applyOfficialWatchedItemUpdate({
-        scope: pending.scope,
-        server: detailResult.server,
-        itemName: match.watchedName,
-        valueKk: resolveDetailBaseValueKk(match),
-        serverUniverse: SERVER_OPTIONS,
-      });
+      // MESMO núcleo de antes, agora compartilhado com o lote (86ª) —
+      // comportamento e mensagens desta linha permanecem idênticos.
+      const result = runDetailOfficialUpdate(detailResult, pending.matchIndex, pending.scope);
       const touched = result.changedServers.length + result.addedServers.length;
       const message = !result.ok
         ? (result.error || "Falha ao atualizar a Lista de Itens.")
@@ -1946,14 +1986,7 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
       done = { matchIndex: pending.matchIndex, ok: result.ok, message };
       // Personagem aberto no modal: reflete os números novos na hora (os
       // demais estados recarregam pelos eventos do núcleo).
-      if (result.ok && touched > 0) {
-        const stored = loadItemsLastQuery();
-        if (stored) {
-          const detailKey = detailResult.id || detailResult.url || detailResult.name;
-          const refreshed = stored.results.find(r => (r.id || r.url || r.name) === detailKey);
-          if (refreshed) setDetailResult(refreshed);
-        }
-      }
+      if (result.ok && touched > 0) refreshOpenDetailResult(detailResult);
     } catch (error) {
       done = { matchIndex: pending.matchIndex, ok: false, message: String((error as Error)?.message || "Falha ao atualizar a Lista de Itens.") };
     }
@@ -1965,6 +1998,57 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
       setDetailApplyDone(null);
       detailApplyTimerRef.current = null;
     }, 2500);
+  }
+
+  /**
+   * EXECUÇÃO DO LOTE do modal Detalhes (86ª): roda o MESMO núcleo dos
+   * botões individuais (runDetailOfficialUpdate) para CADA item encontrado
+   * no personagem aberto, no escopo confirmado. Somente os itens deste
+   * personagem entram; itens sem valor base válido são pulados; a
+   * idempotência do núcleo vale item a item ("já atualizado" não regrava).
+   * Feedback agregado: atualizados / já atualizados / sem base / falhas.
+   */
+  function confirmDetailBulkUpdate() {
+    const scope = detailBulkConfirm;
+    const detail = detailResult;
+    // Dupla checagem de autorização (além de a guia ser exclusiva do Boss).
+    if (!scope || !detail || !isBossUser || detailApplyBusy) return;
+    setDetailApplyBusy(true);
+    let doneMsg: { ok: boolean; message: string };
+    let touchedAny = false;
+    try {
+      let updated = 0, already = 0, skipped = 0, failed = 0;
+      let firstError = "";
+      detail.matches.forEach((match, matchIndex) => {
+        // Sem valor base válido (>= 0,1kk) não há o que gravar — o item é
+        // ignorado, não falha (mesma regra do lote do Painel Bazaar).
+        if (resolveDetailBaseValueKk(match) < 0.1) { skipped += 1; return; }
+        const result = runDetailOfficialUpdate(detail, matchIndex, scope);
+        if (!result.ok) { failed += 1; if (!firstError) firstError = String(result.error || ""); return; }
+        if (result.changedServers.length + result.addedServers.length > 0) { updated += 1; touchedAny = true; }
+        else already += 1; // idempotência do núcleo: valor vigente não regrava
+      });
+      const parts: string[] = [];
+      if (updated > 0) parts.push(`${updated} atualizado(s)`);
+      if (already > 0) parts.push(`${already} já atualizado(s)`);
+      if (skipped > 0) parts.push(`${skipped} sem valor base`);
+      if (failed > 0) parts.push(`${failed} falha(s)${firstError ? `: ${firstError}` : ""}`);
+      const where = scope === "all" ? "todos os servidores" : `somente ${detail.server}`;
+      doneMsg = {
+        ok: failed === 0,
+        message: parts.length > 0 ? `${parts.join(" · ")} (${where}).` : "Nada a atualizar.",
+      };
+    } catch (error) {
+      doneMsg = { ok: false, message: String((error as Error)?.message || "Falha ao atualizar a Lista de Itens.") };
+    }
+    // Personagem aberto no modal: UMA recarga ao final (mesma rotina do
+    // individual) — só quando algo realmente mudou.
+    if (touchedAny) refreshOpenDetailResult(detail);
+    setDetailApplyBusy(false);
+    setDetailBulkConfirm(null);
+    setDetailBulkDone(doneMsg);
+    if (detailBulkTimerRef.current !== null) window.clearTimeout(detailBulkTimerRef.current);
+    detailBulkTimerRef.current = window.setTimeout(() => { setDetailBulkDone(null); detailBulkTimerRef.current = null; }, 5000);
   }
 
   /**
@@ -3103,7 +3187,7 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                           type="button"
                           onClick={() => {
                             if (markViewed) markViewed(auctionKey);
-                            setDetailResult(result); setDetailApply(null); setDetailApplyDone(null); resetDetailLocalState();
+                            setDetailResult(result); setDetailApply(null); setDetailApplyDone(null); setDetailBulkConfirm(null); setDetailBulkDone(null); resetDetailLocalState();
                           }}
                           title={viewState === "last" ? "Último personagem cujos detalhes foram abertos" : viewState === "opened" ? "Detalhes já visualizados neste dispositivo" : "Ver detalhes dos itens do personagem"}
                           className={`inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[9px] font-black transition-colors cursor-pointer ${viewClass}`}
@@ -3594,7 +3678,7 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
       {detailResult && (
         <div
           className="app-modal-overlay fixed inset-0 z-[1200] flex items-center justify-center bg-black/70 backdrop-blur-sm"
-          onMouseDown={event => { if (event.target === event.currentTarget) { setDetailResult(null); setDetailEdit(null); setDetailEditError(null); setDetailApply(null); setDetailApplyDone(null); resetDetailLocalState(); } }}
+          onMouseDown={event => { if (event.target === event.currentTarget) { setDetailResult(null); setDetailEdit(null); setDetailEditError(null); setDetailApply(null); setDetailApplyDone(null); setDetailBulkConfirm(null); setDetailBulkDone(null); resetDetailLocalState(); } }}
         >
           {/* LARGURA (77ª): o CSS de `.app-modal-frame` dimensiona pelo
               `.app-modal-size-*` (o max-w-* do Tailwind é ignorado pelo
@@ -3639,12 +3723,80 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                   );
                 })()}
               </div>
-              <button type="button" onClick={() => { setDetailResult(null); setDetailEdit(null); setDetailEditError(null); setDetailApply(null); setDetailApplyDone(null); resetDetailLocalState(); }} className="p-1 rounded text-slate-400 hover:text-white hover:bg-white/10 transition-colors cursor-pointer flex-shrink-0" title="Fechar">
+              <button type="button" onClick={() => { setDetailResult(null); setDetailEdit(null); setDetailEditError(null); setDetailApply(null); setDetailApplyDone(null); setDetailBulkConfirm(null); setDetailBulkDone(null); resetDetailLocalState(); }} className="p-1 rounded text-slate-400 hover:text-white hover:bg-white/10 transition-colors cursor-pointer flex-shrink-0" title="Fechar">
                 <X size={15} />
               </button>
             </div>
 
             <div className="flex-1 min-h-0 overflow-auto custom-scrollbar px-4 py-3 space-y-2">
+              {/* ATUALIZAÇÃO EM LOTE (86ª — EXCLUSIVA DO BOSS): grava o valor
+                  base de TODOS os itens encontrados NESTE personagem na Lista
+                  de Itens, pelo MESMO núcleo dos botões individuais
+                  "Todos"/"Servidor" (runDetailOfficialUpdate) — valor BASE
+                  oficial de cada linha (lista do servidor > snapshot), itens
+                  sem base válida ignorados, itens de outros personagens NUNCA
+                  tocados. 1º clique NUNCA executa — sempre abre a confirmação. */}
+              {isBossUser && detailResult.matches.length > 0 && (() => {
+                const bulkEligible = detailResult.matches.filter(match => resolveDetailBaseValueKk(match) >= 0.1).length;
+                const bulkSkipped = detailResult.matches.length - bulkEligible;
+                return (
+                  <div className="rounded border border-amber-500/25 bg-amber-500/[0.04] px-2 py-1.5">
+                    {detailBulkDone ? (
+                      <span className={`inline-flex items-center gap-1 text-[8px] font-black uppercase tracking-wide ${detailBulkDone.ok ? "text-emerald-300" : "text-rose-300"}`} title={detailBulkDone.message}>
+                        {detailBulkDone.ok ? <Check size={10} className="flex-shrink-0" /> : <AlertTriangle size={10} className="flex-shrink-0" />}
+                        <span className="min-w-0">{detailBulkDone.message}</span>
+                      </span>
+                    ) : detailBulkConfirm ? (
+                      <span className="inline-flex flex-wrap items-center gap-1.5 text-[9px] text-amber-200">
+                        <AlertTriangle size={10} className="flex-shrink-0 text-amber-300" />
+                        <span>
+                          Gravar o valor base de <span className="font-bold">{bulkEligible} item(ns)</span> encontrados em <span className="font-bold">“{detailResult.name}”</span> {detailBulkConfirm === "all" ? "na Lista de Itens de TODOS os servidores" : <>SOMENTE na lista de <span className="font-bold">{detailResult.server}</span> (demais servidores intactos)</>}?
+                          {bulkSkipped > 0 && <> <span className="text-slate-400">({bulkSkipped} sem valor base será(ão) ignorado(s).)</span></>}
+                          {" "}Somente os itens deste personagem são alterados.
+                        </span>
+                        <button
+                          type="button"
+                          disabled={detailApplyBusy}
+                          onClick={confirmDetailBulkUpdate}
+                          className="rounded border border-emerald-500/40 bg-emerald-500/15 px-1.5 py-0.5 inline-flex items-center gap-1 font-black uppercase tracking-wide text-emerald-300 hover:bg-emerald-500/25 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                        >
+                          {detailApplyBusy ? <RefreshCw size={9} className="animate-spin flex-shrink-0" /> : <Check size={9} className="flex-shrink-0" />} {detailApplyBusy ? "Atualizando…" : "Confirmar"}
+                        </button>
+                        <button
+                          type="button"
+                          disabled={detailApplyBusy}
+                          onClick={() => setDetailBulkConfirm(null)}
+                          className="rounded border border-slate-500/40 bg-slate-500/10 px-1.5 py-0.5 inline-flex items-center gap-1 font-black uppercase tracking-wide text-slate-300 hover:bg-slate-500/20 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                        >
+                          <X size={9} className="flex-shrink-0" /> Cancelar
+                        </button>
+                      </span>
+                    ) : (
+                      <span className="flex flex-wrap items-center gap-1.5">
+                        <span className="text-[8px] font-black uppercase tracking-wider text-slate-400">Atualizar em lote ({bulkEligible} de {detailResult.matches.length} item(ns) com valor base):</span>
+                        <button
+                          type="button"
+                          disabled={bulkEligible === 0 || detailApplyBusy}
+                          onClick={() => { setDetailApply(null); setDetailBulkConfirm(prev => (prev === "server" ? null : "server")); }}
+                          className={`rounded border px-1.5 py-0.5 inline-flex items-center gap-1 text-[8px] font-black uppercase tracking-wide transition-colors cursor-pointer ${detailBulkConfirm === "server" ? "border-amber-500/60 bg-amber-500/20 text-amber-200" : "border-amber-500/35 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20"} disabled:opacity-40 disabled:cursor-not-allowed`}
+                          title={bulkEligible > 0 ? `Gravar o valor base dos ${bulkEligible} item(ns) deste personagem SOMENTE na Lista de Itens de ${detailResult.server} — demais servidores e itens de outros personagens não são alterados.` : "Nenhum item com valor base válido — nada a atualizar."}
+                        >
+                          <RefreshCw size={9} className="flex-shrink-0" /> Atualizar todos neste servidor
+                        </button>
+                        <button
+                          type="button"
+                          disabled={bulkEligible === 0 || detailApplyBusy}
+                          onClick={() => { setDetailApply(null); setDetailBulkConfirm(prev => (prev === "all" ? null : "all")); }}
+                          className={`rounded border px-1.5 py-0.5 inline-flex items-center gap-1 text-[8px] font-black uppercase tracking-wide transition-colors cursor-pointer ${detailBulkConfirm === "all" ? "border-amber-500/60 bg-amber-500/20 text-amber-200" : "border-amber-500/35 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20"} disabled:opacity-40 disabled:cursor-not-allowed`}
+                          title={bulkEligible > 0 ? `Gravar o valor base dos ${bulkEligible} item(ns) deste personagem na Lista de Itens de TODOS os servidores (cria o item onde ainda não existir). Itens de outros personagens não são alterados.` : "Nenhum item com valor base válido — nada a atualizar."}
+                        >
+                          <Globe size={9} className="flex-shrink-0" /> Atualizar todos em todos os servidores
+                        </button>
+                      </span>
+                    )}
+                  </div>
+                );
+              })()}
               <table className="w-full text-[10px]">
                 <thead>
                   <tr className="text-[8px] uppercase tracking-wider text-slate-400 border-b border-[var(--th-line)]/40">
