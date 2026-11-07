@@ -1,18 +1,28 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { AlertTriangle, X, Coins, Check, PackageOpen, Globe, Megaphone, Pencil, Search, Swords, Briefcase, ArrowDownAZ, ArrowUpAZ, CalendarPlus, FileText } from "lucide-react";
+import { AlertTriangle, X, Coins, Check, PackageOpen, Globe, Megaphone, Pencil, Search, Swords, Briefcase, ArrowDownAZ, ArrowUpAZ, CalendarPlus, FileText, Plus, Trash2 } from "lucide-react";
 import type { Character, CharacterAcquisition, CharacterAcquisitionBuyerDetails, ItemSaleRecord } from "../types";
 import { formatRC } from "../types";
 import { SERVER_OPTIONS, serverLabel } from "../constants/servers";
 import {
   BAZAAR_WATCHED_ITEMS_UPDATED_EVENT,
   applyOfficialWatchedItemUpdate,
+  computeTieredValueKk,
   findServerWatchedItem,
   loadWatchedItemsByServer,
   parseDecimalKkText,
   sanitizeDecimalKkText,
   updateSnapshotMatchTotalKk,
 } from "../utils/bazaarWatchedItems";
+import {
+  MANUAL_ITEM_MAX_TIER,
+  MANUAL_SALE_ITEMS_UPDATED_EVENT,
+  addManualSaleItem,
+  loadManualSaleItems,
+  removeManualSaleItem,
+  setManualSaleItemSale,
+  type ManualSaleItem,
+} from "../utils/manualSaleItems";
 import { formatItemSaleSummary, formatKkValue as formatKkValueBase, isItemSaleConcluded } from "../utils/itemSale";
 import {
   buildSaleAnnouncement,
@@ -79,17 +89,19 @@ import ItemSoldModal from "./ItemSoldModal";
 // Pendente = item declarado sem venda registrada.
 // ============================================================================
 
-/** Origem temática do item: Quests (SW/SG/GB) ou item do Bazaar (SEM Quest). */
-export type MySaleItemQuest = "soulwar" | "sanguine" | "crypt" | "bazaar";
+/** Origem temática do item: Quests (SW/SG/GB), item do Bazaar (SEM Quest) ou
+ *  item ADICIONADO MANUALMENTE (89ª — categoria "Manual", sem origem automática). */
+export type MySaleItemQuest = "soulwar" | "sanguine" | "crypt" | "bazaar" | "manual";
 
 /** Um item de Quest do usuário (pendente ou vendido), com contexto de origem. */
 export interface MySaleItem {
-  /** Chave estável: `char:<characterId>:<quest>`, `acq:<acquisitionId>` ou
-   *  `char:<characterId>:bazaar:<matchIndex>`. */
+  /** Chave estável: `char:<characterId>:<quest>`, `acq:<acquisitionId>`,
+   *  `char:<characterId>:bazaar:<matchIndex>` ou `manual:<id>`. */
   key: string;
   /** Origem do registro — define COMO a venda é persistida. */
-  source: "character" | "acquisition" | "bazaar";
-  /** Id do personagem (source=character|bazaar) ou da negociação (source=acquisition). */
+  source: "character" | "acquisition" | "bazaar" | "manual";
+  /** Id do personagem (source=character|bazaar), da negociação
+   *  (source=acquisition) ou do item manual (source=manual). */
   sourceId: string;
   /** Índice do item no snapshot `bazaarItems.matches` (só source=bazaar). */
   matchIndex?: number;
@@ -162,6 +174,9 @@ export function collectMySaleItems(
   buyerDetails: CharacterAcquisitionBuyerDetails[],
   currentUserUid: string,
   lockedQuestFinancialIds: ReadonlySet<string>,
+  /** Itens ADICIONADOS MANUALMENTE (89ª) — lista local por usuário; opcional
+   *  para preservar todas as chamadas existentes. */
+  manualItems: ManualSaleItem[] = [],
 ): MySaleItem[] {
   const items: MySaleItem[] = [];
 
@@ -267,6 +282,37 @@ export function collectMySaleItems(
       soldAtMs: null,
       saleSummary: "",
       saleRecord: null,
+    });
+  }
+
+  // ── Itens ADICIONADOS MANUALMENTE (89ª) ───────────────────────────────────
+  // Categoria "Manual": itens incluídos à mão pelo usuário (nome + Tier +
+  // servidor), SEM personagem/negociação de origem — identificação própria em
+  // todo o modal, nunca misturada aos itens encontrados automaticamente.
+  // Venda registrada no PRÓPRIO item (local, por usuário) pela MESMA
+  // calculadora oficial; critério "vendido" canônico (isItemSaleConcluded).
+  for (const manual of manualItems) {
+    const concluded = isItemSaleConcluded(manual.sale);
+    items.push({
+      key: `manual:${manual.id}`,
+      source: "manual",
+      sourceId: manual.id,
+      quest: "manual",
+      questSigla: "",
+      itemName: manual.name,
+      serverName: serverLabel(manual.server) || manual.server,
+      origin: "disponivel",
+      sold: concluded,
+      soldValueRC: Math.max(0, Number(manual.sale?.resultRC || 0)),
+      addedAtMs: manual.addedAtMs > 0 ? manual.addedAtMs : null,
+      soldAtMs: concluded && (manual.sale?.soldAt || 0) > 0 ? manual.sale?.soldAt ?? null : null,
+      saleSummary: concluded && manual.sale ? formatItemSaleSummary(manual.sale) : "",
+      saleRecord: manual.sale,
+      // Base/considerado derivam da Lista de Itens do servidor (como os itens
+      // de Quest), respeitando o Tier informado (+30%/nível — regra única).
+      watchedName: manual.name,
+      tier: manual.tier,
+      amount: 1,
     });
   }
 
@@ -421,10 +467,21 @@ export default function MyItemsForSaleModal({
   canUpdateOfficialList,
   onClose,
 }: Props) {
+  // ── Itens MANUAIS (89ª) — lista local POR USUÁRIO, recarregada a cada
+  // gravação via evento (mesmo padrão da Lista de Itens): o modal e o
+  // contador do App leem SEMPRE a mesma fonte, sem recarregar a página.
+  const [manualItems, setManualItems] = useState<ManualSaleItem[]>(() => loadManualSaleItems(currentUserUid));
+  useEffect(() => {
+    const refresh = () => setManualItems(loadManualSaleItems(currentUserUid));
+    refresh();
+    window.addEventListener(MANUAL_SALE_ITEMS_UPDATED_EVENT, refresh);
+    return () => window.removeEventListener(MANUAL_SALE_ITEMS_UPDATED_EVENT, refresh);
+  }, [currentUserUid]);
+
   // Recalculado a cada mudança nas listas vivas do App — tempo real.
   const items = useMemo(
-    () => collectMySaleItems(characters, acquisitions, buyerDetails, currentUserUid, lockedQuestFinancialIds),
-    [characters, acquisitions, buyerDetails, currentUserUid, lockedQuestFinancialIds],
+    () => collectMySaleItems(characters, acquisitions, buyerDetails, currentUserUid, lockedQuestFinancialIds, manualItems),
+    [characters, acquisitions, buyerDetails, currentUserUid, lockedQuestFinancialIds, manualItems],
   );
   const unsoldCount = useMemo(() => countMyUnsoldSaleItems(items), [items]);
   const soldCount = items.length - unsoldCount;
@@ -603,6 +660,15 @@ export default function MyItemsForSaleModal({
    *  fonte ÚNICA usada pelos chips de valor E pelo Texto de Venda. */
   function itemConsideredKkOf(item: MySaleItem): number | null {
     if (item.source === "bazaar") return item.consideredKk ?? null;
+    // Item MANUAL (89ª): base viva da Lista de Itens do servidor + a regra
+    // ÚNICA do Tier (+30%/nível, computeTieredValueKk) — nada recalculado à
+    // parte; sem base cadastrada, o valor é desconhecido ("—").
+    if (item.source === "manual") {
+      const base = itemLiveBaseKk(item);
+      if (base === null) return null;
+      const tiered = computeTieredValueKk(base, item.tier || 0);
+      return tiered > 0 ? tiered : null;
+    }
     return itemLiveBaseKk(item);
   }
 
@@ -710,6 +776,45 @@ export default function MyItemsForSaleModal({
     saleTextTimerRef.current = window.setTimeout(() => { setSaleTextDone(null); saleTextTimerRef.current = null; }, ok ? 2000 : 4000);
   }
 
+  // ── ADICIONAR ITEM MANUAL (89ª) — formulário compacto no topo do modal ───
+  // Nome + Tier + Servidor; validação no núcleo (addManualSaleItem — nada é
+  // gravado inválido). Após incluir, o nome/Tier limpam e o SERVIDOR fica,
+  // facilitando inclusões em série no mesmo servidor.
+  const [isAddOpen, setIsAddOpen] = useState(false);
+  const [addName, setAddName] = useState("");
+  const [addTier, setAddTier] = useState(0);
+  const [addServer, setAddServer] = useState("");
+  const [addDone, setAddDone] = useState<{ ok: boolean; message: string } | null>(null);
+  const addTimerRef = useRef<number | null>(null);
+  useEffect(() => () => { if (addTimerRef.current !== null) window.clearTimeout(addTimerRef.current); }, []);
+
+  function confirmAddManualItem() {
+    const result = addManualSaleItem(currentUserUid, { name: addName, tier: addTier, server: addServer });
+    setAddDone(result.ok
+      ? { ok: true, message: `"${result.item?.name}"${(result.item?.tier || 0) > 0 ? ` T${result.item?.tier}` : ""} adicionado em ${result.item?.server} — categoria Manual.` }
+      : { ok: false, message: result.error || "Não foi possível adicionar o item." });
+    if (addTimerRef.current !== null) window.clearTimeout(addTimerRef.current);
+    addTimerRef.current = window.setTimeout(() => { setAddDone(null); addTimerRef.current = null; }, result.ok ? 2500 : 4000);
+    if (result.ok) { setAddName(""); setAddTier(0); }
+  }
+
+  // ── REMOVER item manual (89ª) — SÓ categoria Manual; 1º clique NUNCA
+  // remove (vira "Confirmar?" por 4s — padrão das confirmações do app).
+  const [removeConfirmKey, setRemoveConfirmKey] = useState<string | null>(null);
+  const removeTimerRef = useRef<number | null>(null);
+  useEffect(() => () => { if (removeTimerRef.current !== null) window.clearTimeout(removeTimerRef.current); }, []);
+  function requestRemoveManualItem(item: MySaleItem) {
+    if (removeConfirmKey !== item.key) {
+      setRemoveConfirmKey(item.key);
+      if (removeTimerRef.current !== null) window.clearTimeout(removeTimerRef.current);
+      removeTimerRef.current = window.setTimeout(() => { setRemoveConfirmKey(null); removeTimerRef.current = null; }, 4000);
+      return;
+    }
+    if (removeTimerRef.current !== null) { window.clearTimeout(removeTimerRef.current); removeTimerRef.current = null; }
+    setRemoveConfirmKey(null);
+    removeManualSaleItem(currentUserUid, item.sourceId);
+  }
+
   // ── Venda/edição via ItemSoldModal (calculadora oficial) ──────────────────
   const [saleTarget, setSaleTarget] = useState<MySaleItem | null>(null);
   const [savingKey, setSavingKey] = useState<string | null>(null);
@@ -736,6 +841,15 @@ export default function MyItemsForSaleModal({
     setSaleTarget(null);
     if (!target) return;
     setError("");
+    if (target.source === "manual") {
+      // Item MANUAL (89ª): o registro COMPLETO da calculadora fica no
+      // próprio item (lista local por usuário) — o save dispara o evento e
+      // o modal + contador do App refletem na hora.
+      if (!setManualSaleItemSale(currentUserUid, target.sourceId, sale)) {
+        setError("Não foi possível registrar a venda deste item manual.");
+      }
+      return;
+    }
     if (target.source === "bazaar") {
       // Item do Bazaar (58ª): grava o registro COMPLETO no próprio match do
       // snapshot — MESMO canal do CharTable (onCharacterInlineChange).
@@ -808,7 +922,7 @@ export default function MyItemsForSaleModal({
               <div className="min-w-0">
                 <h3 className="text-[15px] font-black text-amber-200 leading-tight tracking-tight truncate">Itens à Venda</h3>
                 <p className="text-[10px] text-slate-400 leading-snug truncate">
-                  Itens de Quest e itens do Bazaar dos seus personagens — Disponíveis, Vendidos e Negociados comprados
+                  Itens de Quest, do Bazaar e manuais — Disponíveis, Vendidos e Negociados comprados
                 </p>
               </div>
             </div>
@@ -846,18 +960,96 @@ export default function MyItemsForSaleModal({
             <Check size={11} /> Vendidos
             <span className="tabular-nums font-mono">({soldCount})</span>
           </button>
+          {/* ADICIONAR ITEM MANUAL (89ª): abre o formulário compacto (nome +
+              Tier + servidor) — o item entra com a categoria "Manual". */}
+          <button
+            type="button"
+            onClick={() => setIsAddOpen(open => !open)}
+            aria-pressed={isAddOpen}
+            className={`ml-auto inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-[10px] font-black uppercase tracking-wide transition-colors cursor-pointer ${
+              isAddOpen
+                ? "border-teal-500/50 bg-teal-500/20 text-teal-200"
+                : "border-teal-500/35 bg-teal-500/10 text-teal-300 hover:bg-teal-500/20"
+            }`}
+            title="Adicionar um item manualmente à lista (nome, Tier e servidor) — entra com a categoria “Manual”, separada dos itens encontrados automaticamente."
+          >
+            <Plus size={11} /> Adicionar Item
+          </button>
           {/* CONFIGURAR TEXTO DE VENDA (75ª): personaliza o anúncio copiado
               pelo botão "Gerar Texto de Venda" de cada servidor — config
               persistida POR USUÁRIO (local), com prévia ao vivo. */}
           <button
             type="button"
             onClick={() => setIsSaleTextConfigOpen(true)}
-            className="ml-auto inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-amber-500/35 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20 text-[10px] font-black uppercase tracking-wide transition-colors cursor-pointer"
+            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-amber-500/35 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20 text-[10px] font-black uppercase tracking-wide transition-colors cursor-pointer"
             title="Personalizar o anúncio gerado pelo botão “Gerar Texto de Venda” de cada servidor (Introdução, formato dos itens e Encerramento) — salvo para o seu usuário."
           >
             <FileText size={11} /> Configurar Texto de Venda
           </button>
         </div>
+
+        {/* FORMULÁRIO "ADICIONAR ITEM" (89ª) — item MANUAL: nome + Tier +
+            servidor; validação no núcleo; feedback inline que some sozinho. */}
+        {isAddOpen && (
+          <div className="mx-4 mt-2 px-3 py-2 rounded-xl border border-teal-500/30 bg-teal-500/[0.06] flex-shrink-0">
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <span className="text-[8px] font-black px-1 py-px rounded border border-teal-500/40 bg-teal-500/15 text-teal-300 uppercase tracking-wide flex-shrink-0" title="O item adicionado entra com a categoria Manual — separada dos itens encontrados automaticamente.">Manual</span>
+              <input
+                type="text"
+                value={addName}
+                onChange={e => setAddName(e.target.value)}
+                onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); confirmAddManualItem(); } }}
+                placeholder="Nome do item..."
+                aria-label="Nome do item manual"
+                title="Nome do item — Enter adiciona."
+                className="bg-black/40 border border-white/10 rounded-lg px-2.5 py-1.5 text-[11px] text-slate-200 outline-none transition-colors focus:border-teal-500/50 placeholder-slate-600 flex-1 min-w-[140px]"
+              />
+              <select
+                value={addTier}
+                onChange={e => setAddTier(Number(e.target.value) || 0)}
+                aria-label="Tier do item manual"
+                title="Tier do item (0 = sem Tier) — cada nível vale +30% sobre o valor base da Lista de Itens."
+                className="bg-black/40 border border-white/10 rounded-lg px-2.5 py-1.5 text-[11px] text-slate-200 outline-none transition-colors focus:border-teal-500/50 cursor-pointer [color-scheme:dark] flex-shrink-0"
+              >
+                <option value={0}>Sem Tier</option>
+                {Array.from({ length: MANUAL_ITEM_MAX_TIER }, (_, i) => i + 1).map(tier => (
+                  <option key={tier} value={tier}>T{tier}</option>
+                ))}
+              </select>
+              <select
+                value={addServer}
+                onChange={e => setAddServer(e.target.value)}
+                aria-label="Servidor do item manual"
+                title="Servidor do item — define o grupo da lista, o valor base (Lista de Itens) e o Texto de Venda."
+                className="bg-black/40 border border-white/10 rounded-lg px-2.5 py-1.5 text-[11px] text-slate-200 outline-none transition-colors focus:border-teal-500/50 cursor-pointer [color-scheme:dark] flex-shrink-0"
+              >
+                <option value="">Servidor...</option>
+                {SERVER_OPTIONS.map(server => <option key={server} value={server}>{server}</option>)}
+              </select>
+              <button
+                type="button"
+                onClick={confirmAddManualItem}
+                className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-teal-500/50 bg-teal-500/20 text-teal-200 hover:bg-teal-500/30 text-[10px] font-black uppercase tracking-wide transition-colors cursor-pointer flex-shrink-0"
+                title="Adicionar o item à lista com a categoria Manual."
+              >
+                <Plus size={11} /> Adicionar
+              </button>
+              <button
+                type="button"
+                onClick={() => { setIsAddOpen(false); setAddDone(null); }}
+                className="p-1 rounded text-slate-400 hover:text-white hover:bg-white/10 transition-colors cursor-pointer flex-shrink-0"
+                title="Fechar o formulário"
+              >
+                <X size={12} />
+              </button>
+            </div>
+            {addDone && (
+              <p className={`mt-1 text-[9px] leading-snug flex items-center gap-1 ${addDone.ok ? "text-emerald-300" : "text-rose-300"}`} title={addDone.message}>
+                {addDone.ok ? <Check size={9} className="flex-shrink-0" /> : <AlertTriangle size={9} className="flex-shrink-0" />} {addDone.message}
+              </p>
+            )}
+          </div>
+        )}
 
         {/* Filtros — combinados; preservados ao alternar de aba */}
         <div className="px-4 pt-2.5 pb-1 grid grid-cols-2 sm:grid-cols-4 gap-1.5 flex-shrink-0">
@@ -892,6 +1084,7 @@ export default function MyItemsForSaleModal({
             <option value="sanguine">Sanguine (SG)</option>
             <option value="crypt">Graveborn (GB)</option>
             <option value="bazaar">Itens do Bazaar (sem Quest)</option>
+            <option value="manual">Manual (adicionados à mão)</option>
           </select>
           {/* Faixa de valor: valores registrados existem só nos VENDIDOS. */}
           <div className={`flex items-center gap-1 ${tab === "vendidos" ? "" : "opacity-40 pointer-events-none"}`} title={tab === "vendidos" ? "Faixa de valor registrado (RC)" : "Disponível na aba Vendidos (pendentes não têm valor registrado)"}>
@@ -971,7 +1164,7 @@ export default function MyItemsForSaleModal({
               <PackageOpen size={28} className="mx-auto text-slate-600 mb-2" />
               <p className="text-xs text-slate-500 italic">
                 {items.length === 0
-                  ? "Nenhum item de Quest declarado nem item do Bazaar marcado à venda nos seus personagens."
+                  ? "Nenhum item de Quest declarado nem item do Bazaar marcado à venda nos seus personagens — use “Adicionar Item” para incluir um manualmente."
                   : tab === "avenda"
                     ? "Nenhum item pendente corresponde aos filtros atuais."
                     : "Nenhum item vendido corresponde aos filtros atuais."}
@@ -1179,6 +1372,11 @@ export default function MyItemsForSaleModal({
                                personagem — SEM Quest associada (nunca exibe
                                SW/SG/GB). Fúcsia = identidade da guia Itens. */
                             <span className="text-[8px] font-black px-1 py-px rounded border border-fuchsia-500/40 bg-fuchsia-500/15 text-fuchsia-300 uppercase tracking-wide" title="Item do Bazaar — veio na compra do personagem; sem Quest associada (SW/SG/GB)">Bazaar</span>
+                          ) : item.quest === "manual" ? (
+                            /* Item MANUAL (89ª): adicionado à mão pelo botão
+                               "Adicionar Item" — categoria própria, nunca
+                               misturada aos itens encontrados pelo sistema. */
+                            <span className="text-[8px] font-black px-1 py-px rounded border border-teal-500/40 bg-teal-500/15 text-teal-300 uppercase tracking-wide" title="Item adicionado manualmente — não veio da identificação automática do sistema (Quests/Bazaar)">Manual</span>
                           ) : (
                             <span className={`text-[8px] font-black px-1 py-px rounded border ${questBadgeColorBySigla(item.questSigla)}`} title={item.quest === "soulwar" ? "Soul War" : item.quest === "sanguine" ? "Sanguine" : "Graveborn"}>{item.questSigla}</span>
                           )}
@@ -1225,6 +1423,25 @@ export default function MyItemsForSaleModal({
                               className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded border border-amber-500/40 bg-amber-500/10 text-amber-300 hover:bg-amber-500/25 text-[9px] font-bold transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-wait"
                             >
                               <Coins size={9} /> Vender
+                            </button>
+                          )}
+                          {/* REMOVER (89ª) — SÓ itens da categoria Manual; o
+                              1º clique NUNCA remove (vira "Confirmar?" por
+                              4s). Itens automáticos não têm este botão. */}
+                          {item.source === "manual" && (
+                            <button
+                              type="button"
+                              onClick={() => requestRemoveManualItem(item)}
+                              className={`inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded border text-[9px] font-bold transition-colors cursor-pointer ${
+                                removeConfirmKey === item.key
+                                  ? "border-rose-500/60 bg-rose-500/20 text-rose-200"
+                                  : "border-white/10 bg-white/[0.03] text-slate-400 hover:text-rose-300 hover:border-rose-500/40"
+                              }`}
+                              title={removeConfirmKey === item.key
+                                ? `Clique novamente para REMOVER "${item.itemName}" da lista${item.sold ? " — o registro de venda deste item manual também será apagado" : ""}.`
+                                : "Remover este item manual da lista (pedirá confirmação)."}
+                            >
+                              <Trash2 size={9} /> {removeConfirmKey === item.key ? "Confirmar?" : ""}
                             </button>
                           )}
                         </div>
@@ -1285,7 +1502,7 @@ export default function MyItemsForSaleModal({
       {liveSaleTarget && (
         <ItemSoldModal
           itemName={liveSaleTarget.itemName}
-          contextLabel={`${liveSaleTarget.serverName || "Sem servidor"} — ${liveSaleTarget.quest === "bazaar" ? "Item do Bazaar" : liveSaleTarget.questSigla}`}
+          contextLabel={`${liveSaleTarget.serverName || "Sem servidor"} — ${liveSaleTarget.quest === "bazaar" ? "Item do Bazaar" : liveSaleTarget.quest === "manual" ? "Item Manual" : liveSaleTarget.questSigla}`}
           initial={liveSaleTarget.saleRecord}
           /* Fonte local completa (personagem OU match do snapshot) comporta
              venda sem valor; só a negociação (schema = lucro numérico) não. */

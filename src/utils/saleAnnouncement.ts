@@ -31,7 +31,7 @@ export type SaleTextLayout = "lines" | "inline";
  * distingue sem ambiguidade itens de Quest (SW/SG/GB) de itens vindos de
  * personagens do Bazaar ("bazaar"). Nenhuma identificação nova é inventada.
  */
-export type SaleTextOrigin = "soulwar" | "sanguine" | "crypt" | "bazaar";
+export type SaleTextOrigin = "soulwar" | "sanguine" | "crypt" | "bazaar" | "manual";
 
 /** Origens na ordem exibida na UI (siglas oficiais do app — GB, nunca "Crypt"). */
 export const SALE_TEXT_ORIGINS: Array<{ key: SaleTextOrigin; label: string; title: string }> = [
@@ -39,6 +39,9 @@ export const SALE_TEXT_ORIGINS: Array<{ key: SaleTextOrigin; label: string; titl
   { key: "sanguine", label: "SG", title: "Itens de Quest — Sanguine" },
   { key: "crypt", label: "GB", title: "Itens de Quest — Graveborn" },
   { key: "bazaar", label: "Bazaar", title: "Itens à venda de personagens comprados no Bazaar" },
+  // Itens MANUAIS (89ª): adicionados à mão no "Itens à Venda" — origem
+  // própria, nunca misturada com os itens identificados automaticamente.
+  { key: "manual", label: "Manual", title: "Itens adicionados manualmente no Itens à Venda" },
 ];
 
 /** Destaque aplicado ao NOME de cada item (caracteres, não formatação real). */
@@ -79,7 +82,7 @@ export const DEFAULT_SALE_TEXT_CONFIG: SaleTextConfig = {
   includeAmount: true,
   blankLineBetweenItems: false,
   sectionBlankLines: 1,
-  origins: { soulwar: true, sanguine: true, crypt: true, bazaar: true },
+  origins: { soulwar: true, sanguine: true, crypt: true, bazaar: true, manual: true },
 };
 
 const VALID_LAYOUTS: SaleTextLayout[] = ["lines", "inline"];

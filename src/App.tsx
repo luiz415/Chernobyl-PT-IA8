@@ -22,6 +22,7 @@ const initialBgUrl = "./initial-bg.webp";
 import CharTable from "./components/CharTable";
 import AcquiredCharactersPanel from "./components/AcquiredCharactersPanel";
 import MyItemsForSaleModal, { collectMySaleItems, countMyUnsoldSaleItems } from "./components/MyItemsForSaleModal";
+import { MANUAL_SALE_ITEMS_UPDATED_EVENT, loadManualSaleItems, type ManualSaleItem } from "./utils/manualSaleItems";
 import FoundItemsModal, { collectFoundItemGroups } from "./components/FoundItemsModal";
 import CharacterBazaarItemsModal from "./components/CharacterBazaarItemsModal";
 // Cotação do coin persistida pela guia Bazaar → Itens (local) — usada apenas
@@ -3280,9 +3281,20 @@ export default function App() {
   // "Itens à Venda" de Meus Personagens — derivação pura das listas que o App
   // já mantém vivas (nenhuma consulta nova): personagens Disponíveis+Vendidos
   // e negociações COMPRADAS pelo usuário. O contador alimenta o badge do botão.
+  // Itens MANUAIS do "Itens à Venda" (89ª) — lista local POR USUÁRIO,
+  // recarregada a cada gravação via evento (o modal grava, o contador do
+  // botão reflete na hora — mesma fonte, nenhuma leitura no Firestore).
+  const [manualSaleItems, setManualSaleItems] = useState<ManualSaleItem[]>([]);
+  useEffect(() => {
+    const uid = currentUser?.uid || "";
+    const refresh = () => setManualSaleItems(loadManualSaleItems(uid));
+    refresh();
+    window.addEventListener(MANUAL_SALE_ITEMS_UPDATED_EVENT, refresh);
+    return () => window.removeEventListener(MANUAL_SALE_ITEMS_UPDATED_EVENT, refresh);
+  }, [currentUser?.uid]);
   const mySaleItems = useMemo(
-    () => collectMySaleItems(data.characters, characterAcquisitions, characterAcquisitionBuyerDetails, currentUser?.uid || "", negotiatedOriginalCharacterIds),
-    [data.characters, characterAcquisitions, characterAcquisitionBuyerDetails, currentUser?.uid, negotiatedOriginalCharacterIds],
+    () => collectMySaleItems(data.characters, characterAcquisitions, characterAcquisitionBuyerDetails, currentUser?.uid || "", negotiatedOriginalCharacterIds, manualSaleItems),
+    [data.characters, characterAcquisitions, characterAcquisitionBuyerDetails, currentUser?.uid, negotiatedOriginalCharacterIds, manualSaleItems],
   );
   const myUnsoldSaleItemsCount = useMemo(() => countMyUnsoldSaleItems(mySaleItems), [mySaleItems]);
 
