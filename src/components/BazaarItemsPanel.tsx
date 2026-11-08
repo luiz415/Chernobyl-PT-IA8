@@ -83,7 +83,9 @@ import {
   saveItemsInterestRecords,
   toggleItemsInterestRecord,
   upgradeItemsInterestRecords,
+  carryManualTotalsForward,
   loadItemsLastQuery,
+  rememberManualTotalForAuction,
   loadWatchedItemsByServer,
   BAZAAR_WATCHED_ITEMS_UPDATED_EVENT,
   mergeWatchedLists,
@@ -373,6 +375,44 @@ function saveItemsHideEndedPreference(value: boolean) {
   try { localStorage.setItem(ITEMS_HIDE_ENDED_KEY, JSON.stringify(value)); } catch {}
 }
 
+// ── ORDENAÇÃO da tabela — PERSISTIDA (ajuste atual) ─────────────────────────
+// Antes volátil por sessão; agora a pilha (até 2 critérios, coluna+direção)
+// é persistida por dispositivo (mesma convenção dos filtros/preferências da
+// guia). Sem preferência salva (1ª abertura), vale o padrão de sempre:
+// "Encerra" crescente. Depois que o usuário mexe na ordenação, a ESCOLHA
+// DELE prevalece indefinidamente (inclusive uma pilha VAZIA — remover todos
+// os critérios também é uma escolha), em recarregamentos e novas sessões.
+const ITEMS_SORT_STACK_KEY = "rubinot_bazaar_items_sort_stack";
+
+const DEFAULT_ITEMS_SORT_STACK: ItemsSortEntry[] = [{ key: "auctionEndTs", dir: "asc" }];
+
+const VALID_ITEMS_SORT_KEYS: ItemsSortKey[] = ["name", "server", "auctionEndTs", "bid", "totalKk", "rc", "potential"];
+
+function readItemsSortStack(): ItemsSortEntry[] {
+  try {
+    const raw = localStorage.getItem(ITEMS_SORT_STACK_KEY);
+    if (raw === null) return [...DEFAULT_ITEMS_SORT_STACK]; // nunca personalizou
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [...DEFAULT_ITEMS_SORT_STACK];
+    const clean: ItemsSortEntry[] = [];
+    for (const entry of parsed) {
+      const key = (entry as ItemsSortEntry)?.key;
+      const dir = (entry as ItemsSortEntry)?.dir;
+      if (!VALID_ITEMS_SORT_KEYS.includes(key) || (dir !== "asc" && dir !== "desc")) continue;
+      if (clean.some(existing => existing.key === key)) continue;
+      clean.push({ key, dir });
+      if (clean.length >= MAX_ITEMS_SORT_ENTRIES) break;
+    }
+    return clean; // pode ser [] — escolha explícita de "sem ordenação"
+  } catch {
+    return [...DEFAULT_ITEMS_SORT_STACK];
+  }
+}
+
+function saveItemsSortStack(stack: ItemsSortEntry[]) {
+  try { localStorage.setItem(ITEMS_SORT_STACK_KEY, JSON.stringify(stack)); } catch {}
+}
+
 // ── Servidor selecionado no modal "Lista de Itens" ──────────────────────────
 // Cada servidor tem a SUA lista de preços; o seletor do modal define qual
 // lista está sendo exibida/editada (e o alvo do escopo "Apenas Este
@@ -397,15 +437,16 @@ function saveItemsSelectedServer(value: string) {
 // pode AJUSTAR o Total (kk) de cada linha do modal "Ver". Os ajustes são
 // locais ao USUÁRIO e ao DISPOSITIVO (localStorage por uid — NUNCA Firestore,
 // nunca visíveis a outros usuários) e ficam associados ao personagem (chave
-// do leilão) e ao item (`índice:nome`). VALIDADE: a mesma da consulta atual —
-// o estado gravado carrega o `completedAtMs` da consulta a que pertence;
-// quando uma NOVA consulta conclui (localmente ou via auto-bazaar das
-// Quests), a marca muda e a leitura descarta tudo (nova sessão de edição).
-// Reprecificações/"Atualizar Valores" preservam o `completedAtMs` (é a MESMA
-// lista), então os ajustes sobrevivem a elas — decisão da 45ª mantida.
+// do leilão) e ao ITEM (nome normalizado — ver detailTotalKeyAt).
+// VALIDADE (ajuste atual, a pedido — substitui a decisão da 45ª): os ajustes
+// valem INDEFINIDAMENTE — novas consultas, "Atualizar Valores",
+// reprecificações, sincronizações e recarregamentos NÃO os descartam; eles
+// seguem vinculados ao personagem (chave do leilão, estável enquanto o
+// leilão existir) e ao item, prevalecendo sobre os valores recalculados.
+// Remoção SOMENTE pelo próprio usuário (limpar o campo no modal "Ver").
 const ITEMS_DETAIL_TOTALS_KEY_PREFIX = "rubinot_bazaar_items_detail_totals_";
 
-/** Mapa personagem (chave do leilão) → { `índice:nome` → Total (kk) ajustado }. */
+/** Mapa personagem (chave do leilão) → { chave do item → Total (kk) ajustado }. */
 type ItemsDetailTotalsMap = Record<string, Record<string, number>>;
 
 function itemsDetailTotalsKey(uid?: string): string {
@@ -413,15 +454,37 @@ function itemsDetailTotalsKey(uid?: string): string {
 }
 
 /**
- * Lê os ajustes persistidos VALIDANDO a consulta: estado gravado para outra
- * consulta (`queryCompletedAtMs` divergente) é ignorado — personalizações da
- * lista anterior nunca vazam para a nova.
+ * CHAVE do ajuste local de UMA linha: nome do item normalizado (minúsculas),
+ * com sufixo `#n` apenas para ocorrências repetidas do MESMO nome no mesmo
+ * personagem. Antes a chave era `índice:nome` — presa à posição, ela deixava
+ * de casar quando uma NOVA consulta reordenava os matches; pelo NOME, o
+ * ajuste continua vinculado ao personagem e ao respectivo item em qualquer
+ * consulta (requisito da preservação indefinida).
  */
-function readItemsDetailTotals(uid: string | undefined, queryCompletedAtMs: number): ItemsDetailTotalsMap {
+function detailTotalKeyAt(matches: ReadonlyArray<{ foundName: string }>, index: number): string {
+  const nameOf = (i: number) => String(matches[i]?.foundName || "").trim().toLowerCase();
+  const name = nameOf(index);
+  let occurrence = 0;
+  for (let i = 0; i < index; i++) { if (nameOf(i) === name) occurrence++; }
+  return occurrence > 0 ? `${name}#${occurrence}` : name;
+}
+
+/** Converte uma chave LEGADA `índice:nome` para a chave atual (nome). */
+function migrateDetailTotalKey(itemKey: string): string {
+  const legacy = /^\d+:(.+)$/.exec(itemKey);
+  return (legacy ? legacy[1] : itemKey).trim().toLowerCase();
+}
+
+/**
+ * Lê os ajustes persistidos — SEM validade por consulta (preservação
+ * indefinida). Estados gravados pela versão anterior (chaves `índice:nome` e
+ * marca `queryCompletedAtMs`) são migrados na leitura: os ajustes existentes
+ * continuam valendo, agora pela chave por nome.
+ */
+function readItemsDetailTotals(uid: string | undefined): ItemsDetailTotalsMap {
   try {
-    const raw = loadUIState<{ queryCompletedAtMs?: number; characters?: unknown } | null>(itemsDetailTotalsKey(uid), null);
+    const raw = loadUIState<{ characters?: unknown } | null>(itemsDetailTotalsKey(uid), null);
     if (!raw || typeof raw !== "object") return {};
-    if (Number(raw.queryCompletedAtMs || 0) !== queryCompletedAtMs || queryCompletedAtMs <= 0) return {};
     const characters = raw.characters;
     if (!characters || typeof characters !== "object" || Array.isArray(characters)) return {};
     const clean: ItemsDetailTotalsMap = {};
@@ -430,7 +493,8 @@ function readItemsDetailTotals(uid: string | undefined, queryCompletedAtMs: numb
       const cleanItems: Record<string, number> = {};
       for (const [itemKey, value] of Object.entries(items as Record<string, unknown>)) {
         const kk = Number(value);
-        if (itemKey && Number.isFinite(kk) && kk > 0) cleanItems[itemKey] = kk;
+        const migratedKey = migrateDetailTotalKey(itemKey);
+        if (migratedKey && Number.isFinite(kk) && kk > 0 && cleanItems[migratedKey] === undefined) cleanItems[migratedKey] = kk;
       }
       if (Object.keys(cleanItems).length > 0) clean[charKey] = cleanItems;
     }
@@ -440,9 +504,9 @@ function readItemsDetailTotals(uid: string | undefined, queryCompletedAtMs: numb
   }
 }
 
-/** Grava os ajustes com a marca da consulta atual (fonte da validade). */
-function saveItemsDetailTotals(uid: string | undefined, queryCompletedAtMs: number, characters: ItemsDetailTotalsMap): void {
-  saveUIState(itemsDetailTotalsKey(uid), { queryCompletedAtMs, characters });
+/** Grava os ajustes — sem marca de consulta (validade indefinida). */
+function saveItemsDetailTotals(uid: string | undefined, characters: ItemsDetailTotalsMap): void {
+  saveUIState(itemsDetailTotalsKey(uid), { characters });
 }
 
 // `effectiveTotalKk`/`hasManualTotalKk` moraram aqui até a integração
@@ -551,10 +615,14 @@ function bidValueKk(result: BazaarItemsCharacterResult, coinRate: number): numbe
 /**
  * Diferença do potencial em kk (Valor Itens EFETIVO − personagem em kk) —
  * usada como informação complementar no tooltip da coluna.
+ * `effectiveKk` (ajuste atual) é o MESMO valor exibido nas colunas KK/RC
+ * (rowDisplayTotalsInfo — ajustes locais do modal "Ver" > correção manual >
+ * calculado): o Potencial nunca diverge do Valor Itens mostrado na linha.
+ * Sem o argumento (compatibilidade), usa o efetivo padrão.
  */
-function potentialScoreKk(result: BazaarItemsCharacterResult, coinRate: number): number | null {
+function potentialScoreKk(result: BazaarItemsCharacterResult, coinRate: number, effectiveKk: number = effectiveTotalKk(result)): number | null {
   if (coinRate <= 0) return null;
-  return Math.round((effectiveTotalKk(result) - bidValueKk(result, coinRate)) * 100) / 100;
+  return Math.round((effectiveKk - bidValueKk(result, coinRate)) * 100) / 100;
 }
 
 /**
@@ -563,18 +631,20 @@ function potentialScoreKk(result: BazaarItemsCharacterResult, coinRate: number):
  * personagem 100kk / itens 150kk → +50%; personagem 150kk / itens 100kk →
  * −33,3%. Positivo = itens valem mais que o preço (verde); negativo =
  * personagem custa mais que os itens (vermelho). Usa o MESMO valor efetivo
- * da coluna KK (correção manual > calculado). É este número real que a
- * ordenação da coluna usa.
+ * da coluna KK — `effectiveKk` (ajuste atual) recebe o total exibido
+ * (rowDisplayTotalsInfo: ajustes locais do modal "Ver" > correção manual >
+ * calculado), então qualquer edição local recalcula o Potencial na hora,
+ * sem nova consulta. É este número real que a ordenação da coluna usa.
  *
  * Sem cotação do coin (não dá para pôr bid e kk na mesma unidade) ou sem
  * valor de personagem > 0 (divisão inválida) → null: a coluna exibe "—"
  * (dado indisponível), nunca um número enganoso. 1 casa decimal.
  */
-function potentialPercent(result: BazaarItemsCharacterResult, coinRate: number): number | null {
+function potentialPercent(result: BazaarItemsCharacterResult, coinRate: number, effectiveKk: number = effectiveTotalKk(result)): number | null {
   if (coinRate <= 0) return null;
   const bidKk = bidValueKk(result, coinRate);
   if (bidKk <= 0) return null;
-  return Math.round(((effectiveTotalKk(result) - bidKk) / bidKk) * 1000) / 10;
+  return Math.round(((effectiveKk - bidKk) / bidKk) * 1000) / 10;
 }
 
 /** "+50%" / "-33,3%" / "0%" — vírgula pt-BR, sem casa decimal desnecessária. */
@@ -674,12 +744,13 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
   // como tableFilters/sortKey/sortDir do BazarPanel. Tudo derivado/local:
   // nenhum efeito sobre a consulta, os cálculos ou os dados persistidos.
   const [tableFilters, setTableFilters] = useState<ItemsTableFilters>(() => readItemsTableFilters());
-  // ORDENAÇÃO — agora uma PILHA com ATÉ 2 critérios simultâneos (mesma
-  // estratégia do sortStack do CharTable). Padrão na abertura: "Encerra"
-  // crescente (cronológica) como único critério — comportamento inicial
-  // idêntico ao anterior. Índice 0 = critério PRINCIPAL; índice 1 =
-  // desempate. Volátil por sessão, como antes.
-  const [sortStack, setSortStack] = useState<ItemsSortEntry[]>([{ key: "auctionEndTs", dir: "asc" }]);
+  // ORDENAÇÃO — PILHA com ATÉ 2 critérios simultâneos (mesma estratégia do
+  // sortStack do CharTable). Padrão na abertura: "Encerra" crescente
+  // (cronológica) como único critério. PERSISTIDA (ajuste atual): qualquer
+  // mudança de coluna/direção é salva na hora e prevalece sobre o padrão
+  // nas próximas aberturas, recarregamentos e novas sessões.
+  const [sortStack, setSortStack] = useState<ItemsSortEntry[]>(() => readItemsSortStack());
+  useEffect(() => { saveItemsSortStack(sortStack); }, [sortStack]);
 
   // ── "Ocultar encerrados / Exibir todos" — mesmo comportamento das QUESTS ──
   // Preferência persistida por dispositivo (default oculta) + relógio de 15s
@@ -828,24 +899,21 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
   // Boss pode AJUSTAR o Total (kk) de cada linha do modal "Ver". Os ajustes
   // são PERSISTIDOS localmente (localStorage por usuário/dispositivo —
   // NUNCA Firestore) por personagem+item e sobrevivem a fechar/reabrir o
-  // modal, trocar de guia e reiniciar o aplicativo; são descartados apenas
-  // quando uma NOVA consulta substitui a lista atual (validação pelo
-  // `completedAtMs` — ver helpers readItemsDetailTotals/saveItemsDetailTotals).
-  // O valor editado vale nos cálculos LOCAIS do modal (soma dos itens +
-  // conversão RC); a Lista de Itens, a tabela principal e os dados
-  // publicados/persistidos da consulta NÃO mudam.
+  // modal, trocar de guia, reiniciar o aplicativo E a NOVAS CONSULTAS/
+  // sincronizações (ajuste atual — preservação indefinida, chave por nome
+  // do item; ver readItemsDetailTotals/detailTotalKeyAt). O valor editado
+  // vale nos cálculos LOCAIS do modal (soma dos itens + conversão RC) e no
+  // exibido da tabela (KK/RC/Potencial); a Lista de Itens e os dados
+  // publicados da consulta NÃO mudam.
   const [detailTotalEdit, setDetailTotalEdit] = useState<{ matchIndex: number; value: string } | null>(null);
   const [detailTotalsByChar, setDetailTotalsByChar] = useState<ItemsDetailTotalsMap>(
-    () => readItemsDetailTotals(currentUid, lastQuery?.completedAtMs || 0)
+    () => readItemsDetailTotals(currentUid)
   );
-  // Identidade da LISTA atual: muda somente quando uma nova consulta conclui
-  // (reprecificações preservam o completedAtMs). Mudou → os ajustes da lista
-  // anterior são descartados e uma nova sessão de edição começa; troca de
-  // usuário recarrega os ajustes DELE.
-  const detailTotalsQueryMs = lastQuery?.completedAtMs || 0;
+  // Troca de usuário recarrega os ajustes DELE (cada uid tem a própria
+  // chave). Novas consultas NÃO descartam mais os ajustes.
   useEffect(() => {
-    setDetailTotalsByChar(readItemsDetailTotals(currentUid, detailTotalsQueryMs));
-  }, [currentUid, detailTotalsQueryMs]);
+    setDetailTotalsByChar(readItemsDetailTotals(currentUid));
+  }, [currentUid]);
   // ── Cotação do RC do servidor — edição no modal "Detalhes" ───────────────
   // Edita a MESMA configuração persistente usada pela Lista de Itens
   // (appSettings/global.serverCoinRates), para o servidor do personagem exibido.
@@ -853,8 +921,10 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
   const [detailRateError, setDetailRateError] = useState<string | null>(null);
   const [detailRateSaved, setDetailRateSaved] = useState(false);
   const detailRateTimerRef = useRef<number | null>(null);
-  /** Chave do override local de Total — índice + nome (sobrevive à reprecificação da linha). */
-  const detailTotalKey = (index: number, foundName: string) => `${index}:${foundName}`;
+  /** Chave do override de Total de uma linha do PERSONAGEM ABERTO no modal —
+   *  por NOME do item (detailTotalKeyAt): sobrevive a reprecificações E a
+   *  novas consultas, mesmo que a ordem dos matches mude. */
+  const detailTotalKey = (index: number) => detailTotalKeyAt(detailResult?.matches || [], index);
   /** Chave do PERSONAGEM aberto no modal (mesma identidade usada na tabela). */
   const detailCharKey = detailResult ? String(detailResult.id || detailResult.url || detailResult.name || "") : "";
   /**
@@ -880,13 +950,13 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
     if (Object.keys(items).length === 0) delete next[charKey];
     else next[charKey] = items;
     setDetailTotalsByChar(next);
-    saveItemsDetailTotals(currentUid, detailTotalsQueryMs, next);
+    saveItemsDetailTotals(currentUid, next);
   };
   /** Aplica o ajuste LOCAL de Total (kk) da linha (vazio = volta ao calculado). */
-  const saveDetailTotalEdit = (index: number, foundName: string) => {
+  const saveDetailTotalEdit = (index: number) => {
     if (!detailTotalEdit || detailTotalEdit.matchIndex !== index) return;
     const text = detailTotalEdit.value.trim();
-    const key = detailTotalKey(index, foundName);
+    const key = detailTotalKey(index);
     const parsed = text ? parseDecimalKk(text) : null;
     const items = { ...detailTotalOverrides };
     if (parsed !== null) items[key] = parsed;
@@ -895,15 +965,15 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
     setDetailTotalEdit(null);
   };
   /** Descarta o ajuste local de Total de uma linha (volta ao calculado). */
-  const removeDetailTotalOverride = (index: number, foundName: string) => {
-    const key = detailTotalKey(index, foundName);
+  const removeDetailTotalOverride = (index: number) => {
+    const key = detailTotalKey(index);
     const items = { ...detailTotalOverrides };
     delete items[key];
     writeDetailTotalsForChar(detailCharKey, items);
   };
   /** Total (kk) EFETIVO de uma linha do modal Detalhes (ajuste local > calculado). */
   const detailEffectiveMatchKk = (index: number, match: CharacterItemMatch): number => {
-    const override = detailTotalOverrides[detailTotalKey(index, match.foundName)];
+    const override = detailTotalOverrides[detailTotalKey(index)];
     return override !== undefined ? override : Number(match.totalKk || 0);
   };
   /**
@@ -924,7 +994,7 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
     }
     const matches = Array.isArray(result.matches) ? result.matches : [];
     const sum = matches.reduce((acc, match, index) => {
-      const override = overrides[detailTotalKey(index, match.foundName)];
+      const override = overrides[detailTotalKeyAt(matches, index)];
       return acc + (override !== undefined ? override : Number(match.totalKk || 0));
     }, 0);
     return { kk: Math.round((sum + (result.goldKk || 0)) * 10) / 10, adjusted: true };
@@ -1696,7 +1766,10 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
         failedCount: Number(detailsResponse.failedCount || 0),
         stoppedManually: detailsResponse.stoppedManually === true,
         endUntilLabel: effectiveEndUntil,
-        results,
+        // Correções manuais do "Valor Itens (KK)" da consulta anterior são
+        // TRANSPORTADAS (núcleo único carryManualTotalsForward): a nova
+        // consulta recalcula os totais, mas nunca descarta ajuste local.
+        results: carryManualTotalsForward(results),
       };
       saveItemsLastQuery(summary);
       setLastQuery(summary);
@@ -1823,6 +1896,10 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
     // automático) — mesma regra dos demais campos de valor em kk.
     const manual = clean === "" ? null : parseDecimalKk(clean);
     if (clean !== "" && manual === null) return;
+    // Mapa lateral persistente (ajuste atual): a correção sobrevive a NOVAS
+    // consultas — inclusive quando uma consulta intermediária não traz o
+    // personagem. Remover aqui remove também das próximas consultas.
+    rememberManualTotalForAuction(auctionKey, manual && manual > 0 ? manual : null);
     const updated: BazaarItemsLastQuery = {
       ...lastQuery,
       results: lastQuery.results.map(result => {
@@ -2159,7 +2236,7 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
     const charOverrides: Record<string, number> = detailTotalsByChar[auctionKey] || {};
     const hasLocalTotals = Object.keys(charOverrides).length > 0;
     const matches = result.matches.map((match, index) => {
-      const override = charOverrides[detailTotalKey(index, match.foundName)];
+      const override = charOverrides[detailTotalKeyAt(result.matches, index)];
       return { ...match, ...(override !== undefined ? { totalKk: override } : {}) };
     });
     const adjustedTotalKk = Math.round((matches.reduce((acc, m) => acc + Number(m.totalKk || 0), 0) + Number(result.goldKk || 0)) * 10) / 10;
@@ -2258,7 +2335,7 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
         // Linha sem percentual ("—": sem cotação ou sem valor do personagem)
         // é eliminada quando o filtro está ativo — não há número honesto
         // para comparar (mesmo racional do RC, que não inventa valor).
-        const pct = potentialPercent(result, rowRate);
+        const pct = potentialPercent(result, rowRate, rowDisplayTotalsInfo(result).kk);
         if (pct === null) return false;
         if (tableFilters.potentialOperator === "gte" && pct < tableFilters.potentialValue) return false;
         if (tableFilters.potentialOperator === "lte" && pct > tableFilters.potentialValue) return false;
@@ -2300,8 +2377,8 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
         // Ordena pelo VALOR NUMÉRICO real do percentual, nunca pela cor.
         // Sem percentual (cotação/valor ausente), empata no fundo:
         // sentinela finita — evita o NaN de (-Inf) − (-Inf) no comparador.
-        av = potentialPercent(a, rateFor(a.server)) ?? -1e15;
-        bv = potentialPercent(b, rateFor(b.server)) ?? -1e15;
+        av = potentialPercent(a, rateFor(a.server), rowDisplayTotalsInfo(a).kk) ?? -1e15;
+        bv = potentialPercent(b, rateFor(b.server), rowDisplayTotalsInfo(b).kk) ?? -1e15;
       } else if (entry.key === "totalKk") {
         // Ordena pelo MESMO valor exibido (ajustes locais do "Ver" incluídos).
         av = rowDisplayTotalsInfo(a).kk;
@@ -2902,11 +2979,14 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                 // (0 = não configurada → "—", nunca taxa de outro servidor).
                 const rowCoinRate = rateFor(result.server);
                 // POTENCIAL: percentual real ((itens − personagem) ÷
-                // personagem) e diferença em kk para o tooltip. Recalculado
-                // a cada render — correção manual do KK, edição de preço e
-                // "Atualizar Valores" refletem na hora.
-                const potentialPct = potentialPercent(result, rowCoinRate);
-                const potentialDiffKk = potentialScoreKk(result, rowCoinRate);
+                // personagem) e diferença em kk para o tooltip, sobre o
+                // MESMO total exibido na coluna KK (rowDisplay.kk — ajustes
+                // locais do modal "Ver" > correção manual > calculado).
+                // Recalculado a cada render — edição local de item, correção
+                // manual do KK, edição de preço e "Atualizar Valores"
+                // refletem na hora, sem nova consulta.
+                const potentialPct = potentialPercent(result, rowCoinRate, rowDisplay.kk);
+                const potentialDiffKk = potentialScoreKk(result, rowCoinRate, rowDisplay.kk);
                 // Estado do link — MESMO mecanismo do painel de quests
                 // (openedLinksState compartilhado via props).
                 const linkState = getLinkState ? getLinkState(auctionKey) : "open";
@@ -3041,7 +3121,7 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                           {formatKkValue(rowDisplay.kk, "kk")}
                         </span>
                         {rowDisplay.adjusted ? (
-                          <span className="rounded border border-sky-500/40 bg-sky-500/15 px-1 py-px text-[7px] font-black uppercase tracking-wide text-sky-300" title={`Total com os ajustes locais feitos no modal "Ver" (salvos só neste dispositivo, até uma nova consulta). Sem ajustes: ${formatKkValue(effectiveKk, "kk")}.`}>
+                          <span className="rounded border border-sky-500/40 bg-sky-500/15 px-1 py-px text-[7px] font-black uppercase tracking-wide text-sky-300" title={`Total com os ajustes locais feitos no modal "Ver" (salvos só neste dispositivo; valem também após novas consultas). Sem ajustes: ${formatKkValue(effectiveKk, "kk")}.`}>
                             ajustes locais
                           </span>
                         ) : isManualKk && (
@@ -3086,7 +3166,7 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                     {potentialPct !== null ? (
                       <span
                         aria-label={`Potencial: ${formatPotentialPercent(potentialPct)}`}
-                        title={`Potencial: ${formatPotentialPercent(potentialPct)} — Valor Itens ${formatKkValue(effectiveKk, "kk")}${isManualKk ? " (manual)" : ""} vs personagem ${formatKkValue(bidValueKk(result, rowCoinRate), "kk")}${potentialDiffKk !== null ? ` (diferença ${potentialDiffKk >= 0 ? "+" : "−"}${formatKkValue(Math.abs(potentialDiffKk), "kk")})` : ""}`}
+                        title={`Potencial: ${formatPotentialPercent(potentialPct)} — Valor Itens ${formatKkValue(rowDisplay.kk, "kk")}${rowDisplay.adjusted ? " (ajustes locais)" : isManualKk ? " (manual)" : ""} vs personagem ${formatKkValue(bidValueKk(result, rowCoinRate), "kk")}${potentialDiffKk !== null ? ` (diferença ${potentialDiffKk >= 0 ? "+" : "−"}${formatKkValue(Math.abs(potentialDiffKk), "kk")})` : ""}`}
                         className={`inline-flex items-center justify-center gap-1 rounded border px-1.5 py-0.5 font-mono text-[10px] font-black ${
                           potentialPct > 0
                             ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-300"
@@ -3857,7 +3937,7 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                     const isEditingMatch = detailEdit?.matchIndex === index;
                     // Ajuste LOCAL do Total (kk) desta linha (memória apenas).
                     const isEditingTotalMatch = detailTotalEdit?.matchIndex === index;
-                    const rowTotalOverride = detailTotalOverrides[detailTotalKey(index, match.foundName)];
+                    const rowTotalOverride = detailTotalOverrides[detailTotalKey(index)];
                     // Chave do feedback de cópia — uma por linha do modal.
                     const detailCopyKey = `detail_item_${index}`;
                     // Confirmação/feedback do "Atualizar" — por linha.
@@ -3956,8 +4036,9 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                             PERSISTIDO localmente (localStorage por usuário/
                             dispositivo, por personagem+item) e sobrevive a
                             fechar/reabrir o modal, trocar de guia e reiniciar
-                            o app — é descartado quando uma NOVA consulta
-                            substitui a lista. NUNCA alimenta a Lista de
+                            o app e PERMANECE em novas consultas/
+                            sincronizações (preservação indefinida — remova
+                            limpando o campo). NUNCA alimenta a Lista de
                             Itens, o "Atualizar" ou o Firestore — apenas os
                             cálculos locais do modal (soma + conversão RC). */}
                         {isEditingTotalMatch ? (
@@ -3969,14 +4050,14 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                               value={detailTotalEdit.value}
                               onChange={event => setDetailTotalEdit(prev => (prev ? { ...prev, value: sanitizeDecimalKk(event.target.value) } : prev))}
                               onKeyDown={event => {
-                                if (event.key === "Enter") { event.preventDefault(); saveDetailTotalEdit(index, match.foundName); }
+                                if (event.key === "Enter") { event.preventDefault(); saveDetailTotalEdit(index); }
                                 if (event.key === "Escape") { event.preventDefault(); setDetailTotalEdit(null); }
                               }}
                               placeholder="Total (kk)"
                               title={`Total (kk) ajustado de "${match.foundName}" — SOMENTE nesta visualização (até 1 casa decimal). Enter aplica, Esc cancela; vazio volta ao calculado.`}
                               className="h-6 w-16 rounded-md border border-amber-500/60 bg-black/35 px-1.5 text-right font-mono text-[10px] text-amber-200 outline-none focus:border-amber-400"
                             />
-                            <button type="button" onClick={() => saveDetailTotalEdit(index, match.foundName)} className="p-0.5 rounded text-emerald-300 hover:bg-emerald-500/15 transition-colors cursor-pointer" title="Aplicar o ajuste local (salvo só neste dispositivo, para este personagem — vale até uma nova consulta; nada vai ao Firestore)">
+                            <button type="button" onClick={() => saveDetailTotalEdit(index)} className="p-0.5 rounded text-emerald-300 hover:bg-emerald-500/15 transition-colors cursor-pointer" title="Aplicar o ajuste local (salvo só neste dispositivo, para este personagem e este item — preservado em novas consultas e recarregamentos; nada vai ao Firestore)">
                               <Check size={12} strokeWidth={3} />
                             </button>
                             <button type="button" onClick={() => setDetailTotalEdit(null)} className="p-0.5 rounded text-slate-400 hover:text-white hover:bg-white/10 transition-colors cursor-pointer" title="Cancelar">
@@ -3991,7 +4072,7 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                                 <span className="rounded border border-sky-500/40 bg-sky-500/15 px-1 py-px text-[7px] font-black uppercase tracking-wide text-sky-300" title="Ajuste local deste personagem (salvo neste dispositivo) — mantido até uma nova consulta substituir a lista">local</span>
                                 <button
                                   type="button"
-                                  onClick={() => removeDetailTotalOverride(index, match.foundName)}
+                                  onClick={() => removeDetailTotalOverride(index)}
                                   className="p-0.5 rounded text-slate-500 hover:text-amber-300 hover:bg-amber-500/10 transition-colors cursor-pointer"
                                   title={`Descartar o ajuste local e voltar ao total calculado (${formatKkValue(match.totalKk, "kk")})`}
                                 >

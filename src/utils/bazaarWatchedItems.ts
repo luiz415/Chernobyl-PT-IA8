@@ -905,6 +905,87 @@ export function saveItemsLastQuery(query: BazaarItemsLastQuery): void {
 export const BAZAAR_ITEMS_LAST_QUERY_UPDATED_EVENT = "bazaar-items-last-query-updated";
 
 /**
+ * TRANSPORTA as correções MANUAIS do "Valor Itens (KK)" (`manualTotalKk` —
+ * ajuste LOCAL por personagem) da última consulta SALVA para os resultados
+ * de uma consulta NOVA, cruzando pela MESMA identidade de personagem usada
+ * em todo o painel (id do leilão > url > nome). Fonte ÚNICA chamada pelos
+ * DOIS pontos que criam consulta nova (guia Itens e auto-bazaar das Quests):
+ * uma nova consulta recalcula os totais, mas NUNCA descarta a correção
+ * manual do usuário — ela continua vinculada ao personagem e prevalecendo
+ * na exibição (effectiveTotalKk), até o próprio usuário removê-la.
+ * Personagens sem correção anterior saem intactos (mesmas referências);
+ * os valores publicados/espelhados seguem SEMPRE os calculados.
+ */
+export function carryManualTotalsForward(results: BazaarItemsCharacterResult[]): BazaarItemsCharacterResult[] {
+  const keyOf = (r: BazaarItemsCharacterResult) => String(r.id || r.url || r.name || "");
+  // Fonte principal: o MAPA LATERAL persistente (estado mais recente das
+  // correções — inclusive de personagens fora da última consulta).
+  const manualByKey = loadManualTotalsByAuction();
+  // Compatibilidade: correções feitas ANTES do mapa existir vivem apenas na
+  // última consulta salva — migram para o mapa aqui (sem sobrescrever o
+  // estado mais recente de quem já está nele).
+  const previous = loadItemsLastQuery();
+  let migrated = false;
+  for (const result of previous?.results || []) {
+    const manual = Number(result.manualTotalKk);
+    const key = keyOf(result);
+    if (key && Number.isFinite(manual) && manual > 0 && manualByKey[key] === undefined) {
+      manualByKey[key] = manual;
+      migrated = true;
+    }
+  }
+  if (migrated) saveManualTotalsByAuction(manualByKey);
+  if (Object.keys(manualByKey).length === 0) return results;
+  return results.map(result => {
+    const manual = manualByKey[keyOf(result)];
+    return manual !== undefined ? { ...result, manualTotalKk: manual } : result;
+  });
+}
+
+// ── Mapa lateral PERSISTENTE das correções manuais do "Valor Itens (KK)" ───
+// Chaveado pela identidade do leilão (a mesma de todo o painel). É o que
+// garante a preservação INDEFINIDA: mesmo que uma consulta intermediária não
+// traga o personagem (ex.: filtro "Encerra até" mais curto), a correção
+// continua guardada e volta a valer quando ele reaparecer. Local ao
+// dispositivo (mesma natureza da correção manual) — nunca Firestore.
+const BAZAAR_ITEMS_MANUAL_TOTALS_KEY = "rubinot_bazaar_items_manual_totals";
+
+export function loadManualTotalsByAuction(): Record<string, number> {
+  const raw = loadUIState<unknown>(BAZAAR_ITEMS_MANUAL_TOTALS_KEY, null);
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+  const clean: Record<string, number> = {};
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    const manual = Number(value);
+    if (key && Number.isFinite(manual) && manual > 0) clean[key] = manual;
+  }
+  return clean;
+}
+
+function saveManualTotalsByAuction(map: Record<string, number>): void {
+  saveUIState(BAZAAR_ITEMS_MANUAL_TOTALS_KEY, map);
+}
+
+/**
+ * Registra/remove a correção manual de UM personagem no mapa lateral —
+ * chamada pelo MESMO fluxo que grava `manualTotalKk` no lastQuery
+ * (applyManualKk da guia Itens): valor > 0 registra; null/0 remove (o
+ * personagem volta ao automático TAMBÉM nas próximas consultas).
+ */
+export function rememberManualTotalForAuction(auctionKey: string, manual: number | null): void {
+  const key = String(auctionKey || "").trim();
+  if (!key) return;
+  const map = loadManualTotalsByAuction();
+  if (manual !== null && Number.isFinite(manual) && manual > 0) {
+    if (map[key] === manual) return;
+    map[key] = manual;
+  } else {
+    if (map[key] === undefined) return;
+    delete map[key];
+  }
+  saveManualTotalsByAuction(map);
+}
+
+/**
  * Valor EFETIVO do "Valor Itens (KK)" de um personagem: a correção MANUAL
  * (quando presente e válida) tem prioridade sobre o total calculado pela
  * consulta. FONTE ÚNICA — exibição, filtros, ordenação, cálculo de RC e a

@@ -50,6 +50,7 @@ import {
   effectiveTotalKk,
   getServerWatchedItems,
   hasManualTotalKk,
+  carryManualTotalsForward,
   loadItemsLastQuery,
   loadWatchedItemsByServer,
   parseTieredItemName,
@@ -3651,7 +3652,10 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
               failedCount: Number(itemsResponse.failedCount || 0),
               stoppedManually: itemsResponse.stoppedManually === true,
               endUntilLabel: activeFilters.endUntil,
-              results: itemsResults,
+              // MESMO núcleo da guia Itens: correções manuais do "Valor
+              // Itens (KK)" da consulta anterior seguem na nova (o espelho
+              // publicado continua 100% calculado — ver abaixo).
+              results: carryManualTotalsForward(itemsResults),
             };
             saveItemsLastQuery(itemsSummary);
 
