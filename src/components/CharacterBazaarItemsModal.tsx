@@ -27,7 +27,15 @@ import { AlertTriangle, Check, Coins, Globe, Package, RefreshCw, X } from "lucid
 import type { Character } from "../types";
 import { SERVER_OPTIONS } from "../constants/servers";
 import { SERVER_COIN_RATES_EVENT, coinRateText, getServerCoinRate, readLocalCoinRates, saveOfficialServerCoinRate } from "../utils/bazaarCoinRates";
-import { applyOfficialWatchedItemUpdate, parseTieredItemName } from "../utils/bazaarWatchedItems";
+import {
+  BAZAAR_WATCHED_ITEMS_UPDATED_EVENT,
+  applyOfficialWatchedItemUpdate,
+  computeTieredValueKk,
+  findServerWatchedItem,
+  loadWatchedItemsByServer,
+  parseTieredItemName,
+  type WatchedItemsByServer,
+} from "../utils/bazaarWatchedItems";
 import { computeItemRC, formatItemSaleSummary, formatKkValue as formatKkValueBase, isItemSaleConcluded } from "../utils/itemSale";
 import { computeCharacterItemsRc } from "../utils/characterItemsValue";
 
@@ -39,6 +47,62 @@ import { computeCharacterItemsRc } from "../utils/characterItemsValue";
  */
 function formatKkValue(value: number, suffix: "k" | "kk" = "kk"): string {
   return formatKkValueBase(value, suffix, true);
+}
+
+/** Campos de UM item do snapshot usados pelo Valor Considerado (estrutural —
+ *  vale para o match do snapshot com ou sem os extras forSale/sale). */
+interface SnapshotMatchLike {
+  foundName: string;
+  watchedName?: string;
+  baseValueKk?: number;
+  tier?: number;
+  amount?: number;
+  unitValueKk?: number;
+  totalKk?: number;
+}
+
+/**
+ * VALOR CONSIDERADO de um item do snapshot (ajuste atual) — fonte ÚNICA da
+ * coluna homônima do modal "Ver" de Meus Personagens. Precedência:
+ *   1. "personalizado" — o usuário EDITOU o valor deste item em "Itens à
+ *      Venda"/"Itens Encontrados" (updateSnapshotMatchTotalKk grava o novo
+ *      total no próprio match): detectado comparando o total gravado com o
+ *      calculado da compra (unitValueKk × quantidade — tolerância de
+ *      arredondamento). A personalização PREVALECE SEMPRE: nunca é
+ *      substituída pelo valor global/original;
+ *   2. "lista" — sem personalização, o valor considerado vem da Lista de
+ *      Itens DO SERVIDOR do personagem (valor base ATUAL × regra única do
+ *      Tier (+30%/nível, computeTieredValueKk) × quantidade) — sem fallback
+ *      de outro servidor, como em todo o app;
+ *   3. "compra" — item fora da Lista de Itens do servidor: vale o total
+ *      registrado na compra (nada é inventado nem zerado).
+ * Nenhuma regra nova de cálculo: reutiliza computeTieredValueKk,
+ * findServerWatchedItem e a precedência já praticada pelos modais de itens.
+ */
+export function resolveSnapshotConsideredKk(
+  match: SnapshotMatchLike,
+  server: string,
+  watchedByServer: WatchedItemsByServer,
+): { kk: number; source: "personalizado" | "lista" | "compra" } {
+  const tier = Number(match.tier || 0);
+  const amount = Math.max(1, Math.floor(Number(match.amount) || 1));
+  const storedTotalKk = Number(match.totalKk || 0);
+  // Calculado DA COMPRA: unitValueKk do snapshot (fallback: base × Tier) ×
+  // quantidade — o mesmo arredondamento de buildCharacterMatches (2 casas).
+  const purchaseUnitKk = Number(match.unitValueKk) > 0
+    ? Number(match.unitValueKk)
+    : computeTieredValueKk(Number(match.baseValueKk || 0), tier);
+  const purchaseCalcKk = Math.round(purchaseUnitKk * amount * 100) / 100;
+  // Divergência entre o gravado e o calculado da compra = edição do usuário
+  // (updateSnapshotMatchTotalKk é o único gravador do total por item).
+  if (storedTotalKk > 0 && Math.abs(storedTotalKk - purchaseCalcKk) > 0.001) {
+    return { kk: storedTotalKk, source: "personalizado" };
+  }
+  const listed = findServerWatchedItem(watchedByServer, server, match.watchedName || match.foundName);
+  if (listed) {
+    return { kk: Math.round(computeTieredValueKk(listed.valueKk, tier) * amount * 100) / 100, source: "lista" };
+  }
+  return { kk: storedTotalKk > 0 ? storedTotalKk : purchaseCalcKk, source: "compra" };
 }
 
 interface Props {
@@ -96,6 +160,19 @@ export default function CharacterBazaarItemsModal({ character, onToggleForSale, 
     () => getServerCoinRate(readLocalCoinRates(), snapshot?.server),
     [snapshot, coinRatesVersion] // eslint-disable-line react-hooks/exhaustive-deps
   );
+
+  // ── LISTA DE ITENS VIVA (ajuste atual — coluna "Valor Considerado") ───────
+  // Mesmo padrão do modal "Itens à Venda": o mapa por servidor é relido
+  // quando QUALQUER tela grava um valor (evento da Lista de Itens) — a
+  // coluna reflete edições na hora, sem recarregar. Fonte única; nenhuma
+  // leitura nova ao Firestore.
+  const [watchedVersion, setWatchedVersion] = useState(0);
+  useEffect(() => {
+    const bump = () => setWatchedVersion(v => v + 1);
+    window.addEventListener(BAZAAR_WATCHED_ITEMS_UPDATED_EVENT, bump);
+    return () => window.removeEventListener(BAZAAR_WATCHED_ITEMS_UPDATED_EVENT, bump);
+  }, []);
+  const watchedByServer = useMemo(() => loadWatchedItemsByServer(), [watchedVersion]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── RC DO SERVIDOR — EDIÇÃO GLOBAL (70ª — EXCLUSIVA DO BOSS) ──────────────
   // Mesmo recurso do modal "Ver" do Painel Bazaar (69ª), pelo MESMO fluxo
@@ -252,13 +329,20 @@ export default function CharacterBazaarItemsModal({ character, onToggleForSale, 
           <table className="w-full text-[10px]">
             <thead>
               <tr className="text-[8px] uppercase tracking-wider text-slate-400 border-b border-[var(--th-line)]/40">
+                {/* "Item da lista" foi REMOVIDA (ajuste atual): repetia o
+                    mesmo nome de "Item encontrado" — redundante. */}
                 <th className="px-1.5 py-1.5 text-left">Item encontrado</th>
-                <th className="px-1.5 py-1.5 text-left">Item da lista</th>
                 <th className="px-1.5 py-1.5 text-right">Base (kk)</th>
                 <th className="px-1.5 py-1.5 text-center">Tier</th>
                 <th className="px-1.5 py-1.5 text-right">Pós-Tier (kk)</th>
                 <th className="px-1.5 py-1.5 text-center">Qtd</th>
                 <th className="px-1.5 py-1.5 text-right">Total (kk)</th>
+                {/* VALOR CONSIDERADO (ajuste atual): personalização local do
+                    item (quando feita em Itens à Venda/Itens Encontrados) >
+                    Lista de Itens ATUAL do servidor do personagem (base ×
+                    Tier × qtd) > total da compra (item fora da lista).
+                    Fonte única: resolveSnapshotConsideredKk. */}
+                <th className="px-1.5 py-1.5 text-right">Valor Considerado</th>
                 {/* À VENDA (58ª): controle discreto por item — vai para o
                     modal "Itens à Venda" de Meus Personagens, SEM Quest. */}
                 <th className="px-1.5 py-1.5 text-center">À venda</th>
@@ -292,6 +376,10 @@ export default function CharacterBazaarItemsModal({ character, onToggleForSale, 
                 const rowItemLabel = match.watchedName || parseTieredItemName(match.foundName).baseName;
                 const rowConfirm = updateConfirm?.index === index ? updateConfirm : null;
                 const rowDone = updateDone?.index === index ? updateDone : null;
+                // VALOR CONSIDERADO (ajuste atual) — fonte única: a
+                // personalização local do item prevalece; sem ela, a Lista
+                // de Itens ATUAL do servidor; fora da lista, o da compra.
+                const considered = resolveSnapshotConsideredKk(match, snapshot.server || "", watchedByServer);
                 return (
                 <Fragment key={`${match.foundName}-${index}`}>
                 <tr className={`border-b border-[var(--th-line)]/25 ${rowConfirm ? "!border-b-0 bg-amber-500/5" : ""}`}>
@@ -310,7 +398,6 @@ export default function CharacterBazaarItemsModal({ character, onToggleForSale, 
                       {copiedItemIndex === index && <Check size={12} className="text-emerald-400 flex-shrink-0" />}
                     </button>
                   </td>
-                  <td className="px-1.5 py-1.5 text-slate-300">{match.watchedName}</td>
                   <td className="px-1.5 py-1.5 text-right font-mono text-slate-200">{formatKkValue(match.baseValueKk, "kk")}</td>
                   <td className="px-1.5 py-1.5 text-center font-mono">
                     {match.tier > 0
@@ -320,6 +407,29 @@ export default function CharacterBazaarItemsModal({ character, onToggleForSale, 
                   <td className="px-1.5 py-1.5 text-right font-mono text-slate-200">{formatKkValue(match.unitValueKk, "kk")}</td>
                   <td className="px-1.5 py-1.5 text-center font-mono text-slate-200">{match.amount}</td>
                   <td className="px-1.5 py-1.5 text-right font-mono font-bold text-amber-200">{formatKkValue(match.totalKk, "kk")}</td>
+                  {/* VALOR CONSIDERADO (ajuste atual): personalizado > Lista
+                      de Itens do servidor (ao vivo) > registrado na compra.
+                      A personalização NUNCA é substituída pelo global. */}
+                  <td className="px-1.5 py-1.5 text-right font-mono">
+                    <span className="inline-flex items-center justify-end gap-1">
+                      <span
+                        className={`font-bold ${considered.source === "personalizado" ? "text-sky-300" : considered.source === "lista" ? "text-slate-200" : "text-slate-400"}`}
+                        title={considered.source === "personalizado"
+                          ? `Valor PERSONALIZADO por você para este item (editado em “Itens à Venda”/“Itens Encontrados”) — prevalece sobre a Lista de Itens e nunca é substituído pelo valor global/original.`
+                          : considered.source === "lista"
+                            ? `Valor considerado ATUAL pela Lista de Itens de ${snapshot.server || "—"}: base vigente × Tier (+30%/nível) × quantidade — reflete edições da lista na hora.`
+                            : `Valor considerado registrado na COMPRA — "${rowItemLabel}" não está (mais) na Lista de Itens de ${snapshot.server || "—"}.`}
+                      >
+                        {considered.kk > 0 ? formatKkValue(considered.kk, "kk") : "—"}
+                      </span>
+                      {considered.source === "personalizado" && (
+                        <span className="rounded border border-sky-500/40 bg-sky-500/15 px-1 py-px text-[7px] font-black uppercase tracking-wide text-sky-300 flex-shrink-0" title="Personalização local deste item — prevalece sobre a Lista de Itens.">pers.</span>
+                      )}
+                      {considered.source === "compra" && (
+                        <span className="rounded border border-white/15 bg-white/5 px-1 py-px text-[7px] font-black uppercase tracking-wide text-slate-400 flex-shrink-0" title={`Item fora da Lista de Itens de ${snapshot.server || "—"} — vale o registrado na compra.`}>compra</span>
+                      )}
+                    </span>
+                  </td>
                   <td className="px-1.5 py-1.5 text-center">
                     <div className="inline-flex flex-col items-center gap-0.5">
                       <button
