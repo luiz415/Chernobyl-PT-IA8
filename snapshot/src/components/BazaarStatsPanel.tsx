@@ -44,6 +44,7 @@ import {
 import { getServerCoinRate, readLocalCoinRates } from "../utils/bazaarCoinRates";
 import { computeItemRC } from "../utils/itemSale";
 import {
+  BASE_VOCATION_OPTIONS,
   computeStatsFromMetricDocs,
   countActiveHistoryFilters,
   defaultHistoryFilters,
@@ -320,13 +321,11 @@ export default function BazaarStatsPanel({ isBossUser, isElectron, isOtherQueryR
     for (const meta of Object.values(syncState?.months || {})) for (const server of meta.servers || []) set.add(server);
     return Array.from(set).sort((a, b) => a.localeCompare(b, "pt-BR"));
   }, [syncState]);
-  const vocationOptions = useMemo(() => {
-    const set = new Set<string>();
-    for (const docData of metricDocs) {
-      for (const tuple of Object.values(docData.auctions || {})) set.add(tuple.v || "—");
-    }
-    return Array.from(set).sort((a, b) => a.localeCompare(b, "pt-BR"));
-  }, [metricDocs]);
+  // Filtro de vocação AGRUPADO (ajuste atual): SOMENTE as cinco vocações
+  // base — cada opção reúne base + promovida (Knight+Elite Knight, ...).
+  // O casamento é feito na LÓGICA de filtragem (vocationMatchesSelection,
+  // via tupleMatchesFilters), não apenas nos rótulos.
+  const vocationOptions = BASE_VOCATION_OPTIONS;
 
   // Docs de métricas no formato ANTERIOR (células, sem tuplas): ficam fora
   // das estatísticas e geram o aviso de conversão (recarga completa).
@@ -815,7 +814,7 @@ export default function BazaarStatsPanel({ isBossUser, isElectron, isOtherQueryR
 
           <FilterCategory title="Personagem">
             <div className="flex flex-col gap-0.5" title="Vocações consideradas. Seleção múltipla; nenhuma selecionada = todas. Também delimita os filtros de skill (cada skill só se aplica às vocações da guia Itens).">
-              <FieldLabel text="Vocação" hint="Vocações consideradas. Seleção múltipla; nenhuma selecionada = todas. Também delimita os filtros de skill (cada skill só se aplica às vocações da guia Itens)." active={filters.vocations.length > 0} />
+              <FieldLabel text="Vocação" hint="Vocações consideradas — cada opção reúne a vocação base E a promovida (Knight inclui Elite Knight; Paladin, Royal Paladin; Sorcerer, Master Sorcerer; Druid, Elder Druid; Monk, Exalted Monk). Seleção múltipla; nenhuma selecionada = todas. Também delimita os filtros de skill (cada skill só se aplica às vocações da guia Itens)." active={filters.vocations.length > 0} />
               <FilterMulti label="Vocação" options={vocationOptions} selected={filters.vocations} onApply={values => updateFilters({ vocations: values })} placeholder="Vocação" searchable />
             </div>
             <RangeField label="Level" range={filters.level} onChange={range => updateFilters({ level: range })} hint="Intervalo de level do personagem (mín/máx livres — ex.: 400 a 800). Vazio em um lado = sem limite naquele lado." />

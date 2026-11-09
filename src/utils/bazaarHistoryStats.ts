@@ -389,6 +389,41 @@ function matchQuest(value: 0 | 1 | undefined, filter: HistoryQuestFilter): boole
  */
 export type SkillDefsResolver = (vocation: string) => { key: string }[] | null;
 
+// ── Filtro de vocação AGRUPADO (base + promovida) ───────────────────────────
+/**
+ * As CINCO opções do filtro de vocação das Estatísticas — cada uma reúne a
+ * vocação base E a promovida: Knight+Elite Knight, Paladin+Royal Paladin,
+ * Sorcerer+Master Sorcerer, Druid+Elder Druid, Monk+Exalted Monk.
+ */
+export const BASE_VOCATION_OPTIONS: string[] = ["Knight", "Paladin", "Sorcerer", "Druid", "Monk"];
+
+/**
+ * Vocação BASE de uma string de vocação do scraper ("Elite Knight" →
+ * "Knight", "Royal Paladin" → "Paladin", ...). MESMA regra de casamento da
+ * guia Itens (`skillDefsForVocation`): por SUBSTRING, cobrindo promovidas e
+ * não promovidas — nenhuma segunda interpretação. null = desconhecida
+ * (ex.: "—" de leilão sem o dado).
+ */
+export function baseVocationOf(vocation: string): string | null {
+  const text = String(vocation || "").toLowerCase();
+  for (const base of BASE_VOCATION_OPTIONS) {
+    if (text.includes(base.toLowerCase())) return base;
+  }
+  return null;
+}
+
+/**
+ * A vocação do personagem pertence a algum dos GRUPOS selecionados no
+ * filtro? A comparação é pela vocação BASE dos DOIS lados — selecionar
+ * "Knight" inclui automaticamente "Knight" E "Elite Knight" (idem para as
+ * demais). Valores sem base conhecida caem na comparação EXATA (nunca
+ * entram num grupo que não é o deles).
+ */
+export function vocationMatchesSelection(selected: string[], vocation: string): boolean {
+  const base = baseVocationOf(vocation) ?? String(vocation || "");
+  return selected.some(sel => (baseVocationOf(sel) ?? String(sel || "")) === base);
+}
+
 /**
  * Uma tupla passa nos filtros? TODAS as condições valem EM CONJUNTO.
  * Campos "sem dado" (ausentes) NUNCA passam em uma faixa ativa — uma
@@ -401,7 +436,9 @@ export function tupleMatchesFilters(
   filters: HistoryMetricsFilters,
   skillDefs: SkillDefsResolver,
 ): boolean {
-  if (filters.vocations.length > 0 && !filters.vocations.includes(tuple.v)) return false;
+  // Vocação por GRUPO (ajuste atual): a seleção "Knight" casa Knight E
+  // Elite Knight (idem Paladin/Sorcerer/Druid/Monk) — vocationMatchesSelection.
+  if (filters.vocations.length > 0 && !vocationMatchesSelection(filters.vocations, tuple.v)) return false;
   if (!inRange(tuple.l, filters.level)) return false;
   if (!inRange(tuple.b, filters.bid)) return false;
   if (!inRange(tuple.i, filters.items)) return false;
