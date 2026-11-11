@@ -121,3 +121,42 @@ export function buildBazaarCharacterDescription(
     text: `${segments.join(", ")}.\n\n${BAZAAR_CHARACTER_PAGE_BASE_URL}${auctionId}`,
   };
 }
+
+// ── SELEÇÃO MÚLTIPLA (Ctrl + botão direito) ─────────────────────────────────
+// Acumula as mini descrições de VÁRIOS personagens num único texto, na ORDEM
+// em que foram selecionados, cada descrição no formato EXATO da cópia
+// individual (buildBazaarCharacterDescription — fonte única; nada é
+// remontado) e separadas por UMA linha em branco. Funções PURAS — os
+// painéis guardam a seleção em estado local e copiam via copyTextToClipboard.
+
+/** Um personagem na seleção acumulada. */
+export interface BazaarDescriptionSelectionEntry {
+  /** ID REAL do anúncio — chave de DEDUPLICAÇÃO (cada personagem entra 1×). */
+  auctionId: string;
+  /** Chave da linha na tabela de origem (só para o realce visual). */
+  rowKey: string;
+  /** Descrição completa JÁ montada pela função única — formato intacto. */
+  text: string;
+}
+
+/**
+ * Acrescenta um personagem à seleção PRESERVANDO A ORDEM de seleção.
+ * Duplicado (mesmo ID de anúncio) NÃO entra de novo: retorna a MESMA
+ * seleção com `added: false` — o chamador avisa e recopia o acumulado.
+ */
+export function appendDescriptionSelection(
+  selection: BazaarDescriptionSelectionEntry[],
+  entry: BazaarDescriptionSelectionEntry,
+): { selection: BazaarDescriptionSelectionEntry[]; added: boolean } {
+  if (selection.some(item => item.auctionId === entry.auctionId)) return { selection, added: false };
+  return { selection: [...selection, entry], added: true };
+}
+
+/**
+ * Texto final da seleção: descrições na ordem de seleção, separadas por uma
+ * linha em branco (cada descrição já termina no link; o join "\n\n" produz
+ * exatamente o bloco vazio entre personagens do formato combinado).
+ */
+export function joinDescriptionSelection(selection: BazaarDescriptionSelectionEntry[]): string {
+  return selection.map(entry => entry.text).join("\n\n");
+}

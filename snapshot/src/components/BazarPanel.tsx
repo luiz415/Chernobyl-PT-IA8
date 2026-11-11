@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import bazarBgUrl from "../assets/bazar-bg.webp"; // WebP: 1,78 MB → ~157 KB (mesma imagem)
-import { AlertTriangle, ArrowDownUp, BarChart3, Check, CheckCircle2, ChevronDown, ChevronUp, Coins, Crown, ExternalLink, Eye, EyeOff, Filter, FlagTriangleRight, Flame, Globe, Package, Plus, RefreshCw, RotateCcw, ShieldAlert, ShoppingBag, Sparkles, Star, Target, Users, X } from "lucide-react";
+import { AlertTriangle, ArrowDownUp, BarChart3, Check, CheckCircle2, ChevronDown, ChevronUp, Coins, Copy, Crown, ExternalLink, Eye, EyeOff, Filter, FlagTriangleRight, Flame, Globe, Package, Plus, RefreshCw, RotateCcw, ShieldAlert, ShoppingBag, Sparkles, Star, Target, Users, X } from "lucide-react";
 import BazaarItemsPanel from "./BazaarItemsPanel";
 import BazaarInlinePurchaseForm from "./BazaarInlinePurchaseForm";
 import BazaarStatsPanel from "./BazaarStatsPanel";
@@ -27,7 +27,7 @@ import { copyTextToClipboard } from "../utils/clipboard";
 import { syncNotificationPrefsToCloud } from "../services/notificationPrefsSyncService";
 import { syncBazaarEndingAlerts } from "../services/bazaarInterestNotificationService";
 import { buildBazaarBidUrl, extractBazaarAuctionId, parseBidAmount, sanitizeBidInput } from "../utils/bazaarBid";
-import { buildBazaarCharacterDescription, vocationAbbreviation } from "../utils/bazaarCharacterDescription";
+import { appendDescriptionSelection, buildBazaarCharacterDescription, joinDescriptionSelection, vocationAbbreviation, type BazaarDescriptionSelectionEntry } from "../utils/bazaarCharacterDescription";
 import { readBazaarDefaultBid, resolveBazaarBid, saveBazaarDefaultBid } from "../utils/bazaarDefaultBid";
 import { loadUIState, saveUIState, loadNotifications } from "../storage";
 import { SERVER_OPTIONS, normalizeServerName, serverKey } from "../constants/servers";
@@ -1984,16 +1984,57 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
   const [auctionDescFeedback, setAuctionDescFeedback] = useState<{ key: string; ok: boolean; message: string } | null>(null);
   const auctionDescTimerRef = useRef<number | null>(null);
   useEffect(() => () => { if (auctionDescTimerRef.current !== null) window.clearTimeout(auctionDescTimerRef.current); }, []);
-  async function copyAuctionDescription(auction: BazaarAuction, key: string) {
+  // ── SELEÇÃO MÚLTIPLA (ajuste atual — Ctrl + botão direito) ──────────────
+  // Ctrl (ou Cmd) + clique direito ACUMULA as descrições de vários
+  // personagens, na ordem de seleção, separadas por linha em branco — cada
+  // uma no formato EXATO da cópia individual (núcleo único
+  // appendDescriptionSelection/joinDescriptionSelection). A cada adição o
+  // acumulado COMPLETO já vai para a área de transferência (a seleção está
+  // sempre "finalizada" no clipboard); a barra flutuante mostra a contagem
+  // e oferece "Copiar" (refinalizar) e "Limpar". Duplicado (mesmo anúncio)
+  // não entra de novo. O clique direito SEM Ctrl segue copiando SÓ o
+  // personagem clicado, intacto — e não mexe na seleção.
+  const [auctionDescSelection, setAuctionDescSelection] = useState<BazaarDescriptionSelectionEntry[]>([]);
+  const auctionDescSelectedKeys = useMemo(() => new Set(auctionDescSelection.map(entry => entry.rowKey)), [auctionDescSelection]);
+  const [auctionDescBarCopied, setAuctionDescBarCopied] = useState(false);
+  const auctionDescBarTimerRef = useRef<number | null>(null);
+  useEffect(() => () => { if (auctionDescBarTimerRef.current !== null) window.clearTimeout(auctionDescBarTimerRef.current); }, []);
+  async function copyAuctionDescSelectionAll() {
+    if (auctionDescSelection.length === 0) return;
+    const copied = await copyTextToClipboard(joinDescriptionSelection(auctionDescSelection));
+    setAuctionDescBarCopied(copied);
+    if (auctionDescBarTimerRef.current !== null) window.clearTimeout(auctionDescBarTimerRef.current);
+    auctionDescBarTimerRef.current = window.setTimeout(() => { setAuctionDescBarCopied(false); auctionDescBarTimerRef.current = null; }, 1500);
+  }
+  async function copyAuctionDescription(auction: BazaarAuction, key: string, accumulate = false) {
     const built = buildBazaarCharacterDescription(
       { name: auction.name, vocation: auction.vocation, level: auction.level, server: auction.server, auctionEndTs: auction.auctionEndTs, url: auction.url, id: auction.id },
       timezoneOffsetMinutes,
     );
-    const copied = built.ok ? await copyTextToClipboard(built.text) : false;
-    const message = !built.ok ? built.error : copied ? "Descrição copiada!" : "Falha ao copiar.";
-    setAuctionDescFeedback({ key, ok: built.ok && copied, message });
+    let ok = false;
+    let message = "";
+    if (!built.ok) {
+      message = built.error;
+    } else if (accumulate) {
+      // Ctrl + botão direito: acrescenta à seleção (sem duplicar) e copia o
+      // ACUMULADO COMPLETO — o clipboard sempre contém todos os selecionados.
+      const { selection, added } = appendDescriptionSelection(
+        auctionDescSelection,
+        { auctionId: built.auctionId, rowKey: key, text: built.text },
+      );
+      setAuctionDescSelection(selection);
+      const copied = await copyTextToClipboard(joinDescriptionSelection(selection));
+      ok = copied;
+      message = !copied ? "Falha ao copiar." : added ? `Seleção copiada (${selection.length})!` : `Já na seleção (${selection.length}).`;
+    } else {
+      // Botão direito puro: comportamento atual, intacto (cópia individual).
+      const copied = await copyTextToClipboard(built.text);
+      ok = copied;
+      message = copied ? "Descrição copiada!" : "Falha ao copiar.";
+    }
+    setAuctionDescFeedback({ key, ok, message });
     if (auctionDescTimerRef.current !== null) window.clearTimeout(auctionDescTimerRef.current);
-    auctionDescTimerRef.current = window.setTimeout(() => { setAuctionDescFeedback(null); auctionDescTimerRef.current = null; }, built.ok && copied ? 1500 : 2500);
+    auctionDescTimerRef.current = window.setTimeout(() => { setAuctionDescFeedback(null); auctionDescTimerRef.current = null; }, ok ? 1500 : 2500);
   }
   // ── COLUNA "ATUALIZAR" DO MODAL "VER" (66ª tarefa — EXCLUSIVA DO BOSS) ───
   // Confirmação inline por linha/escopo (1º clique NUNCA executa), guard de
@@ -4274,6 +4315,23 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
         )}
         {panelMode === "quests" && (
         <>
+        {/* SELEÇÃO MÚLTIPLA (ajuste atual): barra flutuante enquanto há
+            personagens acumulados por Ctrl + clique direito — contagem,
+            "Copiar" (finaliza/recopia o texto completo) e "Limpar". Só na
+            guia de quests (a guia Itens tem a sua própria). */}
+        {auctionDescSelection.length > 0 && (
+          <div className="fixed bottom-4 right-4 z-50 flex items-center gap-2 rounded-xl border border-sky-500/40 bg-slate-900/95 px-3 py-2 shadow-xl shadow-black/50 backdrop-blur-md">
+            <span className="text-[10px] font-black uppercase tracking-wide text-sky-300" title="Personagens acumulados por Ctrl + clique direito, na ordem de seleção — o texto completo já está na área de transferência a cada adição.">
+              Seleção: {auctionDescSelection.length} {auctionDescSelection.length === 1 ? "personagem" : "personagens"}
+            </span>
+            <button type="button" onClick={() => { void copyAuctionDescSelectionAll(); }} title="Copiar o texto completo da seleção (todas as descrições, na ordem, separadas por linha em branco)." className={`inline-flex items-center gap-1 rounded-lg border px-2 py-1 text-[10px] font-black transition-colors cursor-pointer ${auctionDescBarCopied ? "border-emerald-500/40 bg-emerald-500/15 text-emerald-300" : "border-sky-500/40 bg-sky-500/15 text-sky-300 hover:bg-sky-500/25"}`}>
+              {auctionDescBarCopied ? <><Check size={11} /> Copiado!</> : <><Copy size={11} /> Copiar</>}
+            </button>
+            <button type="button" onClick={() => { setAuctionDescSelection([]); setAuctionDescBarCopied(false); }} title="Limpar a seleção acumulada (não mexe na área de transferência)." className="inline-flex items-center gap-1 rounded-lg border border-white/15 bg-white/5 px-2 py-1 text-[10px] font-black text-slate-300 transition-colors hover:bg-white/10 cursor-pointer">
+              <X size={11} /> Limpar
+            </button>
+          </div>
+        )}
         {error && (
           <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-300 flex items-center gap-2">
             <AlertTriangle size={15} /> {error}
@@ -5243,7 +5301,7 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
                       <td className="h-12 px-1.5 py-2 align-middle font-bold text-white"><div className="flex items-center gap-1.5 min-w-0">{/* Clique DIREITO (81ª): copia a mini descrição + link do anúncio;
                           o menu de contexto padrão é suprimido SÓ aqui. Clique esquerdo
                           segue sem nenhuma ação (comportamento atual). O feedback ocupa
-                          o próprio espaço do nome por 1,5s/2,5s — nada muda no layout. */}<span className={`truncate ${auctionDescFeedback?.key === auctionKey ? (auctionDescFeedback.ok ? "text-emerald-300" : "text-rose-300") : ""}`} title={auctionDescFeedback?.key === auctionKey ? auctionDescFeedback.message : `${auction.name || ""} — clique direito copia a mini descrição + link do anúncio`} onContextMenu={event => { event.preventDefault(); void copyAuctionDescription(auction, auctionKey); }}>{auctionDescFeedback?.key === auctionKey ? auctionDescFeedback.message : (auction.name || "—")}</span>{hasSuspiciousQuest && <span aria-label="Quest suspeita" title="Quest suspeita — contador de bosses muito próximo do total: alta chance de quest indisponível" className="bazaar-badge bazaar-badge-suspicious"><ShieldAlert size={12} strokeWidth={2.5} /></span>}{showLegendEffects && isMaxPriorityPurchase && <span aria-label="Prioridade Máxima" title="Prioridade Máxima — nenhum personagem desta vocação neste servidor" className="bazaar-badge bazaar-badge-max"><Flame size={12} strokeWidth={2.5} /></span>}{showLegendEffects && isPriorityPurchase && <span aria-label="Prioridade" title="Prioridade — menor quantidade desta vocação neste servidor" className="bazaar-badge bazaar-badge-priority"><Star size={11} strokeWidth={2.5} /></span>}{showLegendEffects && isUserPriorityServer && <span aria-label="Prioridade para você" title="Prioridade para você — você não possui personagem neste servidor" className="bazaar-badge bazaar-badge-you"><Star size={11} strokeWidth={2.5} /></span>}</div></td>
+                          o próprio espaço do nome por 1,5s/2,5s — nada muda no layout. */}<span className={`truncate ${auctionDescFeedback?.key === auctionKey ? (auctionDescFeedback.ok ? "text-emerald-300" : "text-rose-300") : auctionDescSelectedKeys.has(auctionKey) ? "text-sky-300" : ""}`} title={auctionDescFeedback?.key === auctionKey ? auctionDescFeedback.message : auctionDescSelectedKeys.has(auctionKey) ? `${auction.name || ""} — na seleção (#${auctionDescSelection.findIndex(entry => entry.rowKey === auctionKey) + 1}). Clique direito copia só este; Ctrl + clique direito acumula vários.` : `${auction.name || ""} — clique direito copia a mini descrição + link do anúncio; Ctrl + clique direito acumula vários personagens num texto só`} onContextMenu={event => { event.preventDefault(); void copyAuctionDescription(auction, auctionKey, event.ctrlKey || event.metaKey); }}>{auctionDescFeedback?.key === auctionKey ? auctionDescFeedback.message : (auction.name || "—")}</span>{hasSuspiciousQuest && <span aria-label="Quest suspeita" title="Quest suspeita — contador de bosses muito próximo do total: alta chance de quest indisponível" className="bazaar-badge bazaar-badge-suspicious"><ShieldAlert size={12} strokeWidth={2.5} /></span>}{showLegendEffects && isMaxPriorityPurchase && <span aria-label="Prioridade Máxima" title="Prioridade Máxima — nenhum personagem desta vocação neste servidor" className="bazaar-badge bazaar-badge-max"><Flame size={12} strokeWidth={2.5} /></span>}{showLegendEffects && isPriorityPurchase && <span aria-label="Prioridade" title="Prioridade — menor quantidade desta vocação neste servidor" className="bazaar-badge bazaar-badge-priority"><Star size={11} strokeWidth={2.5} /></span>}{showLegendEffects && isUserPriorityServer && <span aria-label="Prioridade para você" title="Prioridade para você — você não possui personagem neste servidor" className="bazaar-badge bazaar-badge-you"><Star size={11} strokeWidth={2.5} /></span>}</div></td>
                       {/* Comprado — fluxo de inclusão do personagem comprado
                           (mesma ação/botão, agora posicionado após Personagem). */}
                       <td className="h-12 px-1 py-2 text-center align-middle">

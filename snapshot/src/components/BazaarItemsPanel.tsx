@@ -29,7 +29,7 @@ import { FilterDateMax, FilterInline, FilterMulti, FilterNumber } from "./Filter
 // do Electron — zero consultas extras).
 import { AuctionEndBadge, BazaarNotifySettingsControl, STICKY_FILTER_CELL_CLASS, STICKY_HEAD_CELL_CLASS, closeRubinotBrowserFromRenderer, isAuctionVisibleWithEndedGrace, isQuestSuspicious, QuestBossCounter, QuestStatusIndicator, type BazaarQuestStatusDetail } from "./BazarPanel";
 import { copyTextToClipboard } from "../utils/clipboard";
-import { buildBazaarCharacterDescription } from "../utils/bazaarCharacterDescription";
+import { appendDescriptionSelection, buildBazaarCharacterDescription, joinDescriptionSelection, type BazaarDescriptionSelectionEntry } from "../utils/bazaarCharacterDescription";
 import type { BazaarQuestSource, BazaarRetryCounts, BazaarSpeedMode } from "./BazaarBrowserModal";
 import { loadUIState, saveUIState, loadNotifications } from "../storage";
 import { computeItemRC, formatKkValue as formatKkValueBase } from "../utils/itemSale";
@@ -1098,17 +1098,55 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
   // sucesso, vermelho 2,5s com o motivo na falha — layout preservado.
   const [descCopyFeedback, setDescCopyFeedback] = useState<{ key: string; ok: boolean; message: string } | null>(null);
   const descCopyTimerRef = useRef<number | null>(null);
+  // ── SELEÇÃO MÚLTIPLA (ajuste atual — Ctrl + botão direito) ──────────────
+  // MESMO comportamento da guia de quests, com o MESMO núcleo único
+  // (appendDescriptionSelection/joinDescriptionSelection): Ctrl (ou Cmd) +
+  // clique direito acumula as descrições na ordem de seleção, separadas por
+  // linha em branco, sem duplicar anúncios; a cada adição o texto COMPLETO
+  // já vai para a área de transferência; barra flutuante com contagem,
+  // "Copiar" e "Limpar". Clique direito SEM Ctrl: cópia individual intacta.
+  const [descSelection, setDescSelection] = useState<BazaarDescriptionSelectionEntry[]>([]);
+  const descSelectedKeys = useMemo(() => new Set(descSelection.map(entry => entry.rowKey)), [descSelection]);
+  const [descBarCopied, setDescBarCopied] = useState(false);
+  const descBarTimerRef = useRef<number | null>(null);
+  useEffect(() => () => { if (descBarTimerRef.current) window.clearTimeout(descBarTimerRef.current); }, []);
+  function copyDescSelectionAll() {
+    if (descSelection.length === 0) return;
+    void copyTextToClipboard(joinDescriptionSelection(descSelection)).then(copied => {
+      setDescBarCopied(copied);
+      if (descBarTimerRef.current) window.clearTimeout(descBarTimerRef.current);
+      descBarTimerRef.current = window.setTimeout(() => setDescBarCopied(false), 1500);
+    });
+  }
   function handleCharacterDescriptionContextMenu(
-    event: { preventDefault: () => void; stopPropagation: () => void },
+    event: { preventDefault: () => void; stopPropagation: () => void; ctrlKey?: boolean; metaKey?: boolean },
     feedbackKey: string,
     result: BazaarItemsCharacterResult,
   ) {
     event.preventDefault();
     event.stopPropagation();
+    const accumulate = Boolean(event.ctrlKey || event.metaKey);
     const built = buildBazaarCharacterDescription(
       { name: result.name, vocation: result.vocation, level: result.level, server: result.server, auctionEndTs: result.auctionEndTs ?? null, url: result.url, id: result.id },
       timezoneOffsetMinutes,
     );
+    if (built.ok && accumulate) {
+      // Ctrl + botão direito: acrescenta à seleção (sem duplicar) e copia o
+      // ACUMULADO COMPLETO — o clipboard sempre contém todos os selecionados.
+      const { selection, added } = appendDescriptionSelection(
+        descSelection,
+        { auctionId: built.auctionId, rowKey: feedbackKey, text: built.text },
+      );
+      setDescSelection(selection);
+      void copyTextToClipboard(joinDescriptionSelection(selection)).then(copied => {
+        const message = !copied ? "Falha ao copiar." : added ? `Seleção copiada (${selection.length})!` : `Já na seleção (${selection.length}).`;
+        setDescCopyFeedback({ key: feedbackKey, ok: copied, message });
+        if (descCopyTimerRef.current) window.clearTimeout(descCopyTimerRef.current);
+        descCopyTimerRef.current = window.setTimeout(() => setDescCopyFeedback(null), copied ? 1500 : 2500);
+      });
+      return;
+    }
+    // Botão direito puro: comportamento atual, intacto (cópia individual).
     void (built.ok ? copyTextToClipboard(built.text) : Promise.resolve(false)).then(copied => {
       const message = !built.ok ? built.error : copied ? "Descrição copiada!" : "Falha ao copiar.";
       setDescCopyFeedback({ key: feedbackKey, ok: built.ok && copied, message });
@@ -2521,6 +2559,25 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
           quadro do título) — portal para o contêiner do BazarPanel. */}
       {titleActionsHost && createPortal(titleActions, titleActionsHost)}
 
+      {/* SELEÇÃO MÚLTIPLA (ajuste atual): barra flutuante enquanto há
+          personagens acumulados por Ctrl + clique direito — contagem,
+          "Copiar" (finaliza/recopia o texto completo) e "Limpar". Como o
+          contêiner da guia fica display:none fora do modo itens, a barra
+          só aparece com a guia visível. */}
+      {descSelection.length > 0 && (
+        <div className="fixed bottom-4 right-4 z-50 flex items-center gap-2 rounded-xl border border-sky-500/40 bg-slate-900/95 px-3 py-2 shadow-xl shadow-black/50 backdrop-blur-md">
+          <span className="text-[10px] font-black uppercase tracking-wide text-sky-300" title="Personagens acumulados por Ctrl + clique direito, na ordem de seleção — o texto completo já está na área de transferência a cada adição.">
+            Seleção: {descSelection.length} {descSelection.length === 1 ? "personagem" : "personagens"}
+          </span>
+          <button type="button" onClick={copyDescSelectionAll} title="Copiar o texto completo da seleção (todas as descrições, na ordem, separadas por linha em branco)." className={`inline-flex items-center gap-1 rounded-lg border px-2 py-1 text-[10px] font-black transition-colors cursor-pointer ${descBarCopied ? "border-emerald-500/40 bg-emerald-500/15 text-emerald-300" : "border-sky-500/40 bg-sky-500/15 text-sky-300 hover:bg-sky-500/25"}`}>
+            {descBarCopied ? <><Check size={11} /> Copiado!</> : <><Copy size={11} /> Copiar</>}
+          </button>
+          <button type="button" onClick={() => { setDescSelection([]); setDescBarCopied(false); }} title="Limpar a seleção acumulada (não mexe na área de transferência)." className="inline-flex items-center gap-1 rounded-lg border border-white/15 bg-white/5 px-2 py-1 text-[10px] font-black text-slate-300 transition-colors hover:bg-white/10 cursor-pointer">
+            <X size={11} /> Limpar
+          </button>
+        </div>
+      )}
+
       {error && (
         <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-300 flex items-center gap-2">
           <AlertTriangle size={15} /> {error}
@@ -3019,9 +3076,9 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                       className={`group inline-flex max-w-[220px] items-center justify-start gap-1 rounded px-1 py-0.5 font-bold transition-colors cursor-copy ${
                         descCopyFeedback?.key === copyKey
                           ? (descCopyFeedback.ok ? "bg-emerald-500/20 text-emerald-300" : "bg-rose-500/20 text-rose-300")
-                          : copiedKey === copyKey ? "bg-emerald-500/20 text-emerald-300" : "text-slate-100 hover:bg-white/10 hover:text-white"
+                          : copiedKey === copyKey ? "bg-emerald-500/20 text-emerald-300" : descSelectedKeys.has(copyKey) ? "bg-sky-500/15 text-sky-300 hover:bg-sky-500/25" : "text-slate-100 hover:bg-white/10 hover:text-white"
                       }`}
-                      title={descCopyFeedback?.key === copyKey ? descCopyFeedback.message : copiedKey === copyKey ? "Copiado" : `Copiar "${result.name}" — clique direito copia a mini descrição + link do anúncio`}
+                      title={descCopyFeedback?.key === copyKey ? descCopyFeedback.message : copiedKey === copyKey ? "Copiado" : descSelectedKeys.has(copyKey) ? `"${result.name}" — na seleção (#${descSelection.findIndex(entry => entry.rowKey === copyKey) + 1}). Clique direito copia só este; Ctrl + clique direito acumula vários.` : `Copiar "${result.name}" — clique direito copia a mini descrição + link do anúncio; Ctrl + clique direito acumula vários personagens num texto só`}
                     >
                       {descCopyFeedback?.key === copyKey ? (
                         descCopyFeedback.ok
