@@ -65,7 +65,7 @@ import {
 // espelhada em localStorage para leitura síncrona) — mesma configuração
 // editada na guia Itens (Lista de Itens / modal Ver).
 import { SERVER_COIN_RATES_EVENT, getServerCoinRate, readLocalCoinRates, saveOfficialServerCoinRate } from "../utils/bazaarCoinRates";
-import { computeItemRC, formatKkValue as formatKkValueBase } from "../utils/itemSale";
+import { computeItemRC, formatItemRcText, formatKkValue as formatKkValueBase } from "../utils/itemSale";
 
 /**
  * Formatação de kk da coluna "Valor Itens (kk)" — MESMA regra da guia Itens:
@@ -162,10 +162,11 @@ function parseQuestsViewNumber(text: string): number | null {
 function questsViewInputText(value: number): string {
   return String(Math.round((Number(value) || 0) * 10) / 10).replace(".", ",");
 }
-/** RC inteiro formatado ("4.533 RC") ou "—" sem cotação. */
+/** RC inteiro formatado ("4.533 RC") ou "—" sem cotação — delega para a
+ *  FONTE ÚNICA formatItemRcText (ajuste atual: compartilhada com o modal
+ *  "Ver"/Detalhes da guia Itens, zero divergência entre os modais). */
 function questsViewRcText(coinRate: number, kk: number): string {
-  if (!(coinRate > 0)) return "—";
-  return `${computeItemRC(coinRate, kk).toLocaleString("pt-BR")} RC`;
+  return formatItemRcText(coinRate, kk);
 }
 /**
  * Total (kk) EXIBIDO na coluna "Valor Itens" — SINCRONIZADO com o modal

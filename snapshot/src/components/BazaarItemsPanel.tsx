@@ -32,7 +32,7 @@ import { copyTextToClipboard } from "../utils/clipboard";
 import { appendDescriptionSelection, buildBazaarCharacterDescription, joinDescriptionSelection, type BazaarDescriptionSelectionEntry } from "../utils/bazaarCharacterDescription";
 import type { BazaarQuestSource, BazaarRetryCounts, BazaarSpeedMode } from "./BazaarBrowserModal";
 import { loadUIState, saveUIState, loadNotifications } from "../storage";
-import { computeItemRC, formatKkValue as formatKkValueBase } from "../utils/itemSale";
+import { computeItemRC, formatItemRcText, formatKkValue as formatKkValueBase } from "../utils/itemSale";
 
 /**
  * Formatação de kk da guia Itens: valores têm até 1 casa decimal,
@@ -3824,10 +3824,10 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
               `.app-modal-size-*` (o max-w-* do Tailwind é ignorado pelo
               !important do frame) — sem a classe, este modal ficava nos
               36rem padrão com 7 colunas, forçando rolagem horizontal
-              constante. `xl` (48rem) exibe todas as colunas sem rolagem;
-              em telas estreitas o frame vira 100% e a rolagem continua
-              disponível como último recurso. */}
-          <div className="app-modal-frame app-modal-size-xl w-full max-h-[88vh] flex flex-col rounded-xl border border-fuchsia-500/30 bg-[var(--th-bg-raised)] shadow-2xl shadow-black/60 overflow-hidden">
+              constante. Com a coluna RC (ajuste atual) são 8 colunas:
+              `wide` (58rem) exibe todas sem rolagem; em telas estreitas o
+              frame vira 100% e a rolagem continua como último recurso. */}
+          <div className="app-modal-frame app-modal-size-wide w-full max-h-[88vh] flex flex-col rounded-xl border border-fuchsia-500/30 bg-[var(--th-bg-raised)] shadow-2xl shadow-black/60 overflow-hidden">
             <div className="flex-shrink-0 flex items-center justify-between gap-2 px-4 py-3 border-b border-[var(--th-line)]/40">
               <div className="flex items-center gap-2 min-w-0">
                 <Package size={16} className="text-fuchsia-400 flex-shrink-0" />
@@ -3892,6 +3892,14 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                     <th className="px-1.5 py-1.5 text-center">Tier</th>
                     <th className="px-1.5 py-1.5 text-center">Qtd</th>
                     <th className="px-1.5 py-1.5 text-right w-[132px] min-w-[132px]">Total (kk)</th>
+                    {/* RC (ajuste atual) — conversão do Total efetivo de CADA
+                        item pela cotação DO SERVIDOR deste personagem, no
+                        MESMO padrão do modal "Ver" da guia de quests (fonte
+                        única formatItemRcText/computeItemRC). Acompanha em
+                        tempo real as alterações de cotação (coinRates +
+                        SERVER_COIN_RATES_EVENT — o mesmo caminho vivo do
+                        rodapé) e respeita os ajustes locais de Total. */}
+                    <th className="px-1.5 py-1.5 text-right">RC</th>
                     <th className="px-1.5 py-1.5 text-center">Última Atualização</th>
                     {/* Reserva também aqui (78ª): o feedback de sucesso/erro
                         substitui os botões Todos/Servidor por 2,5s — sem a
@@ -3950,7 +3958,7 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                     const bulkSkipped = detailResult.matches.length - bulkEligible;
                     return (
                       <tr className="border-b border-[var(--th-line)]/25 bg-amber-500/5">
-                        <td colSpan={7} className="px-1.5 py-1.5">
+                        <td colSpan={8} className="px-1.5 py-1.5">
                           <span className="inline-flex flex-wrap items-center gap-1.5 text-[9px] text-amber-200">
                             <AlertTriangle size={10} className="flex-shrink-0 text-amber-300" />
                             <span>
@@ -3985,7 +3993,7 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                           monitorado — resultado válido vindo da consulta do
                           Painel Bazaar (regra única hasRelevantLoot): o total
                           vem exclusivamente do Ouro, exibido no rodapé. */}
-                      <td colSpan={7} className="px-1.5 py-2.5 text-center italic text-slate-500">
+                      <td colSpan={8} className="px-1.5 py-2.5 text-center italic text-slate-500">
                         Nenhum item monitorado encontrado — o valor deste personagem vem apenas do Ouro.
                       </td>
                     </tr>
@@ -4150,6 +4158,17 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                           </span>
                         )}
                       </td>
+                      {/* RC (ajuste atual) — MESMO padrão/célula do modal
+                          "Ver" da guia de quests: conversão do Total EFETIVO
+                          da linha (ajuste local > calculado —
+                          detailEffectiveMatchKk, o mesmo da soma do rodapé)
+                          pela cotação DO SERVIDOR deste personagem (rateFor,
+                          vivo via SERVER_COIN_RATES_EVENT: mudar a cotação
+                          atualiza na hora). Fonte única formatItemRcText —
+                          nenhuma fórmula nova. */}
+                      <td className="px-1.5 py-1.5 text-right font-mono font-bold text-emerald-300" title={rateFor(detailResult.server) > 0 ? `Conversão do Total (kk) deste item pela cotação de ${detailResult.server} (${String(rateFor(detailResult.server)).replace(".", ",")}k por 1000 RC) — mesma fórmula do restante do aplicativo; acompanha as alterações da cotação em tempo real.` : `Defina a cotação do RC de ${detailResult.server} (no rodapé deste modal ou na Lista de Itens) para converter em RC.`}>
+                        {formatItemRcText(rateFor(detailResult.server), detailEffectiveMatchKk(index, match))}
+                      </td>
                       <td className="px-1.5 py-1.5 text-center">
                         {/* ÚLTIMA ATUALIZAÇÃO — quando o VALOR deste item foi
                             modificado pela última vez na Lista de Itens
@@ -4212,7 +4231,7 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                         ESCOPO escolhido. Confirmar aplica; Cancelar descarta. */}
                     {isConfirmingApply && !applyDone && (
                       <tr className="border-b border-[var(--th-line)]/25 bg-amber-500/5">
-                        <td colSpan={7} className="px-1.5 pb-1.5 pt-0">
+                        <td colSpan={8} className="px-1.5 pb-1.5 pt-0">
                           <span className="inline-flex flex-wrap items-center gap-1.5 text-[9px] text-amber-200">
                             <AlertTriangle size={10} className="flex-shrink-0 text-amber-300" />
                             <span>

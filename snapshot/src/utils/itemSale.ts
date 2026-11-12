@@ -55,6 +55,17 @@ export function computeItemRC(rateKk: number, totalKk: number): number {
   return Math.floor(raw);
 }
 
+/**
+ * RC inteiro FORMATADO ("4.533 RC") ou "—" sem cotação válida — FONTE ÚNICA
+ * da exibição de RC por item dos modais "Ver" (guia de quests, que delega
+ * via questsViewRcText, e modal Detalhes/"Ver" da guia Itens). Conversão
+ * exclusivamente pela computeItemRC acima — nenhuma fórmula paralela.
+ */
+export function formatItemRcText(rateKk: number, totalKk: number): string {
+  if (!(rateKk > 0)) return "—";
+  return `${computeItemRC(rateKk, totalKk).toLocaleString("pt-BR")} RC`;
+}
+
 // NOTA (82ª tarefa): o antigo `applyItemsDiscountToCost` ("Descontar valor
 // dos itens", 71ª) foi REMOVIDO junto com a funcionalidade — o valor pago é
 // registrado INTEGRAL e os itens viraram ganho potencial do personagem
