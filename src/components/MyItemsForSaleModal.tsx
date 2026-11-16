@@ -25,6 +25,7 @@ import {
 } from "../utils/manualSaleItems";
 import { formatItemSaleSummary, formatKkValue as formatKkValueBase, isItemSaleConcluded } from "../utils/itemSale";
 import {
+  buildMultiServerSaleAnnouncement,
   buildSaleAnnouncement,
   filterSaleTextItemsByOrigin,
   loadSaleTextConfig,
@@ -335,9 +336,21 @@ interface SaleFilters {
   /** Faixa de valor em RC — aplicada apenas aos VENDIDOS (pendentes não têm valor). */
   minRC: string;
   maxRC: string;
+  /**
+   * FILTRO POR VALOR com limite único (ajuste atual): "acima" = valor
+   * SUPERIOR ao limite; "abaixo" = valor INFERIOR. O valor comparado é o
+   * apropriado de cada aba: À Venda = valor CONSIDERADO do item em kk
+   * (personalizações locais respeitadas; fallback = base exibida quando não
+   * há considerado conhecido); Vendidos = valor REAL registrado da venda
+   * (RC) — estimativas e recebidos nunca se misturam. Texto vazio/inválido
+   * = filtro inativo; item SEM o valor comparável não passa no filtro ativo
+   * (nunca se inventa valor).
+   */
+  valueMode: "acima" | "abaixo";
+  valueLimit: string;
 }
 
-const EMPTY_FILTERS: SaleFilters = { text: "", server: "", quest: "", minRC: "", maxRC: "" };
+const EMPTY_FILTERS: SaleFilters = { text: "", server: "", quest: "", minRC: "", maxRC: "", valueMode: "acima", valueLimit: "" };
 
 // ── Ordenação (combinável com os filtros; agrupamento por servidor mantido) ─
 // "server" ordena os GRUPOS de servidor; os demais critérios ordenam os itens
@@ -413,6 +426,16 @@ function loadSaleSortPref(uid: string): { key: SaleSortKey; dir: SaleSortDir } {
 
 function loadExcludedSaleKeys(uid: string): Set<string> {
   const raw = loadUIState<unknown>(`${SALE_TEXT_EXCLUDED_KEY_PREFIX}${uidKeyPart(uid)}`, []);
+  return new Set(Array.isArray(raw) ? raw.filter((k): k is string => typeof k === "string") : []);
+}
+
+/** SERVIDORES fora do texto consolidado (ajuste atual) — mesmo padrão de
+ *  exclusões persistidas da seleção individual: servidor novo entra
+ *  SELECIONADO por padrão; desmarcado NUNCA entra no texto de todos os
+ *  servidores. Por usuário, salvo a cada clique. */
+const SALE_TEXT_EXCLUDED_SERVERS_KEY_PREFIX = "rubinot_sale_text_excluded_servers_";
+function loadExcludedTextServers(uid: string): Set<string> {
+  const raw = loadUIState<unknown>(`${SALE_TEXT_EXCLUDED_SERVERS_KEY_PREFIX}${uidKeyPart(uid)}`, []);
   return new Set(Array.isArray(raw) ? raw.filter((k): k is string => typeof k === "string") : []);
 }
 
@@ -511,11 +534,32 @@ export default function MyItemsForSaleModal({
     return [...set].sort((a, b) => a.localeCompare(b, "pt-BR"));
   }, [items]);
 
+  // ── VALOR BASE vivo da Lista de Itens por servidor (73ª) ─────────────────
+  // Mesma fonte oficial da guia Itens; o evento recarrega o mapa quando
+  // QUALQUER tela grava um valor — a base exibida reflete na hora.
+  // (Declarado ANTES do filtro/agrupamento porque a ordenação "Valor base"
+  // (76ª) E o filtro por valor (ajuste atual) dependem dele; apenas movido,
+  // sem mudança de comportamento.)
+  const [watchedVersion, setWatchedVersion] = useState(0);
+  useEffect(() => {
+    const bump = () => setWatchedVersion(v => v + 1);
+    window.addEventListener(BAZAAR_WATCHED_ITEMS_UPDATED_EVENT, bump);
+    return () => window.removeEventListener(BAZAAR_WATCHED_ITEMS_UPDATED_EVENT, bump);
+  }, []);
+  const watchedByServer = useMemo(() => loadWatchedItemsByServer(), [watchedVersion]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Itens da aba atual com TODOS os filtros aplicados (derivação pura).
   const filteredItems = useMemo(() => {
     const text = normalizeSearchText(filters.text);
     const minRC = parseRCFilter(filters.minRC);
     const maxRC = parseRCFilter(filters.maxRC);
+    // FILTRO POR VALOR (ajuste atual): limite único em "Acima de"/"Abaixo
+    // de". À Venda compara o kk CONSIDERADO efetivo do item (fonte única
+    // itemConsideredKkOf — personalizações respeitadas; fallback base
+    // exibida); Vendidos compara o valor REAL registrado da venda (RC) —
+    // nunca misturando estimativa com recebido. Sem valor comparável, o
+    // item não passa no filtro ativo (regra única do app: nada inventado).
+    const valueLimit = tab === "avenda" ? parseDecimalKkText(filters.valueLimit) : parseRCFilter(filters.valueLimit);
     return items.filter(item => {
       if (tab === "avenda" ? item.sold : !item.sold) return false;
       if (text && !normalizeSearchText(item.itemName).includes(text)) return false;
@@ -526,22 +570,16 @@ export default function MyItemsForSaleModal({
         if (minRC !== null && item.soldValueRC < minRC) return false;
         if (maxRC !== null && item.soldValueRC > maxRC) return false;
       }
+      if (valueLimit !== null) {
+        const compared = tab === "avenda"
+          ? (itemConsideredKkOf(item) ?? itemShownBaseKk(item))
+          : (item.soldValueRC > 0 ? item.soldValueRC : null);
+        if (compared === null) return false;
+        if (filters.valueMode === "acima" ? compared <= valueLimit : compared >= valueLimit) return false;
+      }
       return true;
     });
-  }, [items, tab, filters]);
-
-  // ── VALOR BASE vivo da Lista de Itens por servidor (73ª) ─────────────────
-  // Mesma fonte oficial da guia Itens; o evento recarrega o mapa quando
-  // QUALQUER tela grava um valor — a base exibida reflete na hora.
-  // (Declarado ANTES do agrupamento porque a ordenação "Valor base" (76ª)
-  // depende dele; apenas movido, sem mudança de comportamento.)
-  const [watchedVersion, setWatchedVersion] = useState(0);
-  useEffect(() => {
-    const bump = () => setWatchedVersion(v => v + 1);
-    window.addEventListener(BAZAAR_WATCHED_ITEMS_UPDATED_EVENT, bump);
-    return () => window.removeEventListener(BAZAAR_WATCHED_ITEMS_UPDATED_EVENT, bump);
-  }, []);
-  const watchedByServer = useMemo(() => loadWatchedItemsByServer(), [watchedVersion]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [items, tab, filters, watchedByServer]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /** Valor BASE vivo do item na Lista de Itens do SEU servidor (73ª) —
    *  null = não cadastrado. Fonte única da render e da ordenação. */
@@ -672,6 +710,40 @@ export default function MyItemsForSaleModal({
     return itemLiveBaseKk(item);
   }
 
+  /**
+   * TOTAIS Base/Considerado (kk) de um conjunto de itens EXIBIDOS (ajuste
+   * atual) — resumo por servidor (cabeçalho do grupo) e geral (rodapé),
+   * sempre sobre os itens pós-filtros. FONTES ÚNICAS por item: base =
+   * itemShownBaseKk (valor unitário × quantidade — a base é por unidade);
+   * considerado = itemConsideredKkOf (já embute Tier/quantidade nas regras
+   * atuais; personalizações locais respeitadas). Itens sem o valor
+   * conhecido ficam FORA da soma correspondente e são contados à parte —
+   * nenhum valor é inventado. São ESTIMATIVAS em kk: nada aqui se mistura
+   * com os valores reais de venda (RC) do resumo financeiro de Vendidos.
+   */
+  function sumShownValuesKk(list: MySaleItem[]): { baseKk: number; consideredKk: number; baseMissing: number; consideredMissing: number } {
+    let baseKk = 0;
+    let consideredKk = 0;
+    let baseMissing = 0;
+    let consideredMissing = 0;
+    for (const item of list) {
+      const units = Math.max(1, Math.floor(Number(item.amount) || 1));
+      const base = itemShownBaseKk(item);
+      if (base === null) baseMissing += 1; else baseKk += base * units;
+      const considered = itemConsideredKkOf(item);
+      if (considered === null) consideredMissing += 1; else consideredKk += considered;
+    }
+    return {
+      baseKk: Math.round(baseKk * 100) / 100,
+      consideredKk: Math.round(consideredKk * 100) / 100,
+      baseMissing,
+      consideredMissing,
+    };
+  }
+
+  /** Resumo GERAL do rodapé — todos os itens listados (pós-filtros). */
+  const shownTotals = useMemo(() => sumShownValuesKk(filteredItems), [filteredItems, watchedByServer]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // ── TEXTO DE VENDA POR SERVIDOR (75ª) ─────────────────────────────────────
   // Config persistida POR USUÁRIO (localStorage — sobrevive a recarregar/
   // reabrir); padrões úteis quando nunca configurado. O botão de cada
@@ -774,6 +846,58 @@ export default function MyItemsForSaleModal({
     setSaleTextDone({ server: serverKey, ok, message });
     if (saleTextTimerRef.current !== null) window.clearTimeout(saleTextTimerRef.current);
     saleTextTimerRef.current = window.setTimeout(() => { setSaleTextDone(null); saleTextTimerRef.current = null; }, ok ? 2000 : 4000);
+  }
+
+  // ── TEXTO DE TODOS OS SERVIDORES SELECIONADOS (ajuste atual) ─────────────
+  // Caixa de seleção no cabeçalho de cada servidor (marcado por padrão;
+  // exclusões persistidas por usuário, como a seleção individual de itens)
+  // + botão global que consolida, num ÚNICO texto, os itens à venda de
+  // TODOS os servidores selecionados: Introdução/Encerramento uma vez e um
+  // bloco por servidor (nome + itens no formato EXATO do anúncio individual
+  // — núcleo único buildMultiServerSaleAnnouncement). Servidores
+  // desmarcados NUNCA entram; a seleção individual de itens e as origens
+  // configuradas continuam valendo (mesmos candidatos saleTextInputsOf).
+  const ALL_SERVERS_TEXT_KEY = "__todos__"; // chave do feedback do botão global
+  const [excludedTextServers, setExcludedTextServers] = useState<Set<string>>(() => loadExcludedTextServers(currentUserUid));
+  useEffect(() => { setExcludedTextServers(loadExcludedTextServers(currentUserUid)); }, [currentUserUid]);
+  function toggleTextServerIncluded(serverKey: string) {
+    setExcludedTextServers(prev => {
+      const next = new Set(prev);
+      if (next.has(serverKey)) next.delete(serverKey); else next.add(serverKey);
+      saveUIState(`${SALE_TEXT_EXCLUDED_SERVERS_KEY_PREFIX}${uidKeyPart(currentUserUid)}`, [...next]);
+      return next;
+    });
+  }
+  /** Servidores com itens à venda SELECIONADOS para o texto consolidado,
+   *  em ordem alfabética (a MESMA ordem dos grupos exibidos). */
+  function selectedTextServers(): string[] {
+    return [...pendingItemsByServer.keys()]
+      .filter(server => !excludedTextServers.has(server))
+      .sort((a, b) => a.localeCompare(b, "pt-BR"));
+  }
+  async function generateAllServersSaleText() {
+    const servers = selectedTextServers();
+    const groups = servers
+      .map(server => ({ server, items: saleTextInputsOf(server) }))
+      .filter(group => filterSaleTextItemsByOrigin(saleTextConfig, group.items).length > 0);
+    if (groups.length === 0) {
+      setSaleTextDone({ server: ALL_SERVERS_TEXT_KEY, ok: false, message: servers.length === 0 ? "Nenhum servidor selecionado — marque as caixas dos servidores desejados." : "Nenhum item entra no anúncio — confira as caixas de seleção dos itens e as origens em Configurar Texto de Venda." });
+      if (saleTextTimerRef.current !== null) window.clearTimeout(saleTextTimerRef.current);
+      saleTextTimerRef.current = window.setTimeout(() => { setSaleTextDone(null); saleTextTimerRef.current = null; }, 4000);
+      return;
+    }
+    const text = buildMultiServerSaleAnnouncement(saleTextConfig, groups);
+    let ok = true;
+    let message = `Texto copiado — ${groups.length} servidor${groups.length === 1 ? "" : "es"}!`;
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      ok = false;
+      message = "Falha ao copiar — o navegador bloqueou a área de transferência; tente novamente.";
+    }
+    setSaleTextDone({ server: ALL_SERVERS_TEXT_KEY, ok, message });
+    if (saleTextTimerRef.current !== null) window.clearTimeout(saleTextTimerRef.current);
+    saleTextTimerRef.current = window.setTimeout(() => { setSaleTextDone(null); saleTextTimerRef.current = null; }, ok ? 2500 : 4000);
   }
 
   // ── ADICIONAR ITEM MANUAL (89ª) — formulário compacto no topo do modal ───
@@ -975,6 +1099,25 @@ export default function MyItemsForSaleModal({
           >
             <Plus size={11} /> Adicionar Item
           </button>
+          {/* TEXTO DE TODOS OS SERVIDORES SELECIONADOS (ajuste atual): um
+              único texto consolidado com os itens à venda dos servidores
+              MARCADOS (caixa no cabeçalho de cada servidor), organizado por
+              servidor no formato do anúncio individual. */}
+          {saleTextDone?.server === "__todos__" ? (
+            <span className={`inline-flex items-center gap-1 px-2.5 py-1.5 text-[9px] font-black uppercase tracking-wide ${saleTextDone.ok ? "text-emerald-300" : "text-rose-300"}`} title={saleTextDone.message}>
+              {saleTextDone.ok ? <Check size={11} className="flex-shrink-0" /> : <AlertTriangle size={11} className="flex-shrink-0" />}
+              <span className="max-w-[260px] truncate">{saleTextDone.message}</span>
+            </span>
+          ) : (
+            <button
+              type="button"
+              onClick={() => { void generateAllServersSaleText(); }}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-amber-500/35 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20 text-[10px] font-black uppercase tracking-wide transition-colors cursor-pointer"
+              title={`Gerar e copiar UM texto com os itens à venda de TODOS os servidores selecionados (${selectedTextServers().length} de ${pendingItemsByServer.size} marcado${selectedTextServers().length === 1 ? "" : "s"} — caixas nos cabeçalhos dos servidores). Introdução/Encerramento uma vez e um bloco por servidor, no mesmo formato do anúncio individual; servidores desmarcados e itens desmarcados/vendidos NUNCA entram.`}
+            >
+              <Megaphone size={11} /> Gerar Texto (Selecionados)
+            </button>
+          )}
           {/* CONFIGURAR TEXTO DE VENDA (75ª): personaliza o anúncio copiado
               pelo botão "Gerar Texto de Venda" de cada servidor — config
               persistida POR USUÁRIO (local), com prévia ao vivo. */}
@@ -1109,8 +1252,35 @@ export default function MyItemsForSaleModal({
             />
           </div>
           {/* Ordenação — combinável com os filtros; agrupamento mantido */}
-          <div className="col-span-2 sm:col-span-4 flex items-center gap-1.5">
-            <span className="text-[9px] font-bold uppercase tracking-wider text-slate-500 flex-shrink-0">Ordenar por</span>
+          <div className="col-span-2 sm:col-span-4 flex items-center gap-1.5 flex-wrap">
+            {/* FILTRO POR VALOR (ajuste atual) — limite único Acima/Abaixo.
+                O valor comparado é o apropriado da aba: À Venda = kk
+                CONSIDERADO (personalizações respeitadas; fallback base);
+                Vendidos = valor REAL da venda (RC). Vazio = inativo. */}
+            <span className="text-[9px] font-bold uppercase tracking-wider text-slate-500 flex-shrink-0">Valor</span>
+            <select
+              value={filters.valueMode}
+              onChange={e => setFilters(f => ({ ...f, valueMode: e.target.value as SaleFilters["valueMode"] }))}
+              aria-label="Modo do filtro por valor"
+              title={`Acima de = somente itens com valor SUPERIOR ao limite; Abaixo de = somente com valor INFERIOR. ${tab === "avenda" ? "Compara o valor CONSIDERADO do item (kk, com as suas personalizações; sem considerado, a base exibida)." : "Compara o valor REAL registrado da venda (RC) — estimativas nunca entram."}`}
+              className={`${inputCls} cursor-pointer [color-scheme:dark] w-auto flex-shrink-0`}
+            >
+              <option value="acima">Acima de</option>
+              <option value="abaixo">Abaixo de</option>
+            </select>
+            <input
+              type="text"
+              inputMode="decimal"
+              value={filters.valueLimit}
+              onChange={e => setFilters(f => ({ ...f, valueLimit: tab === "avenda" ? sanitizeDecimalKkText(e.target.value) : e.target.value.replace(/\D+/g, "") }))}
+              placeholder={tab === "avenda" ? "Limite (kk)" : "Limite (RC)"}
+              aria-label={tab === "avenda" ? "Limite do filtro por valor em kk" : "Limite do filtro por valor em RC"}
+              title={tab === "avenda"
+                ? "Limite em kk (até 1 casa decimal, ex.: 1,5) — compara com o valor CONSIDERADO de cada item (personalizações locais respeitadas; sem considerado conhecido, a base exibida). Itens sem valor comparável ficam fora enquanto o filtro está ativo. Vazio = sem filtro."
+                : "Limite em RC — compara com o valor REAL registrado da venda. Vendas sem valor informado ficam fora enquanto o filtro está ativo. Vazio = sem filtro."}
+              className={`${inputCls} w-20 flex-shrink-0`}
+            />
+            <span className="text-[9px] font-bold uppercase tracking-wider text-slate-500 flex-shrink-0 ml-2">Ordenar por</span>
             <select
               value={sortKey}
               onChange={e => setSortKey(e.target.value as SaleSortKey)}
@@ -1171,11 +1341,45 @@ export default function MyItemsForSaleModal({
               </p>
             </div>
           ) : (
-            groupedByServer.map(([server, list]) => (
+            groupedByServer.map(([server, list]) => {
+              // RESUMO DO SERVIDOR (ajuste atual): totais Base/Considerado
+              // (kk) SÓ dos itens exibidos deste grupo (pós-filtros) —
+              // mesmas fontes únicas por item; recalculado a cada filtro.
+              const groupTotals = sumShownValuesKk(list);
+              return (
               <section key={server} className="rounded-xl border border-white/10 bg-white/[0.02] overflow-hidden">
                 <header className="flex items-center gap-1.5 px-3 py-1.5 bg-white/[0.04] border-b border-white/5 flex-wrap">
+                  {/* Seleção do SERVIDOR para o texto consolidado (ajuste
+                      atual): marcado = entra no "Gerar Texto (Selecionados)".
+                      Exclusões persistidas por usuário; não interfere no
+                      botão individual deste servidor. */}
+                  {(pendingItemsByServer.get(server)?.length || 0) > 0 && (
+                    <input
+                      type="checkbox"
+                      checked={!excludedTextServers.has(server)}
+                      onChange={() => toggleTextServerIncluded(server)}
+                      className="accent-amber-500 flex-shrink-0 cursor-pointer"
+                      aria-label={`Incluir ${server} no texto consolidado de todos os servidores selecionados`}
+                      title={excludedTextServers.has(server)
+                        ? `Fora do texto consolidado — marque para incluir os itens à venda de ${server} no "Gerar Texto (Selecionados)".`
+                        : `Entra no texto consolidado ("Gerar Texto (Selecionados)") — desmarque para deixar ${server} fora.`}
+                    />
+                  )}
                   <Globe size={11} className="text-sky-400 flex-shrink-0" />
                   <span className="text-[10px] font-black uppercase tracking-wider text-sky-300 truncate">{server}</span>
+                  {/* RESUMO DE VALORES DO SERVIDOR (ajuste atual) — itens
+                      exibidos (pós-filtros): Base = Σ base exibida ×
+                      quantidade; Considerado = Σ valor considerado
+                      (personalizações respeitadas). Estimativas em kk —
+                      independentes dos valores reais de venda (RC). */}
+                  <span className="inline-flex items-center gap-1 flex-shrink-0" title={`Soma dos valores BASE dos ${list.length} ite${list.length === 1 ? "m" : "ns"} exibido${list.length === 1 ? "" : "s"} de ${server} (base da Lista de Itens × quantidade; ${groupTotals.baseMissing > 0 ? `${groupTotals.baseMissing} sem base conhecida fora da soma` : "todos com base conhecida"}).`}>
+                    <span className="text-[8px] font-black uppercase tracking-wide text-slate-500">Base</span>
+                    <span className="text-[9px] font-black font-mono text-slate-300 tabular-nums">{formatKk(groupTotals.baseKk)}{groupTotals.baseMissing > 0 ? "*" : ""}</span>
+                  </span>
+                  <span className="inline-flex items-center gap-1 flex-shrink-0" title={`Soma dos valores CONSIDERADOS dos ${list.length} ite${list.length === 1 ? "m" : "ns"} exibido${list.length === 1 ? "" : "s"} de ${server} (regras atuais: personalizações locais > snapshot/lista, Tier e quantidade incluídos; ${groupTotals.consideredMissing > 0 ? `${groupTotals.consideredMissing} sem valor conhecido fora da soma` : "todos com valor conhecido"}).`}>
+                    <span className="text-[8px] font-black uppercase tracking-wide text-amber-500/80">Considerado</span>
+                    <span className="text-[9px] font-black font-mono text-amber-300 tabular-nums">{formatKk(groupTotals.consideredKk)}{groupTotals.consideredMissing > 0 ? "*" : ""}</span>
+                  </span>
                   {/* GERAR TEXTO DE VENDA (75ª): anúncio SÓ com os itens
                       AINDA À VENDA deste servidor (vendidos e outros
                       servidores ficam de fora), no formato configurado —
@@ -1461,13 +1665,38 @@ export default function MyItemsForSaleModal({
                   })}
                 </ul>
               </section>
-            ))
+              );
+            })
           )}
         </div>
 
         {/* Rodapé */}
-        <div className="px-4 py-2.5 border-t border-white/5 bg-black/30 flex items-center justify-between gap-2 flex-shrink-0">
-          <p className="text-[9px] text-slate-500 leading-snug">
+        <div className="px-4 py-2.5 border-t border-white/5 bg-black/30 flex items-center justify-between gap-2 flex-shrink-0 flex-wrap">
+          {/* RESUMO GERAL (ajuste atual) — TODOS os itens listados
+              (pós-filtros, todas as guias de servidor): total Base e total
+              Considerado em kk (mesmas fontes únicas dos resumos por
+              servidor). São ESTIMATIVAS: na aba Vendidos, o valor
+              efetivamente RECEBIDO (RC real) aparece ao lado, separado —
+              nunca misturado com as estimativas em kk. */}
+          {filteredItems.length > 0 && (
+            <span className="inline-flex items-center gap-x-3 gap-y-1 flex-wrap">
+              <span className="inline-flex items-baseline gap-1.5" title={`Soma dos valores BASE dos ${filteredItems.length} ite${filteredItems.length === 1 ? "m" : "ns"} listado${filteredItems.length === 1 ? "" : "s"} (base da Lista de Itens × quantidade; ${shownTotals.baseMissing > 0 ? `${shownTotals.baseMissing} sem base conhecida fora da soma` : "todos com base conhecida"}). Estimativa em kk — não é valor recebido.`}>
+                <span className="text-[9px] font-bold uppercase tracking-wider text-slate-500">Total Base</span>
+                <span className="text-[11px] font-black font-mono tabular-nums text-slate-200">{formatKk(shownTotals.baseKk)}{shownTotals.baseMissing > 0 ? "*" : ""}</span>
+              </span>
+              <span className="inline-flex items-baseline gap-1.5" title={`Soma dos valores CONSIDERADOS dos ${filteredItems.length} ite${filteredItems.length === 1 ? "m" : "ns"} listado${filteredItems.length === 1 ? "" : "s"} (regras atuais: personalizações locais > snapshot/lista, Tier e quantidade incluídos; ${shownTotals.consideredMissing > 0 ? `${shownTotals.consideredMissing} sem valor conhecido fora da soma` : "todos com valor conhecido"}). Estimativa em kk — não é valor recebido.`}>
+                <span className="text-[9px] font-bold uppercase tracking-wider text-amber-500/80">Total Considerado</span>
+                <span className="text-[11px] font-black font-mono tabular-nums text-amber-300">{formatKk(shownTotals.consideredKk)}{shownTotals.consideredMissing > 0 ? "*" : ""}</span>
+              </span>
+              {tab === "vendidos" && soldSummary && (
+                <span className="inline-flex items-baseline gap-1.5" title={`Valor efetivamente RECEBIDO (RC) das ${soldSummary.valuedCount} venda${soldSummary.valuedCount === 1 ? "" : "s"} com valor registrado — regras financeiras existentes (mesmo total do resumo verde acima); ${soldSummary.noValueCount > 0 ? `${soldSummary.noValueCount} venda${soldSummary.noValueCount === 1 ? "" : "s"} sem valor informado fora do total` : "todas com valor informado"}. Separado das estimativas em kk ao lado.`}>
+                  <span className="text-[9px] font-bold uppercase tracking-wider text-emerald-400/80">Recebido</span>
+                  <span className="text-[11px] font-black font-mono tabular-nums text-emerald-300">{formatRC(soldSummary.totalRC)}</span>
+                </span>
+              )}
+            </span>
+          )}
+          <p className="text-[9px] text-slate-500 leading-snug flex-1 basis-60">
             Vendas e valores são gravados no registro do próprio personagem (ou no Lucro Quest da negociação) — tudo reflete em Meus Personagens na hora.
           </p>
           <button

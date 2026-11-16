@@ -218,17 +218,58 @@ export function formatSaleTextItem(item: SaleTextItemInput, config: SaleTextConf
 export function buildSaleAnnouncement(config: SaleTextConfig, items: SaleTextItemInput[]): string {
   const cfg = sanitizeSaleTextConfig(config);
   const sectionJoin = "\n".repeat(1 + cfg.sectionBlankLines);
-  // Filtro de origens (76ª) aplicado AQUI: prévia e cópia passam pelo mesmo
-  // caminho — nenhum gerador paralelo.
-  const itemTexts = filterSaleTextItemsByOrigin(cfg, items)
-    .map(item => formatSaleTextItem(item, cfg))
-    .filter(text => text.length > 0);
-  const body = cfg.layout === "inline"
-    ? itemTexts.join(cfg.separator.length > 0 ? cfg.separator : " | ")
-    : itemTexts.join("\n".repeat(cfg.blankLineBetweenItems ? 2 : 1));
+  const body = buildSaleItemsBody(cfg, items);
   // Normaliza apenas CRLF das seções livres (clipboard multi-plataforma);
   // conteúdo (emojis/acentos/quebras) permanece como o usuário digitou.
   const intro = cfg.intro.replace(/\r\n/g, "\n").trim();
   const outro = cfg.outro.replace(/\r\n/g, "\n").trim();
   return [intro, body, outro].filter(section => section.length > 0).join(sectionJoin);
+}
+
+/**
+ * Corpo de itens de um anúncio (SEM Introdução/Encerramento) — extração
+ * LITERAL do miolo de buildSaleAnnouncement (fonte única: o anúncio de um
+ * servidor e o consolidado multi-servidor montam os itens por aqui; nenhum
+ * gerador paralelo). Filtro de origens (76ª) aplicado AQUI, como sempre.
+ * `cfg` já deve vir sanitizada pelo chamador.
+ */
+function buildSaleItemsBody(cfg: SaleTextConfig, items: SaleTextItemInput[]): string {
+  const itemTexts = filterSaleTextItemsByOrigin(cfg, items)
+    .map(item => formatSaleTextItem(item, cfg))
+    .filter(text => text.length > 0);
+  return cfg.layout === "inline"
+    ? itemTexts.join(cfg.separator.length > 0 ? cfg.separator : " | ")
+    : itemTexts.join("\n".repeat(cfg.blankLineBetweenItems ? 2 : 1));
+}
+
+/** Itens candidatos de UM servidor para o texto consolidado. */
+export interface MultiServerSaleTextGroup {
+  server: string;
+  items: SaleTextItemInput[];
+}
+
+/**
+ * ANÚNCIO CONSOLIDADO de VÁRIOS servidores (ajuste atual): um único texto
+ * com Introdução e Encerramento UMA vez (as mesmas seções configuradas) e,
+ * entre elas, um bloco por servidor — o NOME do servidor como título da
+ * seção ("Mystian:") seguido do corpo de itens no formato EXATO do anúncio
+ * individual (mesma config, mesmo formatSaleTextItem, mesmo filtro de
+ * origens — fonte única buildSaleItemsBody). Servidores sem nenhum item
+ * elegível são OMITIDOS (nunca um título órfão); a ordem dos blocos é a
+ * ordem dos grupos recebidos. O espaçamento entre blocos é o MESMO das
+ * seções (sectionBlankLines) — a organização por servidor fica legível em
+ * qualquer configuração.
+ */
+export function buildMultiServerSaleAnnouncement(config: SaleTextConfig, groups: MultiServerSaleTextGroup[]): string {
+  const cfg = sanitizeSaleTextConfig(config);
+  const sectionJoin = "\n".repeat(1 + cfg.sectionBlankLines);
+  const blocks = (Array.isArray(groups) ? groups : [])
+    .map(group => {
+      const body = buildSaleItemsBody(cfg, group.items);
+      return body.length > 0 ? `${String(group.server || "").trim()}:\n${body}` : "";
+    })
+    .filter(block => block.length > 0);
+  const intro = cfg.intro.replace(/\r\n/g, "\n").trim();
+  const outro = cfg.outro.replace(/\r\n/g, "\n").trim();
+  return [intro, ...blocks, outro].filter(section => section.length > 0).join(sectionJoin);
 }
