@@ -23,7 +23,12 @@ import {
   setManualSaleItemSale,
   type ManualSaleItem,
 } from "../utils/manualSaleItems";
-import { formatItemSaleSummary, formatKkValue as formatKkValueBase, isItemSaleConcluded } from "../utils/itemSale";
+import { computeItemRC, formatItemSaleSummary, formatKkValue as formatKkValueBase, isItemSaleConcluded } from "../utils/itemSale";
+// Cotação do RC POR SERVIDOR (97ª — RC nos totais do rodapé): espelho local
+// da configuração GLOBAL (appSettings/global.serverCoinRates) + evento de
+// atualização — mesmo padrão do modal "Ver" de Meus Personagens (leitura
+// síncrona, ZERO consultas novas ao Firestore).
+import { SERVER_COIN_RATES_EVENT, getServerCoinRate, readLocalCoinRates } from "../utils/bazaarCoinRates";
 import {
   buildMultiServerSaleAnnouncement,
   buildSaleAnnouncement,
@@ -548,6 +553,17 @@ export default function MyItemsForSaleModal({
   }, []);
   const watchedByServer = useMemo(() => loadWatchedItemsByServer(), [watchedVersion]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // ── Cotação do RC por servidor — VIVA (ajuste atual) ─────────────────────
+  // Espelho local + evento (mesmo padrão do modal "Ver"): alterar a cotação
+  // em qualquer tela reflete nos totais em RC na hora, sem nova consulta.
+  const [coinRatesVersion, setCoinRatesVersion] = useState(0);
+  useEffect(() => {
+    const bump = () => setCoinRatesVersion(v => v + 1);
+    window.addEventListener(SERVER_COIN_RATES_EVENT, bump);
+    return () => window.removeEventListener(SERVER_COIN_RATES_EVENT, bump);
+  }, []);
+  const coinRates = useMemo(() => readLocalCoinRates(), [coinRatesVersion]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Itens da aba atual com TODOS os filtros aplicados (derivação pura).
   const filteredItems = useMemo(() => {
     const text = normalizeSearchText(filters.text);
@@ -721,28 +737,40 @@ export default function MyItemsForSaleModal({
    * nenhum valor é inventado. São ESTIMATIVAS em kk: nada aqui se mistura
    * com os valores reais de venda (RC) do resumo financeiro de Vendidos.
    */
-  function sumShownValuesKk(list: MySaleItem[]): { baseKk: number; consideredKk: number; baseMissing: number; consideredMissing: number } {
+  function sumShownValuesKk(list: MySaleItem[]): { baseKk: number; consideredKk: number; baseMissing: number; consideredMissing: number; baseRC: number; consideredRC: number; rateMissing: number } {
     let baseKk = 0;
     let consideredKk = 0;
     let baseMissing = 0;
     let consideredMissing = 0;
+    // RC (97ª): cada item é convertido pela cotação do PRÓPRIO servidor
+    // (regra canônica computeItemRC, por item — nunca uma taxa única sobre
+    // a soma, que misturaria servidores). Item com valor conhecido mas
+    // servidor SEM cotação fica fora do RC e é contado à parte.
+    let baseRC = 0;
+    let consideredRC = 0;
+    let rateMissing = 0;
     for (const item of list) {
       const units = Math.max(1, Math.floor(Number(item.amount) || 1));
+      const rate = getServerCoinRate(coinRates, item.serverName);
       const base = itemShownBaseKk(item);
-      if (base === null) baseMissing += 1; else baseKk += base * units;
+      if (base === null) baseMissing += 1; else { baseKk += base * units; if (rate > 0) baseRC += computeItemRC(rate, base * units); }
       const considered = itemConsideredKkOf(item);
-      if (considered === null) consideredMissing += 1; else consideredKk += considered;
+      if (considered === null) consideredMissing += 1; else { consideredKk += considered; if (rate > 0) consideredRC += computeItemRC(rate, considered); }
+      if (rate <= 0 && (base !== null || considered !== null)) rateMissing += 1;
     }
     return {
       baseKk: Math.round(baseKk * 100) / 100,
       consideredKk: Math.round(consideredKk * 100) / 100,
       baseMissing,
       consideredMissing,
+      baseRC,
+      consideredRC,
+      rateMissing,
     };
   }
 
   /** Resumo GERAL do rodapé — todos os itens listados (pós-filtros). */
-  const shownTotals = useMemo(() => sumShownValuesKk(filteredItems), [filteredItems, watchedByServer]); // eslint-disable-line react-hooks/exhaustive-deps
+  const shownTotals = useMemo(() => sumShownValuesKk(filteredItems), [filteredItems, watchedByServer, coinRates]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── TEXTO DE VENDA POR SERVIDOR (75ª) ─────────────────────────────────────
   // Config persistida POR USUÁRIO (localStorage — sobrevive a recarregar/
@@ -1104,18 +1132,18 @@ export default function MyItemsForSaleModal({
               MARCADOS (caixa no cabeçalho de cada servidor), organizado por
               servidor no formato do anúncio individual. */}
           {saleTextDone?.server === "__todos__" ? (
-            <span className={`inline-flex items-center gap-1 px-2.5 py-1.5 text-[9px] font-black uppercase tracking-wide ${saleTextDone.ok ? "text-emerald-300" : "text-rose-300"}`} title={saleTextDone.message}>
-              {saleTextDone.ok ? <Check size={11} className="flex-shrink-0" /> : <AlertTriangle size={11} className="flex-shrink-0" />}
-              <span className="max-w-[260px] truncate">{saleTextDone.message}</span>
+            <span className={`inline-flex items-center gap-1 px-1.5 py-1 text-[8px] font-black uppercase tracking-wide ${saleTextDone.ok ? "text-emerald-300" : "text-rose-300"}`} title={saleTextDone.message}>
+              {saleTextDone.ok ? <Check size={10} className="flex-shrink-0" /> : <AlertTriangle size={10} className="flex-shrink-0" />}
+              <span className="max-w-[220px] truncate">{saleTextDone.message}</span>
             </span>
           ) : (
             <button
               type="button"
               onClick={() => { void generateAllServersSaleText(); }}
-              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-amber-500/35 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20 text-[10px] font-black uppercase tracking-wide transition-colors cursor-pointer"
+              className="inline-flex items-center gap-1 px-2 py-1 rounded-md border border-amber-500/35 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20 text-[9px] font-black uppercase tracking-wide transition-colors cursor-pointer"
               title={`Gerar e copiar UM texto com os itens à venda de TODOS os servidores selecionados (${selectedTextServers().length} de ${pendingItemsByServer.size} marcado${selectedTextServers().length === 1 ? "" : "s"} — caixas nos cabeçalhos dos servidores). Introdução/Encerramento uma vez e um bloco por servidor, no mesmo formato do anúncio individual; servidores desmarcados e itens desmarcados/vendidos NUNCA entram.`}
             >
-              <Megaphone size={11} /> Gerar Texto (Selecionados)
+              <Megaphone size={10} /> Gerar Texto (Selecionados)
             </button>
           )}
           {/* CONFIGURAR TEXTO DE VENDA (75ª): personaliza o anúncio copiado
@@ -1257,13 +1285,13 @@ export default function MyItemsForSaleModal({
                 O valor comparado é o apropriado da aba: À Venda = kk
                 CONSIDERADO (personalizações respeitadas; fallback base);
                 Vendidos = valor REAL da venda (RC). Vazio = inativo. */}
-            <span className="text-[9px] font-bold uppercase tracking-wider text-slate-500 flex-shrink-0">Valor</span>
+            <span className="text-[8px] font-bold uppercase tracking-wider text-slate-500 flex-shrink-0">Valor</span>
             <select
               value={filters.valueMode}
               onChange={e => setFilters(f => ({ ...f, valueMode: e.target.value as SaleFilters["valueMode"] }))}
               aria-label="Modo do filtro por valor"
               title={`Acima de = somente itens com valor SUPERIOR ao limite; Abaixo de = somente com valor INFERIOR. ${tab === "avenda" ? "Compara o valor CONSIDERADO do item (kk, com as suas personalizações; sem considerado, a base exibida)." : "Compara o valor REAL registrado da venda (RC) — estimativas nunca entram."}`}
-              className={`${inputCls} cursor-pointer [color-scheme:dark] w-auto flex-shrink-0`}
+              className="bg-black/40 border border-white/10 rounded-md px-1.5 py-1 text-[10px] text-slate-200 outline-none transition-colors focus:border-amber-500/50 cursor-pointer [color-scheme:dark] flex-shrink-0"
             >
               <option value="acima">Acima de</option>
               <option value="abaixo">Abaixo de</option>
@@ -1273,14 +1301,14 @@ export default function MyItemsForSaleModal({
               inputMode="decimal"
               value={filters.valueLimit}
               onChange={e => setFilters(f => ({ ...f, valueLimit: tab === "avenda" ? sanitizeDecimalKkText(e.target.value) : e.target.value.replace(/\D+/g, "") }))}
-              placeholder={tab === "avenda" ? "Limite (kk)" : "Limite (RC)"}
+              placeholder={tab === "avenda" ? "kk" : "RC"}
               aria-label={tab === "avenda" ? "Limite do filtro por valor em kk" : "Limite do filtro por valor em RC"}
               title={tab === "avenda"
                 ? "Limite em kk (até 1 casa decimal, ex.: 1,5) — compara com o valor CONSIDERADO de cada item (personalizações locais respeitadas; sem considerado conhecido, a base exibida). Itens sem valor comparável ficam fora enquanto o filtro está ativo. Vazio = sem filtro."
                 : "Limite em RC — compara com o valor REAL registrado da venda. Vendas sem valor informado ficam fora enquanto o filtro está ativo. Vazio = sem filtro."}
-              className={`${inputCls} w-20 flex-shrink-0`}
+              className="bg-black/40 border border-white/10 rounded-md px-1.5 py-1 text-[10px] text-slate-200 outline-none transition-colors focus:border-amber-500/50 placeholder-slate-600 w-14 flex-shrink-0"
             />
-            <span className="text-[9px] font-bold uppercase tracking-wider text-slate-500 flex-shrink-0 ml-2">Ordenar por</span>
+            <span className="text-[8px] font-bold uppercase tracking-wider text-slate-500 flex-shrink-0 ml-2">Ordenar por</span>
             <select
               value={sortKey}
               onChange={e => setSortKey(e.target.value as SaleSortKey)}
@@ -1372,13 +1400,13 @@ export default function MyItemsForSaleModal({
                       quantidade; Considerado = Σ valor considerado
                       (personalizações respeitadas). Estimativas em kk —
                       independentes dos valores reais de venda (RC). */}
-                  <span className="inline-flex items-center gap-1 flex-shrink-0" title={`Soma dos valores BASE dos ${list.length} ite${list.length === 1 ? "m" : "ns"} exibido${list.length === 1 ? "" : "s"} de ${server} (base da Lista de Itens × quantidade; ${groupTotals.baseMissing > 0 ? `${groupTotals.baseMissing} sem base conhecida fora da soma` : "todos com base conhecida"}).`}>
-                    <span className="text-[8px] font-black uppercase tracking-wide text-slate-500">Base</span>
-                    <span className="text-[9px] font-black font-mono text-slate-300 tabular-nums">{formatKk(groupTotals.baseKk)}{groupTotals.baseMissing > 0 ? "*" : ""}</span>
+                  <span className="inline-flex items-center gap-0.5 flex-shrink-0" title={`Soma dos valores BASE dos ${list.length} ite${list.length === 1 ? "m" : "ns"} exibido${list.length === 1 ? "" : "s"} de ${server} (base da Lista de Itens × quantidade; ${groupTotals.baseMissing > 0 ? `${groupTotals.baseMissing} sem base conhecida fora da soma` : "todos com base conhecida"}).`}>
+                    <span className="text-[7px] font-black uppercase tracking-wide text-slate-500">Base</span>
+                    <span className="text-[8px] font-black font-mono text-slate-300 tabular-nums">{formatKk(groupTotals.baseKk)}{groupTotals.baseMissing > 0 ? "*" : ""}</span>
                   </span>
-                  <span className="inline-flex items-center gap-1 flex-shrink-0" title={`Soma dos valores CONSIDERADOS dos ${list.length} ite${list.length === 1 ? "m" : "ns"} exibido${list.length === 1 ? "" : "s"} de ${server} (regras atuais: personalizações locais > snapshot/lista, Tier e quantidade incluídos; ${groupTotals.consideredMissing > 0 ? `${groupTotals.consideredMissing} sem valor conhecido fora da soma` : "todos com valor conhecido"}).`}>
-                    <span className="text-[8px] font-black uppercase tracking-wide text-amber-500/80">Considerado</span>
-                    <span className="text-[9px] font-black font-mono text-amber-300 tabular-nums">{formatKk(groupTotals.consideredKk)}{groupTotals.consideredMissing > 0 ? "*" : ""}</span>
+                  <span className="inline-flex items-center gap-0.5 flex-shrink-0" title={`Soma dos valores CONSIDERADOS dos ${list.length} ite${list.length === 1 ? "m" : "ns"} exibido${list.length === 1 ? "" : "s"} de ${server} (regras atuais: personalizações locais > snapshot/lista, Tier e quantidade incluídos; ${groupTotals.consideredMissing > 0 ? `${groupTotals.consideredMissing} sem valor conhecido fora da soma` : "todos com valor conhecido"}).`}>
+                    <span className="text-[7px] font-black uppercase tracking-wide text-amber-500/80">Consid.</span>
+                    <span className="text-[8px] font-black font-mono text-amber-300 tabular-nums">{formatKk(groupTotals.consideredKk)}{groupTotals.consideredMissing > 0 ? "*" : ""}</span>
                   </span>
                   {/* GERAR TEXTO DE VENDA (75ª): anúncio SÓ com os itens
                       AINDA À VENDA deste servidor (vendidos e outros
@@ -1679,26 +1707,26 @@ export default function MyItemsForSaleModal({
               efetivamente RECEBIDO (RC real) aparece ao lado, separado —
               nunca misturado com as estimativas em kk. */}
           {filteredItems.length > 0 && (
-            <span className="inline-flex items-center gap-x-3 gap-y-1 flex-wrap">
-              <span className="inline-flex items-baseline gap-1.5" title={`Soma dos valores BASE dos ${filteredItems.length} ite${filteredItems.length === 1 ? "m" : "ns"} listado${filteredItems.length === 1 ? "" : "s"} (base da Lista de Itens × quantidade; ${shownTotals.baseMissing > 0 ? `${shownTotals.baseMissing} sem base conhecida fora da soma` : "todos com base conhecida"}). Estimativa em kk — não é valor recebido.`}>
-                <span className="text-[9px] font-bold uppercase tracking-wider text-slate-500">Total Base</span>
-                <span className="text-[11px] font-black font-mono tabular-nums text-slate-200">{formatKk(shownTotals.baseKk)}{shownTotals.baseMissing > 0 ? "*" : ""}</span>
+            <span className="inline-flex items-center gap-x-2.5 gap-y-1 flex-wrap">
+              <span className="inline-flex items-baseline gap-1" title={`Soma dos valores BASE dos ${filteredItems.length} ite${filteredItems.length === 1 ? "m" : "ns"} listado${filteredItems.length === 1 ? "" : "s"} (base da Lista de Itens × quantidade; ${shownTotals.baseMissing > 0 ? `${shownTotals.baseMissing} sem base conhecida fora da soma` : "todos com base conhecida"}). RC convertido pela cotação de CADA servidor (computeItemRC por item${shownTotals.rateMissing > 0 ? `; ${shownTotals.rateMissing} ite${shownTotals.rateMissing === 1 ? "m" : "ns"} de servidor sem cotação fora do RC` : ""}). Estimativa — não é valor recebido.`}>
+                <span className="text-[8px] font-bold uppercase tracking-wider text-slate-500">Total Base</span>
+                <span className="text-[10px] font-black font-mono tabular-nums text-slate-200">{formatKk(shownTotals.baseKk)}{shownTotals.baseMissing > 0 ? "*" : ""}</span>
+                <span className="text-[9px] font-bold font-mono tabular-nums text-sky-300/90">≈ {shownTotals.baseRC.toLocaleString("pt-BR")} RC{shownTotals.rateMissing > 0 ? "*" : ""}</span>
               </span>
-              <span className="inline-flex items-baseline gap-1.5" title={`Soma dos valores CONSIDERADOS dos ${filteredItems.length} ite${filteredItems.length === 1 ? "m" : "ns"} listado${filteredItems.length === 1 ? "" : "s"} (regras atuais: personalizações locais > snapshot/lista, Tier e quantidade incluídos; ${shownTotals.consideredMissing > 0 ? `${shownTotals.consideredMissing} sem valor conhecido fora da soma` : "todos com valor conhecido"}). Estimativa em kk — não é valor recebido.`}>
-                <span className="text-[9px] font-bold uppercase tracking-wider text-amber-500/80">Total Considerado</span>
-                <span className="text-[11px] font-black font-mono tabular-nums text-amber-300">{formatKk(shownTotals.consideredKk)}{shownTotals.consideredMissing > 0 ? "*" : ""}</span>
+              <span className="inline-flex items-baseline gap-1" title={`Soma dos valores CONSIDERADOS dos ${filteredItems.length} ite${filteredItems.length === 1 ? "m" : "ns"} listado${filteredItems.length === 1 ? "" : "s"} (regras atuais: personalizações locais > snapshot/lista, Tier e quantidade incluídos; ${shownTotals.consideredMissing > 0 ? `${shownTotals.consideredMissing} sem valor conhecido fora da soma` : "todos com valor conhecido"}). RC convertido pela cotação de CADA servidor (computeItemRC por item${shownTotals.rateMissing > 0 ? `; ${shownTotals.rateMissing} ite${shownTotals.rateMissing === 1 ? "m" : "ns"} de servidor sem cotação fora do RC` : ""}). Estimativa — não é valor recebido.`}>
+                <span className="text-[8px] font-bold uppercase tracking-wider text-amber-500/80">Total Considerado</span>
+                <span className="text-[10px] font-black font-mono tabular-nums text-amber-300">{formatKk(shownTotals.consideredKk)}{shownTotals.consideredMissing > 0 ? "*" : ""}</span>
+                <span className="text-[9px] font-bold font-mono tabular-nums text-sky-300/90">≈ {shownTotals.consideredRC.toLocaleString("pt-BR")} RC{shownTotals.rateMissing > 0 ? "*" : ""}</span>
               </span>
               {tab === "vendidos" && soldSummary && (
-                <span className="inline-flex items-baseline gap-1.5" title={`Valor efetivamente RECEBIDO (RC) das ${soldSummary.valuedCount} venda${soldSummary.valuedCount === 1 ? "" : "s"} com valor registrado — regras financeiras existentes (mesmo total do resumo verde acima); ${soldSummary.noValueCount > 0 ? `${soldSummary.noValueCount} venda${soldSummary.noValueCount === 1 ? "" : "s"} sem valor informado fora do total` : "todas com valor informado"}. Separado das estimativas em kk ao lado.`}>
-                  <span className="text-[9px] font-bold uppercase tracking-wider text-emerald-400/80">Recebido</span>
-                  <span className="text-[11px] font-black font-mono tabular-nums text-emerald-300">{formatRC(soldSummary.totalRC)}</span>
+                <span className="inline-flex items-baseline gap-1" title={`Valor efetivamente RECEBIDO (RC) das ${soldSummary.valuedCount} venda${soldSummary.valuedCount === 1 ? "" : "s"} com valor registrado — regras financeiras existentes (mesmo total do resumo verde acima); ${soldSummary.noValueCount > 0 ? `${soldSummary.noValueCount} venda${soldSummary.noValueCount === 1 ? "" : "s"} sem valor informado fora do total` : "todas com valor informado"}. Separado das estimativas ao lado.`}>
+                  <span className="text-[8px] font-bold uppercase tracking-wider text-emerald-400/80">Recebido</span>
+                  <span className="text-[10px] font-black font-mono tabular-nums text-emerald-300">{formatRC(soldSummary.totalRC)}</span>
                 </span>
               )}
             </span>
           )}
-          <p className="text-[9px] text-slate-500 leading-snug flex-1 basis-60">
-            Vendas e valores são gravados no registro do próprio personagem (ou no Lucro Quest da negociação) — tudo reflete em Meus Personagens na hora.
-          </p>
+          <span className="flex-1" />
           <button
             type="button"
             onClick={onClose}
