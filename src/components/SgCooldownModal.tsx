@@ -134,6 +134,18 @@ export default function SgCooldownModal({ open, characterName, currentUntil, onS
             >
               Zerar
             </button>
+            {/* 98ª tarefa — atalho "Feito agora": Bakragore recém-derrotado.
+                Preenche os campos com o cooldown padrão restante (2d 19h 45m)
+                pelo MESMO mecanismo dos campos manuais (igual ao "Zerar"); o
+                fim exato continua sendo calculado no Salvar já existente. */}
+            <button
+              type="button"
+              onClick={() => { setCdDays("2"); setCdHours("19"); setCdMins("45"); }}
+              className="px-2 py-1 rounded-md border border-amber-500/40 bg-amber-500/10 text-amber-300 text-[10px] font-bold hover:bg-amber-500/20 transition-colors cursor-pointer"
+              title="Boss feito agora — preenche automaticamente 2d 19h 45m; confirme no Salvar"
+            >
+              Feito agora
+            </button>
           </div>
 
           {error ? (

@@ -66,6 +66,31 @@ export interface VipPlansConfig {
   plan90PriceRC: number;
 }
 
+/** Quests rastreadas no histórico de status (campos soulwar/sanguine/crypt do Character). */
+export type QuestStatusHistoryQuest = "soulwar" | "sanguine" | "crypt";
+
+/**
+ * HISTÓRICO DE STATUS DAS QUESTS (98ª tarefa) — um registro por MUDANÇA REAL
+ * de status (manual OU automática) das quests do personagem da lista pessoal.
+ *
+ * `at` é epoch ms: carrega a DATA e o HORÁRIO EXATO da alteração (mesma
+ * convenção de createdAt/itemDropadoSWAt — confiável entre fusos/dispositivos;
+ * a UI/estatística formata como quiser). `status` é o NOVO valor do campo:
+ * `true` = quest DISPONÍVEL (pendente), `false` = CONCLUÍDA/indisponível —
+ * exatamente a convenção dos campos soulwar/sanguine/crypt do app.
+ *
+ * O registro é APPEND-ONLY (nunca sobrescrito) e fica DENTRO do próprio
+ * Character — persiste pelos MESMOS caminhos já existentes (localStorage +
+ * userCharacters/{uid}), sobrevivendo a recarregamentos, novas consultas e
+ * sincronizações sem nenhum write novo. Alimentará estatísticas individuais
+ * (quando cada quest foi realizada).
+ */
+export interface QuestStatusHistoryEntry {
+  quest: QuestStatusHistoryQuest;
+  status: boolean;
+  at: number;
+}
+
 export interface Character {
   id: string;
   account: string;
@@ -86,6 +111,15 @@ export interface Character {
   crypt?: boolean;
   soulwarDone?: boolean;
   sanguineDone?: boolean;
+  /**
+   * HISTÓRICO DE STATUS DAS QUESTS — registros append-only de TODA mudança
+   * real dos campos soulwar/sanguine/crypt (manual ou automática), com data
+   * e horário exatos (epoch ms). Detectado centralmente em App.tsx (mesmo
+   * padrão do efeito dos probableMarkers), portanto NENHUM caminho de
+   * alteração escapa. Opcional por retrocompatibilidade; NUNCA publicado em
+   * sharedCharacters (dado pessoal para estatísticas do dono).
+   */
+  questStatusHistory?: QuestStatusHistoryEntry[];
   /**
    * ROT SG — quantidade de ROTAÇÕES CONCLUÍDAS da Sanguine por este
    * personagem. `0`/ausente = nunca registrou rotação (Meus Personagens

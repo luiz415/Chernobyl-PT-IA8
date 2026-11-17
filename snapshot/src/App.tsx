@@ -5,7 +5,7 @@ import {
   Lock, LockOpen, ArrowUp, ArrowDown, MessageSquareMore, Heart, Cloud, CloudCog, ShoppingBag, Bell, Trophy,
   SlidersHorizontal, ChevronDown, FileSpreadsheet, Briefcase, FileCode2, Coins, Package } from "lucide-react";
 import ExoriLogo from "./components/ExoriLogo";
-import type { AppData, Character, CharacterAcquisition, CharacterAcquisitionBuyerDetails, CharacterBazaarItemsSnapshot, PartyCustomMember, PartyFinalizationReason, PartyTab, PersonalPartyHistory, PtType, WaitingService, SharedService, DialogOptions, ProbableMarkersMap, Vocation } from "./types";
+import type { AppData, Character, CharacterAcquisition, CharacterAcquisitionBuyerDetails, CharacterBazaarItemsSnapshot, PartyCustomMember, PartyFinalizationReason, PartyTab, PersonalPartyHistory, PtType, QuestStatusHistoryEntry, WaitingService, SharedService, DialogOptions, ProbableMarkersMap, Vocation } from "./types";
 import { setGlobalDialogHandler, customAlert, customConfirm, formatRC } from "./types";
 import { loadData, saveData, exportCSV, exportJSON, importJSON, buildPersonalBackup, normalizeImportedBackup, saveAutoSaveHandle, loadAutoSaveHandle, loadUIState, saveUIState, saveCloseTray, saveStartWithWindows, saveLowCpuUsage, loadSharedCharsCache, saveSharedCharsCache, isSharedCharsCacheFresh, invalidateSharedCharsCache } from "./storage";
 import { canViewServiceEntry, canViewServiceForViewer, projectServiceForViewer } from "./utils/serviceVisibility";
@@ -29,6 +29,7 @@ import CharacterBazaarItemsModal from "./components/CharacterBazaarItemsModal";
 // para a conversão em RC no modal de itens do personagem (Boss).
 import { loadItemsLastQuery, loadItemsInterestRecords, interestedAuctionIdsFrom, BAZAAR_ITEMS_LAST_QUERY_UPDATED_EVENT } from "./utils/bazaarWatchedItems";
 import { computeCharacterItemsRc, isItemsProfitModel } from "./utils/characterItemsValue";
+import { appendQuestStatusHistory } from "./utils/questStatusHistory";
 // Cotação do RC POR SERVIDOR — fonte única GLOBAL (appSettings/global
 // .serverCoinRates, espelhada em localStorage) compartilhada pelo modal
 // "RC Servidores", pela Lista de Itens do Bazaar e por todos os cálculos
@@ -1767,8 +1768,11 @@ export default function App() {
     // dono do personagem — NUNCA publicado no documento compartilhado.
     // Usuários comuns com acesso ao personagem não recebem essas informações.
     // `itemsValueRc` (82ª) também sai: é dado financeiro derivado dos itens.
+    // `questStatusHistory` (98ª) também sai: histórico pessoal para as
+    // estatísticas do DONO — amigos não precisam dele e o documento
+    // compartilhado permanece enxuto.
     const charactersToShare = data.characters.filter(c => c.shared === true && !c.vendido).map(c => {
-      const { bazaarItems: _bazaarItems, itemsValueRc: _itemsValueRc, ...publicCharacter } = c;
+      const { bazaarItems: _bazaarItems, itemsValueRc: _itemsValueRc, questStatusHistory: _questStatusHistory, ...publicCharacter } = c;
       return {
         ...publicCharacter,
         ownerUid: currentUser.uid,
@@ -2290,6 +2294,51 @@ export default function App() {
     }
 
     prevCharsForMarkersRef.current = data.characters;
+  }, [data.characters]);
+
+  // ============================================================================
+  // HISTÓRICO DE STATUS DAS QUESTS (98ª tarefa) — registro centralizado
+  // ============================================================================
+  // Mesmo padrão do efeito dos probableMarkers acima: compara a lista pessoal
+  // com o estado anterior e, para CADA mudança real de status de quest
+  // (soulwar/sanguine/crypt — manual OU automática: edição inline, modal,
+  // Att Chars, Auto-Att, conclusão de PT, seleção de drop etc.), anexa um
+  // registro `{ quest, status, at }` ao próprio personagem
+  // (`questStatusHistory`). Por viver DENTRO do Character, o histórico
+  // persiste pelos caminhos já existentes (autosave local + debounce de
+  // userCharacters) — nenhum write novo — e sobrevive a recarregamentos,
+  // consultas e sincronizações. Anti-duplicação no núcleo puro
+  // (utils/questStatusHistory): só mudança real gera registro, e ecos de
+  // sincronização (último registro já com o mesmo status) são ignorados.
+  // A primeira execução apenas popula o ref — carga inicial NUNCA vira
+  // histórico (nenhuma data é inventada); personagens recém-criados também
+  // não geram registro (status inicial não é "alteração").
+  // ============================================================================
+  const prevCharsForQuestHistoryRef = useRef<Character[]>([]);
+
+  useEffect(() => {
+    const prevChars = prevCharsForQuestHistoryRef.current;
+    prevCharsForQuestHistoryRef.current = data.characters;
+    if (prevChars.length === 0) return;
+
+    const at = Date.now();
+    const updates = new Map<string, QuestStatusHistoryEntry[]>();
+    data.characters.forEach(c => {
+      const prev = prevChars.find(pc => pc.id === c.id);
+      if (!prev) return;
+      const nextHistory = appendQuestStatusHistory(prev, c, at);
+      if (nextHistory) updates.set(c.id, nextHistory);
+    });
+    if (updates.size === 0) return;
+
+    // O append dispara este efeito de novo, mas aí os status já são iguais
+    // entre ref e estado (só o histórico mudou) → nenhum novo registro (sem loop).
+    setData(current => ({
+      ...current,
+      characters: current.characters.map(c =>
+        updates.has(c.id) ? { ...c, questStatusHistory: updates.get(c.id)! } : c,
+      ),
+    }));
   }, [data.characters]);
 
   // ============================================================================
