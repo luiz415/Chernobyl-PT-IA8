@@ -375,6 +375,23 @@ const SORT_OPTIONS: Array<{ key: SaleSortKey; label: string }> = [
 
 const VALID_SORT_KEYS: SaleSortKey[] = ["item", "server", "value", "base", "added", "sold"];
 
+// ── FILTRO POR CATEGORIA (ajuste atual) — chips exclusivos ──────────────────
+// Substitui o antigo <select> de origens por BOTÕES independentes (Todas /
+// SW / SG / GB / Bazaar / Manual): cada chip, quando ativo, exibe SOMENTE a
+// sua categoria. É pura APRESENTAÇÃO sobre o MESMO campo `filters.quest` de
+// sempre (passesSaleFilters inalterado — nenhuma regra de negócio nova);
+// clicar no chip ativo (ou em "Todas") remove o filtro. Alternar categoria
+// NUNCA toca nos demais filtros, valores, seleções de servidor ou qualquer
+// outra configuração. Cores ativas = identidade das badges já usadas no app.
+const CATEGORY_FILTER_OPTIONS: Array<{ key: "" | MySaleItemQuest; label: string; title: string; activeCls: string }> = [
+  { key: "", label: "Todas", title: "Exibir itens de todas as categorias", activeCls: "border-amber-500/50 bg-amber-500/20 text-amber-200" },
+  { key: "soulwar", label: "SW", title: "Somente itens de Quest — Soul War", activeCls: "border-slate-400/50 bg-slate-500/25 text-slate-100" },
+  { key: "sanguine", label: "SG", title: "Somente itens de Quest — Sanguine", activeCls: "border-red-700/60 bg-red-900/40 text-red-300" },
+  { key: "crypt", label: "GB", title: "Somente itens de Quest — Graveborn", activeCls: "border-lime-700/60 bg-lime-900/35 text-lime-400" },
+  { key: "bazaar", label: "Bazaar", title: "Somente itens do Bazaar (vieram na compra do personagem — sem Quest)", activeCls: "border-fuchsia-500/50 bg-fuchsia-500/20 text-fuchsia-200" },
+  { key: "manual", label: "Manual", title: "Somente itens adicionados manualmente", activeCls: "border-teal-500/50 bg-teal-500/20 text-teal-200" },
+];
+
 /**
  * Comparador dos itens DENTRO de um grupo (desempate: nome asc).
  * `baseKkOf` (76ª) resolve o VALOR BASE real do item (chip "Base" — Lista de
@@ -1075,7 +1092,9 @@ export default function MyItemsForSaleModal({
     return null;
   };
 
-  const inputCls = "w-full bg-black/40 border border-white/10 rounded-lg px-2.5 py-1.5 text-[11px] text-slate-200 outline-none transition-colors focus:border-amber-500/50 placeholder-slate-600";
+  // Controles de filtro compactados (ajuste atual): py-1/text-[10px] no
+  // lugar de py-1.5/text-[11px] — mesma identidade, menos espaço ocupado.
+  const inputCls = "w-full bg-black/40 border border-white/10 rounded-md px-2 py-1 text-[10px] text-slate-200 outline-none transition-colors focus:border-amber-500/50 placeholder-slate-600";
 
   return createPortal(
     <div
@@ -1109,7 +1128,7 @@ export default function MyItemsForSaleModal({
             type="button"
             onClick={() => setTab("avenda")}
             aria-pressed={tab === "avenda"}
-            className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-[10px] font-black uppercase tracking-wide transition-colors cursor-pointer ${
+            className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border text-[10px] font-black uppercase tracking-wide transition-colors cursor-pointer ${
               tab === "avenda"
                 ? "border-amber-500/50 bg-amber-500/20 text-amber-200"
                 : "border-white/10 bg-white/[0.03] text-slate-400 hover:text-slate-200"
@@ -1122,7 +1141,7 @@ export default function MyItemsForSaleModal({
             type="button"
             onClick={() => setTab("vendidos")}
             aria-pressed={tab === "vendidos"}
-            className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-[10px] font-black uppercase tracking-wide transition-colors cursor-pointer ${
+            className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border text-[10px] font-black uppercase tracking-wide transition-colors cursor-pointer ${
               tab === "vendidos"
                 ? "border-emerald-500/50 bg-emerald-500/20 text-emerald-200"
                 : "border-white/10 bg-white/[0.03] text-slate-400 hover:text-slate-200"
@@ -1137,14 +1156,14 @@ export default function MyItemsForSaleModal({
             type="button"
             onClick={() => setIsAddOpen(open => !open)}
             aria-pressed={isAddOpen}
-            className={`ml-auto inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-[10px] font-black uppercase tracking-wide transition-colors cursor-pointer ${
+            className={`ml-auto inline-flex items-center gap-1 px-2 py-1 rounded-md border text-[9px] font-black uppercase tracking-wide transition-colors cursor-pointer ${
               isAddOpen
                 ? "border-teal-500/50 bg-teal-500/20 text-teal-200"
                 : "border-teal-500/35 bg-teal-500/10 text-teal-300 hover:bg-teal-500/20"
             }`}
             title="Adicionar um item manualmente à lista (nome, Tier e servidor) — entra com a categoria “Manual”, separada dos itens encontrados automaticamente."
           >
-            <Plus size={11} /> Adicionar Item
+            <Plus size={10} /> Adicionar Item
           </button>
           {/* TEXTO DE TODOS OS SERVIDORES SELECIONADOS (ajuste atual): um
               único texto consolidado com os itens à venda dos servidores
@@ -1171,10 +1190,10 @@ export default function MyItemsForSaleModal({
           <button
             type="button"
             onClick={() => setIsSaleTextConfigOpen(true)}
-            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-amber-500/35 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20 text-[10px] font-black uppercase tracking-wide transition-colors cursor-pointer"
+            className="inline-flex items-center gap-1 px-2 py-1 rounded-md border border-amber-500/35 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20 text-[9px] font-black uppercase tracking-wide transition-colors cursor-pointer"
             title="Personalizar o anúncio gerado pelo botão “Gerar Texto de Venda” de cada servidor (Introdução, formato dos itens e Encerramento) — salvo para o seu usuário."
           >
-            <FileText size={11} /> Configurar Texto de Venda
+            <FileText size={10} /> Configurar Texto de Venda
           </button>
         </div>
 
@@ -1242,97 +1261,112 @@ export default function MyItemsForSaleModal({
         )}
 
         {/* Filtros — combinados; preservados ao alternar de aba */}
-        <div className="px-4 pt-2.5 pb-1 grid grid-cols-2 sm:grid-cols-4 gap-1.5 flex-shrink-0">
-          <label className="relative col-span-2 sm:col-span-1">
-            <Search size={11} className="absolute left-2 top-1/2 -translate-y-1/2 text-slate-500 pointer-events-none" />
-            <input
-              type="text"
-              value={filters.text}
-              onChange={e => setFilters(f => ({ ...f, text: e.target.value }))}
-              placeholder="Buscar item..."
-              aria-label="Buscar por nome do item"
-              className={`${inputCls} pl-6`}
-            />
-          </label>
-          <select
-            value={filters.server}
-            onChange={e => setFilters(f => ({ ...f, server: e.target.value }))}
-            aria-label="Filtrar por servidor"
-            className={`${inputCls} cursor-pointer [color-scheme:dark]`}
-          >
-            <option value="">Todos os servidores</option>
-            {serverOptions.map(server => <option key={server} value={server}>{server}</option>)}
-          </select>
-          <select
-            value={filters.quest}
-            onChange={e => setFilters(f => ({ ...f, quest: e.target.value as SaleFilters["quest"] }))}
-            aria-label="Filtrar por Quest"
-            className={`${inputCls} cursor-pointer [color-scheme:dark]`}
-          >
-            <option value="">Todas as origens</option>
-            <option value="soulwar">Soul War (SW)</option>
-            <option value="sanguine">Sanguine (SG)</option>
-            <option value="crypt">Graveborn (GB)</option>
-            <option value="bazaar">Itens do Bazaar (sem Quest)</option>
-            <option value="manual">Manual (adicionados à mão)</option>
-          </select>
-          {/* Faixa de valor: valores registrados existem só nos VENDIDOS. */}
-          <div className={`flex items-center gap-1 ${tab === "vendidos" ? "" : "opacity-40 pointer-events-none"}`} title={tab === "vendidos" ? "Faixa de valor registrado (RC)" : "Disponível na aba Vendidos (pendentes não têm valor registrado)"}>
-            <input
-              type="text"
-              inputMode="numeric"
-              value={filters.minRC}
-              onChange={e => setFilters(f => ({ ...f, minRC: e.target.value.replace(/\D+/g, "") }))}
-              placeholder="RC mín."
-              aria-label="Valor mínimo em RC"
-              className={inputCls}
-            />
-            <span className="text-slate-600 text-[10px]">–</span>
-            <input
-              type="text"
-              inputMode="numeric"
-              value={filters.maxRC}
-              onChange={e => setFilters(f => ({ ...f, maxRC: e.target.value.replace(/\D+/g, "") }))}
-              placeholder="RC máx."
-              aria-label="Valor máximo em RC"
-              className={inputCls}
-            />
-          </div>
-          {/* Ordenação — combinável com os filtros; agrupamento mantido */}
-          <div className="col-span-2 sm:col-span-4 flex items-center gap-1.5 flex-wrap">
-            {/* FILTRO POR VALOR (ajuste atual) — limite único Acima/Abaixo.
-                O valor comparado é o apropriado da aba: À Venda = kk
-                CONSIDERADO (personalizações respeitadas; fallback base);
-                Vendidos = valor REAL da venda (RC). Vazio = inativo. */}
-            <span className="text-[8px] font-bold uppercase tracking-wider text-slate-500 flex-shrink-0">Valor</span>
+        {/* ── PAINEL DE FILTROS (ajuste atual — reorganizado e compacto) ────
+            Linha 1: busca + servidor + faixa RC (Vendidos) + filtro por
+            valor. Linha 2: CATEGORIAS em chips exclusivos (novo — substitui
+            o <select> de origens, mesmo filtro de sempre) + ordenação.
+            Nenhuma regra de negócio alterada: apenas layout/hierarquia. */}
+        <div className="mx-4 mt-2 px-2.5 py-2 rounded-xl border border-white/10 bg-white/[0.02] flex-shrink-0 space-y-1.5">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 items-center">
+            <label className="relative col-span-2 sm:col-span-1">
+              <Search size={11} className="absolute left-2 top-1/2 -translate-y-1/2 text-slate-500 pointer-events-none" />
+              <input
+                type="text"
+                value={filters.text}
+                onChange={e => setFilters(f => ({ ...f, text: e.target.value }))}
+                placeholder="Buscar item..."
+                aria-label="Buscar por nome do item"
+                className={`${inputCls} pl-6`}
+              />
+            </label>
             <select
-              value={filters.valueMode}
-              onChange={e => setFilters(f => ({ ...f, valueMode: e.target.value as SaleFilters["valueMode"] }))}
-              aria-label="Modo do filtro por valor"
-              title={`Acima de = somente itens com valor SUPERIOR ao limite; Abaixo de = somente com valor INFERIOR. ${tab === "avenda" ? "Compara o valor CONSIDERADO do item (kk, com as suas personalizações; sem considerado, a base exibida)." : "Compara o valor REAL registrado da venda (RC) — estimativas nunca entram."}`}
-              className="bg-black/40 border border-white/10 rounded-md px-1.5 py-1 text-[10px] text-slate-200 outline-none transition-colors focus:border-amber-500/50 cursor-pointer [color-scheme:dark] flex-shrink-0"
+              value={filters.server}
+              onChange={e => setFilters(f => ({ ...f, server: e.target.value }))}
+              aria-label="Filtrar por servidor"
+              className={`${inputCls} cursor-pointer [color-scheme:dark]`}
             >
-              <option value="acima">Acima de</option>
-              <option value="abaixo">Abaixo de</option>
+              <option value="">Todos os servidores</option>
+              {serverOptions.map(server => <option key={server} value={server}>{server}</option>)}
             </select>
-            <input
-              type="text"
-              inputMode="decimal"
-              value={filters.valueLimit}
-              onChange={e => setFilters(f => ({ ...f, valueLimit: tab === "avenda" ? sanitizeDecimalKkText(e.target.value) : e.target.value.replace(/\D+/g, "") }))}
-              placeholder={tab === "avenda" ? "kk" : "RC"}
-              aria-label={tab === "avenda" ? "Limite do filtro por valor em kk" : "Limite do filtro por valor em RC"}
-              title={tab === "avenda"
-                ? "Limite em kk (até 1 casa decimal, ex.: 1,5) — compara com o valor CONSIDERADO de cada item (personalizações locais respeitadas; sem considerado conhecido, a base exibida). Itens sem valor comparável ficam fora enquanto o filtro está ativo. Vazio = sem filtro."
-                : "Limite em RC — compara com o valor REAL registrado da venda. Vendas sem valor informado ficam fora enquanto o filtro está ativo. Vazio = sem filtro."}
-              className="bg-black/40 border border-white/10 rounded-md px-1.5 py-1 text-[10px] text-slate-200 outline-none transition-colors focus:border-amber-500/50 placeholder-slate-600 w-14 flex-shrink-0"
-            />
-            <span className="text-[8px] font-bold uppercase tracking-wider text-slate-500 flex-shrink-0 ml-2">Ordenar por</span>
+            {/* Faixa de valor: valores registrados existem só nos VENDIDOS. */}
+            <div className={`flex items-center gap-1 ${tab === "vendidos" ? "" : "opacity-40 pointer-events-none"}`} title={tab === "vendidos" ? "Faixa de valor registrado (RC)" : "Disponível na aba Vendidos (pendentes não têm valor registrado)"}>
+              <input
+                type="text"
+                inputMode="numeric"
+                value={filters.minRC}
+                onChange={e => setFilters(f => ({ ...f, minRC: e.target.value.replace(/\D+/g, "") }))}
+                placeholder="RC mín."
+                aria-label="Valor mínimo em RC"
+                className={inputCls}
+              />
+              <span className="text-slate-600 text-[10px]">–</span>
+              <input
+                type="text"
+                inputMode="numeric"
+                value={filters.maxRC}
+                onChange={e => setFilters(f => ({ ...f, maxRC: e.target.value.replace(/\D+/g, "") }))}
+                placeholder="RC máx."
+                aria-label="Valor máximo em RC"
+                className={inputCls}
+              />
+            </div>
+            {/* FILTRO POR VALOR — limite único Acima/Abaixo. O valor comparado
+                é o apropriado da aba: À Venda = kk CONSIDERADO (personalizações
+                respeitadas; fallback base); Vendidos = valor REAL (RC). */}
+            <div className="flex items-center gap-1">
+              <span className="text-[8px] font-bold uppercase tracking-wider text-slate-500 flex-shrink-0">Valor</span>
+              <select
+                value={filters.valueMode}
+                onChange={e => setFilters(f => ({ ...f, valueMode: e.target.value as SaleFilters["valueMode"] }))}
+                aria-label="Modo do filtro por valor"
+                title={`Acima de = somente itens com valor SUPERIOR ao limite; Abaixo de = somente com valor INFERIOR. ${tab === "avenda" ? "Compara o valor CONSIDERADO do item (kk, com as suas personalizações; sem considerado, a base exibida)." : "Compara o valor REAL registrado da venda (RC) — estimativas nunca entram."}`}
+                className="bg-black/40 border border-white/10 rounded-md px-1.5 py-1 text-[10px] text-slate-200 outline-none transition-colors focus:border-amber-500/50 cursor-pointer [color-scheme:dark] flex-1 min-w-0"
+              >
+                <option value="acima">Acima de</option>
+                <option value="abaixo">Abaixo de</option>
+              </select>
+              <input
+                type="text"
+                inputMode="decimal"
+                value={filters.valueLimit}
+                onChange={e => setFilters(f => ({ ...f, valueLimit: tab === "avenda" ? sanitizeDecimalKkText(e.target.value) : e.target.value.replace(/\D+/g, "") }))}
+                placeholder={tab === "avenda" ? "kk" : "RC"}
+                aria-label={tab === "avenda" ? "Limite do filtro por valor em kk" : "Limite do filtro por valor em RC"}
+                title={tab === "avenda"
+                  ? "Limite em kk (até 1 casa decimal, ex.: 1,5) — compara com o valor CONSIDERADO de cada item (personalizações locais respeitadas; sem considerado conhecido, a base exibida). Itens sem valor comparável ficam fora enquanto o filtro está ativo. Vazio = sem filtro."
+                  : "Limite em RC — compara com o valor REAL registrado da venda. Vendas sem valor informado ficam fora enquanto o filtro está ativo. Vazio = sem filtro."}
+                className="bg-black/40 border border-white/10 rounded-md px-1.5 py-1 text-[10px] text-slate-200 outline-none transition-colors focus:border-amber-500/50 placeholder-slate-600 w-12 flex-shrink-0"
+              />
+            </div>
+          </div>
+          {/* Linha 2 — CATEGORIAS (chips exclusivos, novo) + ordenação. Cada
+              chip exibe SOMENTE a sua categoria; clicar no ativo volta a
+              "Todas". Mesmo campo filters.quest do antigo select — alternar
+              NUNCA interfere nos demais filtros/valores/seleções. */}
+          <div className="flex items-center gap-1 flex-wrap pt-1.5 border-t border-white/5">
+            <span className="text-[8px] font-bold uppercase tracking-wider text-slate-500 flex-shrink-0">Categoria</span>
+            {CATEGORY_FILTER_OPTIONS.map(opt => (
+              <button
+                key={opt.key || "todas"}
+                type="button"
+                onClick={() => setFilters(f => ({ ...f, quest: f.quest === opt.key ? "" : opt.key }))}
+                aria-pressed={filters.quest === opt.key}
+                title={opt.title}
+                className={`px-1.5 py-0.5 rounded border text-[9px] font-black uppercase tracking-wide transition-colors cursor-pointer flex-shrink-0 ${
+                  filters.quest === opt.key
+                    ? opt.activeCls
+                    : "border-white/10 bg-white/[0.03] text-slate-500 hover:text-slate-300 hover:border-white/20"
+                }`}
+              >
+                {opt.label}
+              </button>
+            ))}
+            <span className="text-[8px] font-bold uppercase tracking-wider text-slate-500 flex-shrink-0 ml-auto">Ordenar</span>
             <select
               value={sortKey}
               onChange={e => setSortKey(e.target.value as SaleSortKey)}
               aria-label="Critério de ordenação"
-              className={`${inputCls} cursor-pointer [color-scheme:dark] flex-1`}
+              className="bg-black/40 border border-white/10 rounded-md px-1.5 py-1 text-[10px] text-slate-200 outline-none transition-colors focus:border-amber-500/50 cursor-pointer [color-scheme:dark] flex-shrink-0 max-w-[150px]"
             >
               {SORT_OPTIONS.map(opt => <option key={opt.key} value={opt.key}>{opt.label}</option>)}
             </select>
@@ -1341,9 +1375,9 @@ export default function MyItemsForSaleModal({
               onClick={() => setSortDir(d => (d === "asc" ? "desc" : "asc"))}
               aria-label={sortDir === "asc" ? "Ordem crescente (clique para decrescente)" : "Ordem decrescente (clique para crescente)"}
               title={sortDir === "asc" ? "Crescente — clique para decrescente" : "Decrescente — clique para crescente"}
-              className="inline-flex items-center gap-1 px-2 py-1.5 rounded-lg border border-white/10 bg-white/[0.03] text-slate-300 hover:text-amber-300 hover:border-amber-500/40 text-[10px] font-bold transition-colors cursor-pointer flex-shrink-0"
+              className="inline-flex items-center gap-1 px-1.5 py-1 rounded-md border border-white/10 bg-white/[0.03] text-slate-300 hover:text-amber-300 hover:border-amber-500/40 text-[9px] font-bold transition-colors cursor-pointer flex-shrink-0"
             >
-              {sortDir === "asc" ? <ArrowDownAZ size={12} /> : <ArrowUpAZ size={12} />}
+              {sortDir === "asc" ? <ArrowDownAZ size={11} /> : <ArrowUpAZ size={11} />}
               {sortDir === "asc" ? "Cresc." : "Decresc."}
             </button>
           </div>
@@ -1352,14 +1386,14 @@ export default function MyItemsForSaleModal({
         {/* Resumo financeiro — SÓ aba Vendidos, SÓ itens exibidos (pós-filtros);
             vendas sem valor ficam fora do total/média (contadas à parte). */}
         {soldSummary && soldSummary.shownCount > 0 && (
-          <div className="mx-4 mt-2 px-3 py-2 rounded-xl border border-emerald-500/25 bg-emerald-500/[0.06] flex items-center gap-x-4 gap-y-1 flex-wrap flex-shrink-0">
+          <div className="mx-4 mt-2 px-3 py-1.5 rounded-xl border border-emerald-500/25 bg-emerald-500/[0.06] flex items-center gap-x-4 gap-y-1 flex-wrap flex-shrink-0">
             <span className="inline-flex items-baseline gap-1.5">
               <span className="text-[9px] font-bold uppercase tracking-wider text-emerald-400/80">Total</span>
-              <span className="text-[13px] font-black tabular-nums text-emerald-300">{formatRC(soldSummary.totalRC)}</span>
+              <span className="text-[12px] font-black tabular-nums text-emerald-300">{formatRC(soldSummary.totalRC)}</span>
             </span>
             <span className="inline-flex items-baseline gap-1.5">
               <span className="text-[9px] font-bold uppercase tracking-wider text-emerald-400/80">Média</span>
-              <span className="text-[13px] font-black tabular-nums text-emerald-300">{soldSummary.valuedCount > 0 ? formatRC(soldSummary.averageRC) : "—"}</span>
+              <span className="text-[12px] font-black tabular-nums text-emerald-300">{soldSummary.valuedCount > 0 ? formatRC(soldSummary.averageRC) : "—"}</span>
             </span>
             <span className="text-[9px] text-slate-500 ml-auto tabular-nums">
               {soldSummary.valuedCount} ite{soldSummary.valuedCount === 1 ? "m" : "ns"} com valor
@@ -1375,7 +1409,7 @@ export default function MyItemsForSaleModal({
         )}
 
         {/* Lista agrupada por servidor */}
-        <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3 space-y-3">
+        <div className="flex-1 min-h-0 overflow-y-auto px-4 py-2.5 space-y-2">
           {groupedByServer.length === 0 ? (
             <div className="py-10 text-center">
               <PackageOpen size={28} className="mx-auto text-slate-600 mb-2" />
@@ -1469,7 +1503,7 @@ export default function MyItemsForSaleModal({
                     const totalKey = `${item.key}:total`;
                     const rowDone = editDone && (editDone.key === baseKey || editDone.key === totalKey) ? editDone : null;
                     return (
-                      <li key={item.key} className="px-3 py-2 flex items-center gap-2 flex-wrap">
+                      <li key={item.key} className="px-3 py-1.5 flex items-center gap-2 flex-wrap">
                         {/* SELEÇÃO INDIVIDUAL (76ª) — só itens AINDA À VENDA
                             (vendidos nunca entram no anúncio): marcado =
                             entra no Texto de Venda; desmarcado = fica de
