@@ -9,6 +9,7 @@ import {
   applyOfficialWatchedItemUpdate,
   findServerWatchedItem,
   loadWatchedItemsByServer,
+  markSnapshotMatchForSale,
   parseDecimalKkText,
   sanitizeDecimalKkText,
   updateSnapshotMatchTotalKk,
@@ -301,14 +302,12 @@ export default function FoundItemsModal({
     onCharacterInlineChange({ ...character, bazaarItems: updater(snap) });
   }
 
-  /** À VENDA — MESMO patch do modal "Ver" (58ª): forSaleAt só na 1ª marcação. */
+  /** À VENDA — MESMO núcleo do modal "Ver" (markSnapshotMatchForSale):
+   *  forSaleAt só na 1ª marcação; marcar um match com VÁRIAS unidades o
+   *  divide em registros INDEPENDENTES de 1 unidade (ajuste atual) — sem
+   *  mudar índices dos demais matches nem a soma dos valores. */
   function handleToggleForSale(characterId: string, matchIndex: number, forSale: boolean) {
-    updateSnapshot(characterId, snap => ({
-      ...snap,
-      matches: snap.matches.map((m, i) => i === matchIndex
-        ? { ...m, forSale, ...(forSale && !((m.forSaleAt || 0) > 0) ? { forSaleAt: Date.now() } : {}) }
-        : m),
-    }));
+    updateSnapshot(characterId, snap => markSnapshotMatchForSale(snap, matchIndex, forSale) || snap);
   }
 
   /** VENDIDO — grava o registro no match E o marca à venda (consta na aba

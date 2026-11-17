@@ -27,7 +27,7 @@ import FoundItemsModal, { collectFoundItemGroups } from "./components/FoundItems
 import CharacterBazaarItemsModal from "./components/CharacterBazaarItemsModal";
 // Cotação do coin persistida pela guia Bazaar → Itens (local) — usada apenas
 // para a conversão em RC no modal de itens do personagem (Boss).
-import { loadItemsLastQuery, loadItemsInterestRecords, interestedAuctionIdsFrom, BAZAAR_ITEMS_LAST_QUERY_UPDATED_EVENT } from "./utils/bazaarWatchedItems";
+import { loadItemsLastQuery, loadItemsInterestRecords, interestedAuctionIdsFrom, markSnapshotMatchForSale, BAZAAR_ITEMS_LAST_QUERY_UPDATED_EVENT } from "./utils/bazaarWatchedItems";
 import { computeCharacterItemsRc, isItemsProfitModel } from "./utils/characterItemsValue";
 import { appendQuestStatusHistory } from "./utils/questStatusHistory";
 // Cotação do RC POR SERVIDOR — fonte única GLOBAL (appSettings/global
@@ -6502,18 +6502,20 @@ export default function App() {
                servidor da guia Itens) e reage ao SERVER_COIN_RATES_EVENT —
                a prop estática foi removida para o rodapé refletir em tempo
                real a edição global do RC feita pelo Boss. */
-            /* À VENDA (58ª): grava forSale/forSaleAt no PRÓPRIO match do
-               snapshot pelo MESMO canal do CharTable (persistência local +
-               sync existentes). `forSaleAt` é definido só na PRIMEIRA
-               marcação (nunca reescrevemos a data de inclusão); desmarcar
-               preserva o registro do item e a venda já registrada. */
+            /* À VENDA (58ª; unidades individuais no ajuste atual): grava
+               forSale/forSaleAt no PRÓPRIO match do snapshot pelo MESMO
+               canal do CharTable (persistência local + sync existentes).
+               Núcleo único markSnapshotMatchForSale: `forSaleAt` só na
+               PRIMEIRA marcação; desmarcar preserva o registro e a venda;
+               marcar um match com VÁRIAS unidades o divide em registros
+               INDEPENDENTES de 1 unidade (valor/venda/remoção próprios),
+               sem mudar os índices dos demais matches nem a soma total. */
             onToggleForSale={(matchIndex, forSale) => {
               const snap = liveBazaarView.bazaarItems;
-              if (!snap || !snap.matches[matchIndex]) return;
-              const matches = snap.matches.map((m, i) => i === matchIndex
-                ? { ...m, forSale, ...(forSale && !((m.forSaleAt || 0) > 0) ? { forSaleAt: Date.now() } : {}) }
-                : m);
-              handleCharacterInlineChange({ ...liveBazaarView, bazaarItems: { ...snap, matches } });
+              if (!snap) return;
+              const next = markSnapshotMatchForSale(snap, matchIndex, forSale);
+              if (!next || next === snap) return;
+              handleCharacterInlineChange({ ...liveBazaarView, bazaarItems: next });
             }}
             /* ATUALIZAR LISTA OFICIAL (66ª — EXCLUSIVO DO BOSS): dupla
                garantia — além de o modal só ser montado para o Boss (acima),

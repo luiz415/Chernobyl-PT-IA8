@@ -60,8 +60,18 @@ export interface SaleTextConfig {
   highlight: SaleTextHighlight;
   /** Incluir o valor (kk) do item, quando conhecido. */
   includeValue: boolean;
-  /** Incluir a quantidade (xN) quando maior que 1. */
-  includeAmount: boolean;
+  /**
+   * REMOVER ITENS DUPLICADOS (ajuste atual — substitui a antiga opção
+   * "Incluir quantidade (xN)", removida junto com o sufixo xN: cada unidade
+   * agora é um registro individual). Marcada: o texto apresenta apenas UMA
+   * ocorrência de cada item — repetições pelo NOME apresentado (Tier
+   * incluído) são removidas, independentemente das unidades cadastradas.
+   * Desmarcada: todas as ocorrências individuais aparecem. A remoção é
+   * aplicada DEPOIS dos filtros e da ordenação (a lista chega ao núcleo já
+   * filtrada/ordenada pelo chamador) e POR SERVIDOR (a organização por
+   * servidor é preservada — o mesmo item em dois servidores sai nos dois).
+   */
+  removeDuplicates: boolean;
   /** Linha EXTRA em branco entre itens (somente layout "lines"). */
   blankLineBetweenItems: boolean;
   /** Linhas em branco entre as seções (Introdução/Itens/Encerramento): 0-3. */
@@ -79,7 +89,7 @@ export const DEFAULT_SALE_TEXT_CONFIG: SaleTextConfig = {
   separator: " | ",
   highlight: "none",
   includeValue: true,
-  includeAmount: true,
+  removeDuplicates: false,
   blankLineBetweenItems: false,
   sectionBlankLines: 1,
   origins: { soulwar: true, sanguine: true, crypt: true, bazaar: true, manual: true },
@@ -108,7 +118,9 @@ export function sanitizeSaleTextConfig(raw: unknown): SaleTextConfig {
     separator: text(source.separator, DEFAULT_SALE_TEXT_CONFIG.separator),
     highlight: VALID_HIGHLIGHTS.includes(source.highlight as SaleTextHighlight) ? (source.highlight as SaleTextHighlight) : DEFAULT_SALE_TEXT_CONFIG.highlight,
     includeValue: bool(source.includeValue, DEFAULT_SALE_TEXT_CONFIG.includeValue),
-    includeAmount: bool(source.includeAmount, DEFAULT_SALE_TEXT_CONFIG.includeAmount),
+    // Configs antigas com `includeAmount` são aceitas sem erro — o campo é
+    // simplesmente ignorado (a opção xN deixou de existir).
+    removeDuplicates: bool(source.removeDuplicates, DEFAULT_SALE_TEXT_CONFIG.removeDuplicates),
     blankLineBetweenItems: bool(source.blankLineBetweenItems, DEFAULT_SALE_TEXT_CONFIG.blankLineBetweenItems),
     sectionBlankLines: Number.isFinite(sectionBlankLines) ? Math.min(3, Math.max(0, Math.floor(sectionBlankLines))) : DEFAULT_SALE_TEXT_CONFIG.sectionBlankLines,
     origins,
@@ -142,8 +154,6 @@ export interface SaleTextItemInput {
   name: string;
   /** Valor considerado (kk) — null/0 = desconhecido (omitido do texto). */
   valueKk: number | null;
-  /** Quantidade (xN no texto quando > 1 e habilitado). */
-  amount?: number;
   /** Origem do item (76ª) — usada pelo filtro de origens da config.
    *  Ausente = o item passa sempre (compatibilidade com a 75ª). */
   origin?: SaleTextOrigin;
@@ -196,13 +206,14 @@ function applyHighlight(name: string, highlight: SaleTextHighlight): string {
   return name;
 }
 
-/** Linha/trecho de UM item conforme a config (nome [T<n>] [xN] [— valor]).
+/** Linha/trecho de UM item conforme a config (nome [T<n>] [— valor]).
  *  O nome apresentado (79ª) sai em Title Case com o Tier integrado — o
- *  destaque escolhido envolve o conjunto ("*Winged Boots T1*"). */
+ *  destaque escolhido envolve o conjunto ("*Winged Boots T1*"). O sufixo
+ *  "xN" deixou de existir (ajuste atual): cada unidade é um registro
+ *  individual — duplicatas são tratadas pela opção "Remover itens
+ *  duplicados". */
 export function formatSaleTextItem(item: SaleTextItemInput, config: SaleTextConfig): string {
   let text = applyHighlight(saleTextDisplayName(item), config.highlight);
-  const amount = Number(item.amount) || 0;
-  if (config.includeAmount && amount > 1) text += ` x${amount}`;
   const valueKk = Number(item.valueKk) || 0;
   if (config.includeValue && valueKk > 0) text += ` — ${formatKkValue(valueKk, "kk", true)}`;
   return text;
@@ -234,7 +245,22 @@ export function buildSaleAnnouncement(config: SaleTextConfig, items: SaleTextIte
  * `cfg` já deve vir sanitizada pelo chamador.
  */
 function buildSaleItemsBody(cfg: SaleTextConfig, items: SaleTextItemInput[]): string {
-  const itemTexts = filterSaleTextItemsByOrigin(cfg, items)
+  let eligible = filterSaleTextItemsByOrigin(cfg, items);
+  // REMOVER ITENS DUPLICADOS (ajuste atual): apenas UMA ocorrência por NOME
+  // apresentado (Title Case + Tier — "Arboreal Ring" ≠ "Arboreal Ring T1"),
+  // mantendo a PRIMEIRA na ordem recebida. Aplicada DEPOIS do filtro de
+  // origens e sobre a lista já filtrada/ordenada pelo chamador (ordem
+  // visual respeitada); por servidor, já que o corpo é gerado por grupo.
+  if (cfg.removeDuplicates) {
+    const seen = new Set<string>();
+    eligible = eligible.filter(item => {
+      const key = saleTextDisplayName(item).toLocaleLowerCase("pt-BR");
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }
+  const itemTexts = eligible
     .map(item => formatSaleTextItem(item, cfg))
     .filter(text => text.length > 0);
   return cfg.layout === "inline"

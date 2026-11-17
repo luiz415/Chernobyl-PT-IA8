@@ -456,6 +456,83 @@ export function updateSnapshotMatchTotalKk<S extends { totalKk: number; goldKk?:
   return { ...snap, matches, totalKk: autoTotal, manualTotalKk: null };
 }
 
+/** Match do snapshot visto pela marcação "À venda" (campos estruturais). */
+type ForSaleMatch = {
+  amount: number;
+  totalKk: number;
+  forSale?: boolean;
+  forSaleAt?: number;
+  sale?: unknown | null;
+};
+
+/**
+ * MARCAÇÃO "À VENDA" de um match do snapshot (ajuste atual — unidades
+ * INDIVIDUAIS) — função PURA, fonte ÚNICA dos dois pontos que marcam itens
+ * à venda (modal "Ver" via App e "Itens Encontrados" do Boss).
+ *
+ * Regras:
+ *   • DESMARCAR: apenas `forSale: false` no match — registro original e
+ *     venda (se houver) preservados, como sempre.
+ *   • MARCAR match de 1 unidade: comportamento histórico (58ª) —
+ *     `forSale: true` e `forSaleAt` definido SÓ na primeira marcação.
+ *   • MARCAR match com VÁRIAS unidades (amount > 1) e SEM venda registrada:
+ *     o match é DIVIDIDO em `amount` registros INDEPENDENTES de 1 unidade —
+ *     cada um com seus próprios dados (valor considerado próprio, venda
+ *     própria, remoção própria). O match original permanece NO MESMO índice
+ *     (vira a 1ª unidade) e as demais unidades são ACRESCENTADAS AO FIM do
+ *     array — os índices dos outros matches NÃO mudam (chaves estáveis
+ *     `char:<id>:bazaar:<matchIndex>` de itens já existentes, exclusões do
+ *     Texto de Venda etc. permanecem válidas). O `totalKk` do match é
+ *     repartido entre as unidades PRESERVANDO A SOMA (último recebe o
+ *     resto do arredondamento) — o total do snapshot não muda.
+ *   • Match com VENDA registrada nunca é dividido (o registro histórico da
+ *     operação não é reescrito) — apenas re-marcado como antes.
+ *
+ * Retorna o MESMO objeto quando não há nada a mudar (idempotência) e null
+ * para índice inválido.
+ */
+export function markSnapshotMatchForSale<S extends { matches: ForSaleMatch[] }>(
+  snap: S,
+  matchIndex: number,
+  forSale: boolean,
+  nowMs: number = Date.now(),
+): S | null {
+  if (!snap || !Array.isArray(snap.matches) || matchIndex < 0 || matchIndex >= snap.matches.length) return null;
+  const match = snap.matches[matchIndex];
+  if (!forSale) {
+    if (match.forSale !== true) return snap;
+    return { ...snap, matches: snap.matches.map((m, i) => (i === matchIndex ? { ...m, forSale: false } : m)) };
+  }
+  const units = Math.max(1, Math.floor(Number(match.amount) || 1));
+  // `forSaleAt` definido SÓ na 1ª marcação (nunca reescrevemos a data).
+  const forSaleAt = (match.forSaleAt || 0) > 0 ? (match.forSaleAt as number) : nowMs;
+  if (units <= 1 || match.sale) {
+    if (match.forSale === true) return snap;
+    return {
+      ...snap,
+      matches: snap.matches.map((m, i) => (i === matchIndex ? { ...m, forSale: true, forSaleAt } : m)),
+    };
+  }
+  // ── DIVISÃO EM UNIDADES INDIVIDUAIS ───────────────────────────────────────
+  // Repartição do total CONSIDERADO preservando a soma: N−1 unidades com a
+  // parcela arredondada (2 casas) e a última com o resto exato.
+  const totalKk = Number(match.totalKk) || 0;
+  const share = Math.round((totalKk / units) * 100) / 100;
+  const lastShare = Math.round((totalKk - share * (units - 1)) * 100) / 100;
+  const unitOf = (unitTotal: number): ForSaleMatch => ({
+    ...match,
+    amount: 1,
+    totalKk: unitTotal,
+    forSale: true,
+    forSaleAt,
+  });
+  const matches = snap.matches.map((m, i) => (i === matchIndex ? unitOf(share) : m));
+  for (let unit = 1; unit < units; unit++) {
+    matches.push(unitOf(unit < units - 1 ? share : lastShare));
+  }
+  return { ...snap, matches };
+}
+
 /**
  * União dos nomes monitorados (normalizados) de TODOS os servidores — é o
  * conjunto enviado à consulta: a consulta ENCONTRA os itens; o preço aplicado

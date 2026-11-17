@@ -37,11 +37,14 @@ interface Props {
   onClose: () => void;
 }
 
-/** Itens FICTÍCIOS para a prévia quando o usuário ainda não tem itens. */
+/** Itens FICTÍCIOS para a prévia quando o usuário ainda não tem itens —
+ *  com uma repetição proposital ("Gold Token" 2×) para a opção "Remover
+ *  itens duplicados" mostrar o efeito na prévia. */
 const FALLBACK_SAMPLE_ITEMS: SaleTextItemInput[] = [
-  { name: "Falcon Coif", valueKk: 25, amount: 1, origin: "soulwar" },
-  { name: "Spiritthorn Helmet [Tier 2]", valueKk: 40.5, amount: 1, origin: "bazaar" },
-  { name: "Gold Token", valueKk: 1.5, amount: 3, origin: "sanguine" },
+  { name: "Falcon Coif", valueKk: 25, origin: "soulwar" },
+  { name: "Spiritthorn Helmet [Tier 2]", valueKk: 40.5, origin: "bazaar" },
+  { name: "Gold Token", valueKk: 1.5, origin: "sanguine" },
+  { name: "Gold Token", valueKk: 1.5, origin: "sanguine" },
 ];
 
 export default function SaleTextConfigModal({ initial, sampleItems, sampleLabel, onSave, onClose }: Props) {
@@ -165,9 +168,13 @@ export default function SaleTextConfigModal({ initial, sampleItems, sampleLabel,
                 <input type="checkbox" checked={draft.includeValue} onChange={e => patch({ includeValue: e.target.checked })} className="accent-amber-500" />
                 Incluir valor (kk)
               </label>
-              <label className="inline-flex items-center gap-1.5 cursor-pointer text-[10px] text-slate-300" title="Inclui a quantidade (xN) quando o item tem mais de uma unidade.">
-                <input type="checkbox" checked={draft.includeAmount} onChange={e => patch({ includeAmount: e.target.checked })} className="accent-amber-500" />
-                Incluir quantidade (xN)
+              {/* REMOVER ITENS DUPLICADOS (ajuste atual) — substitui a antiga
+                  "Incluir quantidade (xN)": cada unidade é um registro
+                  individual; marcada, o texto sai com UMA ocorrência por
+                  nome (após filtros/ordenação, por servidor). */}
+              <label className="inline-flex items-center gap-1.5 cursor-pointer text-[10px] text-slate-300" title="Marcada: o texto apresenta apenas UMA ocorrência de cada item — repetições pelo nome são removidas, independentemente das unidades cadastradas. Desmarcada: todas as ocorrências individuais aparecem. Aplicada após os filtros e a ordenação, por servidor.">
+                <input type="checkbox" checked={draft.removeDuplicates} onChange={e => patch({ removeDuplicates: e.target.checked })} className="accent-amber-500" />
+                Remover itens duplicados
               </label>
               <label className={`inline-flex items-center gap-1.5 text-[10px] text-slate-300 ${draft.layout === "lines" ? "cursor-pointer" : "opacity-40 cursor-not-allowed"}`} title={draft.layout === "lines" ? "Deixa uma linha em branco entre um item e o seguinte." : "Disponível na organização um abaixo do outro"}>
                 <input type="checkbox" checked={draft.blankLineBetweenItems} disabled={draft.layout !== "lines"} onChange={e => patch({ blankLineBetweenItems: e.target.checked })} className="accent-amber-500" />

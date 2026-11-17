@@ -564,38 +564,46 @@ export default function MyItemsForSaleModal({
   }, []);
   const coinRates = useMemo(() => readLocalCoinRates(), [coinRatesVersion]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Itens da aba atual com TODOS os filtros aplicados (derivação pura).
-  const filteredItems = useMemo(() => {
+  /**
+   * Predicado ÚNICO dos filtros do modal (ajuste atual — apenas EXTRAÍDO do
+   * memo da listagem, mesma lógica de sempre): usado pela listagem da aba
+   * atual E pelos candidatos do Texto de Venda, que seguem SEMPRE a
+   * semântica da aba À Venda (o anúncio só contém itens pendentes).
+   * `mode` define a referência: vendido × pendente, faixa de RC (só
+   * Vendidos) e o valor comparado pelo filtro por valor — À Venda = kk
+   * CONSIDERADO efetivo (fonte única itemConsideredKkOf; fallback base
+   * exibida); Vendidos = valor REAL registrado (RC). Sem valor comparável,
+   * o item não passa no filtro ativo (regra única do app: nada inventado).
+   */
+  function passesSaleFilters(item: MySaleItem, mode: "avenda" | "vendidos"): boolean {
+    if (mode === "avenda" ? item.sold : !item.sold) return false;
     const text = normalizeSearchText(filters.text);
-    const minRC = parseRCFilter(filters.minRC);
-    const maxRC = parseRCFilter(filters.maxRC);
-    // FILTRO POR VALOR (ajuste atual): limite único em "Acima de"/"Abaixo
-    // de". À Venda compara o kk CONSIDERADO efetivo do item (fonte única
-    // itemConsideredKkOf — personalizações respeitadas; fallback base
-    // exibida); Vendidos compara o valor REAL registrado da venda (RC) —
-    // nunca misturando estimativa com recebido. Sem valor comparável, o
-    // item não passa no filtro ativo (regra única do app: nada inventado).
-    const valueLimit = tab === "avenda" ? parseDecimalKkText(filters.valueLimit) : parseRCFilter(filters.valueLimit);
-    return items.filter(item => {
-      if (tab === "avenda" ? item.sold : !item.sold) return false;
-      if (text && !normalizeSearchText(item.itemName).includes(text)) return false;
-      if (filters.server && item.serverName !== filters.server) return false;
-      if (filters.quest && item.quest !== filters.quest) return false;
-      // Faixa de valor: só faz sentido sobre valor registrado (aba Vendidos).
-      if (tab === "vendidos") {
-        if (minRC !== null && item.soldValueRC < minRC) return false;
-        if (maxRC !== null && item.soldValueRC > maxRC) return false;
-      }
-      if (valueLimit !== null) {
-        const compared = tab === "avenda"
-          ? (itemConsideredKkOf(item) ?? itemShownBaseKk(item))
-          : (item.soldValueRC > 0 ? item.soldValueRC : null);
-        if (compared === null) return false;
-        if (filters.valueMode === "acima" ? compared <= valueLimit : compared >= valueLimit) return false;
-      }
-      return true;
-    });
-  }, [items, tab, filters, watchedByServer]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (text && !normalizeSearchText(item.itemName).includes(text)) return false;
+    if (filters.server && item.serverName !== filters.server) return false;
+    if (filters.quest && item.quest !== filters.quest) return false;
+    // Faixa de valor: só faz sentido sobre valor registrado (aba Vendidos).
+    if (mode === "vendidos") {
+      const minRC = parseRCFilter(filters.minRC);
+      const maxRC = parseRCFilter(filters.maxRC);
+      if (minRC !== null && item.soldValueRC < minRC) return false;
+      if (maxRC !== null && item.soldValueRC > maxRC) return false;
+    }
+    const valueLimit = mode === "avenda" ? parseDecimalKkText(filters.valueLimit) : parseRCFilter(filters.valueLimit);
+    if (valueLimit !== null) {
+      const compared = mode === "avenda"
+        ? (itemConsideredKkOf(item) ?? itemShownBaseKk(item))
+        : (item.soldValueRC > 0 ? item.soldValueRC : null);
+      if (compared === null) return false;
+      if (filters.valueMode === "acima" ? compared <= valueLimit : compared >= valueLimit) return false;
+    }
+    return true;
+  }
+
+  // Itens da aba atual com TODOS os filtros aplicados (derivação pura).
+  const filteredItems = useMemo(
+    () => items.filter(item => passesSaleFilters(item, tab)),
+    [items, tab, filters, watchedByServer], // eslint-disable-line react-hooks/exhaustive-deps
+  );
 
   /** Valor BASE vivo do item na Lista de Itens do SEU servidor (73ª) —
    *  null = não cadastrado. Fonte única da render e da ordenação. */
@@ -801,42 +809,50 @@ export default function MyItemsForSaleModal({
     });
   }
 
-  /** Itens AINDA À VENDA (não vendidos) agrupados por servidor — conjunto
-   *  REAL do anúncio, independente de filtros/aba (deriva da lista viva). */
-  const pendingItemsByServer = useMemo(() => {
+  /** Itens AINDA À VENDA **EXIBIDOS** agrupados por servidor, na MESMA
+   *  ordenação visual — conjunto EXATO do Texto de Venda (ajuste atual):
+   *  os MESMOS filtros da listagem (fonte única passesSaleFilters, sempre
+   *  na semântica da aba À Venda — o anúncio só contém pendentes) e a
+   *  MESMA ordenação exibida. Itens ocultos pelos filtros NUNCA entram;
+   *  a ordem do texto é a ordem da tela. */
+  const pendingShownByServer = useMemo(() => {
     const map = new Map<string, MySaleItem[]>();
     for (const item of items) {
-      if (item.sold) continue;
+      if (item.sold || !passesSaleFilters(item, "avenda")) continue;
       const key = item.serverName || "Sem servidor";
       const list = map.get(key) || [];
       list.push(item);
       map.set(key, list);
     }
+    for (const [key, list] of map) {
+      map.set(key, [...list].sort((a, b) => compareSaleItems(a, b, sortKey, sortDir, itemShownBaseKk)));
+    }
     return map;
-  }, [items]);
+  }, [items, filters, sortKey, sortDir, watchedByServer]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /**
-   * Itens CANDIDATOS ao anúncio de UM servidor, na MESMA ordenação exibida:
-   * pendentes do servidor, SEM os desmarcados na seleção individual (76ª).
-   * A origem de cada um segue junto (`origin` = MySaleItem.quest — Quest e
-   * Bazaar nunca se misturam); o filtro de ORIGENS é aplicado depois, pelo
-   * núcleo (`filterSaleTextItemsByOrigin`/`buildSaleAnnouncement`) — assim a
-   * prévia do modal de configuração reage às origens AINDA NÃO salvas.
+   * Itens CANDIDATOS ao anúncio de UM servidor, EXATAMENTE como exibidos
+   * (filtros atuais + ordenação visual — pendingShownByServer), SEM os
+   * desmarcados na seleção individual (76ª). A origem de cada um segue
+   * junto (`origin` = MySaleItem.quest — Quest e Bazaar nunca se misturam);
+   * o filtro de ORIGENS e a remoção de duplicados (ajuste atual) são
+   * aplicados DEPOIS, pelo núcleo (`buildSaleAnnouncement`/
+   * `buildSaleItemsBody`) — assim a prévia do modal de configuração reage
+   * às opções AINDA NÃO salvas, e os duplicados são removidos somente
+   * APÓS filtros e ordenação.
    */
   function saleTextInputsOf(serverKey: string): SaleTextItemInput[] {
-    const pending = [...(pendingItemsByServer.get(serverKey) || [])]
+    return (pendingShownByServer.get(serverKey) || [])
       .filter(item => !excludedSaleKeys.has(item.key))
-      .sort((a, b) => compareSaleItems(a, b, sortKey, sortDir, itemShownBaseKk));
-    return pending.map(item => ({
-      name: item.itemName,
-      valueKk: itemConsideredKkOf(item),
-      amount: Number(item.amount) || 0,
-      origin: item.quest,
-      // Tier (79ª) — apresentado como "T<n>" após o nome no texto gerado.
-      // O núcleo também reconhece o sufixo "[Tier x]" do próprio nome
-      // (snapshot do Bazaar) e unifica as duas fontes sem duplicar.
-      tier: Number(item.tier) || 0,
-    }));
+      .map(item => ({
+        name: item.itemName,
+        valueKk: itemConsideredKkOf(item),
+        origin: item.quest,
+        // Tier (79ª) — apresentado como "T<n>" após o nome no texto gerado.
+        // O núcleo também reconhece o sufixo "[Tier x]" do próprio nome
+        // (snapshot do Bazaar) e unifica as duas fontes sem duplicar.
+        tier: Number(item.tier) || 0,
+      }));
   }
 
   /** Quantos itens do servidor REALMENTE entram no texto (seleção ∧ origem). */
@@ -845,11 +861,12 @@ export default function MyItemsForSaleModal({
   }
 
   // Amostra da PRÉVIA do modal de configuração: itens reais do 1º servidor
-  // (alfabético) com itens à venda — o usuário vê o resultado de verdade.
+  // (alfabético) com itens à venda EXIBIDOS — o usuário vê o resultado de
+  // verdade, com os filtros/ordenação atuais aplicados.
   const sampleServer = useMemo(() => {
-    const keys = [...pendingItemsByServer.keys()].sort((a, b) => a.localeCompare(b, "pt-BR"));
+    const keys = [...pendingShownByServer.keys()].sort((a, b) => a.localeCompare(b, "pt-BR"));
     return keys[0] || "";
-  }, [pendingItemsByServer]);
+  }, [pendingShownByServer]);
 
   async function generateSaleText(serverKey: string) {
     const inputs = saleTextInputsOf(serverKey);
@@ -857,7 +874,7 @@ export default function MyItemsForSaleModal({
     // elegível, NADA é copiado — o aviso orienta o usuário (em vez de um
     // anúncio silenciosamente vazio na área de transferência).
     if (filterSaleTextItemsByOrigin(saleTextConfig, inputs).length === 0) {
-      setSaleTextDone({ server: serverKey, ok: false, message: "Nenhum item entra no anúncio — confira as caixas de seleção dos itens e as origens em Configurar Texto de Venda." });
+      setSaleTextDone({ server: serverKey, ok: false, message: "Nenhum item entra no anúncio — confira os filtros ativos, as caixas de seleção dos itens e as origens em Configurar Texto de Venda." });
       if (saleTextTimerRef.current !== null) window.clearTimeout(saleTextTimerRef.current);
       saleTextTimerRef.current = window.setTimeout(() => { setSaleTextDone(null); saleTextTimerRef.current = null; }, 4000);
       return;
@@ -896,12 +913,14 @@ export default function MyItemsForSaleModal({
       return next;
     });
   }
-  /** Servidores com itens à venda SELECIONADOS para o texto consolidado,
-   *  em ordem alfabética (a MESMA ordem dos grupos exibidos). */
+  /** Servidores com itens à venda EXIBIDOS e SELECIONADOS para o texto
+   *  consolidado, na MESMA ordem visual dos grupos (alfabética; invertida
+   *  quando a ordenação é "Servidor" descendente — como na tela). */
   function selectedTextServers(): string[] {
-    return [...pendingItemsByServer.keys()]
+    const groupFlip = sortKey === "server" && sortDir === "desc" ? -1 : 1;
+    return [...pendingShownByServer.keys()]
       .filter(server => !excludedTextServers.has(server))
-      .sort((a, b) => a.localeCompare(b, "pt-BR"));
+      .sort((a, b) => groupFlip * a.localeCompare(b, "pt-BR"));
   }
   async function generateAllServersSaleText() {
     const servers = selectedTextServers();
@@ -909,7 +928,7 @@ export default function MyItemsForSaleModal({
       .map(server => ({ server, items: saleTextInputsOf(server) }))
       .filter(group => filterSaleTextItemsByOrigin(saleTextConfig, group.items).length > 0);
     if (groups.length === 0) {
-      setSaleTextDone({ server: ALL_SERVERS_TEXT_KEY, ok: false, message: servers.length === 0 ? "Nenhum servidor selecionado — marque as caixas dos servidores desejados." : "Nenhum item entra no anúncio — confira as caixas de seleção dos itens e as origens em Configurar Texto de Venda." });
+      setSaleTextDone({ server: ALL_SERVERS_TEXT_KEY, ok: false, message: servers.length === 0 ? "Nenhum servidor com itens exibidos selecionado — confira os filtros ativos e as caixas dos servidores desejados." : "Nenhum item entra no anúncio — confira os filtros ativos, as caixas de seleção dos itens e as origens em Configurar Texto de Venda." });
       if (saleTextTimerRef.current !== null) window.clearTimeout(saleTextTimerRef.current);
       saleTextTimerRef.current = window.setTimeout(() => { setSaleTextDone(null); saleTextTimerRef.current = null; }, 4000);
       return;
@@ -1141,7 +1160,7 @@ export default function MyItemsForSaleModal({
               type="button"
               onClick={() => { void generateAllServersSaleText(); }}
               className="inline-flex items-center gap-1 px-2 py-1 rounded-md border border-amber-500/35 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20 text-[9px] font-black uppercase tracking-wide transition-colors cursor-pointer"
-              title={`Gerar e copiar UM texto com os itens à venda de TODOS os servidores selecionados (${selectedTextServers().length} de ${pendingItemsByServer.size} marcado${selectedTextServers().length === 1 ? "" : "s"} — caixas nos cabeçalhos dos servidores). Introdução/Encerramento uma vez e um bloco por servidor, no mesmo formato do anúncio individual; servidores desmarcados e itens desmarcados/vendidos NUNCA entram.`}
+              title={`Gerar e copiar UM texto com os itens à venda EXIBIDOS de TODOS os servidores selecionados (${selectedTextServers().length} de ${pendingShownByServer.size} marcado${selectedTextServers().length === 1 ? "" : "s"} — caixas nos cabeçalhos dos servidores). O texto respeita EXATAMENTE os filtros e a ordenação atuais (itens ocultos nunca entram; ordem visual preservada). Introdução/Encerramento uma vez e um bloco por servidor, no mesmo formato do anúncio individual; servidores desmarcados e itens desmarcados/vendidos NUNCA entram.`}
             >
               <Megaphone size={10} /> Gerar Texto (Selecionados)
             </button>
@@ -1381,7 +1400,7 @@ export default function MyItemsForSaleModal({
                       atual): marcado = entra no "Gerar Texto (Selecionados)".
                       Exclusões persistidas por usuário; não interfere no
                       botão individual deste servidor. */}
-                  {(pendingItemsByServer.get(server)?.length || 0) > 0 && (
+                  {(pendingShownByServer.get(server)?.length || 0) > 0 && (
                     <input
                       type="checkbox"
                       checked={!excludedTextServers.has(server)}
@@ -1412,7 +1431,7 @@ export default function MyItemsForSaleModal({
                       AINDA À VENDA deste servidor (vendidos e outros
                       servidores ficam de fora), no formato configurado —
                       copiado direto para a área de transferência. */}
-                  {(pendingItemsByServer.get(server)?.length || 0) > 0 && (
+                  {(pendingShownByServer.get(server)?.length || 0) > 0 && (
                     saleTextDone?.server === server ? (
                       <span className={`inline-flex items-center gap-1 text-[8px] font-black uppercase tracking-wide ${saleTextDone.ok ? "text-emerald-300" : "text-rose-300"}`} title={saleTextDone.message}>
                         {saleTextDone.ok ? <Check size={10} className="flex-shrink-0" /> : <AlertTriangle size={10} className="flex-shrink-0" />}
@@ -1423,7 +1442,7 @@ export default function MyItemsForSaleModal({
                         type="button"
                         onClick={() => { void generateSaleText(server); }}
                         className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-amber-500/35 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20 text-[8px] font-black uppercase tracking-wide transition-colors cursor-pointer"
-                        title={`Gerar e copiar o anúncio de ${server}: ${saleTextEligibleCount(server)} de ${pendingItemsByServer.get(server)?.length || 0} ite${(pendingItemsByServer.get(server)?.length || 0) === 1 ? "m" : "ns"} à venda entra${saleTextEligibleCount(server) === 1 ? "" : "m"} no texto (caixas de seleção + origens configuradas) — itens já vendidos e de outros servidores NUNCA entram.`}
+                        title={`Gerar e copiar o anúncio de ${server}: ${saleTextEligibleCount(server)} de ${pendingShownByServer.get(server)?.length || 0} ite${(pendingShownByServer.get(server)?.length || 0) === 1 ? "m" : "ns"} à venda EXIBIDO${(pendingShownByServer.get(server)?.length || 0) === 1 ? "" : "S"} entra${saleTextEligibleCount(server) === 1 ? "" : "m"} no texto (filtros e ordenação atuais respeitados + caixas de seleção + origens configuradas) — itens ocultos pelos filtros, já vendidos e de outros servidores NUNCA entram.`}
                       >
                         <Megaphone size={9} className="flex-shrink-0" /> Gerar Texto de Venda
                       </button>
