@@ -336,8 +336,16 @@ interface SaleFilters {
   text: string;
   /** Servidor exato ("" = todos). */
   server: string;
-  /** Quest ("" = todas). */
-  quest: "" | MySaleItemQuest;
+  /**
+   * CATEGORIAS SELECIONADAS (ajuste atual — checkboxes independentes):
+   * conjunto das origens exibidas (SW/SG/GB/Bazaar/Manual). Cada checkbox é
+   * totalmente independente — marcar/desmarcar uma NUNCA altera as demais.
+   * Item só é exibido se a sua categoria estiver no conjunto; conjunto
+   * VAZIO = nenhuma categoria selecionada = nenhum item exibido. Padrão:
+   * TODAS marcadas (comportamento de sempre). Substitui o antigo campo
+   * único `quest` (select/chips exclusivos).
+   */
+  quests: MySaleItemQuest[];
   /** Faixa de valor em RC — aplicada apenas aos VENDIDOS (pendentes não têm valor). */
   minRC: string;
   maxRC: string;
@@ -355,7 +363,10 @@ interface SaleFilters {
   valueLimit: string;
 }
 
-const EMPTY_FILTERS: SaleFilters = { text: "", server: "", quest: "", minRC: "", maxRC: "", valueMode: "acima", valueLimit: "" };
+/** Todas as categorias possíveis — ordem de exibição dos checkboxes. */
+const ALL_SALE_QUESTS: MySaleItemQuest[] = ["soulwar", "sanguine", "crypt", "bazaar", "manual"];
+
+const EMPTY_FILTERS: SaleFilters = { text: "", server: "", quests: [...ALL_SALE_QUESTS], minRC: "", maxRC: "", valueMode: "acima", valueLimit: "" };
 
 // ── Ordenação (combinável com os filtros; agrupamento por servidor mantido) ─
 // "server" ordena os GRUPOS de servidor; os demais critérios ordenam os itens
@@ -375,21 +386,22 @@ const SORT_OPTIONS: Array<{ key: SaleSortKey; label: string }> = [
 
 const VALID_SORT_KEYS: SaleSortKey[] = ["item", "server", "value", "base", "added", "sold"];
 
-// ── FILTRO POR CATEGORIA (ajuste atual) — chips exclusivos ──────────────────
-// Substitui o antigo <select> de origens por BOTÕES independentes (Todas /
-// SW / SG / GB / Bazaar / Manual): cada chip, quando ativo, exibe SOMENTE a
-// sua categoria. É pura APRESENTAÇÃO sobre o MESMO campo `filters.quest` de
-// sempre (passesSaleFilters inalterado — nenhuma regra de negócio nova);
-// clicar no chip ativo (ou em "Todas") remove o filtro. Alternar categoria
-// NUNCA toca nos demais filtros, valores, seleções de servidor ou qualquer
-// outra configuração. Cores ativas = identidade das badges já usadas no app.
-const CATEGORY_FILTER_OPTIONS: Array<{ key: "" | MySaleItemQuest; label: string; title: string; activeCls: string }> = [
-  { key: "", label: "Todas", title: "Exibir itens de todas as categorias", activeCls: "border-amber-500/50 bg-amber-500/20 text-amber-200" },
-  { key: "soulwar", label: "SW", title: "Somente itens de Quest — Soul War", activeCls: "border-slate-400/50 bg-slate-500/25 text-slate-100" },
-  { key: "sanguine", label: "SG", title: "Somente itens de Quest — Sanguine", activeCls: "border-red-700/60 bg-red-900/40 text-red-300" },
-  { key: "crypt", label: "GB", title: "Somente itens de Quest — Graveborn", activeCls: "border-lime-700/60 bg-lime-900/35 text-lime-400" },
-  { key: "bazaar", label: "Bazaar", title: "Somente itens do Bazaar (vieram na compra do personagem — sem Quest)", activeCls: "border-fuchsia-500/50 bg-fuchsia-500/20 text-fuchsia-200" },
-  { key: "manual", label: "Manual", title: "Somente itens adicionados manualmente", activeCls: "border-teal-500/50 bg-teal-500/20 text-teal-200" },
+// ── FILTRO POR CATEGORIA (ajuste atual) — CHECKBOXES independentes ──────────
+// Substitui os chips exclusivos da versão anterior por CAIXAS DE SELEÇÃO
+// totalmente independentes (Itens SW / SG / GB / Bazaar / Manual): várias
+// categorias podem estar marcadas ao mesmo tempo — marcar/desmarcar uma
+// NUNCA altera as demais. Marcada = itens da categoria exibidos; desmarcada
+// = somente os dela saem da visualização; NENHUMA marcada = nenhum item
+// exibido. É pura APRESENTAÇÃO sobre o conjunto `filters.quests` (regra
+// única em passesSaleFilters — nenhuma regra de negócio nova); alternar
+// categorias NUNCA toca nos demais filtros, valores, seleções de servidor
+// ou qualquer outra configuração. Cores = identidade das badges do app.
+const CATEGORY_FILTER_OPTIONS: Array<{ key: MySaleItemQuest; label: string; title: string; checkedCls: string; accent: string }> = [
+  { key: "soulwar", label: "Itens SW", title: "Exibir itens de Quest — Soul War", checkedCls: "border-slate-400/50 bg-slate-500/25 text-slate-100", accent: "accent-slate-400" },
+  { key: "sanguine", label: "Itens SG", title: "Exibir itens de Quest — Sanguine", checkedCls: "border-red-700/60 bg-red-900/40 text-red-300", accent: "accent-red-700" },
+  { key: "crypt", label: "Itens GB", title: "Exibir itens de Quest — Graveborn (GB)", checkedCls: "border-lime-700/60 bg-lime-900/35 text-lime-400", accent: "accent-lime-700" },
+  { key: "bazaar", label: "Itens Bazaar", title: "Exibir itens do Bazaar (vieram na compra do personagem — sem Quest)", checkedCls: "border-fuchsia-500/50 bg-fuchsia-500/20 text-fuchsia-200", accent: "accent-fuchsia-500" },
+  { key: "manual", label: "Itens Manual", title: "Exibir itens adicionados manualmente", checkedCls: "border-teal-500/50 bg-teal-500/20 text-teal-200", accent: "accent-teal-500" },
 ];
 
 /**
@@ -597,7 +609,9 @@ export default function MyItemsForSaleModal({
     const text = normalizeSearchText(filters.text);
     if (text && !normalizeSearchText(item.itemName).includes(text)) return false;
     if (filters.server && item.serverName !== filters.server) return false;
-    if (filters.quest && item.quest !== filters.quest) return false;
+    // Categorias (checkboxes independentes): item exibido SOMENTE se a sua
+    // categoria estiver marcada; nenhuma marcada → nenhum item exibido.
+    if (!filters.quests.includes(item.quest)) return false;
     // Faixa de valor: só faz sentido sobre valor registrado (aba Vendidos).
     if (mode === "vendidos") {
       const minRC = parseRCFilter(filters.minRC);
@@ -1263,8 +1277,8 @@ export default function MyItemsForSaleModal({
         {/* Filtros — combinados; preservados ao alternar de aba */}
         {/* ── PAINEL DE FILTROS (ajuste atual — reorganizado e compacto) ────
             Linha 1: busca + servidor + faixa RC (Vendidos) + filtro por
-            valor. Linha 2: CATEGORIAS em chips exclusivos (novo — substitui
-            o <select> de origens, mesmo filtro de sempre) + ordenação.
+            valor. Linha 2: CATEGORIAS em CHECKBOXES independentes (multi-
+            seleção; nenhuma marcada = nada exibido) + ordenação.
             Nenhuma regra de negócio alterada: apenas layout/hierarquia. */}
         <div className="mx-4 mt-2 px-2.5 py-2 rounded-xl border border-white/10 bg-white/[0.02] flex-shrink-0 space-y-1.5">
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 items-center">
@@ -1339,28 +1353,43 @@ export default function MyItemsForSaleModal({
               />
             </div>
           </div>
-          {/* Linha 2 — CATEGORIAS (chips exclusivos, novo) + ordenação. Cada
-              chip exibe SOMENTE a sua categoria; clicar no ativo volta a
-              "Todas". Mesmo campo filters.quest do antigo select — alternar
+          {/* Linha 2 — CATEGORIAS (checkboxes INDEPENDENTES) + ordenação.
+              Cada caixa marca/desmarca SOMENTE a própria categoria (multi-
+              seleção livre); desmarcada, apenas os itens dela saem da
+              visualização; NENHUMA marcada = nenhum item exibido. Alternar
               NUNCA interfere nos demais filtros/valores/seleções. */}
           <div className="flex items-center gap-1 flex-wrap pt-1.5 border-t border-white/5">
-            <span className="text-[8px] font-bold uppercase tracking-wider text-slate-500 flex-shrink-0">Categoria</span>
-            {CATEGORY_FILTER_OPTIONS.map(opt => (
-              <button
-                key={opt.key || "todas"}
-                type="button"
-                onClick={() => setFilters(f => ({ ...f, quest: f.quest === opt.key ? "" : opt.key }))}
-                aria-pressed={filters.quest === opt.key}
-                title={opt.title}
-                className={`px-1.5 py-0.5 rounded border text-[9px] font-black uppercase tracking-wide transition-colors cursor-pointer flex-shrink-0 ${
-                  filters.quest === opt.key
-                    ? opt.activeCls
-                    : "border-white/10 bg-white/[0.03] text-slate-500 hover:text-slate-300 hover:border-white/20"
-                }`}
-              >
-                {opt.label}
-              </button>
-            ))}
+            <span className="text-[8px] font-bold uppercase tracking-wider text-slate-500 flex-shrink-0">Categorias</span>
+            {CATEGORY_FILTER_OPTIONS.map(opt => {
+              const checked = filters.quests.includes(opt.key);
+              return (
+                <label
+                  key={opt.key}
+                  title={opt.title}
+                  className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded border text-[9px] font-black uppercase tracking-wide transition-colors cursor-pointer select-none flex-shrink-0 ${
+                    checked
+                      ? opt.checkedCls
+                      : "border-white/10 bg-white/[0.03] text-slate-500 hover:text-slate-300 hover:border-white/20"
+                  }`}
+                >
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={() => setFilters(f => ({
+                      ...f,
+                      // Toggle APENAS desta categoria — as demais ficam como
+                      // estão (ordem canônica preservada ao remontar a lista).
+                      quests: f.quests.includes(opt.key)
+                        ? f.quests.filter(q => q !== opt.key)
+                        : ALL_SALE_QUESTS.filter(q => q === opt.key || f.quests.includes(q)),
+                    }))}
+                    aria-label={opt.title}
+                    className={`w-2.5 h-2.5 rounded-sm cursor-pointer ${opt.accent}`}
+                  />
+                  {opt.label}
+                </label>
+              );
+            })}
             <span className="text-[8px] font-bold uppercase tracking-wider text-slate-500 flex-shrink-0 ml-auto">Ordenar</span>
             <select
               value={sortKey}
