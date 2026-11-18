@@ -463,6 +463,46 @@ function loadExcludedSaleKeys(uid: string): Set<string> {
   return new Set(Array.isArray(raw) ? raw.filter((k): k is string => typeof k === "string") : []);
 }
 
+// ── FILTROS + ABA persistidos POR USUÁRIO (104ª) ────────────────────────────
+// TODO o contexto de consulta do modal (aba ativa, busca, servidor,
+// categorias, faixa RC, filtro por valor) é salvo automaticamente a cada
+// alteração e restaurado na próxima abertura — mesmo após recarregar a
+// página ou iniciar nova sessão. MESMO mecanismo das demais preferências
+// (loadUIState/saveUIState em localStorage, por uid — NENHUMA leitura ou
+// gravação no Firebase: é preferência de exibição, nunca dado de item).
+// Compatibilidade futura: a sanitização campo a campo aceita configurações
+// antigas/incompletas — campo ausente ou inválido volta ao padrão, sem
+// descartar o restante.
+const SALE_ITEMS_FILTERS_KEY_PREFIX = "rubinot_sale_items_filters_";
+
+/** Sanitização campo a campo (nunca confia no JSON bruto do storage) —
+ *  campo ausente/inválido volta ao padrão de EMPTY_FILTERS, preservando o
+ *  restante da configuração (compatibilidade com versões antigas e futuras). */
+function sanitizeSaleFilters(raw: unknown): SaleFilters {
+  const src = (raw && typeof raw === "object" ? raw : {}) as Partial<Record<keyof SaleFilters, unknown>>;
+  return {
+    text: typeof src.text === "string" ? src.text : EMPTY_FILTERS.text,
+    server: typeof src.server === "string" ? src.server : EMPTY_FILTERS.server,
+    // Categorias: só valores conhecidos, ordem canônica, sem duplicatas;
+    // configuração antiga SEM o campo (pré-101ª) = todas marcadas (padrão).
+    quests: Array.isArray(src.quests)
+      ? ALL_SALE_QUESTS.filter(q => (src.quests as unknown[]).includes(q))
+      : [...EMPTY_FILTERS.quests],
+    minRC: typeof src.minRC === "string" ? src.minRC.replace(/\D+/g, "") : EMPTY_FILTERS.minRC,
+    maxRC: typeof src.maxRC === "string" ? src.maxRC.replace(/\D+/g, "") : EMPTY_FILTERS.maxRC,
+    valueMode: src.valueMode === "abaixo" ? "abaixo" : EMPTY_FILTERS.valueMode,
+    valueLimit: typeof src.valueLimit === "string" ? src.valueLimit : EMPTY_FILTERS.valueLimit,
+  };
+}
+
+function loadSaleViewPref(uid: string): { tab: "avenda" | "vendidos"; filters: SaleFilters } {
+  const raw = loadUIState<{ tab?: unknown; filters?: unknown }>(`${SALE_ITEMS_FILTERS_KEY_PREFIX}${uidKeyPart(uid)}`, {});
+  return {
+    tab: raw?.tab === "vendidos" ? "vendidos" : "avenda",
+    filters: sanitizeSaleFilters(raw?.filters),
+  };
+}
+
 /** SERVIDORES fora do texto consolidado (ajuste atual) — mesmo padrão de
  *  exclusões persistidas da seleção individual: servidor novo entra
  *  SELECIONADO por padrão; desmarcado NUNCA entra no texto de todos os
@@ -546,8 +586,20 @@ export default function MyItemsForSaleModal({
   // ── Abas (À Venda / Vendidos) + filtros combinados ────────────────────────
   // Os filtros são um estado ÚNICO compartilhado pelas duas abas: alternar
   // entre elas nunca descarta o contexto da consulta.
-  const [tab, setTab] = useState<"avenda" | "vendidos">("avenda");
-  const [filters, setFilters] = useState<SaleFilters>(EMPTY_FILTERS);
+  // 104ª: aba + filtros PERSISTIDOS por usuário — restaurados na abertura
+  // (inclusive após recarregar a página/nova sessão) e salvos a cada
+  // alteração, sem botão de confirmação. Preferência de exibição pura:
+  // nenhum dado de item/venda/personalização é tocado por aqui.
+  const [tab, setTab] = useState<"avenda" | "vendidos">(() => loadSaleViewPref(currentUserUid).tab);
+  const [filters, setFilters] = useState<SaleFilters>(() => loadSaleViewPref(currentUserUid).filters);
+  useEffect(() => {
+    const pref = loadSaleViewPref(currentUserUid);
+    setTab(pref.tab);
+    setFilters(pref.filters);
+  }, [currentUserUid]);
+  useEffect(() => {
+    saveUIState(`${SALE_ITEMS_FILTERS_KEY_PREFIX}${uidKeyPart(currentUserUid)}`, { tab, filters });
+  }, [tab, filters, currentUserUid]);
   // Ordenação — também compartilhada entre as abas (nunca descarta filtros).
   // Persistida POR USUÁRIO (76ª): sobrevive a fechar/reabrir o modal e o app.
   const [sortKey, setSortKey] = useState<SaleSortKey>(() => loadSaleSortPref(currentUserUid).key);
