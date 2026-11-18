@@ -386,6 +386,8 @@ interface QuestsItemsStepResponse {
     /** Contadores de bosses ("X/Y") — mesma função, mesmo payload. */
     soulWarBossCount?: number;
     sanguineBossCount?: number;
+    /** Graveborn (crypt) — o handler já envia; faltava declarar/transportar. */
+    cryptBossCount?: number;
     error?: string;
   }>;
   analyzedCount?: number;
@@ -3475,9 +3477,25 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
                 ...(detail.skills && Object.keys(detail.skills).length > 0 ? { skills: detail.skills } : {}),
                 ...(detail.soulwarCompleted !== undefined ? { soulwarCompleted: detail.soulwarCompleted } : {}),
                 ...(detail.sanguineCompleted !== undefined ? { sanguineCompleted: detail.sanguineCompleted } : {}),
+                // GRAVEBORN (106ª — id interno `crypt` preservado): o handler
+                // `rubinot-bazaar-items-v2` SEMPRE derivou o status pelo MESMO
+                // payload/funções das quests (deriveQuestsFromApiPayload /
+                // deriveQuestsFromQuestEntries), mas ESTE caminho (etapa de
+                // itens DENTRO da consulta de Quests) descartava o campo ao
+                // montar o resultado persistido — a guia "Personagens com
+                // Itens" ficava sem o dado ("—" na coluna Graveborn) sempre
+                // que a última consulta vinha daqui. Agora o campo é
+                // transportado EXATAMENTE como na consulta avulsa da própria
+                // guia Itens (executeItemsQuery) — mesma semântica: true =
+                // feita, false = disponível, null = inconclusivo ("?"),
+                // ausente = consulta antiga ("—"). Itens/valores intactos.
+                ...(detail.cryptCompleted !== undefined ? { cryptCompleted: detail.cryptCompleted } : {}),
                 ...(detail.questSource === "quests" ? { questSource: "quests" as const } : {}),
                 ...(typeof detail.soulWarBossCount === "number" ? { soulWarBossCount: detail.soulWarBossCount } : {}),
                 ...(typeof detail.sanguineBossCount === "number" ? { sanguineBossCount: detail.sanguineBossCount } : {}),
+                // Contador de bosses do Graveborn — mesmo transporte da guia
+                // Itens (alimenta o "X/Y" e a detecção de quest suspeita).
+                ...(typeof detail.cryptBossCount === "number" ? { cryptBossCount: detail.cryptBossCount } : {}),
                 bid: Number(auction.bid || 0),
                 auctionEndTs: auction.auctionEndTs ?? null,
               });
