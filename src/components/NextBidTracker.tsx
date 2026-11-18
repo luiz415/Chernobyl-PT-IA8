@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { ExternalLink, Gavel, X } from "lucide-react";
 // ─────────────────────────────────────────────────────────────────────────────
 // PRÓXIMO BID (105ª tarefa) — badge no rodapé (ao lado do contador de
@@ -276,8 +277,15 @@ export default function NextBidTracker({ currentUserUid }: { currentUserUid: str
         )}
       </button>
 
-      {/* ── MODAL — interesses ativos em ordem cronológica de encerramento ── */}
-      {isOpen && (
+      {/* ── MODAL — interesses ativos em ordem cronológica de encerramento ──
+          Renderizado via PORTAL no <body> (correção pós-105ª): o badge vive
+          dentro do <footer>, que tem `backdrop-blur-md` — por especificação
+          CSS, um ancestral com backdrop-filter vira o containing block de
+          descendentes `position: fixed`, o que CONFINAVA o overlay à área do
+          rodapé. No portal, o overlay é filho do <body> e cobre a tela
+          inteira, como os demais modais do app. Nada muda na lógica/visual
+          interno do modal. */}
+      {isOpen && createPortal(
         <div className="fixed inset-0 z-[1200] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4" onClick={() => setIsOpen(false)}>
           <div
             className="app-modal-frame app-modal-size-lg w-full max-h-[85vh] flex flex-col rounded-xl border border-amber-500/30 bg-[var(--th-bg-raised)] shadow-2xl shadow-black/60 overflow-hidden"
@@ -428,7 +436,8 @@ export default function NextBidTracker({ currentUserUid }: { currentUserUid: str
               </div>
             )}
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
     </>
   );
