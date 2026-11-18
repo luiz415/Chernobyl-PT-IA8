@@ -22,12 +22,18 @@ import type { Character, CharacterBazaarItemsSnapshot, PartyTab, WaitingService,
 import { useAuth } from "../context/AuthContext";
 import { getManualSyncCooldownRemainingMs, markManualSyncAttempt, publishOfficialBazaarList, readOfficialBazaarCache, removeBazaarInterest, removeBazaarInterestsForAuctions, setBazaarInterest, syncBazaarInterests, syncOfficialBazaarList, type BazaarInterestMap, type OfficialBazaarMetadata } from "../services/bazaarOfficialService";
 import { applyValueOverlay, buildValueOverlay, clearBazaarValueOverlay, computeAutoRemoveAuctions, parseAutoRemoveLimit, readBazaarValueOverlay, sanitizeAutoRemoveLimit, saveBazaarValueOverlay } from "../utils/bazaarValueRefresh";
-import { BAZAR_NOTIFY_MINUTES_MAX, BAZAR_NOTIFY_MINUTES_MIN, BAZAR_NOTIFY_SETTINGS_CHANGED_EVENT, BAZAR_REPEAT_ALERT_CHANGED_EVENT, clampBazarNotifyMinutes, formatAuctionEnd, formatDateTimeWithOffset, formatDuration, formatTimeZoneOffset, getBazarEndUntilAtConfiguredTime, getDefaultBazarEndUntil, getDeviceTimezoneOffsetMinutes, normalizeAuctionEndTimestamp, parseDateTimeLocalWithOffset, readBazarNotifyMinutes, readBazarRepeatAlert, saveBazarRepeatAlert } from "../utils/bazaarTime";
+import { BAZAR_NOTIFY_MINUTES_MAX, BAZAR_NOTIFY_MINUTES_MIN, BAZAR_NOTIFY_SETTINGS_CHANGED_EVENT, BAZAR_REPEAT_ALERT_CHANGED_EVENT, clampBazarNotifyMinutes, formatDateTimeWithOffset, formatDuration, formatTimeZoneOffset, getBazarEndUntilAtConfiguredTime, getDefaultBazarEndUntil, getDeviceTimezoneOffsetMinutes, normalizeAuctionEndTimestamp, parseDateTimeLocalWithOffset, readBazarNotifyMinutes, readBazarRepeatAlert, saveBazarRepeatAlert } from "../utils/bazaarTime";
 import { copyTextToClipboard } from "../utils/clipboard";
+// 105ª: badge "Encerra" e núcleo "Valor Itens/modal Ver" movidos para
+// módulos próprios (fonte única com o modal "Próximo Bid" do rodapé).
+import { AuctionEndBadge, isAuctionStillActive } from "./AuctionEndBadge";
+import { hasRelevantLoot, itemsViewFromAuction, itemsViewFromLocalResult, questsViewAdjustedTotalKk, questsViewItemKey, questsViewOverridesKey, readQuestsViewOverrides, type QuestsItemsDetailView, type QuestsViewOverride, type QuestsViewOverridesMap } from "../utils/bazaarItemsDetailView";
+// Reexportação de compatibilidade: o BazaarItemsPanel importa o badge daqui.
+export { AuctionEndBadge };
 import { syncNotificationPrefsToCloud } from "../services/notificationPrefsSyncService";
 import { syncBazaarEndingAlerts } from "../services/bazaarInterestNotificationService";
 import { buildBazaarBidUrl, extractBazaarAuctionId, parseBidAmount, sanitizeBidInput } from "../utils/bazaarBid";
-import { appendDescriptionSelection, buildBazaarCharacterDescription, joinDescriptionSelection, vocationAbbreviation, type BazaarDescriptionSelectionEntry } from "../utils/bazaarCharacterDescription";
+import { appendDescriptionSelection, buildBazaarCharacterDescription, getVocationAbbreviation, getVocationBadgeClass, joinDescriptionSelection, type BazaarDescriptionSelectionEntry } from "../utils/bazaarCharacterDescription";
 import { readBazaarDefaultBid, resolveBazaarBid, saveBazaarDefaultBid } from "../utils/bazaarDefaultBid";
 import { loadUIState, saveUIState, loadNotifications } from "../storage";
 import { SERVER_OPTIONS, normalizeServerName, serverKey } from "../constants/servers";
@@ -47,9 +53,7 @@ import {
   canonicalServerKey,
   deriveWatchedBaseKkFromTotal,
   collectAllWatchKeys,
-  effectiveTotalKk,
   getServerWatchedItems,
-  hasManualTotalKk,
   carryManualTotalsForward,
   loadItemsLastQuery,
   loadWatchedItemsByServer,
@@ -75,82 +79,14 @@ function formatItemsKk(value: number): string {
   return formatKkValueBase(value, "kk", true);
 }
 
-/**
- * REGRA ÚNICA de relevância do resultado de itens de um personagem:
- * há informação para exibir quando existe ao menos UM item monitorado
- * encontrado OU quando o Ouro lido no leilão passa de 1kk. A presença de
- * itens deixou de ser a única condição — personagem só com Ouro (> 1kk)
- * também gera resultado, botão "Ver" e valor na coluna. Ouro até 1kk
- * continua irrelevante sozinho (comportamento anterior preservado).
- * Todos os pontos que decidem "tem dados de itens?" usam ESTE predicado.
- */
-const RELEVANT_GOLD_KK_THRESHOLD = 1;
-function hasRelevantLoot(matchCount: number, goldKk: number): boolean {
-  const gold = Number(goldKk || 0);
-  return matchCount > 0 || (Number.isFinite(gold) && gold > RELEVANT_GOLD_KK_THRESHOLD);
-}
+// hasRelevantLoot / QuestsItemsDetailView / personalização LOCAL do modal
+// "Ver" (QuestsViewOverride, readQuestsViewOverrides, questsViewItemKey,
+// questsViewAdjustedTotalKk) e os construtores itemsViewFromLocalResult /
+// itemsViewFromAuction foram MOVIDOS para utils/bazaarItemsDetailView.ts na
+// 105ª tarefa (corpos idênticos — fonte única): o painel "Próximo Bid" do
+// rodapé calcula o "Valor dos Itens" exatamente como esta guia, sem
+// importar o BazarPanel (lazy) no rodapé.
 
-/**
- * Dados exibidos pela coluna "Valor Itens (kk)" e pelo modal "Ver" — shape
- * NEUTRO que unifica as DUAS fontes possíveis:
- *   • LOCAL (dispositivo do Boss): última consulta da guia Itens
- *     (`rubinot_bazaar_items_last_query`), que inclui a correção manual;
- *   • EMBUTIDA (todos os usuários): campos `items*` gravados dentro de cada
- *     personagem da lista oficial pela publicação da consulta de Itens.
- * A LOCAL tem prioridade quando existe (é a mais fresca no dispositivo que
- * rodou a consulta); nos demais dispositivos só a embutida existe.
- */
-interface QuestsItemsDetailView {
-  name: string;
-  server: string;
-  /**
-   * `watchedName`/`baseValueKk` (66ª tarefa): identificação do item na Lista
-   * de Itens e o valor BASE usado na valoração — fonte LOCAL os traz
-   * prontos; fonte EMBUTIDA os reconstrói pela MESMA fórmula oficial do
-   * Tier já usada no snapshot de compra (buildPurchaseItemsSnapshot).
-   * Alimentam a coluna "Atualizar" (exclusiva do Boss) do modal "Ver".
-   */
-  matches: { foundName: string; tier: number; amount: number; totalKk: number; watchedName?: string; baseValueKk?: number }[];
-  /** Valor EFETIVO exibido (correção manual > calculado, quando fonte local). */
-  effectiveKk: number;
-  /** Valor CALCULADO pela consulta (para o tooltip quando há manual). */
-  calculatedKk: number;
-  isManual: boolean;
-  goldKk: number;
-  /** Chave do leilão (mesma getAuctionKey da tabela) — indexa a personalização LOCAL do modal. */
-  auctionKey?: string;
-}
-
-// ── MODAL "VER" — PERSONALIZAÇÃO LOCAL DE VALORES ───────────────────────────
-// O usuário pode ajustar, SOMENTE para si: o valor do Coin usado na conversão
-// para RC, o valor considerado de cada item e o valor do Ouro. NADA disso é
-// gravado no Firestore nem afeta outros usuários: vive no localStorage deste
-// dispositivo (chave por usuário) e é DESCARTADO automaticamente quando o
-// personagem deixa de existir na lista atual (poda contra os leilões
-// presentes — nunca acumula personagens removidos indefinidamente).
-// A conversão kk → RC usa a MESMA função canônica do aplicativo
-// (computeItemRC: floor(kk ÷ cotação × 1000); cotação = quantos k equivalem
-// a 1000 RC — idêntica à guia Itens).
-interface QuestsViewOverride {
-  /** Cotação do coin usada na conversão (k por 1000 RC). */
-  coinRateKk?: number;
-  /** Valor do Ouro (kk) personalizado. */
-  goldKk?: number;
-  /** Valor (kk) personalizado por item — chave `${índice}:${nome}`. */
-  items?: Record<string, number>;
-}
-type QuestsViewOverridesMap = Record<string, QuestsViewOverride>;
-const BAZAR_QUESTS_VIEW_OVERRIDES_KEY_PREFIX = "rubinot_bazaar_quests_view_overrides_";
-function questsViewOverridesKey(uid?: string): string {
-  return `${BAZAR_QUESTS_VIEW_OVERRIDES_KEY_PREFIX}${uid || "anon"}`;
-}
-function readQuestsViewOverrides(uid?: string): QuestsViewOverridesMap {
-  const raw = loadUIState<QuestsViewOverridesMap | null>(questsViewOverridesKey(uid), null);
-  return raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
-}
-function questsViewItemKey(index: number, foundName: string): string {
-  return `${index}:${foundName}`;
-}
 /** "2,5" | "12.3" | "125" → número ≥ 0; vazio/inválido = null (campo volta ao automático). */
 function parseQuestsViewNumber(text: string): number | null {
   const trimmed = String(text || "").trim();
@@ -168,88 +104,6 @@ function questsViewInputText(value: number): string {
 function questsViewRcText(coinRate: number, kk: number): string {
   return formatItemRcText(coinRate, kk);
 }
-/**
- * Total (kk) EXIBIDO na coluna "Valor Itens" — SINCRONIZADO com o modal
- * "Ver": quando o personagem tem personalização LOCAL salva (valor de item
- * e/ou Ouro), o total é RECALCULADO exatamente como no modal (soma dos
- * itens efetivos + Ouro efetivo, arredondado a 1 casa); sem personalização,
- * mantém o efetivo original (inclusive a correção manual da guia Itens).
- * A persistência (updateQuestsViewOverride) só guarda entradas que DIFEREM
- * do automático — presença no mapa significa valor realmente personalizado,
- * a mesma semântica do `hasValueOverride` do modal. Nada é lido/gravado no
- * Firestore: puro reflexo do override local já existente.
- */
-function questsViewAdjustedTotalKk(
-  view: QuestsItemsDetailView,
-  ovr: QuestsViewOverride | undefined,
-): { kk: number; adjusted: boolean } {
-  const items = ovr?.items || {};
-  const hasItemOverride = Object.keys(items).length > 0;
-  const hasGoldOverride = typeof ovr?.goldKk === "number";
-  if (!hasItemOverride && !hasGoldOverride) return { kk: view.effectiveKk, adjusted: false };
-  const sum = view.matches.reduce((acc, match, index) => {
-    const override = items[questsViewItemKey(index, match.foundName)];
-    return acc + (typeof override === "number" ? override : Number(match.totalKk || 0));
-  }, 0);
-  const gold = hasGoldOverride ? Number(ovr?.goldKk || 0) : Number(view.goldKk || 0);
-  return { kk: Math.round((sum + gold) * 10) / 10, adjusted: true };
-}
-
-/** Constrói a view a partir do resultado LOCAL da guia Itens (Boss). */
-function itemsViewFromLocalResult(result: BazaarItemsCharacterResult): QuestsItemsDetailView {
-  return {
-    name: String(result.name || ""),
-    server: String(result.server || ""),
-    matches: (result.matches || []).map(match => ({
-      foundName: String(match.foundName || ""),
-      tier: Number(match.tier || 0),
-      amount: Number(match.amount || 0),
-      totalKk: Number(match.totalKk || 0),
-      // Fonte LOCAL (consulta da guia Itens): o match já carrega o item da
-      // lista e o valor base — transportados para a coluna "Atualizar".
-      watchedName: String(match.watchedName || ""),
-      baseValueKk: Number(match.baseValueKk || 0),
-    })),
-    effectiveKk: effectiveTotalKk(result),
-    calculatedKk: Number(result.totalKk || 0),
-    isManual: hasManualTotalKk(result),
-    goldKk: Number(result.goldKk || 0),
-  };
-}
-
-/** Constrói a view a partir dos campos EMBUTIDOS na lista oficial. */
-function itemsViewFromAuction(auction: BazaarAuction): QuestsItemsDetailView | null {
-  // Resultado embutido é válido com itens OU Ouro relevante (> 1kk) — mesma
-  // regra única (hasRelevantLoot) usada na coleta da consulta.
-  const embeddedMatches = Array.isArray(auction.itemsMatches) ? auction.itemsMatches : [];
-  if (typeof auction.itemsTotalKk !== "number" || !hasRelevantLoot(embeddedMatches.length, Number(auction.itemsGoldKk || 0))) return null;
-  return {
-    name: String(auction.name || ""),
-    server: String(auction.server || ""),
-    matches: embeddedMatches.map(match => {
-      // Fonte EMBUTIDA (resumo publicado): reconstrói o valor BASE pela
-      // MESMA fórmula oficial do Tier usada no snapshot de compra
-      // (buildPurchaseItemsSnapshot): unit = total ÷ qtd; base = unit ÷
-      // (1 + 0,3 × tier). O resumo não guarda o nome da lista — o item é
-      // identificado pelo nome encontrado (o [Tier x] é separado na hora
-      // de atualizar, via parseTieredItemName).
-      const amount = Number(match.amount || 0);
-      const totalKk = Number(match.totalKk || 0);
-      const tier = Math.max(0, Number(match.tier || 0));
-      const unitValueKk = Math.round((amount > 0 ? totalKk / amount : totalKk) * 100) / 100;
-      const baseValueKk = Math.round((unitValueKk / (1 + 0.3 * tier)) * 100) / 100;
-      const foundName = String(match.foundName || "");
-      return { foundName, tier, amount, totalKk, watchedName: foundName, baseValueKk };
-    }),
-    effectiveKk: Number(auction.itemsTotalKk || 0),
-    calculatedKk: Number(auction.itemsTotalKk || 0),
-    // A correção manual do Boss é local ao dispositivo dele — o publicado é
-    // sempre o valor calculado pela consulta.
-    isManual: false,
-    goldKk: Number(auction.itemsGoldKk || 0),
-  };
-}
-
 /**
  * SNAPSHOT DE ITENS PARA A COMPRA (botão "Comprado" da guia Quests).
  *
@@ -983,21 +837,9 @@ function mergeVocationFilters(saved?: VocationLevelFilters): VocationLevelFilter
   return defaults;
 }
 
-function getVocationAbbreviation(vocation: string): string {
-  // Tabela movida para vocationAbbreviation (fonte única com a mini
-  // descrição do clique direito — 81ª); o badge preserva o "—" para vazio.
-  return vocationAbbreviation(vocation) || "—";
-}
-
-function getVocationBadgeClass(vocation: string): string {
-  const abbreviation = getVocationAbbreviation(vocation);
-  if (abbreviation === "ED") return "bg-emerald-500/10 border-emerald-500/30 text-emerald-300";
-  if (abbreviation === "EK") return "bg-slate-500/10 border-slate-400/30 text-slate-300";
-  if (abbreviation === "MS") return "bg-rose-500/10 border-rose-500/30 text-rose-300";
-  if (abbreviation === "RP") return "bg-yellow-500/10 border-yellow-500/30 text-yellow-300";
-  if (abbreviation === "MK") return "bg-purple-500/10 border-purple-500/30 text-purple-300";
-  return "bg-white/5 border-white/10 text-slate-300";
-}
+// getVocationAbbreviation / getVocationBadgeClass foram MOVIDAS para
+// utils/bazaarCharacterDescription.ts na 105ª (fonte única com o modal
+// "Próximo Bid" do rodapé) — corpos idênticos, importadas acima.
 
 /**
  * Estilo da PÍLULA do contador "xN", na mesma paleta de
@@ -1145,15 +987,11 @@ function formatEndUntilForDisplay(value: string): string {
 // o painel "Personagens com Itens" exibe a coluna "Encerra" com exatamente a
 // mesma formatação. Corpo idêntico ao que vivia aqui.
 
-// Assinatura ESTRUTURAL (87ª — mesma estratégia da
-// isAuctionVisibleWithEndedGrace): aceita qualquer objeto com
-// `auctionEndTs`, para a MESMA regra valer também na coluna "Encerra" da
-// guia "Personagens com Itens". Corpo idêntico ao anterior.
-function isAuctionStillActive(auction: { auctionEndTs?: number | null }, nowUnixTs: number): boolean {
-  const auctionEndTs = normalizeAuctionEndTimestamp(auction.auctionEndTs ?? null);
-  if (!auctionEndTs) return true;
-  return auctionEndTs > nowUnixTs;
-}
+// isAuctionStillActive / isAuctionEndingSoon / AuctionEndBadge foram MOVIDOS
+// para components/AuctionEndBadge.tsx na 105ª (corpos idênticos — fonte
+// única visual também para o modal "Próximo Bid" do rodapé, que não pode
+// importar este painel lazy). Importados e reexportados acima — o
+// BazaarItemsPanel continua importando AuctionEndBadge daqui, intacto.
 
 // Exportada para o BazaarItemsPanel: o botão "Ocultar encerrados / Exibir
 // todos" do modo itens usa EXATAMENTE a mesma regra de visibilidade (mesma
@@ -1163,40 +1001,6 @@ export function isAuctionVisibleWithEndedGrace(auction: { auctionEndTs?: number 
   const auctionEndTs = normalizeAuctionEndTimestamp(auction.auctionEndTs ?? null);
   if (!auctionEndTs) return true;
   return auctionEndTs + BAZAR_ENDED_VISIBILITY_GRACE_SECONDS > nowUnixTs;
-}
-
-// Assinatura ESTRUTURAL (87ª) — ver nota da isAuctionStillActive acima.
-function isAuctionEndingSoon(auction: { auctionEndTs?: number | null }, nowUnixTs: number): boolean {
-  const auctionEndTs = normalizeAuctionEndTimestamp(auction.auctionEndTs ?? null);
-  if (!auctionEndTs) return false;
-  const secondsLeft = auctionEndTs - nowUnixTs;
-  return secondsLeft > 0 && secondsLeft <= 5 * 60;
-}
-
-/**
- * CÉLULA "ENCERRA" — FONTE ÚNICA VISUAL (87ª tarefa): o badge usado pela
- * tabela "Personagens Para SW/SG/GB" (este painel) e, por importação, pela
- * coluna "Encerra" da guia "Personagens com Itens" — MESMOS indicadores,
- * cores e critérios, sem lógica visual duplicada:
- *   • encerra em ≤ 5 minutos → destaque âmbar (borda + fundo), ícone de
- *     alerta, negrito e tooltip "Leilão encerra em menos de 5 minutos";
- *   • ativo → texto padrão (slate-300);
- *   • JÁ ENCERRADO → texto apagado (slate-600) com tachado.
- * Exportado no mesmo padrão estrutural da isAuctionVisibleWithEndedGrace.
- */
-export function AuctionEndBadge({ auctionEndTs, nowUnixTs, timezoneOffsetMinutes }: {
-  auctionEndTs?: number | null;
-  nowUnixTs: number;
-  timezoneOffsetMinutes: number;
-}) {
-  const probe = { auctionEndTs: auctionEndTs ?? null };
-  const endingSoon = isAuctionEndingSoon(probe, nowUnixTs);
-  return (
-    <span className={`inline-flex items-center justify-center gap-1 rounded-md px-1.5 py-0.5 ${endingSoon ? "border border-amber-500/35 bg-amber-500/10 text-amber-300 font-black" : isAuctionStillActive(probe, nowUnixTs) ? "text-slate-300" : "text-slate-600 line-through"}`} title={endingSoon ? "Leilão encerra em menos de 5 minutos" : undefined}>
-      {endingSoon && <AlertTriangle size={10} className="text-amber-300" />}
-      {formatAuctionEnd(auctionEndTs ?? null, timezoneOffsetMinutes)}
-    </span>
-  );
 }
 
 function formatTimeOfDayWithOffset(ms: number | null | undefined, offsetMinutes: number): string {

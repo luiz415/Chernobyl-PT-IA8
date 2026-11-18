@@ -135,6 +135,25 @@ export function getDeviceTimezoneOffsetMinutes(): number {
   return DEFAULT_BAZAAR_TIMEZONE_OFFSET_MINUTES;
 }
 
+/**
+ * Fuso horário CONFIGURADO no Painel Bazaar (105ª) — lê o campo
+ * `timezoneOffsetMinutes` das preferências persistidas do painel
+ * (`rubinot_bazaar_filters`, a MESMA chave compartilhada que o BazarPanel e o
+ * Bid Padrão — utils/bazaarDefaultBid — já usam por mesclagem); ausente ou
+ * inválido → fuso do dispositivo (mesmo fallback do painel). Permite que o
+ * badge/modal "Próximo Bid" do rodapé exiba exatamente os MESMOS horários da
+ * coluna "Encerra" do painel, sem importar o BazarPanel (lazy) no rodapé.
+ */
+export function readBazarPanelTimezoneOffsetMinutes(): number {
+  try {
+    const raw = localStorage.getItem("rubinot_bazaar_filters");
+    const parsed = raw ? JSON.parse(raw) : null;
+    const value = Number(parsed?.timezoneOffsetMinutes);
+    if (Number.isFinite(value)) return value;
+  } catch {}
+  return getDeviceTimezoneOffsetMinutes();
+}
+
 export function formatTimeOfDayWithOffset(ms: number | null | undefined, offsetMinutes: number): string {
   if (!ms || !Number.isFinite(ms)) return "--:--:--";
   const shifted = new Date(ms + offsetMinutes * 60 * 1000);

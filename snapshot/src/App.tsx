@@ -43,6 +43,9 @@ import { NotificationCenter } from "./components/NotificationCenter";
 import { useAuth } from "./context/AuthContext";
 import AuthModal from "./components/AuthModal";
 import VipAccessButton from "./components/VipAccessButton";
+// Próximo Bid (105ª) — badge + modal do rodapé; import DIRETO (não lazy):
+// componente pequeno que só lê espelhos locais, sem puxar o BazarPanel.
+import NextBidTracker from "./components/NextBidTracker";
 import HubHelpTooltip from "./components/HubHelpTooltip";
 import { Shield, HelpCircle, Tv, GraduationCap } from "lucide-react";
 import { useTutorial } from "./tutorial/TutorialContext";
@@ -6370,6 +6373,17 @@ export default function App() {
               </div>
             );
           })()}
+
+          <span className="h-4 w-px bg-red-900/30" />
+
+          {/* Próximo Bid (105ª) — badge AO LADO do contador de usuários:
+              encerramento mais próximo entre os "Meus Interesses" do Painel
+              Bazaar (espelhos locais da lista oficial + interesses — zero
+              consulta nova ao Firebase). O botão abre o modal com todos os
+              interesses ativos em ordem cronológica. Na simulação/demo o
+              badge fica neutro ("—"): os interesses reais não vazam para o
+              modo demo e os fictícios não existem fora do painel. */}
+          <NextBidTracker currentUserUid={isSimulation ? "" : (currentUser?.uid || "")} />
 
         </div>
         <div className="flex items-center gap-3 flex-wrap">

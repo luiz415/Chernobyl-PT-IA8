@@ -53,6 +53,30 @@ export function vocationAbbreviation(vocation: string): string {
 }
 
 /**
+ * Abreviação para o BADGE de vocação (movida do BazarPanel na 105ª — o modal
+ * "Próximo Bid" do rodapé usa o MESMO badge sem importar o painel inteiro):
+ * tabela única vocationAbbreviation acima; preserva o "—" para vazio.
+ */
+export function getVocationAbbreviation(vocation: string): string {
+  return vocationAbbreviation(vocation) || "—";
+}
+
+/**
+ * Paleta do badge de vocação — corpo IDÊNTICO ao que vivia no BazarPanel
+ * (movido na 105ª): mesma cor por vocação em TODOS os pontos que exibem o
+ * badge (tabela do painel e modal "Próximo Bid" do rodapé).
+ */
+export function getVocationBadgeClass(vocation: string): string {
+  const abbreviation = getVocationAbbreviation(vocation);
+  if (abbreviation === "ED") return "bg-emerald-500/10 border-emerald-500/30 text-emerald-300";
+  if (abbreviation === "EK") return "bg-slate-500/10 border-slate-400/30 text-slate-300";
+  if (abbreviation === "MS") return "bg-rose-500/10 border-rose-500/30 text-rose-300";
+  if (abbreviation === "RP") return "bg-yellow-500/10 border-yellow-500/30 text-yellow-300";
+  if (abbreviation === "MK") return "bg-purple-500/10 border-purple-500/30 text-purple-300";
+  return "bg-white/5 border-white/10 text-slate-300";
+}
+
+/**
  * "HH:MM DD/MM" do encerramento no fuso configurado — MESMA matemática do
  * formatAuctionEnd (coluna "Encerra"), só com a ordem hora/data invertida.
  * Timestamp ausente/inválido ⇒ "" (o chamador omite o segmento).

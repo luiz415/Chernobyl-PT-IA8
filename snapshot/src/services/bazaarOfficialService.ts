@@ -249,6 +249,19 @@ const CACHE_SCHEMA_VERSION = 1;
 const AUTO_CHECK_INTERVAL_MS = 60 * 60 * 1000;
 export const BAZAAR_MANUAL_SYNC_COOLDOWN_MS = 60 * 1000;
 
+// ── EVENTOS LOCAIS DE CACHE (105ª) ──────────────────────────────────────────
+// Disparados NA MESMA JANELA sempre que os espelhos locais (lista oficial /
+// interesses) são gravados ou descartados — o painel "Próximo Bid" do rodapé
+// (App) relê os caches e se mantém reativo SEM listener novo no Firestore e
+// sem estado paralelo (outras janelas/abas já são cobertas pelo evento
+// nativo "storage" do navegador, que só dispara entre janelas distintas).
+// try/catch: os services também rodam em contextos sem `window` (testes).
+export const BAZAAR_OFFICIAL_CACHE_UPDATED_EVENT = "rubinot:bazaar-official-cache-updated";
+export const BAZAAR_INTERESTS_CACHE_UPDATED_EVENT = "rubinot:bazaar-interests-cache-updated";
+function dispatchLocalCacheEvent(name: string) {
+  try { window.dispatchEvent(new Event(name)); } catch {}
+}
+
 function now() {
   return Date.now();
 }
@@ -320,6 +333,7 @@ export function readOfficialBazaarCache(): OfficialBazaarCache | null {
 
 function saveOfficialBazaarCache(cache: OfficialBazaarCache) {
   try { localStorage.setItem(OFFICIAL_CACHE_KEY, JSON.stringify(cache)); } catch {}
+  dispatchLocalCacheEvent(BAZAAR_OFFICIAL_CACHE_UPDATED_EVENT);
 }
 
 export function readBazaarInterestsCache(version?: string): { version: number; bazaarVersion: string; interests: BazaarInterestMap } | null {
@@ -337,12 +351,14 @@ export function readBazaarInterestsCache(version?: string): { version: number; b
 
 function saveBazaarInterestsCache(payload: { version: number; bazaarVersion: string; interests: BazaarInterestMap }) {
   try { localStorage.setItem(INTERESTS_CACHE_KEY, JSON.stringify(payload)); } catch {}
+  dispatchLocalCacheEvent(BAZAAR_INTERESTS_CACHE_UPDATED_EVENT);
 }
 
 /** Descarta o cache local de interesses e força a próxima sincronização a reler. */
 export function clearBazaarInterestsCache() {
   try { localStorage.removeItem(INTERESTS_CACHE_KEY); } catch {}
   writeNumber(INTERESTS_CHECK_KEY, 0);
+  dispatchLocalCacheEvent(BAZAAR_INTERESTS_CACHE_UPDATED_EVENT);
 }
 
 /** Converte o documento agregado no mapa consumido pela UI. */
