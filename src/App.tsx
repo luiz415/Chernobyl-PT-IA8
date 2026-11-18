@@ -3,7 +3,7 @@ import {
   Swords, History as HistoryIcon, BarChart3, StickyNote,
   Save, CheckCircle2, AlertTriangle, Calculator, AppWindow, Users, UserPlus, Archive, User, Clock, Sparkles,
   Lock, LockOpen, ArrowUp, ArrowDown, MessageSquareMore, Heart, Cloud, CloudCog, ShoppingBag, Bell, Trophy,
-  SlidersHorizontal, ChevronDown, FileSpreadsheet, Briefcase, FileCode2, Coins, Package } from "lucide-react";
+  SlidersHorizontal, ChevronDown, FileSpreadsheet, Briefcase, FileCode2, Coins, Package, Gem, ScrollText } from "lucide-react";
 import ExoriLogo from "./components/ExoriLogo";
 import type { AppData, Character, CharacterAcquisition, CharacterAcquisitionBuyerDetails, CharacterBazaarItemsSnapshot, PartyCustomMember, PartyFinalizationReason, PartyTab, PersonalPartyHistory, PtType, QuestStatusHistoryEntry, WaitingService, SharedService, DialogOptions, ProbableMarkersMap, Vocation } from "./types";
 import { setGlobalDialogHandler, customAlert, customConfirm, formatRC } from "./types";
@@ -95,6 +95,10 @@ const AutoBidEngine = lazyWithSuspense(() => import("./components/AutoBidEngine"
 // Modais sempre montados com prop `open`: chunk baixado na 1ª abertura;
 // após abrir, permanecem montados (latch) — semântica de estado preservada.
 const CharacterModal = lazyModal(() => import("./components/CharacterModal"));
+// Renderizados condicionalmente ({aberto && <Modal/>}) — lazyWithSuspense
+// (sem prop `open`): o chunk baixa na 1ª abertura e desmonta ao fechar.
+const LastDropsModal = lazyWithSuspense(() => import("./components/LastDropsModal"));
+const LastQuestsModal = lazyWithSuspense(() => import("./components/LastQuestsModal"));
 const CurrencyCalculator = lazyModal(() => import("./components/CurrencyCalculator"));
 const ImbuementsModal = lazyModal(() => import("./components/ImbuementsModal"));
 const RtcImportModal = lazyModal(() => import("./components/RtcImportModal"));
@@ -531,6 +535,11 @@ export default function App() {
   // Modal "Itens à Venda" de Meus Personagens (gerenciador centralizado dos
   // itens de Quest de todos os personagens do usuário).
   const [isMyItemsSaleOpen, setIsMyItemsSaleOpen] = useState(false);
+  // Modais "Últimos Drops"/"Últimas Quests" (102ª) de Meus Personagens —
+  // leitura pura do histórico de quests dos personagens (fonte única
+  // utils/questStatusHistory, compartilhada com a guia Stats).
+  const [isLastDropsOpen, setIsLastDropsOpen] = useState(false);
+  const [isLastQuestsOpen, setIsLastQuestsOpen] = useState(false);
   // Modal "Itens Encontrados" (59ª): todos os itens do Bazaar importados na
   // compra dos personagens, em um só lugar (EXCLUSIVO do Boss — mesma regra
   // da coluna Itens/"Ver").
@@ -5835,6 +5844,32 @@ export default function App() {
                 <Briefcase size={11} /> NEGOCIADOS ENTRE USUÁRIOS
                 <span className="font-bold font-mono">({demoData ? demoData.acquisitions.length : characterAcquisitions.length})</span>
               </button>
+              {/* "Últimos Drops"/"Últimas Quests" (102ª): leitura do
+                  histórico de quests/drops dos personagens da lista pessoal
+                  (fonte única utils/questStatusHistory, a mesma da Stats).
+                  Ocultos no modo demo do tutorial. */}
+              {!demoData && (
+                <button
+                  type="button"
+                  onClick={() => setIsLastDropsOpen(true)}
+                  className="nav-pill nav-pill--action inline-flex items-center gap-1 px-3 py-1 text-[10px] cursor-pointer whitespace-nowrap"
+                  style={{ ["--pill-accent" as string]: "var(--color-emerald-500)" }}
+                  title="Ver os 5 drops mais recentes dos seus personagens (com filtros por quest)"
+                >
+                  <Gem size={11} /> ÚLTIMOS DROPS
+                </button>
+              )}
+              {!demoData && (
+                <button
+                  type="button"
+                  onClick={() => setIsLastQuestsOpen(true)}
+                  className="nav-pill nav-pill--action inline-flex items-center gap-1 px-3 py-1 text-[10px] cursor-pointer whitespace-nowrap"
+                  style={{ ["--pill-accent" as string]: "var(--color-sky-500)" }}
+                  title="Ver as últimas quests realizadas pelos seus personagens (com ou sem drop; rotações Sanguine contam como quest realizada)"
+                >
+                  <ScrollText size={11} /> ÚLTIMAS QUESTS
+                </button>
+              )}
               {/* "Itens Encontrados" (59ª): todos os itens do Bazaar
                   importados na compra dos personagens (mesmos dados do botão
                   "Ver"), em um só lugar — EXCLUSIVO do Boss (mesma regra da
@@ -6538,6 +6573,15 @@ export default function App() {
           canUpdateOfficialList={userProfile?.role === "Boss"}
           onClose={() => setIsFoundItemsOpen(false)}
         />
+      )}
+      {/* "Últimos Drops"/"Últimas Quests" (102ª) — somente leitura do
+          histórico dos personagens da lista pessoal (ativos + vendidos);
+          nenhum write: a fonte única vive em utils/questStatusHistory. */}
+      {isLastDropsOpen && !demoData && (
+        <LastDropsModal characters={data.characters} onClose={() => setIsLastDropsOpen(false)} />
+      )}
+      {isLastQuestsOpen && !demoData && (
+        <LastQuestsModal characters={data.characters} onClose={() => setIsLastQuestsOpen(false)} />
       )}
       {/* "Itens à Venda" de Meus Personagens — gerenciamento centralizado dos
           itens de Quest do usuário. Persistência pelos canais EXISTENTES:

@@ -28,6 +28,7 @@ import { formatRC, VOCATIONS } from "../types";
 import { FilterMulti } from "./FilterTypes";
 import { sumServiceProfit } from "../services/sharedServicesService";
 import { computeCharacterItemsRc } from "../utils/characterItemsValue";
+import { collectCharacterDropEvents } from "../utils/questStatusHistory";
 import { SERVER_COIN_RATES_EVENT, getServerCoinRate, readLocalCoinRates } from "../utils/bazaarCoinRates";
 import { toFirestoreMillis } from "../utils/firestoreTimestamp";
 
@@ -892,10 +893,18 @@ export default function StatsPanel({ characters, parties = [], partyHistory = []
     SOULWAR_ITEMS.forEach((item) => { swCounts[item] = 0; });
     SANGUINE_ITEMS.forEach((item) => { sgCounts[item] = 0; });
     CRYPT_ITEMS.forEach((item) => { cryptCounts[item] = 0; });
+    // FONTE ÚNICA DO HISTÓRICO (102ª): a contagem usa collectCharacterDropEvents
+    // — os MESMOS dados dos modais "Últimos Drops"/"Últimas Quests" (histórico
+    // kind:"drop" + campos itemDropadoXX atuais, deduplicados). Sem histórico
+    // registrado, o resultado é idêntico ao anterior (só o item atual de cada
+    // personagem); com histórico, drops antigos SUBSTITUÍDOS por um novo item
+    // continuam contando — consistência entre Stats e os modais.
     baseFiltered.forEach((c) => {
-      if (c.itemDropadoSW && swCounts[c.itemDropadoSW] !== undefined) swCounts[c.itemDropadoSW]++;
-      if (c.itemDropadoSG && sgCounts[c.itemDropadoSG] !== undefined) sgCounts[c.itemDropadoSG]++;
-      if (c.itemDropadoCrypt && cryptCounts[c.itemDropadoCrypt] !== undefined) cryptCounts[c.itemDropadoCrypt]++;
+      collectCharacterDropEvents(c).forEach((ev) => {
+        if (ev.quest === "soulwar" && swCounts[ev.item] !== undefined) swCounts[ev.item]++;
+        if (ev.quest === "sanguine" && sgCounts[ev.item] !== undefined) sgCounts[ev.item]++;
+        if (ev.quest === "crypt" && cryptCounts[ev.item] !== undefined) cryptCounts[ev.item]++;
+      });
     });
     // Os drops privados do adquirente usam a mesma lista SW/SG da tabela de
     // personagens. Eles não são expostos ao dono original, mas entram nas

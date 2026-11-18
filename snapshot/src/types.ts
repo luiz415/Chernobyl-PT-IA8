@@ -89,6 +89,23 @@ export interface QuestStatusHistoryEntry {
   quest: QuestStatusHistoryQuest;
   status: boolean;
   at: number;
+  /**
+   * TIPO DO REGISTRO (102ª tarefa) — o MESMO array (fonte única) passou a
+   * acolher, além das mudanças de status, os DEMAIS acontecimentos de quest
+   * do personagem. Ausente/"status" = mudança de status (formato original
+   * da 98ª — todos os registros antigos permanecem válidos, sem migração);
+   * "drop" = item dropado registrado/atualizado (células DROP SW/SG/GB);
+   * "rotation" = rotação Sanguine CONCLUÍDA (com OU sem drop — a rotação
+   * conta como quest realizada independentemente do drop).
+   * Alimenta os modais "Últimos Drops"/"Últimas Quests" e a guia Stats.
+   */
+  kind?: "status" | "drop" | "rotation";
+  /** Nome do item dropado (kind="drop"). */
+  item?: string;
+  /** Houve drop na rotação? (kind="rotation") — distingue "Com drop"/"Sem drop". */
+  drop?: boolean;
+  /** Número da rotação concluída (kind="rotation") — valor de sgRot após a conclusão. */
+  rot?: number;
 }
 
 export interface Character {
