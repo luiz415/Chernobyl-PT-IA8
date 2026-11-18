@@ -5844,15 +5844,16 @@ export default function App() {
                 <Briefcase size={11} /> NEGOCIADOS ENTRE USUÁRIOS
                 <span className="font-bold font-mono">({demoData ? demoData.acquisitions.length : characterAcquisitions.length})</span>
               </button>
-              {/* "Últimos Drops"/"Últimas Quests" (102ª): leitura do
+              {/* "Últimos Drops"/"Últimas Quests" (102ª/103ª): leitura do
                   histórico de quests/drops dos personagens da lista pessoal
                   (fonte única utils/questStatusHistory, a mesma da Stats).
-                  Ocultos no modo demo do tutorial. */}
+                  103ª: no GRUPO DA DIREITA (ml-auto no primeiro), imediatamente
+                  à esquerda de "Itens Encontrados". Ocultos no modo demo. */}
               {!demoData && (
                 <button
                   type="button"
                   onClick={() => setIsLastDropsOpen(true)}
-                  className="nav-pill nav-pill--action inline-flex items-center gap-1 px-3 py-1 text-[10px] cursor-pointer whitespace-nowrap"
+                  className="nav-pill nav-pill--action inline-flex items-center gap-1 px-3 py-1 text-[10px] cursor-pointer whitespace-nowrap ml-auto"
                   style={{ ["--pill-accent" as string]: "var(--color-emerald-500)" }}
                   title="Ver os 5 drops mais recentes dos seus personagens (com filtros por quest)"
                 >
@@ -5878,7 +5879,7 @@ export default function App() {
                 <button
                   type="button"
                   onClick={() => setIsFoundItemsOpen(true)}
-                  className="nav-pill nav-pill--action inline-flex items-center gap-1 px-3 py-1 text-[10px] cursor-pointer whitespace-nowrap ml-auto"
+                  className="nav-pill nav-pill--action inline-flex items-center gap-1 px-3 py-1 text-[10px] cursor-pointer whitespace-nowrap"
                   style={{ ["--pill-accent" as string]: "var(--color-fuchsia-500)" }}
                   title="Consultar e gerenciar os itens encontrados em todos os seus personagens (os mesmos do botão Ver)"
                 >
@@ -5893,7 +5894,7 @@ export default function App() {
                 <button
                   type="button"
                   onClick={() => setIsMyItemsSaleOpen(true)}
-                  className={`nav-pill nav-pill--action inline-flex items-center gap-1 px-3 py-1 text-[10px] cursor-pointer whitespace-nowrap ${userProfile?.role === "Boss" ? "" : "ml-auto"}`}
+                  className="nav-pill nav-pill--action inline-flex items-center gap-1 px-3 py-1 text-[10px] cursor-pointer whitespace-nowrap"
                   style={{ ["--pill-accent" as string]: "var(--color-amber-500)" }}
                   title="Gerenciar os itens de Quest de todos os seus personagens (pendentes e vendidos)"
                 >
@@ -6578,10 +6579,10 @@ export default function App() {
           histórico dos personagens da lista pessoal (ativos + vendidos);
           nenhum write: a fonte única vive em utils/questStatusHistory. */}
       {isLastDropsOpen && !demoData && (
-        <LastDropsModal characters={data.characters} onClose={() => setIsLastDropsOpen(false)} />
+        <LastDropsModal characters={data.characters} currentUserUid={currentUser?.uid || ""} onClose={() => setIsLastDropsOpen(false)} />
       )}
       {isLastQuestsOpen && !demoData && (
-        <LastQuestsModal characters={data.characters} onClose={() => setIsLastQuestsOpen(false)} />
+        <LastQuestsModal characters={data.characters} currentUserUid={currentUser?.uid || ""} onClose={() => setIsLastQuestsOpen(false)} />
       )}
       {/* "Itens à Venda" de Meus Personagens — gerenciamento centralizado dos
           itens de Quest do usuário. Persistência pelos canais EXISTENTES:

@@ -899,8 +899,11 @@ export default function StatsPanel({ characters, parties = [], partyHistory = []
     // registrado, o resultado é idêntico ao anterior (só o item atual de cada
     // personagem); com histórico, drops antigos SUBSTITUÍDOS por um novo item
     // continuam contando — consistência entre Stats e os modais.
+    // PROTEÇÃO (103ª): drops `reverted` (realização desfeita — quest voltou a
+    // "Disponível") ficam FORA da contagem, como nos modais (mesma validade).
     baseFiltered.forEach((c) => {
       collectCharacterDropEvents(c).forEach((ev) => {
+        if (ev.reverted) return;
         if (ev.quest === "soulwar" && swCounts[ev.item] !== undefined) swCounts[ev.item]++;
         if (ev.quest === "sanguine" && sgCounts[ev.item] !== undefined) sgCounts[ev.item]++;
         if (ev.quest === "crypt" && cryptCounts[ev.item] !== undefined) cryptCounts[ev.item]++;

@@ -180,59 +180,16 @@ export interface CharacterDropEvent {
    * mas nunca entram em listas cronológicas: data não se inventa).
    */
   at: number | null;
-}
-
-/**
- * TODOS os drops conhecidos de UM personagem: os registros `kind:"drop"` do
- * histórico + os campos atuais itemDropadoXX/At quando AINDA não representados
- * no histórico (retrocompatibilidade: itens selecionados antes da 102ª não
- * geraram registro — entram pela data real já gravada neles, sem migração e
- * sem duplicar: item+data iguais ao último registro são o MESMO drop).
- */
-export function collectCharacterDropEvents(character: Character): CharacterDropEvent[] {
-  const history = Array.isArray(character.questStatusHistory) ? character.questStatusHistory : [];
-  const events: CharacterDropEvent[] = [];
-  const baseOf = (quest: QuestStatusHistoryQuest, item: string, at: number | null): CharacterDropEvent => ({
-    charId: character.id,
-    server: String(character.servidor || "").trim(),
-    character: String(character.personagem || "").trim(),
-    quest,
-    item,
-    at,
-  });
-
-  for (const entry of history) {
-    if (entry && entry.kind === "drop" && String(entry.item || "").trim()) {
-      events.push(baseOf(entry.quest, String(entry.item).trim(), entry.at > 0 ? entry.at : null));
-    }
-  }
-
-  for (const quest of QUEST_STATUS_HISTORY_QUESTS) {
-    const fields = DROP_FIELDS[quest];
-    const item = String(character[fields.item] || "").trim();
-    if (!item) continue;
-    const at = Number(character[fields.at]) || 0;
-    const represented = events.some(ev =>
-      ev.quest === quest && ev.item === item && (at > 0 ? ev.at === at : true),
-    );
-    if (!represented) events.push(baseOf(quest, item, at > 0 ? at : null));
-  }
-
-  return events;
-}
-
-/**
- * Drops de TODOS os personagens informados, do MAIS RECENTE para o mais
- * antigo (somente eventos com data real — sem data não há cronologia).
- */
-export function collectRecentDrops(characters: Character[]): CharacterDropEvent[] {
-  const all: CharacterDropEvent[] = [];
-  for (const character of characters) {
-    for (const ev of collectCharacterDropEvents(character)) {
-      if (ev.at !== null) all.push(ev);
-    }
-  }
-  return all.sort((a, b) => b.at! - a.at! || a.character.localeCompare(b.character));
+  /**
+   * PROTEÇÃO CONTRA ALTERAÇÕES ACIDENTAIS (103ª): `true` quando a realização
+   * à qual este drop pertence foi DESFEITA (status da quest voltou a
+   * "Disponível" depois dela, sem nova conclusão). O registro bruto é
+   * PRESERVADO no histórico (nada é apagado) — ele apenas deixa de contar
+   * nas listagens válidas ("Últimos Drops" e Stats). Drops de ROTAÇÕES
+   * Sanguine nunca são revertidos por status (a rotação é uma resposta
+   * explícita "Drop?" — voltar a SG a "Disponível" é o ciclo normal).
+   */
+  reverted: boolean;
 }
 
 /** Uma QUEST REALIZADA por um personagem (conclusão de status ou rotação SG). */
@@ -257,71 +214,158 @@ export interface QuestRealizationEvent {
 const DROP_MATCH_MARGIN_MS = 10 * 60_000;
 
 /**
- * QUESTS REALIZADAS de todos os personagens, da mais recente para a mais
- * antiga. Realização = registro de CONCLUSÃO de status (status=false, 98ª)
- * OU rotação Sanguine concluída (kind="rotation" — conta SEMPRE, com ou sem
- * drop). Quando a conclusão de status da SG nasce no MESMO salvamento da
- * rotação, só a rotação aparece (evita linha duplicada da mesma realização).
- * "Com drop": rotações respondem por si (campo `drop`); para as demais
- * realizações, um drop registrado da MESMA quest é associado à realização
- * mais próxima anterior (com margem para o fluxo item→conclusão automática).
+ * ANÁLISE ÚNICA do histórico de UM personagem (103ª) — ponto central que
+ * produz, de uma vez, os DROPS (com a flag `reverted`) e as REALIZAÇÕES
+ * VÁLIDAS. Tudo deriva daqui: "Últimos Drops", "Últimas Quests" e a guia
+ * Stats leem o MESMO resultado (nenhum consumidor tem regra própria).
+ *
+ * Regras:
+ *   • DROPS = registros `kind:"drop"` + campos atuais itemDropadoXX/At ainda
+ *     não representados (retrocompatibilidade sem migração; dedup item+data).
+ *   • REALIZAÇÃO = conclusão de status (status=false, 98ª) ou rotação SG
+ *     (kind="rotation" — conta SEMPRE, com ou sem drop). A conclusão de
+ *     status da SG nascida no MESMO salvamento de uma rotação é a MESMA
+ *     realização (só a rotação entra).
+ *   • PROTEÇÃO (103ª): conclusão de status seguida de volta a "Disponível"
+ *     (registro status=true posterior) = alteração desfeita → NÃO conta como
+ *     realização e o drop a ela associado fica `reverted` (fora dos "últimos
+ *     drops válidos" e da Stats). O histórico bruto é integralmente
+ *     preservado; nova conclusão posterior gera realização nova, normalmente.
+ *     Rotações SG nunca são invalidadas por status (resposta explícita).
+ *   • Associação drop ↔ realização: cada drop pertence à realização mais
+ *     próxima ANTERIOR (com margem para o fluxo item→conclusão automática);
+ *     drop sem realização conhecida é revertido apenas se um status=true
+ *     posterior o desfez; drops sem data (legados) nunca são presumidos
+ *     revertidos (nada se inventa).
+ */
+function analyzeCharacterQuestHistory(character: Character): {
+  drops: CharacterDropEvent[];
+  realizations: QuestRealizationEvent[];
+} {
+  const history = Array.isArray(character.questStatusHistory) ? character.questStatusHistory : [];
+  const server = String(character.servidor || "").trim();
+  const name = String(character.personagem || "").trim();
+
+  // ── DROPS brutos (histórico + retrocompatibilidade, dedup item+data) ─────
+  const drops: CharacterDropEvent[] = [];
+  const dropOf = (quest: QuestStatusHistoryQuest, item: string, at: number | null): CharacterDropEvent => ({
+    charId: character.id, server, character: name, quest, item, at, reverted: false,
+  });
+  for (const entry of history) {
+    if (entry && entry.kind === "drop" && String(entry.item || "").trim()) {
+      drops.push(dropOf(entry.quest, String(entry.item).trim(), entry.at > 0 ? entry.at : null));
+    }
+  }
+  for (const quest of QUEST_STATUS_HISTORY_QUESTS) {
+    const fields = DROP_FIELDS[quest];
+    const item = String(character[fields.item] || "").trim();
+    if (!item) continue;
+    const at = Number(character[fields.at]) || 0;
+    const represented = drops.some(ev => ev.quest === quest && ev.item === item && (at > 0 ? ev.at === at : true));
+    if (!represented) drops.push(dropOf(quest, item, at > 0 ? at : null));
+  }
+
+  // ── Entradas de status e rotações ────────────────────────────────────────
+  const statusEntries = history.filter(e => e && isStatusEntry(e) && e.at > 0);
+  const rotations = history.filter(e => e && e.kind === "rotation" && e.at > 0);
+  const revertedAfter = (quest: QuestStatusHistoryQuest, at: number): boolean =>
+    statusEntries.some(e => e.quest === quest && e.status === true && e.at > at);
+
+  // ── Candidatos a realização (rotações + conclusões, com validade) ────────
+  interface Candidate { quest: QuestStatusHistoryQuest; at: number; invalid: boolean; event: QuestRealizationEvent }
+  const candidates: Candidate[] = [];
+  const realizationOf = (quest: QuestStatusHistoryQuest, at: number): QuestRealizationEvent => ({
+    charId: character.id, server, character: name, quest, at, withDrop: false, item: null, rot: null,
+  });
+  for (const entry of rotations) {
+    candidates.push({
+      quest: "sanguine", at: entry.at, invalid: false,
+      event: { ...realizationOf("sanguine", entry.at), withDrop: entry.drop === true, rot: typeof entry.rot === "number" ? entry.rot : null },
+    });
+  }
+  for (const entry of statusEntries) {
+    if (entry.status !== false) continue;
+    // Conclusão de status da SG nascida JUNTO de uma rotação (mesmo
+    // salvamento) é a MESMA realização → só a rotação entra.
+    if (entry.quest === "sanguine" && rotations.some(r => Math.abs(r.at - entry.at) <= DROP_MATCH_MARGIN_MS)) continue;
+    // PROTEÇÃO (103ª): conclusão desfeita (voltou a "Disponível" depois) não
+    // conta como realização — mas permanece como alvo de pareamento para que
+    // o drop associado seja marcado como revertido junto.
+    candidates.push({ quest: entry.quest, at: entry.at, invalid: revertedAfter(entry.quest, entry.at), event: realizationOf(entry.quest, entry.at) });
+  }
+
+  // ── Associação drop ↔ realização POR QUEST ──────────────────────────────
+  // Dono do drop: (1) a PRIMEIRA realização imediatamente posterior dentro
+  // da margem (fluxo item→conclusão automática no mesmo salvamento) ou, não
+  // havendo, (2) a última realização ANTERIOR ao drop (item registrado
+  // depois da conclusão). Um drop nunca "pula" para uma realização mais
+  // nova que a sua (ex.: drop de conclusão desfeita não é associado à
+  // re-conclusão seguinte — a 103ª o marca como revertido junto com ela).
+  for (const quest of QUEST_STATUS_HISTORY_QUESTS) {
+    const questCandidates = candidates.filter(c => c.quest === quest).sort((a, b) => a.at - b.at);
+    for (const drop of drops) {
+      if (drop.quest !== quest || drop.at === null) continue;
+      let target: Candidate | null = null;
+      for (const candidate of questCandidates) {
+        if (candidate.at >= drop.at && candidate.at <= drop.at + DROP_MATCH_MARGIN_MS) { target = candidate; break; }
+      }
+      if (!target) {
+        for (const candidate of questCandidates) {
+          if (candidate.at <= drop.at) target = candidate;
+          else break;
+        }
+      }
+      if (target) {
+        if (target.invalid) {
+          drop.reverted = true;             // realização desfeita → drop fora das listas válidas
+        } else if (target.event.item === null) {
+          target.event.withDrop = true;
+          target.event.item = drop.item;
+        }
+      } else {
+        // Sem realização conhecida (ex.: drop legado anterior à 98ª): só um
+        // status=true POSTERIOR desfaz o drop (alteração acidental corrigida).
+        drop.reverted = revertedAfter(quest, drop.at);
+      }
+    }
+  }
+
+  return { drops, realizations: candidates.filter(c => !c.invalid).map(c => c.event) };
+}
+
+/**
+ * TODOS os drops conhecidos de UM personagem (inclusive os revertidos, com a
+ * flag) — a Stats conta apenas `!reverted`; listas cronológicas usam
+ * `collectRecentDrops`. Fonte única: analyzeCharacterQuestHistory.
+ */
+export function collectCharacterDropEvents(character: Character): CharacterDropEvent[] {
+  return analyzeCharacterQuestHistory(character).drops;
+}
+
+/**
+ * Drops VÁLIDOS de todos os personagens informados, do MAIS RECENTE para o
+ * mais antigo (somente eventos com data real — sem data não há cronologia;
+ * drops de realizações desfeitas ficam fora: proteção da 103ª).
+ */
+export function collectRecentDrops(characters: Character[]): CharacterDropEvent[] {
+  const all: CharacterDropEvent[] = [];
+  for (const character of characters) {
+    for (const ev of collectCharacterDropEvents(character)) {
+      if (ev.at !== null && !ev.reverted) all.push(ev);
+    }
+  }
+  return all.sort((a, b) => b.at! - a.at! || a.character.localeCompare(b.character));
+}
+
+/**
+ * QUESTS REALIZADAS VÁLIDAS de todos os personagens, da mais recente para a
+ * mais antiga (conclusões desfeitas — voltas a "Disponível" — não contam:
+ * proteção da 103ª). Fonte única: analyzeCharacterQuestHistory.
  */
 export function collectQuestRealizations(characters: Character[]): QuestRealizationEvent[] {
   const all: QuestRealizationEvent[] = [];
-
   for (const character of characters) {
-    const history = Array.isArray(character.questStatusHistory) ? character.questStatusHistory : [];
-    const drops = collectCharacterDropEvents(character).filter(ev => ev.at !== null);
-    const rotations = history.filter(e => e && e.kind === "rotation");
-
-    const realizations: QuestRealizationEvent[] = [];
-    const baseOf = (quest: QuestStatusHistoryQuest, at: number): QuestRealizationEvent => ({
-      charId: character.id,
-      server: String(character.servidor || "").trim(),
-      character: String(character.personagem || "").trim(),
-      quest,
-      at,
-      withDrop: false,
-      item: null,
-      rot: null,
-    });
-
-    for (const entry of history) {
-      if (!entry || entry.at <= 0) continue;
-      if (entry.kind === "rotation") {
-        realizations.push({ ...baseOf("sanguine", entry.at), withDrop: entry.drop === true, rot: typeof entry.rot === "number" ? entry.rot : null });
-        continue;
-      }
-      if (!isStatusEntry(entry) || entry.status !== false) continue;
-      // Conclusão de status da SG nascida JUNTO de uma rotação (mesmo
-      // salvamento) é a MESMA realização → só a rotação entra.
-      if (entry.quest === "sanguine" && rotations.some(r => Math.abs(r.at - entry.at) <= DROP_MATCH_MARGIN_MS)) continue;
-      realizations.push(baseOf(entry.quest, entry.at));
-    }
-
-    // Associação drop ↔ realização POR QUEST: cada drop pertence à realização
-    // mais próxima ANTERIOR (com margem); drops nunca se duplicam entre
-    // realizações e uma rotação com resposta "Sim" apenas ganha o nome do item.
-    for (const quest of QUEST_STATUS_HISTORY_QUESTS) {
-      const questRealizations = realizations
-        .filter(r => r.quest === quest)
-        .sort((a, b) => a.at - b.at);
-      if (questRealizations.length === 0) continue;
-      for (const drop of drops.filter(d => d.quest === quest)) {
-        let target: QuestRealizationEvent | null = null;
-        for (const realization of questRealizations) {
-          if (realization.at <= drop.at! + DROP_MATCH_MARGIN_MS) target = realization;
-          else break;
-        }
-        if (target && target.item === null) {
-          target.withDrop = true;
-          target.item = drop.item;
-        }
-      }
-    }
-
-    all.push(...realizations);
+    all.push(...analyzeCharacterQuestHistory(character).realizations);
   }
-
   return all.sort((a, b) => b.at - a.at || a.character.localeCompare(b.character));
 }
