@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { ExternalLink, Gavel, Package, Swords, X } from "lucide-react";
+import { ExternalLink, FlagTriangleRight, Gavel, Package, Swords, X } from "lucide-react";
 // ─────────────────────────────────────────────────────────────────────────────
 // PRÓXIMO BID (105ª tarefa; categorias + visual da 107ª) — badge no rodapé
 // (ao lado do contador de usuários) + modal de acompanhamento dos interesses
@@ -18,12 +18,23 @@ import { ExternalLink, Gavel, Package, Swords, X } from "lucide-react";
 //     Com Itens" (loadItemsInterestRecords — 100% LOCAL por uid, ZERO
 //     Firestore), cruzados com a ÚLTIMA CONSULTA local da guia Itens
 //     (loadItemsLastQuery) pela MESMA regra da guia (isItemsInterestMarked:
-//     id do leilão OU nome+servidor). Os resultados ficam em DUAS categorias:
-//     "Personagens Para SW/SG/GB" e "Personagens Com Itens", cada uma em
-//     ordem cronológica de encerramento; personagem marcado nas DUAS guias
-//     aparece SÓ em "Personagens Com Itens" (decisão do usuário — zero
-//     duplicação). Sem cargo Boss, comportamento anterior intacto (só a
-//     categoria de quests, sem cabeçalhos extras).
+//     id do leilão OU nome+servidor).
+//   • 109ª — LISTA ÚNICA: as categorias da 107ª foram substituídas por uma
+//     lista só, ordenada EXCLUSIVAMENTE pelo encerramento (mais próximo →
+//     mais distante); a ORIGEM de cada interesse virou o badge "Quest"
+//     (guia Personagens Para SW/SG/GB) / "Item" (guia Personagens Com
+//     Itens) no próprio card. A regra de deduplicação continua a da 107ª
+//     (decisão do usuário): personagem marcado nas DUAS guias aparece UMA
+//     vez, com origem "Item". Sem cargo Boss, mesmas regras de exibição de
+//     sempre (só interesses de quests — todos com badge "Quest").
+// BID DIRETO (109ª) — MESMA funcionalidade da coluna LINK do Painel Bazaar,
+// pelas MESMAS fontes únicas (zero duplicação de lógica): campo numérico por
+// personagem (sanitizeBidInput), prioridade individual > Bid Padrão do
+// painel (resolveBazaarBid + readBazaarDefaultBid — a MESMA preferência
+// persistida em rubinot_bazaar_filters), URL oficial com o valor preenchido
+// (buildBazaarBidUrl → /bazaar/{ID}/bid?amount={VALOR}, ID real via
+// extractBazaarAuctionId) e abertura externa (openExternalUrl). NENHUM lance
+// é executado aqui — o usuário confirma no próprio site, como no painel.
 //   • Valor dos Itens → MESMO núcleo da coluna "Valor Itens (kk)"/modal "Ver"
 //     (utils/bazaarItemsDetailView): consulta LOCAL da guia Itens > campos
 //     embutidos na lista; personalização LOCAL do modal "Ver" > automático;
@@ -69,6 +80,8 @@ import {
 } from "../utils/bazaarCharacterDescription";
 import { copyTextToClipboard } from "../utils/clipboard";
 import { openExternalUrl } from "../utils/openExternal";
+import { buildBazaarBidUrl, extractBazaarAuctionId, sanitizeBidInput } from "../utils/bazaarBid";
+import { readBazaarDefaultBid, resolveBazaarBid, type BazaarDefaultBidConfig } from "../utils/bazaarDefaultBid";
 import { SERVER_COIN_RATES_EVENT, getServerCoinRate, readLocalCoinRates } from "../utils/bazaarCoinRates";
 import { formatItemRcText, formatKkValue } from "../utils/itemSale";
 import {
@@ -119,6 +132,13 @@ interface NextBidCharacter {
 interface NextBidEntry {
   /** Chave do leilão — a MESMA getAuctionKey do painel (id > url > nome). */
   key: string;
+  /**
+   * ORIGEM do interesse (109ª — badge do card): "quest" = guia "Personagens
+   * Para SW/SG/GB" (interesses do Painel Bazaar); "item" = guia "Personagens
+   * Com Itens" (interesses locais da guia Itens — só usuário Boss). Marcado
+   * nas duas guias → UMA entrada com origem "item" (dedup da 107ª).
+   */
+  origin: "quest" | "item";
   character: NextBidCharacter;
   /** Encerramento normalizado (unix s) — null quando a lista não o trouxe. */
   endTs: number | null;
@@ -213,9 +233,15 @@ export default function NextBidTracker({ currentUserUid, isBoss = false }: { cur
   }, []);
 
   // ── DERIVAÇÃO (fontes "Meus Interesses" — nenhuma lista paralela) ────────
-  const { questsEntries, itemsEntries, timezoneOffsetMinutes } = useMemo(() => {
+  // 109ª: as DUAS fontes (quests + itens) continuam derivadas separadas (cada
+  // uma com sua regra de interesse), mas o resultado final é UMA lista só,
+  // ordenada exclusivamente pelo encerramento. O Bid Padrão do painel é lido
+  // aqui (mesma preferência de rubinot_bazaar_filters) para o fallback do
+  // botão "Bid" — revalidado a cada tick/evento, como o fuso.
+  const { entries, timezoneOffsetMinutes, defaultBid } = useMemo(() => {
     const timezoneOffsetMinutes = readBazarPanelTimezoneOffsetMinutes();
-    const empty = { questsEntries: [] as NextBidEntry[], itemsEntries: [] as NextBidEntry[], timezoneOffsetMinutes };
+    const defaultBid: BazaarDefaultBidConfig = readBazaarDefaultBid();
+    const empty = { entries: [] as NextBidEntry[], timezoneOffsetMinutes, defaultBid };
     if (!currentUserUid) return empty;
     const nowUnixTs = Math.floor(nowMs / 1000);
     // Fonte LOCAL da guia Itens (dispositivo do Boss) — prioridade sobre os
@@ -259,6 +285,7 @@ export default function NextBidTracker({ currentUserUid, isBoss = false }: { cur
           if (!isAuctionStillActive({ auctionEndTs: result.auctionEndTs ?? null }, nowUnixTs)) continue;
           itemsList.push({
             key,
+            origin: "item",
             character: {
               id: String(result.id || ""),
               name: String(result.name || ""),
@@ -274,9 +301,8 @@ export default function NextBidTracker({ currentUserUid, isBoss = false }: { cur
         }
       }
     }
-    itemsList.sort(compareByAuctionEnd);
-    // Deduplicação entre categorias (decisão do usuário): personagem também
-    // marcado na guia Quests aparece SÓ aqui — a categoria de Itens prevalece.
+    // Deduplicação entre origens (decisão do usuário, mantida da 107ª):
+    // personagem também marcado na guia Quests entra UMA vez, como "Item".
     const itemsKeys = new Set(itemsList.map(entry => entry.key));
     const itemsPairs = new Set(itemsList.map(entry => characterPairKey(entry.character.name, entry.character.server)).filter(Boolean));
 
@@ -301,6 +327,7 @@ export default function NextBidTracker({ currentUserUid, isBoss = false }: { cur
         const itemsView = localResult ? itemsViewFromLocalResult(localResult) : itemsViewFromAuction(character);
         questsList.push({
           key,
+          origin: "quest",
           character: {
             id: String(character.id || ""),
             name: String(character.name || ""),
@@ -315,18 +342,18 @@ export default function NextBidTracker({ currentUserUid, isBoss = false }: { cur
         });
       }
     }
-    questsList.sort(compareByAuctionEnd);
-    return { questsEntries: questsList, itemsEntries: itemsList, timezoneOffsetMinutes };
+    // 109ª — LISTA ÚNICA: funde as duas origens e ordena EXCLUSIVAMENTE pelo
+    // encerramento (compareByAuctionEnd: mais próximo → mais distante; sem
+    // horário conhecido vai para o fim; empate decidido pelo nome).
+    const merged = [...questsList, ...itemsList].sort(compareByAuctionEnd);
+    return { entries: merged, timezoneOffsetMinutes, defaultBid };
   }, [currentUserUid, isBoss, officialCache, nowMs, sourcesBump]);
 
   const nowUnixTs = Math.floor(nowMs / 1000);
-  const totalCount = questsEntries.length + itemsEntries.length;
-  // Próximo encerramento GERAL = o mais cedo entre as duas categorias (cada
-  // lista já está em ordem cronológica — basta comparar os primeiros com
-  // horário conhecido). Alimenta o badge do rodapé e o selo "Próximo".
-  const nextEntry = [questsEntries.find(entry => entry.endTs !== null), itemsEntries.find(entry => entry.endTs !== null)]
-    .filter((entry): entry is NextBidEntry => !!entry)
-    .sort(compareByAuctionEnd)[0] || null;
+  const totalCount = entries.length;
+  // Próximo encerramento = primeiro com horário conhecido (lista já ordenada).
+  // Alimenta o badge do rodapé e o selo "Próximo".
+  const nextEntry = entries.find(entry => entry.endTs !== null) || null;
   const nextLabel = nextEntry ? formatAuctionEndShort(nextEntry.endTs, timezoneOffsetMinutes) : "";
   const nextEndingSoon = nextEntry ? isAuctionEndingSoon({ auctionEndTs: nextEntry.endTs }, nowUnixTs) : false;
 
@@ -351,6 +378,39 @@ export default function NextBidTracker({ currentUserUid, isBoss = false }: { cur
     setDescBarCopied(copied);
     if (descBarTimerRef.current !== null) window.clearTimeout(descBarTimerRef.current);
     descBarTimerRef.current = window.setTimeout(() => { setDescBarCopied(false); descBarTimerRef.current = null; }, 1500);
+  }
+
+  // ── BID DIRETO (109ª) — rascunho por leilão, como o bidDrafts do painel ──
+  // Nunca persistido e nunca enviado ao RubinOT: serve apenas para montar a
+  // URL oficial de lance. Mesma sanitização (sanitizeBidInput) e mesma
+  // prioridade (resolveBazaarBid: individual > Bid Padrão > nada) da coluna
+  // LINK do Painel Bazaar.
+  const [bidDrafts, setBidDrafts] = useState<Record<string, string>>({});
+  function setBidDraft(auctionKey: string, raw: string) {
+    if (!auctionKey) return;
+    const digits = sanitizeBidInput(raw);
+    setBidDrafts(prev => {
+      if ((prev[auctionKey] || "") === digits) return prev;
+      const next = { ...prev };
+      if (digits) next[auctionKey] = digits;
+      else delete next[auctionKey];
+      return next;
+    });
+  }
+  /**
+   * Abre a página oficial de lance com o valor já na URL — MESMO fluxo do
+   * openAuctionBidPage do painel: resolveBazaarBid decide o valor (individual
+   * da linha > Bid Padrão ativo com campo vazio; individual inválido nunca é
+   * substituído em silêncio) e buildBazaarBidUrl monta a URL com o ID REAL do
+   * leilão (extractBazaarAuctionId sobre o link/ID existentes — nunca
+   * inventado). Nenhum lance é executado: o usuário confirma no site.
+   */
+  function openEntryBidPage(entry: NextBidEntry) {
+    const resolution = resolveBazaarBid(bidDrafts[entry.key] || "", defaultBid);
+    if (resolution.amount === null) return;
+    const bidUrl = buildBazaarBidUrl(entry.character.url, entry.character.id, String(resolution.amount));
+    if (!bidUrl) return;
+    openExternalUrl(bidUrl);
   }
 
   /** Clique ESQUERDO no nome: copia SÓ o nome (feedback no próprio lugar). */
@@ -412,6 +472,13 @@ export default function NextBidTracker({ currentUserUid, isBoss = false }: { cur
     const selectionIndex = descSelection.findIndex(sel => sel.rowKey === entry.key);
     const isSelected = descSelectedKeys.has(entry.key);
     const feedbackHere = nameFeedback?.key === entry.key ? nameFeedback : null;
+    // BID (109ª) — mesmos gates da coluna LINK do painel: ID real do leilão
+    // (extractBazaarAuctionId) + valor resolvido (individual > Bid Padrão).
+    const bidDraft = bidDrafts[entry.key] || "";
+    const auctionBidId = extractBazaarAuctionId(character.url, character.id);
+    const bidResolution = resolveBazaarBid(bidDraft, defaultBid);
+    const canOpenBidPage = !!auctionBidId && bidResolution.amount !== null;
+    const defaultBidActive = defaultBid.enabled && defaultBid.amount !== null;
     return (
       <div
         key={entry.key}
@@ -447,6 +514,19 @@ export default function NextBidTracker({ currentUserUid, isBoss = false }: { cur
             {Number(character.level || 0) > 0 && (
               <span className="font-mono text-[9px] font-bold tabular-nums text-slate-400 flex-shrink-0" title={`Level ${character.level}`}>
                 {character.level}
+              </span>
+            )}
+            {/* Badge de ORIGEM (109ª — substitui as categorias da 107ª):
+                "Quest" = interesse da guia Personagens Para SW/SG/GB;
+                "Item" = interesse da guia Personagens Com Itens (Boss).
+                Mesmos acentos âmbar/ciano dos antigos cabeçalhos. */}
+            {entry.origin === "quest" ? (
+              <span className="inline-flex items-center gap-0.5 flex-shrink-0 rounded border border-amber-500/35 bg-amber-500/10 px-1 py-px text-[7px] font-black uppercase tracking-wider text-amber-300" title="Origem do interesse: guia Personagens Para SW/SG/GB (Painel Bazaar)">
+                <Swords size={7} /> Quest
+              </span>
+            ) : (
+              <span className="inline-flex items-center gap-0.5 flex-shrink-0 rounded border border-cyan-500/35 bg-cyan-500/10 px-1 py-px text-[7px] font-black uppercase tracking-wider text-cyan-300" title="Origem do interesse: guia Personagens Com Itens (Painel Bazaar). Marcado também na guia de Quests, o personagem aparece uma única vez, aqui.">
+                <Package size={7} /> Item
               </span>
             )}
             {isNext && (
@@ -496,40 +576,61 @@ export default function NextBidTracker({ currentUserUid, isBoss = false }: { cur
           <AuctionEndBadge auctionEndTs={character.auctionEndTs ?? null} nowUnixTs={nowUnixTs} timezoneOffsetMinutes={timezoneOffsetMinutes} />
           {timeLeft && (
             <span
-              className={`text-[8.5px] font-bold ${endingSoon ? "text-amber-300 animate-pulse" : stillActive ? "text-slate-500" : "text-slate-600 line-through"}`}
+              className={`text-[8.5px] font-black ${endingSoon ? "text-amber-300 animate-pulse" : stillActive ? "text-slate-400" : "text-slate-600 line-through"}`}
               title={endingSoon ? "Leilão encerra em menos de 5 minutos" : stillActive ? "Tempo restante até o encerramento" : "Leilão já encerrado"}
             >
               {timeLeft}
             </span>
           )}
         </div>
-        <button
-          type="button"
-          onClick={() => openExternalUrl(String(character.url || ""))}
-          disabled={!character.url}
-          title={character.url ? "Abrir o anúncio deste personagem no Bazaar" : "Link do anúncio indisponível"}
-          className="inline-flex h-6 flex-shrink-0 items-center justify-center gap-1 rounded-md border border-cyan-500/25 bg-cyan-500/10 px-1.5 text-[9px] font-black text-cyan-300 hover:bg-cyan-500/20 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
-        >
-          <ExternalLink size={10} /> Abrir
-        </button>
-      </div>
-    );
-  }
-
-  /** Cabeçalho de categoria (107ª — SÓ usuário Boss vê as duas categorias). */
-  function renderSectionHeader(kind: "quests" | "items", count: number) {
-    const isQuests = kind === "quests";
-    return (
-      <div className={`flex items-center gap-2 rounded-md border-l-2 px-2.5 py-1.5 ${isQuests ? "border-amber-400 bg-gradient-to-r from-amber-500/10 to-transparent" : "border-cyan-400 bg-gradient-to-r from-cyan-500/10 to-transparent"}`}>
-        {isQuests
-          ? <Swords size={12} className="flex-shrink-0 text-amber-300" />
-          : <Package size={12} className="flex-shrink-0 text-cyan-300" />}
-        <span className={`text-[10px] font-black uppercase tracking-wider ${isQuests ? "text-amber-200" : "text-cyan-200"}`}>
-          {isQuests ? "Personagens Para SW/SG/GB" : "Personagens Com Itens"}
-        </span>
-        <span className={`rounded-full border px-1.5 font-mono text-[8px] font-black leading-[14px] ${isQuests ? "border-amber-500/35 bg-amber-500/10 text-amber-300" : "border-cyan-500/35 bg-cyan-500/10 text-cyan-300"}`} title={`${count} interesse(s) ativo(s) nesta categoria`}>
-          {count}
-        </span>
+        {/* AÇÕES (109ª): campo do valor + "Bid" (mesma funcionalidade da
+            coluna LINK do painel — Enter também abre) e o "Abrir" de sempre. */}
+        <div className="flex w-[7.25rem] flex-shrink-0 flex-col gap-1">
+          <input
+            type="text"
+            inputMode="numeric"
+            pattern="[0-9]*"
+            value={bidDraft}
+            onChange={event => setBidDraft(entry.key, event.target.value)}
+            onKeyDown={event => { if (event.key === "Enter" && canOpenBidPage) openEntryBidPage(entry); }}
+            placeholder={defaultBidActive ? "Padrão" : "Valor"}
+            aria-label={`Valor do lance para ${character.name}`}
+            title={defaultBidActive
+              ? `Bid individual — tem prioridade sobre o Bid Padrão (${defaultBid.amount}); vazio, o botão Bid usa o padrão`
+              : "Valor do lance (apenas números). O lance NÃO é enviado automaticamente."}
+            className="h-6 w-full min-w-0 rounded-md border border-[var(--th-line)]/60 bg-[var(--th-bg)]/60 px-1 text-center text-[10px] font-black text-[var(--th-text)] outline-none transition-colors placeholder:font-bold placeholder:text-slate-500 focus:border-amber-500/60"
+          />
+          <div className="flex gap-1">
+            <button
+              type="button"
+              onClick={() => openEntryBidPage(entry)}
+              disabled={!canOpenBidPage}
+              title={canOpenBidPage
+                ? bidResolution.source === "individual"
+                  ? `Abrir a página oficial de lance com o valor individual (${bidResolution.amount})`
+                  : `Abrir a página oficial de lance com o Bid Padrão (${bidResolution.amount}) — campo individual vazio`
+                : auctionBidId
+                  ? bidResolution.invalidIndividual
+                    ? "Valor individual inválido — corrija ou limpe o campo para usar o Bid Padrão"
+                    : "Informe um valor numérico válido para habilitar o Bid"
+                  : "Personagem sem ID de leilão disponível"}
+              className={`inline-flex h-6 flex-1 min-w-0 items-center justify-center gap-0.5 rounded-md border px-1 text-[9px] font-black transition-colors ${canOpenBidPage
+                ? "border-emerald-500/35 bg-emerald-500/12 text-emerald-300 hover:bg-emerald-500/22 cursor-pointer"
+                : "border-[var(--th-line)]/40 bg-white/[0.03] text-slate-600 cursor-not-allowed"}`}
+            >
+              <FlagTriangleRight size={10} className="flex-shrink-0" /> Bid
+            </button>
+            <button
+              type="button"
+              onClick={() => openExternalUrl(String(character.url || ""))}
+              disabled={!character.url}
+              title={character.url ? "Abrir o anúncio deste personagem no Bazaar" : "Link do anúncio indisponível"}
+              className="inline-flex h-6 flex-1 min-w-0 items-center justify-center gap-0.5 rounded-md border border-cyan-500/25 bg-cyan-500/10 px-1 text-[9px] font-black text-cyan-300 hover:bg-cyan-500/20 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              <ExternalLink size={10} className="flex-shrink-0" /> Abrir
+            </button>
+          </div>
+        </div>
       </div>
     );
   }
@@ -615,29 +716,14 @@ export default function NextBidTracker({ currentUserUid, isBoss = false }: { cur
                     {isBoss ? " (guias de Quests e de Itens)" : ""} — os leilões ainda ativos aparecem aqui em ordem de encerramento.
                   </span>
                 </div>
-              ) : isBoss ? (
-                /* BOSS (107ª): DUAS categorias, cada uma em ordem cronológica
-                   própria; personagem marcado nas duas guias aparece só em
-                   "Personagens Com Itens" (deduplicação na derivação). */
-                <div className="flex flex-col gap-2 p-2.5">
-                  {renderSectionHeader("quests", questsEntries.length)}
-                  {questsEntries.length === 0 ? (
-                    <span className="px-2 pb-1 text-[9px] text-slate-500">Nenhum interesse ativo nesta categoria.</span>
-                  ) : (
-                    <div className="flex flex-col gap-1.5">{questsEntries.map((entry, index) => renderEntryCard(entry, index))}</div>
-                  )}
-                  {renderSectionHeader("items", itemsEntries.length)}
-                  {itemsEntries.length === 0 ? (
-                    <span className="px-2 pb-1 text-[9px] text-slate-500">Nenhum interesse ativo nesta categoria.</span>
-                  ) : (
-                    <div className="flex flex-col gap-1.5">{itemsEntries.map((entry, index) => renderEntryCard(entry, index))}</div>
-                  )}
-                </div>
               ) : (
-                /* SEM cargo Boss: comportamento anterior — só os interesses
-                   do Painel Bazaar (quests), sem categoria adicional. */
+                /* 109ª — LISTA ÚNICA (sem categorias): todos os interesses
+                   ativos em ordem cronológica de encerramento; a origem de
+                   cada um é o badge "Quest"/"Item" do próprio card. Usuário
+                   comum segue vendo só os interesses de quests (regras de
+                   exibição inalteradas — a derivação não muda). */
                 <div className="flex flex-col gap-1.5 p-2.5">
-                  {questsEntries.map((entry, index) => renderEntryCard(entry, index))}
+                  {entries.map((entry, index) => renderEntryCard(entry, index))}
                 </div>
               )}
             </div>
