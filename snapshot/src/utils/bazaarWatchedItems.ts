@@ -1214,6 +1214,16 @@ export function loadItemsInterestRecords(uid: string): ItemsInterestRecord[] {
   return deduped;
 }
 
+/**
+ * AVISO LOCAL (107ª — mesma janela) de que os interesses da guia Itens
+ * mudaram: o evento "storage" do navegador NÃO dispara na janela que gravou,
+ * então o modal "Próximo Bid" (rodapé) usa este CustomEvent para refletir na
+ * hora o marcar/desmarcar "Tenho Interesse" da guia "Personagens Com Itens".
+ * Mesmo padrão do BAZAAR_ITEMS_LAST_QUERY_UPDATED_EVENT — nenhuma rede,
+ * nenhum Firestore, nada muda para quem não escuta o evento.
+ */
+export const BAZAAR_ITEMS_INTERESTS_UPDATED_EVENT = "bazaar-items-interests-updated";
+
 export function saveItemsInterestRecords(uid: string, records: ItemsInterestRecord[]): void {
   const clean = (records || [])
     .map(record => ({
@@ -1223,6 +1233,11 @@ export function saveItemsInterestRecords(uid: string, records: ItemsInterestReco
     }))
     .filter(record => record.id || (record.name && record.server));
   saveUIState(itemsInterestsKey(uid), clean);
+  try {
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent(BAZAAR_ITEMS_INTERESTS_UPDATED_EVENT));
+    }
+  } catch { /* ambiente sem window (testes) — gravação já feita acima */ }
 }
 
 /** true quando algum registro marca este personagem/leilão. */

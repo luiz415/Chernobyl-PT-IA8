@@ -6382,8 +6382,11 @@ export default function App() {
               consulta nova ao Firebase). O botão abre o modal com todos os
               interesses ativos em ordem cronológica. Na simulação/demo o
               badge fica neutro ("—"): os interesses reais não vazam para o
-              modo demo e os fictícios não existem fora do painel. */}
-          <NextBidTracker currentUserUid={isSimulation ? "" : (currentUser?.uid || "")} />
+              modo demo e os fictícios não existem fora do painel.
+              107ª: usuário Boss também vê a categoria "Personagens Com
+              Itens" (interesses locais da guia Itens) — o cargo é passado
+              aqui e some na simulação, junto com o uid. */}
+          <NextBidTracker currentUserUid={isSimulation ? "" : (currentUser?.uid || "")} isBoss={!isSimulation && isBossUser} />
 
         </div>
         <div className="flex items-center gap-3 flex-wrap">
