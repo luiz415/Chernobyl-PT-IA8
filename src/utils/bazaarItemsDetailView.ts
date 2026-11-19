@@ -10,7 +10,7 @@
 // única implementação, zero divergência entre painel e rodapé.
 // Nada aqui lê/grava Firestore — somente localStorage (overrides locais).
 // ─────────────────────────────────────────────────────────────────────────────
-import { loadUIState } from "../storage";
+import { loadUIState, saveUIState } from "../storage";
 import {
   effectiveTotalKk,
   hasManualTotalKk,
@@ -89,6 +89,30 @@ export function questsViewOverridesKey(uid?: string): string {
 export function readQuestsViewOverrides(uid?: string): QuestsViewOverridesMap {
   const raw = loadUIState<QuestsViewOverridesMap | null>(questsViewOverridesKey(uid), null);
   return raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
+}
+
+/**
+ * AVISO LOCAL (110ª — mesma janela) de que as personalizações do modal "Ver"
+ * mudaram: o evento "storage" do navegador NÃO dispara na janela que gravou,
+ * então o modal "Próximo Bid" (rodapé) usa este CustomEvent para recalcular
+ * o total em RC do cabeçalho na hora da edição — mesmo padrão dos eventos
+ * locais de bazaarWatchedItems. Nenhuma rede, nenhum Firestore.
+ */
+export const BAZAAR_QUESTS_VIEW_OVERRIDES_UPDATED_EVENT = "bazaar-quests-view-overrides-updated";
+
+/**
+ * GRAVAÇÃO das personalizações do modal "Ver" (fonte única da escrita —
+ * 110ª): mesma chave por uid de sempre (saveUIState) + o aviso local acima.
+ * O BazarPanel delega para cá (persistQuestsViewOverrides); o modo demo
+ * continua NÃO persistindo (o guard permanece no painel, inalterado).
+ */
+export function saveQuestsViewOverrides(uid: string | undefined, overrides: QuestsViewOverridesMap): void {
+  saveUIState(questsViewOverridesKey(uid), overrides);
+  try {
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent(BAZAAR_QUESTS_VIEW_OVERRIDES_UPDATED_EVENT));
+    }
+  } catch { /* ambiente sem window (testes) — gravação já feita acima */ }
 }
 export function questsViewItemKey(index: number, foundName: string): string {
   return `${index}:${foundName}`;

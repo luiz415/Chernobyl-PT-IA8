@@ -83,7 +83,7 @@ import { openExternalUrl } from "../utils/openExternal";
 import { buildBazaarBidUrl, extractBazaarAuctionId, sanitizeBidInput } from "../utils/bazaarBid";
 import { readBazaarDefaultBid, resolveBazaarBid, type BazaarDefaultBidConfig } from "../utils/bazaarDefaultBid";
 import { SERVER_COIN_RATES_EVENT, getServerCoinRate, readLocalCoinRates } from "../utils/bazaarCoinRates";
-import { formatItemRcText, formatKkValue } from "../utils/itemSale";
+import { computeItemRC, formatItemRcText, formatKkValue } from "../utils/itemSale";
 import {
   BAZAAR_ITEMS_INTERESTS_KEY_PREFIX,
   BAZAAR_ITEMS_INTERESTS_UPDATED_EVENT,
@@ -95,6 +95,7 @@ import {
   type BazaarItemsCharacterResult,
 } from "../utils/bazaarWatchedItems";
 import {
+  BAZAAR_QUESTS_VIEW_OVERRIDES_UPDATED_EVENT,
   itemsViewFromAuction,
   itemsViewFromLocalResult,
   questsViewAdjustedTotalKk,
@@ -221,6 +222,10 @@ export default function NextBidTracker({ currentUserUid, isBoss = false }: { cur
     window.addEventListener(SERVER_COIN_RATES_EVENT, bump);
     window.addEventListener(BAZAAR_ITEMS_LAST_QUERY_UPDATED_EVENT, bump);
     window.addEventListener(BAZAAR_ITEMS_INTERESTS_UPDATED_EVENT, bump);
+    // 110ª: edição das personalizações do modal "Ver" (valores de item/ouro/
+    // cotação) dispara este aviso local — o total em RC do cabeçalho
+    // recalcula NA HORA, sem fechar/reabrir o modal nem esperar o tick.
+    window.addEventListener(BAZAAR_QUESTS_VIEW_OVERRIDES_UPDATED_EVENT, bump);
     window.addEventListener("storage", onStorage);
     return () => {
       window.removeEventListener(BAZAAR_OFFICIAL_CACHE_UPDATED_EVENT, refreshOfficial);
@@ -228,6 +233,7 @@ export default function NextBidTracker({ currentUserUid, isBoss = false }: { cur
       window.removeEventListener(SERVER_COIN_RATES_EVENT, bump);
       window.removeEventListener(BAZAAR_ITEMS_LAST_QUERY_UPDATED_EVENT, bump);
       window.removeEventListener(BAZAAR_ITEMS_INTERESTS_UPDATED_EVENT, bump);
+      window.removeEventListener(BAZAAR_QUESTS_VIEW_OVERRIDES_UPDATED_EVENT, bump);
       window.removeEventListener("storage", onStorage);
     };
   }, []);
@@ -238,10 +244,10 @@ export default function NextBidTracker({ currentUserUid, isBoss = false }: { cur
   // ordenada exclusivamente pelo encerramento. O Bid Padrão do painel é lido
   // aqui (mesma preferência de rubinot_bazaar_filters) para o fallback do
   // botão "Bid" — revalidado a cada tick/evento, como o fuso.
-  const { entries, timezoneOffsetMinutes, defaultBid } = useMemo(() => {
+  const { entries, timezoneOffsetMinutes, defaultBid, itemsTotalRc, itemsRcCount } = useMemo(() => {
     const timezoneOffsetMinutes = readBazarPanelTimezoneOffsetMinutes();
     const defaultBid: BazaarDefaultBidConfig = readBazaarDefaultBid();
-    const empty = { entries: [] as NextBidEntry[], timezoneOffsetMinutes, defaultBid };
+    const empty = { entries: [] as NextBidEntry[], timezoneOffsetMinutes, defaultBid, itemsTotalRc: 0, itemsRcCount: 0 };
     if (!currentUserUid) return empty;
     const nowUnixTs = Math.floor(nowMs / 1000);
     // Fonte LOCAL da guia Itens (dispositivo do Boss) — prioridade sobre os
@@ -346,7 +352,24 @@ export default function NextBidTracker({ currentUserUid, isBoss = false }: { cur
     // encerramento (compareByAuctionEnd: mais próximo → mais distante; sem
     // horário conhecido vai para o fim; empate decidido pelo nome).
     const merged = [...questsList, ...itemsList].sort(compareByAuctionEnd);
-    return { entries: merged, timezoneOffsetMinutes, defaultBid };
+    // 110ª — TOTAL em RC dos personagens de origem "Item" (cabeçalho, SÓ
+    // Boss): soma do MESMO RC exibido em cada card — displayKk já é o total
+    // efetivo com personalizações locais (questsViewAdjustedTotalKk: edições
+    // do modal "Ver" > automático; correção manual da guia Itens embutida) e
+    // coinRate já é cotação personalizada > cotação do servidor. Conversão
+    // pela fonte única computeItemRC (floor por personagem — o total é a
+    // soma EXATA dos RCs individuais dos cards). Quests ficam FORA; cada
+    // personagem conta UMA vez (dedup da derivação); sem cotação válida ou
+    // sem itens, o personagem não tem RC no card e não entra na soma.
+    let itemsTotalRc = 0;
+    let itemsRcCount = 0;
+    for (const entry of merged) {
+      if (entry.origin !== "item") continue;
+      if (entry.displayKk === null || !(entry.coinRate > 0)) continue;
+      itemsTotalRc += computeItemRC(entry.coinRate, entry.displayKk);
+      itemsRcCount += 1;
+    }
+    return { entries: merged, timezoneOffsetMinutes, defaultBid, itemsTotalRc, itemsRcCount };
   }, [currentUserUid, isBoss, officialCache, nowMs, sourcesBump]);
 
   const nowUnixTs = Math.floor(nowMs / 1000);
@@ -695,6 +718,21 @@ export default function NextBidTracker({ currentUserUid, isBoss = false }: { cur
                 {totalCount > 0 && (
                   <span className="rounded-full border border-amber-500/35 bg-amber-500/10 px-1.5 font-mono text-[9px] font-black leading-[15px] text-amber-300">
                     {totalCount}
+                  </span>
+                )}
+                {/* 110ª — TOTAL em RC dos itens (SÓ usuário Boss): soma dos
+                    RCs exibidos nos cards de origem "Item" (personalizações
+                    locais + cotação por servidor/override — mesmos critérios
+                    do Painel Bazaar; cada personagem conta UMA vez). Some
+                    junto com os personagens de Itens; usuário sem o cargo
+                    nunca vê o chip. */}
+                {isBoss && entries.some(entry => entry.origin === "item") && (
+                  <span
+                    className="inline-flex items-center gap-1 flex-shrink-0 rounded-md border border-emerald-500/35 bg-emerald-500/10 px-1.5 py-0.5 font-mono text-[9px] font-black tabular-nums text-emerald-300"
+                    title={`Valor total estimado dos itens dos ${itemsRcCount} personagem(ns) com origem "Item" (soma exata dos RCs exibidos nos cards): valores personalizados do modal "Ver" e correções manuais prevalecem sobre o automático; conversão kk → RC pela cotação de cada servidor (personalizada > oficial), floor por personagem. Personagem sem cotação válida não entra na soma. Personagens "Quest" ficam fora.`}
+                  >
+                    <Package size={10} className="flex-shrink-0 text-emerald-400" />
+                    Itens: {itemsTotalRc.toLocaleString("pt-BR")} RC
                   </span>
                 )}
               </div>

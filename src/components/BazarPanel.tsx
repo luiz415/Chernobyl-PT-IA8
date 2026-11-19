@@ -27,7 +27,7 @@ import { copyTextToClipboard } from "../utils/clipboard";
 // 105ª: badge "Encerra" e núcleo "Valor Itens/modal Ver" movidos para
 // módulos próprios (fonte única com o modal "Próximo Bid" do rodapé).
 import { AuctionEndBadge, isAuctionStillActive } from "./AuctionEndBadge";
-import { hasRelevantLoot, itemsViewFromAuction, itemsViewFromLocalResult, questsViewAdjustedTotalKk, questsViewItemKey, questsViewOverridesKey, readQuestsViewOverrides, type QuestsItemsDetailView, type QuestsViewOverride, type QuestsViewOverridesMap } from "../utils/bazaarItemsDetailView";
+import { hasRelevantLoot, itemsViewFromAuction, itemsViewFromLocalResult, questsViewAdjustedTotalKk, questsViewItemKey, readQuestsViewOverrides, saveQuestsViewOverrides, type QuestsItemsDetailView, type QuestsViewOverride, type QuestsViewOverridesMap } from "../utils/bazaarItemsDetailView";
 // Reexportação de compatibilidade: o BazaarItemsPanel importa o badge daqui.
 export { AuctionEndBadge };
 import { syncNotificationPrefsToCloud } from "../services/notificationPrefsSyncService";
@@ -2109,7 +2109,10 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
     setQuestsViewOverrides(next);
     // DEMO: nada persiste (os leilões fictícios não podem sujar nem podar as
     // personalizações reais) — o estado vive só na sessão do tutorial.
-    if (!demoMode) saveUIState(questsViewOverridesKey(currentUser?.uid), next);
+    // 110ª: a gravação real delega à fonte única saveQuestsViewOverrides
+    // (mesma chave/saveUIState de sempre + aviso local p/ o modal "Próximo
+    // Bid" recalcular o total em RC na hora). Nada muda para esta guia.
+    if (!demoMode) saveQuestsViewOverrides(currentUser?.uid, next);
   };
 
   /** Aplica um patch à personalização de um personagem, removendo campos devolvidos ao automático. */
