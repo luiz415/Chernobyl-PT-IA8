@@ -566,9 +566,25 @@ export default function NextBidTracker({ currentUserUid, isBoss = false }: { cur
           rodapé. No portal, o overlay é filho do <body> e cobre a tela
           inteira, como os demais modais do app. */}
       {isOpen && createPortal(
-        <div className="fixed inset-0 z-[1200] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4" onClick={() => setIsOpen(false)}>
+        /* 108ª — RESPONSIVIDADE pela BASE GLOBAL de modais (index.css), a
+           MESMA dos demais modais do app:
+           • `app-modal-overlay` confina o overlay à área útil medida pelo
+             App (useModalViewportBounds publica os insets do cabeçalho e do
+             RODAPÉ no <html> — vale para portais e acompanha zoom/resolução
+             via visualViewport): o modal nunca cobre o rodapé nem as bordas;
+           • `app-modal-frame--scroll` + `app-modal-body` = teto de altura
+             global (`--app-modal-available-height`, com !important) e
+             rolagem SÓ no miolo, apenas quando necessária — com poucos
+             personagens o modal mantém a altura natural;
+           • o `max-h-[85vh]` local foi REMOVIDO: ignorava o rodapé (85vh
+             pode ser maior que a área útil) e era justamente o que deixava
+             o modal ultrapassar os limites em telas baixas/zoom alto.
+           Cabeçalho e barra de seleção são flex-shrink-0 — permanecem
+           visíveis durante a rolagem. `fixed inset-0` continua como
+           fallback declarativo (o CSS global prevalece), como nos demais. */
+        <div className="app-modal-overlay fixed inset-0 z-[1200] flex items-center justify-center bg-black/70 backdrop-blur-sm" onClick={() => setIsOpen(false)}>
           <div
-            className="app-modal-frame app-modal-size-lg w-full max-h-[85vh] flex flex-col rounded-xl border border-amber-500/30 bg-[var(--th-bg-raised)] shadow-2xl shadow-black/60 overflow-hidden"
+            className="app-modal-frame app-modal-size-lg app-modal-frame--scroll w-full rounded-xl border border-amber-500/30 bg-[var(--th-bg-raised)] shadow-2xl shadow-black/60"
             onClick={event => event.stopPropagation()}
           >
             <div className="flex items-center justify-between gap-2 px-3 py-2 border-b border-[var(--th-line)]/60 bg-[var(--th-bg-overlay)] flex-shrink-0">
@@ -586,7 +602,11 @@ export default function NextBidTracker({ currentUserUid, isBoss = false }: { cur
               </button>
             </div>
 
-            <div className="flex-1 min-h-0 overflow-y-auto">
+            {/* Miolo rolável (108ª): `app-modal-body` é a fonte única da
+                rolagem interna (flex:1 + min-height:0 + overflow:auto do CSS
+                global) — a barra vertical só aparece quando o conteúdo passa
+                da área útil; `custom-scrollbar` = barra discreta padrão. */}
+            <div className="app-modal-body custom-scrollbar">
               {totalCount === 0 ? (
                 <div className="flex flex-col items-center gap-1.5 px-4 py-8 text-center">
                   <span className="text-[11px] font-bold text-slate-300">Nenhum interesse ativo no momento.</span>
