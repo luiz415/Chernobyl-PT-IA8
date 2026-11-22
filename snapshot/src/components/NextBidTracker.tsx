@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { ExternalLink, FlagTriangleRight, Gavel, Package, Swords, X } from "lucide-react";
+import { Clock, ExternalLink, FlagTriangleRight, Gavel, Package, Swords, X } from "lucide-react";
 // ─────────────────────────────────────────────────────────────────────────────
 // PRÓXIMO BID (105ª tarefa; categorias + visual da 107ª) — badge no rodapé
 // (ao lado do contador de usuários) + modal de acompanhamento dos interesses
@@ -380,6 +380,30 @@ export default function NextBidTracker({ currentUserUid, isBoss = false }: { cur
   const nextLabel = nextEntry ? formatAuctionEndShort(nextEntry.endTs, timezoneOffsetMinutes) : "";
   const nextEndingSoon = nextEntry ? isAuctionEndingSoon({ auctionEndTs: nextEntry.endTs }, nowUnixTs) : false;
 
+  // ── 112ª — QUADRO "Próximos encerramentos" ────────────────────────────────
+  // Sequência dos horários de encerramento DISTINTOS dos interesses listados
+  // (Quest E Item, sem distinção), derivada 100% de `entries` — que já vem
+  // ordenada cronologicamente (compareByAuctionEnd), já exclui leilões
+  // encerrados (isAuctionStillActive na derivação + relógio de 30s) e já é
+  // recalculada pelos MESMOS eventos do modal (interesses, última consulta,
+  // cotações, overrides). Nenhuma leitura extra no Firebase e nenhum timer
+  // novo. Dedup: horários EXATAMENTE iguais viram UMA entrada, com a
+  // contagem de personagens embutida (×N quando N > 1). A dupla checagem
+  // isAuctionStillActive aqui cobre o intervalo entre ticks do relógio.
+  const UPCOMING_END_TIMES_LIMIT = 6; // exibe até 6 distintos (mínimo exigido: 3)
+  const upcomingEndTimes = useMemo(() => {
+    const byEndTs = new Map<number, number>(); // endTs → nº de personagens
+    for (const entry of entries) {
+      if (entry.endTs === null) continue;
+      if (!isAuctionStillActive({ auctionEndTs: entry.endTs }, nowUnixTs)) continue;
+      byEndTs.set(entry.endTs, (byEndTs.get(entry.endTs) || 0) + 1);
+    }
+    // Map preserva a ordem de inserção e `entries` já está ordenada — a
+    // sequência resultante é cronológica (mais próximo → mais distante).
+    return Array.from(byEndTs.entries()).map(([endTs, count]) => ({ endTs, count }));
+  }, [entries, nowUnixTs]);
+  const visibleEndTimes = upcomingEndTimes.slice(0, UPCOMING_END_TIMES_LIMIT);
+
   // ── FEEDBACK de cópia no lugar do nome (mesmo padrão do painel) ──────────
   const [nameFeedback, setNameFeedback] = useState<{ key: string; ok: boolean; message: string } | null>(null);
   const nameFeedbackTimerRef = useRef<number | null>(null);
@@ -740,6 +764,52 @@ export default function NextBidTracker({ currentUserUid, isBoss = false }: { cur
                 <X size={14} />
               </button>
             </div>
+
+            {/* 112ª — QUADRO "Próximos encerramentos": faixa compacta logo
+                abaixo do cabeçalho, FORA do miolo rolável (flex-shrink-0,
+                como o cabeçalho e a barra de seleção — fica sempre visível e
+                não consome a área de rolagem da lista). Horários DISTINTOS
+                em ordem cronológica (duplicados exibidos UMA vez, com ×N);
+                o PRÓXIMO ganha destaque âmbar (vermelho pulsante quando
+                falta ≤ 5 min — mesmo critério isAuctionEndingSoon dos
+                cards). Some sozinho quando não há horário conhecido. */}
+            {visibleEndTimes.length > 0 && (
+              <div className="flex items-center gap-1.5 flex-wrap px-3 py-1.5 border-b border-[var(--th-line)]/40 bg-black/20 flex-shrink-0">
+                <span className="inline-flex items-center gap-1 text-[9px] font-black uppercase tracking-wide text-slate-400 flex-shrink-0">
+                  <Clock size={10} className="text-amber-400 flex-shrink-0" />
+                  Próximos encerramentos
+                </span>
+                {visibleEndTimes.map((slot, index) => {
+                  const soon = isAuctionEndingSoon({ auctionEndTs: slot.endTs }, nowUnixTs);
+                  const isNext = index === 0;
+                  return (
+                    <span
+                      key={slot.endTs}
+                      className={`inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 font-mono text-[9px] font-black tabular-nums transition-colors ${
+                        isNext
+                          ? soon
+                            ? "border-red-500/50 bg-red-500/15 text-red-300 animate-pulse"
+                            : "border-amber-500/45 bg-amber-500/15 text-amber-200"
+                          : "border-[var(--th-line)]/60 bg-black/25 text-slate-300"
+                      }`}
+                      title={`${slot.count} personagem(ns) com encerramento neste horário${isNext ? " — próximo encerramento" : ""}`}
+                    >
+                      {isNext && <FlagTriangleRight size={9} className={`flex-shrink-0 ${soon ? "text-red-400" : "text-amber-400"}`} />}
+                      {formatAuctionEndShort(slot.endTs, timezoneOffsetMinutes)}
+                      {slot.count > 1 && <span className={isNext ? (soon ? "text-red-400/80" : "text-amber-400/80") : "text-slate-500"}>×{slot.count}</span>}
+                    </span>
+                  );
+                })}
+                {upcomingEndTimes.length > visibleEndTimes.length && (
+                  <span
+                    className="text-[9px] font-bold text-slate-500 flex-shrink-0"
+                    title="Horários distintos além dos exibidos — todos os personagens continuam na lista abaixo."
+                  >
+                    +{upcomingEndTimes.length - visibleEndTimes.length}
+                  </span>
+                )}
+              </div>
+            )}
 
             {/* Miolo rolável (108ª): `app-modal-body` é a fonte única da
                 rolagem interna (flex:1 + min-height:0 + overflow:auto do CSS
