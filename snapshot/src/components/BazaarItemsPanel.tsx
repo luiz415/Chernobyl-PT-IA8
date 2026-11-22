@@ -1898,6 +1898,11 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
         autoRun: false,
         // Releitura pertence à GUIA ITENS — progresso não vaza para quests.
         progressScope: "itens",
+        // "Atualizar Valores" (MESMA exceção das quests): pula SOMENTE a
+        // verificação de jogadores online — bids de personagens já listados
+        // são atualizáveis com qualquer quantidade de players, inclusive
+        // zero. A consulta de itens normal continua respeitando o mínimo.
+        valueRefresh: true,
       }) as ItemsFetchResult;
       if (!response?.ok || response?.cancelled || !Array.isArray(response.auctions)) {
         setError(response?.error || "Não foi possível reler a listagem do Bazaar. Os valores atuais foram mantidos.");

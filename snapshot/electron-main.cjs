@@ -4457,7 +4457,7 @@ async function readRubinotOnlineCountWithGrace(page, maxWaitMs = 5000) {
  * consulta prossegue sozinha, sem qualquer ação manual. O botão "Concluir
  * agora" continua funcionando durante a espera (parada cooperativa).
  */
-async function ensureRubinotServerAvailability(progressSender, context, { autoRun = false, skipOnlineCheck = false } = {}) {
+async function ensureRubinotServerAvailability(progressSender, context, { autoRun = false, skipOnlineCheck = false, skipReason = 'Forçar Consulta' } = {}) {
   const label = 'bazaar-availability';
   const startedAt = Date.now();
   let attempt = 0;
@@ -4482,14 +4482,15 @@ async function ensureRubinotServerAvailability(progressSender, context, { autoRu
     // sem ela a consulta é tecnicamente impossível — e o restante do fluxo
     // (fila, retries, parada manual) permanece idêntico.
     if (session.ok && skipOnlineCheck) {
-      rubinotDiag(label, 'Forçar Consulta: verificação de jogadores online IGNORADA a pedido do Boss (vale só para esta consulta).', {
+      rubinotDiag(label, `${skipReason}: verificação de jogadores online IGNORADA a pedido do Boss (vale só para esta consulta).`, {
         attempt,
         autoRun,
         sessionOk: true,
+        motivo: skipReason,
         minimo: RUBINOT_MIN_ONLINE_PLAYERS,
         elapsedMs: Date.now() - startedAt,
       });
-      return { ok: true, session, onlineCount: null, onlineCheckSkipped: true };
+      return { ok: true, session, onlineCount: null, onlineCheckSkipped: true, onlineCheckSkipReason: skipReason };
     }
 
     let online = { found: false, count: NaN, source: '' };
@@ -4578,7 +4579,7 @@ async function ensureRubinotServerAvailability(progressSender, context, { autoRu
   }
 }
 
-async function fetchRubinotBazaarWithPlaywright(progressSender = null, browserKey = rubinotSelectedBrowser, endUntilTs = 0, cleanProfile = false, autoRun = false, forceQuery = false) {
+async function fetchRubinotBazaarWithPlaywright(progressSender = null, browserKey = rubinotSelectedBrowser, endUntilTs = 0, cleanProfile = false, autoRun = false, forceQuery = false, valueRefresh = false) {
   if (rubinotFetchInFlight) return rubinotFetchInFlight;
 
   rubinotFetchInFlight = (async () => {
@@ -4592,7 +4593,14 @@ async function fetchRubinotBazaarWithPlaywright(progressSender = null, browserKe
       // até liberar, então segue naturalmente para o fluxo atual.
       // "Forçar Consulta": ignora SOMENTE a checagem de jogadores online;
       // a validação de sessão e todo o restante continuam obrigatórios.
-      const readiness = await ensureRubinotServerAvailability(progressSender, context, { autoRun, skipOnlineCheck: forceQuery === true });
+      // "Atualizar Valores" (valueRefresh): MESMA exceção, SEMPRE — a
+      // releitura de bids de personagens JÁ listados não depende da
+      // quantidade de jogadores online (acima, abaixo do mínimo ou zero).
+      // Vale só para esta execução; as consultas normais seguem exigindo o
+      // mínimo e o "Forçar Consulta" continua one-shot como antes.
+      const skipOnlineCheck = forceQuery === true || valueRefresh === true;
+      const skipReason = forceQuery === true ? 'Forçar Consulta' : 'Atualizar Valores';
+      const readiness = await ensureRubinotServerAvailability(progressSender, context, { autoRun, skipOnlineCheck, skipReason });
       if (!readiness.ok) {
         return {
           ok: false,
@@ -4608,7 +4616,7 @@ async function fetchRubinotBazaarWithPlaywright(progressSender = null, browserKe
       }
       const session = readiness.session;
       rubinotDiag('bazaar', 'Servidor disponível: prosseguindo com a consulta normal.', {
-        jogadoresOnline: readiness.onlineCheckSkipped ? 'ignorado (Forçar Consulta)' : readiness.onlineCount,
+        jogadoresOnline: readiness.onlineCheckSkipped ? `ignorado (${readiness.onlineCheckSkipReason || skipReason})` : readiness.onlineCount,
         minimo: RUBINOT_MIN_ONLINE_PLAYERS,
       });
 
@@ -5026,16 +5034,23 @@ ipcMain.handle('rubinot-bazaar-fetch', async (event, payload = {}) => {
   // pula exclusivamente a verificação de jogadores online. Nenhum estado
   // global é alterado — consultas seguintes voltam ao comportamento padrão.
   const forceQuery = payload?.forceQuery === true;
+  // "Atualizar Valores" (quests E itens): releitura de bids de personagens
+  // JÁ listados — pula SEMPRE e EXCLUSIVAMENTE a verificação de jogadores
+  // online (funciona com qualquer quantidade, inclusive zero). Flag válida
+  // só para esta execução; nenhum estado global muda e as consultas normais
+  // (manual, Auto-Bazaar, itens) continuam respeitando a verificação.
+  const valueRefresh = payload?.valueRefresh === true;
   rubinotDiag('context', 'Configuração desta consulta.', {
     modo: rubinotSpeedMode,
     intervaloEntrePersonagensMs: speed().detailsGapMs,
     autoRun,
     forcarConsulta: forceQuery,
+    atualizarValores: valueRefresh,
     retry: rubinotRunRetryPlan.length > 0
       ? rubinotRunRetryPlan.map(step => `${step.browser} ${step.attempt}/${step.attempts}`)
       : '(nenhum)',
   });
-  return runRubinotQueued('bazaar-fetch', () => fetchRubinotBazaarWithPlaywright(event.sender, rubinotSelectedBrowser, endUntilTs, rubinotUseCleanProfile, autoRun, forceQuery));
+  return runRubinotQueued('bazaar-fetch', () => fetchRubinotBazaarWithPlaywright(event.sender, rubinotSelectedBrowser, endUntilTs, rubinotUseCleanProfile, autoRun, forceQuery, valueRefresh));
 });
 
 // --- Rubinot Bazaar: detalhes sob demanda por personagem ---

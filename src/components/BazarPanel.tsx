@@ -2964,6 +2964,12 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
         retryBrowsers: loadUIState<string[]>(BAZAAR_RETRY_BROWSERS_KEY, []),
         retryCounts: normalizeRetryCounts(loadUIState<BazaarRetryCounts | null>(BAZAAR_RETRY_COUNTS_KEY, null)),
         autoRun: false,
+        // "Atualizar Valores": releitura de bids de personagens JÁ listados —
+        // o processo principal pula SOMENTE a verificação de jogadores online
+        // (funciona com qualquer quantidade, inclusive zero). Sessão,
+        // Cloudflare, fila, retries e parada manual seguem obrigatórios, e as
+        // consultas normais continuam exigindo o mínimo de players.
+        valueRefresh: true,
       }) as BazaarFetchResult;
       if (!response?.ok || response?.cancelled || !Array.isArray(response.auctions)) {
         setError(response?.error || "Não foi possível reler a listagem do Bazaar. Os valores atuais foram mantidos.");
