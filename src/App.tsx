@@ -35,6 +35,7 @@ import { appendQuestStatusHistory } from "./utils/questStatusHistory";
 // "RC Servidores", pela Lista de Itens do Bazaar e por todos os cálculos
 // kk ⇄ RC. Substitui a antiga taxa fixa única e as taxas por usuário.
 import { getServerCoinRate, readLocalCoinRates, sanitizeCoinRateHistory, sanitizeCoinRates, writeLocalCoinRateHistory, writeLocalCoinRates } from "./utils/bazaarCoinRates";
+import { sanitizeExpectedProfitValues, writeLocalExpectedProfitValues } from "./utils/expectedProfit";
 import { applySanguineOutcomeToOwnServices, fetchAllSharedServicesAsWaiting, isServiceProbablyDone, readAllSharedServicesCache, readServiceRequestsCache, readSharedServicesCache, replaceOwnerSharedServicesInWaitingCache } from "./services/sharedServicesService";
 import { backfillServiceQueueEntries, buildServiceQueueKey, freeServiceQueueEntry, registerServiceQueueEntry } from "./services/serviceQueueIndexService";
 import NotesPanel from "./components/NotesPanel";
@@ -46,8 +47,10 @@ import VipAccessButton from "./components/VipAccessButton";
 // Próximo Bid (105ª) — badge + modal do rodapé; import DIRETO (não lazy):
 // componente pequeno que só lê espelhos locais, sem puxar o BazarPanel.
 import NextBidTracker from "./components/NextBidTracker";
+// Lucro Esperado (115ª) — modal leve: espelhos locais + eventos, sem lazy.
+import ExpectedProfitModal from "./components/ExpectedProfitModal";
 import HubHelpTooltip from "./components/HubHelpTooltip";
-import { Shield, HelpCircle, Tv, GraduationCap } from "lucide-react";
+import { Shield, HelpCircle, Tv, GraduationCap, TrendingUp } from "lucide-react";
 import { useTutorial } from "./tutorial/TutorialContext";
 import { registerTourCommands } from "./tutorial/commands";
 import { isDemoId } from "./tutorial/demo";
@@ -572,6 +575,8 @@ export default function App() {
   const [rtcImportOpen, setRtcImportOpen] = useState(false);
   // Modal "RC Servidores" (cotação GLOBAL do RC por servidor — só Boss).
   const [serverRatesOpen, setServerRatesOpen] = useState(false);
+  // 115ª — modal "Lucro Esperado" (consulta aberta a todos os usuários).
+  const [expectedProfitOpen, setExpectedProfitOpen] = useState(false);
   // Contador de cliques no botão "Câmbio". Só marcar `calcOpen` como `true`
   // não basta: se a janela já está aberta o valor não muda, nenhum efeito
   // roda e o clique se perde. Este contador é o sinal de "trazer para frente".
@@ -650,6 +655,12 @@ export default function App() {
       // ANTES das taxas, para o evento já encontrar os dois atualizados.
       writeLocalCoinRateHistory(sanitizeCoinRateHistory(data.serverCoinRateHistory));
       writeLocalCoinRates(sanitizeCoinRates(data.serverCoinRates));
+      // LUCRO ESPERADO (115ª): o cadastro "Valores Considerados" viaja no
+      // MESMO documento (expectedProfitItemValues) — espelhado aqui para
+      // TODOS os usuários receberem as edições do Boss em tempo real, sem
+      // nenhum listener/leitura adicional (o evento sincroniza modais
+      // abertos, como nas cotações).
+      writeLocalExpectedProfitValues(sanitizeExpectedProfitValues(data.expectedProfitItemValues));
       // Aplica imediatamente o status de pausa e as configurações remotas do logger local
       setLoggerPaused(newSettings.firestoreLoggerPaused);
       setLoggerRemoteConfig({
@@ -6151,6 +6162,13 @@ export default function App() {
           <button onClick={handleOpenCalc} className="inline-flex items-center gap-0.5 sm:gap-1 rounded-md border border-[var(--th-line)]/80 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20 hover:border-amber-600/50 hover:text-amber-200 transition-all duration-200 cursor-pointer" title="Câmbio" style={{ padding: "clamp(2.7px, 0.54vh, 5.4px) clamp(5.4px, 0.9vw, 9px)", fontSize: "clamp(8.1px, 1.35vh, 9.9px)" }}>
             <Calculator size={11} className="sm:w-[13px] sm:h-[13px]" /> <span className="hidden sm:inline">Câmbio</span>
           </button>
+          {/* 115ª — Lucro Esperado (SW/SG/GB + Itens Crypt): consulta aberta
+              a TODOS os usuários; a edição dos "Valores Considerados" dentro
+              do modal é exclusiva do Boss (backend revalida nas Rules de
+              appSettings). */}
+          <button onClick={() => setExpectedProfitOpen(true)} className="inline-flex items-center gap-0.5 sm:gap-1 rounded-md border border-[var(--th-line)]/80 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20 hover:border-emerald-600/50 hover:text-emerald-200 transition-all duration-200 cursor-pointer" title="Lucro Esperado — retorno das quests SW/SG/GB e Itens Crypt por servidor, em RC" style={{ padding: "clamp(2.7px, 0.54vh, 5.4px) clamp(5.4px, 0.9vw, 9px)", fontSize: "clamp(8.1px, 1.35vh, 9.9px)" }}>
+            <TrendingUp size={11} className="sm:w-[13px] sm:h-[13px]" /> <span className="hidden sm:inline">Lucro Esperado</span>
+          </button>
           {/* RC Servidores — cotação GLOBAL do RC por servidor (fonte única
               compartilhada com a Lista de Itens do Bazaar). SOMENTE Boss:
               a UI esconde o botão e as Security Rules de appSettings
@@ -6625,6 +6643,11 @@ export default function App() {
       {/* RC Servidores — cotação GLOBAL do RC por servidor (só Boss). */}
       {isBossUser && serverRatesOpen && (
         <ServerCoinRatesModal onClose={() => setServerRatesOpen(false)} />
+      )}
+      {/* 115ª — Lucro Esperado: todos consultam; edição dos "Valores
+          Considerados" dentro do modal só para Boss (Rules revalidam). */}
+      {expectedProfitOpen && (
+        <ExpectedProfitModal isBoss={userProfile?.role === "Boss"} onClose={() => setExpectedProfitOpen(false)} />
       )}
       <ImbuementsModal open={imbueOpen} onClose={() => setImbueOpen(false)} />
       <RtcImportModal open={rtcImportOpen} onClose={() => setRtcImportOpen(false)} />
