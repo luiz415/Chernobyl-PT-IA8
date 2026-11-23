@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { X, Coins, Percent, RotateCcw, Check, Minus, Plus } from "lucide-react";
+import { X, Coins, Percent, RotateCcw, Check, Minus, Plus, Globe, RefreshCw } from "lucide-react";
 import type { ItemSaleRecord } from "../types";
 import { formatRC } from "../types";
-import { getServerCoinRate, readLocalCoinRates } from "../utils/bazaarCoinRates";
+import { SERVER_COIN_RATES_EVENT, getServerCoinRate, readLocalCoinRates, saveOfficialServerCoinRate } from "../utils/bazaarCoinRates";
+import { useAuth } from "../context/AuthContext";
 import {
   OFFER_TAX_CAP_KK,
   OFFER_TAX_PERCENT,
@@ -61,6 +62,34 @@ interface Props {
 }
 
 export default function ItemSoldModal({ itemName, contextLabel, initial, allowNoValue = true, server, onCancel, onSave }: Props) {
+  // ── 113ª — ATUALIZAÇÃO DO RC OFICIAL DO SERVIDOR (EXCLUSIVA DO BOSS) ──────
+  // O cargo vem do MESMO AuthContext que o app inteiro já mantém (nenhuma
+  // leitura nova no Firebase). Quando o Boss digita no campo "RC no Market"
+  // um valor DIFERENTE da cotação oficial cadastrada para o servidor do
+  // item, aparece a opção de confirmar a atualização — que usa o MESMO
+  // fluxo único do quadro "RC Servidores"/modais "Ver" (69ª/70ª):
+  // saveOfficialServerCoinRate → persistCoinRates → appSettings/global
+  // .serverCoinRates + histórico + espelho local + evento (as Security
+  // Rules revalidam o cargo no backend). Para quem não é Boss NADA muda —
+  // o campo continua valendo só para ESTA venda, como sempre. Vendas já
+  // registradas carregam o próprio rateKk no registro e NUNCA são
+  // retocadas por uma mudança de cotação.
+  const { userProfile } = useAuth();
+  const canUpdateOfficialRate = userProfile?.role === "Boss" && !!String(server || "").trim();
+  const [officialRate, setOfficialRate] = useState(() => getServerCoinRate(readLocalCoinRates(), server));
+  useEffect(() => {
+    const refresh = () => setOfficialRate(getServerCoinRate(readLocalCoinRates(), server));
+    refresh();
+    // Mesmo evento do quadro "RC Servidores": alterações feitas em QUALQUER
+    // modal (inclusive a confirmação abaixo) refletem aqui na hora.
+    window.addEventListener(SERVER_COIN_RATES_EVENT, refresh);
+    return () => window.removeEventListener(SERVER_COIN_RATES_EVENT, refresh);
+  }, [server]);
+  const [rateSaving, setRateSaving] = useState(false);
+  const [rateFeedback, setRateFeedback] = useState<{ ok: boolean; message: string } | null>(null);
+  const rateTimerRef = useRef<number | null>(null);
+  useEffect(() => () => { if (rateTimerRef.current !== null) window.clearTimeout(rateTimerRef.current); }, []);
+
   // ── Estado dos campos (strings de digitação, pt-BR) ───────────────────────
   const [vendaRaw, setVendaRaw] = useState(() => initial && initial.vendaKk > 0 ? formatRateKkDisplay(initial.vendaKk) : "");
   // "RC no Market": o registro em edição tem precedência; sem registro, o
@@ -90,6 +119,29 @@ export default function ItemSoldModal({ itemName, contextLabel, initial, allowNo
   // `parseRateKk` aceita vírgula pt-BR; venda também tolera decimais.
   const vendaKk = parseRateKk(vendaRaw);
   const rateKk = parseRateKk(rateRaw);
+
+  // 113ª — oferta de atualização: Boss + servidor conhecido + valor válido
+  // digitado DIFERENTE da cotação oficial vigente (mesmo epsilon da
+  // idempotência do fluxo oficial; cobre também servidor ainda SEM cotação).
+  const officialRateDiffers = canUpdateOfficialRate && !noValue && rateKk > 0 && Math.abs(rateKk - officialRate) >= 0.0001;
+  async function confirmOfficialRateUpdate() {
+    if (!canUpdateOfficialRate || rateSaving) return;
+    setRateSaving(true);
+    try {
+      // MESMO fluxo único do quadro "RC Servidores"/modais "Ver": validação
+      // oficial (número > 0, 1 casa), "Já atualizado" sem gravar, altera SÓ
+      // a chave DESTE servidor e preserva as demais; nunca lança.
+      const result = await saveOfficialServerCoinRate(String(server || ""), rateRaw);
+      setRateFeedback({ ok: result.ok, message: result.message });
+      if (rateTimerRef.current !== null) window.clearTimeout(rateTimerRef.current);
+      rateTimerRef.current = window.setTimeout(() => { setRateFeedback(null); rateTimerRef.current = null; }, result.ok ? 2500 : 4000);
+      // Espelho local já disparou o SERVER_COIN_RATES_EVENT; o refresh aqui
+      // é só cinto de segurança para ambientes sem o evento.
+      setOfficialRate(getServerCoinRate(readLocalCoinRates(), server));
+    } finally {
+      setRateSaving(false);
+    }
+  }
 
   const readyForTax = vendaKk > 0 && rateKk > 0;
   const preview = useMemo(() => {
@@ -175,6 +227,40 @@ export default function ItemSoldModal({ itemName, contextLabel, initial, allowNo
               </div>
             </label>
           </div>
+
+          {/* 113ª — ATUALIZAR RC OFICIAL DO SERVIDOR (SÓ Boss): aparece
+              quando o valor digitado difere da cotação oficial vigente do
+              servidor do item. Confirmar grava pelo MESMO mecanismo do
+              quadro "RC Servidores" (appSettings/global.serverCoinRates +
+              histórico + espelho/evento); a venda em si continua usando o
+              valor do campo, e vendas já registradas não mudam. */}
+          {canUpdateOfficialRate && (officialRateDiffers || rateFeedback) && (
+            <div className="rounded-xl border border-red-500/25 bg-red-500/[0.05] px-3 py-2">
+              {rateFeedback ? (
+                <span className={`block text-[10px] font-bold leading-snug ${rateFeedback.ok ? "text-emerald-300" : "text-red-300"}`}>
+                  {rateFeedback.message}
+                </span>
+              ) : (
+                <div className="flex items-center justify-between gap-2">
+                  <span className="min-w-0 flex-1 text-[9px] leading-snug text-red-200/80">
+                    <span className="font-bold text-red-200">RC de {String(server || "").trim()}</span>: cadastrado{" "}
+                    <span className="font-bold tabular-nums">{officialRate > 0 ? `${formatRateKkDisplay(officialRate)}k` : "—"}</span>
+                    {" "}→ informado <span className="font-bold tabular-nums text-red-100">{formatRateKkDisplay(rateKk)}k</span>
+                  </span>
+                  <button
+                    type="button"
+                    disabled={rateSaving}
+                    onClick={() => { void confirmOfficialRateUpdate(); }}
+                    title={`Atualiza a cotação OFICIAL do RC exclusivamente para ${String(server || "").trim()} — mesma gravação do quadro "RC Servidores" do Painel Bazaar (compartilhada com todos os usuários). Vendas já registradas não são alteradas.`}
+                    className="inline-flex h-6 items-center gap-1 flex-shrink-0 rounded-lg border border-red-500/40 bg-red-500/15 px-2 text-[9px] font-black text-red-200 hover:bg-red-500/25 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    {rateSaving ? <RefreshCw size={10} className="animate-spin" /> : <Globe size={10} />}
+                    Atualizar servidor
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
 
           {/* "Não informar valor" — confirma a venda SEM preço: o item é
               encerrado (sai de "À Venda") com os campos financeiros zerados
