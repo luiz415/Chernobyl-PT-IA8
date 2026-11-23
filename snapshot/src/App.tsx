@@ -6168,16 +6168,16 @@ export default function App() {
           <button onClick={() => setImbueOpen(true)} className="inline-flex items-center gap-0.5 sm:gap-1 rounded-md border border-[var(--th-line)]/80 bg-violet-500/10 text-violet-300 hover:bg-violet-500/20 hover:border-violet-500/50 hover:text-violet-200 transition-all duration-200 cursor-pointer" title="Guia de Imbuements" style={{ padding: "clamp(2.7px, 0.54vh, 5.4px) clamp(5.4px, 0.9vw, 9px)", fontSize: "clamp(8.1px, 1.35vh, 9.9px)" }}>
             <Sparkles size={11} className="sm:w-[13px] sm:h-[13px]" /> <span className="hidden sm:inline">Imbue</span>
           </button>
-          {/* Calc Win depende de IPC do Electron: não é renderizado na Web. */}
-          {isElectron && (
-            <button onClick={() => {
-              try { const { ipcRenderer } = (window as any).require("electron"); ipcRenderer.invoke("open-windows-calc"); } catch { customAlert("Erro ao abrir calculadora."); }
-            }} className="inline-flex items-center gap-0.5 sm:gap-1 rounded-md border border-[var(--th-line)]/80 bg-[var(--th-bg-base)] text-amber-200/70 hover:bg-[var(--th-bg-raised)] hover:border-[var(--th-brand)]/60 hover:text-amber-200 transition-all duration-200 cursor-pointer" title="Calc Win" style={{ padding: "clamp(2.7px, 0.54vh, 5.4px) clamp(5.4px, 0.9vw, 9px)", fontSize: "clamp(8.1px, 1.35vh, 9.9px)" }}>
-              <AppWindow size={11} className="sm:w-[13px] sm:h-[13px] text-amber-600/80" /> <span className="hidden sm:inline">Calc Win</span>
-            </button>
-          )}
-          <AutoSaveButton status={autoSaveStatus} fileName={autoSaveName} onClick={handleAutoSaveClick} />
+          {/* 114ª — "Calc Win" e "AUTO-SAVE" moveram para DENTRO do menu
+              "Opções" (itens de menu com as MESMAS ações/estados/títulos de
+              sempre — os botões soltos saíram do cabeçalho para evitar
+              duplicidade). Calc Win continua dependendo de IPC do Electron:
+              na Web o item nem é renderizado (onOpenCalcWin ausente). */}
           <OptionsMenu
+            onOpenCalcWin={isElectron ? () => {
+              try { const { ipcRenderer } = (window as any).require("electron"); ipcRenderer.invoke("open-windows-calc"); } catch { customAlert("Erro ao abrir calculadora."); }
+            } : undefined}
+            autoSave={{ status: autoSaveStatus, fileName: autoSaveName, onClick: handleAutoSaveClick }}
             onImport={handleImport}
             onExport={() => exportJSON(buildPersonalBackup(data.characters, data.notes, [], displayUserName))}
             onExportCSV={() => exportCSV(data, (c) => {
@@ -6811,25 +6811,20 @@ function TabButton({ active, icon, label, count, countLabel, onClick, variant, p
   );
 }
 
-function AutoSaveButton({ status, fileName, onClick }: { status: AutoSaveStatus; fileName: string; onClick: () => void }) {
-  const config = {
-    unconfigured: { icon: <Save size={11} />, className: "bg-[var(--th-bg-base)] border-[var(--th-line)]/80 text-amber-200/60 hover:bg-[var(--th-bg-raised)] hover:border-[var(--th-brand)]/60 hover:text-amber-200", title: "Configurar Auto-Save" },
-    waiting: { icon: <Save size={11} />, className: "bg-sky-500/10 border-sky-500/30 text-sky-400 hover:bg-sky-500/20 hover:border-sky-500/50", title: "Retomar Auto-Save" },
-    saved: { icon: <CheckCircle2 size={11} />, className: "bg-emerald-500/10 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/20 hover:border-emerald-500/50", title: fileName ? `Auto-Save: ${fileName}` : "Auto-Save ativo" },
-    error: { icon: <AlertTriangle size={11} />, className: "bg-rose-500/10 border-rose-500/30 text-rose-400 hover:bg-rose-500/20 hover:border-rose-500/50", title: "Erro. Clique para reconfigurar." },
-  }[status];
-  return (
-    <button onClick={onClick} className={`inline-flex items-center gap-0.5 sm:gap-1 rounded-md border transition-all cursor-pointer ${config.className}`} title={config.title} style={{ padding: "clamp(2.7px, 0.54vh, 5.4px) clamp(5.4px, 0.9vw, 9px)", fontSize: "clamp(8.1px, 1.35vh, 9.9px)" }}>
-      {config.icon} <span className="hidden sm:inline">AUTO-SAVE</span>
-    </button>
-  );
-}
-
 /**
- * Menu "Opções" — agrupa Importar / Exportar / CSV em um único botão.
+ * Menu "Opções" — agrupa Importar / Exportar / CSV / Calc Win / AUTO-SAVE
+ * em um único botão.
  *
- * Apenas apresentação: as três ações continuam sendo exatamente as mesmas
+ * Apenas apresentação: as ações continuam sendo exatamente as mesmas
  * (inclusive o <input type="file"> do Importar, preservado como <label>).
+ * 114ª — "Calc Win" e "AUTO-SAVE" deixaram de ser botões soltos no
+ * cabeçalho e viraram itens deste menu, com as MESMAS ações, estados,
+ * ícones e títulos de antes (o antigo componente AutoSaveButton foi
+ * absorvido aqui — cores por status preservadas no item):
+ *   • Calc Win só existe no Electron (IPC) — na Web o item não é
+ *     renderizado (prop onOpenCalcWin ausente), como o botão original;
+ *   • AUTO-SAVE mantém o ciclo configurar/retomar/ativo/erro — o item
+ *     reflete o status pela MESMA tabela de ícones/títulos usada antes.
  *
  * O menu é posicionado de forma absoluta DENTRO do header em vez de usar
  * portal: o header aplica `zoom`, e um portal em document.body ficaria
@@ -6840,10 +6835,16 @@ function OptionsMenu({
   onImport,
   onExport,
   onExportCSV,
+  onOpenCalcWin,
+  autoSave,
 }: {
   onImport: (f: File) => void;
   onExport: () => void;
   onExportCSV: () => void;
+  /** Presente somente no Electron — ausente, o item "Calc Win" não existe. */
+  onOpenCalcWin?: () => void;
+  /** Estado/ação do AUTO-SAVE (mesma lógica do App — o menu só apresenta). */
+  autoSave: { status: AutoSaveStatus; fileName: string; onClick: () => void };
 }) {
   const [open, setOpen] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -6869,6 +6870,17 @@ function OptionsMenu({
   const itemClass =
     "w-full flex items-center gap-2 px-2.5 py-1.5 text-left rounded-md text-amber-200/80 hover:bg-amber-500/15 hover:text-amber-100 transition-colors cursor-pointer";
 
+  // 114ª — AUTO-SAVE como item do menu: MESMOS ícones/títulos por status do
+  // antigo botão (AutoSaveButton), com as cores adaptadas ao formato de item
+  // (texto/hover em vez de borda/fundo de botão) para o status continuar
+  // visível no menu: cinza=configurar, azul=retomar, verde=ativo, rosa=erro.
+  const autoSaveItem = {
+    unconfigured: { icon: <Save size={11} />, className: "text-amber-200/60 hover:bg-amber-500/15 hover:text-amber-100", title: "Configurar Auto-Save" },
+    waiting: { icon: <Save size={11} />, className: "text-sky-400 hover:bg-sky-500/15 hover:text-sky-300", title: "Retomar Auto-Save" },
+    saved: { icon: <CheckCircle2 size={11} />, className: "text-emerald-400 hover:bg-emerald-500/15 hover:text-emerald-300", title: autoSave.fileName ? `Auto-Save: ${autoSave.fileName}` : "Auto-Save ativo" },
+    error: { icon: <AlertTriangle size={11} />, className: "text-rose-400 hover:bg-rose-500/15 hover:text-rose-300", title: "Erro. Clique para reconfigurar." },
+  }[autoSave.status];
+
   return (
     <div ref={wrapRef} className="relative inline-flex">
       <button
@@ -6881,7 +6893,7 @@ function OptionsMenu({
             ? "border-amber-600/60 bg-amber-500/15 text-amber-200"
             : "border-[var(--th-line)]/80 bg-[var(--th-bg-base)] text-amber-200/70 hover:bg-[var(--th-bg-raised)] hover:border-[var(--th-brand)]/60 hover:text-amber-200"
         }`}
-        title="Opções — Importar, Exportar e CSV"
+        title={`Opções — Importar, Exportar, CSV${onOpenCalcWin ? ", Calc Win" : ""} e AUTO-SAVE`}
         style={{ padding: "clamp(2.7px, 0.54vh, 5.4px) clamp(5.4px, 0.9vw, 9px)", fontSize: "clamp(8.1px, 1.35vh, 9.9px)" }}
       >
         <SlidersHorizontal size={11} className="sm:w-[13px] sm:h-[13px] text-amber-600/80" />
@@ -6933,6 +6945,35 @@ function OptionsMenu({
           >
             <FileSpreadsheet size={11} className="text-amber-600/80 flex-shrink-0" />
             <span>CSV</span>
+          </button>
+
+          {/* 114ª — Calc Win (SÓ Electron): mesma ação IPC do antigo botão
+              do cabeçalho; na Web a prop vem ausente e o item não existe. */}
+          {onOpenCalcWin && (
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => { setOpen(false); onOpenCalcWin(); }}
+              className={itemClass}
+              title="Calc Win"
+            >
+              <AppWindow size={11} className="text-amber-600/80 flex-shrink-0" />
+              <span>Calc Win</span>
+            </button>
+          )}
+
+          {/* 114ª — AUTO-SAVE: mesma tabela de status (ícone/título/cor) do
+              antigo botão AutoSaveButton, agora como item do menu — a ação
+              continua a MESMA (configurar/retomar/estado atual). */}
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => { setOpen(false); autoSave.onClick(); }}
+            className={`w-full flex items-center gap-2 px-2.5 py-1.5 text-left rounded-md transition-colors cursor-pointer ${autoSaveItem.className}`}
+            title={autoSaveItem.title}
+          >
+            <span className="flex-shrink-0">{autoSaveItem.icon}</span>
+            <span>AUTO-SAVE</span>
           </button>
         </div>
       )}
