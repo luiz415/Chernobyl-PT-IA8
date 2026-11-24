@@ -5,6 +5,8 @@ import { SERVER_OPTIONS } from "../constants/servers";
 import { formatRC } from "../types";
 import { SERVER_COIN_RATES_EVENT, coinRateText, getServerCoinRate, readLocalCoinRates } from "../utils/bazaarCoinRates";
 import { computeItemRC, formatRateKkDisplay, parseRateKk, sanitizeRateKkInput } from "../utils/itemSale";
+import { applyOfficialWatchedItemUpdate, formatWatchedUpdatedAt } from "../utils/bazaarWatchedItems";
+import { readBazarPanelTimezoneOffsetMinutes } from "../utils/bazaarTime";
 import {
   CRYPT_ITEMS,
   CRYPT_RUNES_REQUIRED,
@@ -17,12 +19,12 @@ import {
   expectedHoursPerReward,
   expectedItemKey,
   getExpectedItemEntry,
-  persistExpectedProfitValues,
+  persistExpectedProfitEntryPatches,
   readLocalExpectedProfitValues,
   type ExpectedItemValueEntry,
+  type ExpectedProfitEntryPatch,
   type ExpectedProfitValues,
 } from "../utils/expectedProfit";
-import { serverKey } from "../constants/servers";
 
 /**
  * MODAL "LUCRO ESPERADO" (115ª) — análise do retorno esperado das quests
@@ -42,6 +44,14 @@ import { serverKey } from "../constants/servers";
  *     oportunidade das runas; sem dupla contagem).
  *   • PREMISSA sinalizada: recompensas equiprováveis (sem confirmação
  *     oficial das taxas individuais); médias só sobre itens CONFIGURADOS.
+ *   • 116ª: cada item exibe a ÚLTIMA ATUALIZAÇÃO do valor (epoch no banco,
+ *     fuso do usuário na exibição; sem valor = "Não atualizado") e a Venda
+ *     Direta é SINCRONIZADA bidirecionalmente com o valor BASE da Lista de
+ *     Itens do Painel Bazaar (salvar aqui atualiza a lista local via
+ *     applyOfficialWatchedItemUpdate; salvar lá espelha para cá pelo funil
+ *     saveWatchedItemsByServer — sempre por diferença, sem loops). A Venda
+ *     Paciente e as personalizações por usuário/personagem nunca são
+ *     tocadas pela sincronização.
  */
 interface Props {
   isBoss: boolean;
@@ -123,23 +133,55 @@ export default function ExpectedProfitModal({ isBoss, onClose }: Props) {
     if (!isBoss || saving) return;
     setSaving(true);
     try {
-      // Mescla: substitui SOMENTE os itens do grupo em edição NESTE servidor
-      // (demais servidores/grupos preservados); campo vazio REMOVE o valor.
-      const sKey = serverKey(server);
-      const nextServer = { ...(values[sKey] || {}) };
+      // 116ª — salvamento GRANULAR: um patch por item que MUDOU de fato
+      // (campo vazio REMOVE o cadastro; demais itens/servidores intactos —
+      // edições simultâneas de outros Boss nunca são sobrescritas) e `u`
+      // (última atualização) carimbado SÓ nos itens alterados.
+      const now = Date.now();
+      const patches: ExpectedProfitEntryPatch[] = [];
+      const directChanges: { itemName: string; valueKk: number }[] = [];
       for (const item of group.items) {
         const iKey = expectedItemKey(item);
+        const existing = getExpectedItemEntry(values, server, item);
         const d = parseRateKk(draft[iKey]?.d || "");
         const p = parseRateKk(draft[iKey]?.p || "");
-        const entry: ExpectedItemValueEntry = {};
-        if (d > 0) entry.d = d;
-        if (p > 0) entry.p = p;
-        if (entry.d !== undefined || entry.p !== undefined) nextServer[iKey] = entry;
-        else delete nextServer[iKey];
+        const nextD = d > 0 ? d : undefined;
+        const nextP = p > 0 ? p : undefined;
+        if (nextD === existing.d && nextP === existing.p) continue; // sem mudança — data preservada
+        if (nextD === undefined && nextP === undefined) {
+          patches.push({ server, itemName: item, entry: null });
+        } else {
+          const entry: ExpectedItemValueEntry = { u: now };
+          if (nextD !== undefined) entry.d = nextD;
+          if (nextP !== undefined) entry.p = nextP;
+          patches.push({ server, itemName: item, entry });
+        }
+        if (nextD !== undefined && nextD !== existing.d) directChanges.push({ itemName: item, valueKk: nextD });
       }
-      const next: ExpectedProfitValues = { ...values, [sKey]: nextServer };
-      if (Object.keys(nextServer).length === 0) delete next[sKey];
-      const { remoteOk } = await persistExpectedProfitValues(next);
+      if (patches.length === 0) {
+        setFeedback({ ok: true, message: "Nenhuma alteração para salvar." });
+        if (feedbackTimerRef.current !== null) window.clearTimeout(feedbackTimerRef.current);
+        feedbackTimerRef.current = window.setTimeout(() => { setFeedback(null); feedbackTimerRef.current = null; }, 2500);
+        return;
+      }
+      const { remoteOk } = await persistExpectedProfitEntryPatches(patches);
+      // 116ª — Lucro Esperado → Painel Bazaar: cada Venda Direta ALTERADA
+      // vira o valor BASE do item na Lista de Itens DESTE servidor, pelo
+      // MESMO mecanismo oficial do "Atualizar Valores" (reprice da última
+      // consulta + evento para a guia aberta; idempotente), com o MESMO
+      // carimbo `now` — registro de atualização idêntico nas duas
+      // interfaces. Como o espelho local já confere, a gravação da lista
+      // NÃO regrava o cadastro compartilhado (guarda anti-loop).
+      for (const change of directChanges) {
+        applyOfficialWatchedItemUpdate({
+          scope: "server",
+          server,
+          itemName: change.itemName,
+          valueKk: change.valueKk,
+          serverUniverse: SERVER_OPTIONS,
+          atMs: now,
+        });
+      }
       setFeedback(remoteOk
         ? { ok: true, message: `Valores de ${group.label} salvos para ${server}.` }
         : { ok: false, message: "Falha ao sincronizar — valores aplicados neste dispositivo e reenviados na próxima gravação." });
@@ -151,6 +193,9 @@ export default function ExpectedProfitModal({ isBoss, onClose }: Props) {
   }
 
   const rcText = (value: number | null): string => value === null ? "—" : formatRC(Math.round(value));
+  // 116ª — fuso de exibição: o MESMO configurado no Painel Bazaar (fallback:
+  // fuso do dispositivo do usuário). O armazenamento é sempre epoch (ms).
+  const tzOffsetMinutes = readBazarPanelTimezoneOffsetMinutes();
   const inputCls = "w-20 bg-black/40 border rounded-md px-1.5 py-0.5 text-[10px] text-right tabular-nums outline-none transition-colors placeholder-slate-600";
 
   // ── Blocos de categoria (Venda Direta × Venda Paciente) ──────────────────
@@ -346,6 +391,7 @@ export default function ExpectedProfitModal({ isBoss, onClose }: Props) {
               </div>
               <div className="text-[8.5px] leading-snug text-slate-500">
                 Valores em kk por item em <span className="font-bold text-slate-300">{server}</span> — <span className="text-sky-300 font-bold">Venda Direta</span> = mínimo alcançável (maior oferta de compra); <span className="text-violet-300 font-bold">Venda Paciente</span> = média esperada sem pressa. Campo vazio = não configurado (fica fora das médias).
+                <span className="block mt-0.5">A <span className="text-sky-300 font-bold">Venda Direta</span> é o MESMO valor <span className="font-bold text-slate-300">Base</span> da Lista de Itens do Painel Bazaar (guia Personagens Com Itens): alterar e salvar em qualquer um dos dois atualiza o outro em tempo real, no servidor correspondente. A <span className="text-violet-300 font-bold">Venda Paciente</span> nunca é alterada pela sincronização.</span>
                 {!isBoss && <span className="block text-amber-400/80 font-bold mt-0.5">Somente usuários Boss podem editar e salvar estes valores.</span>}
               </div>
               <div className="rounded-xl border border-[var(--th-line)]/60 bg-black/20 p-2 space-y-0.5">
@@ -355,9 +401,17 @@ export default function ExpectedProfitModal({ isBoss, onClose }: Props) {
                   const p = draft[iKey]?.p ?? "";
                   const dRc = coinRate > 0 ? computeItemRC(coinRate, parseRateKk(d)) : 0;
                   const pRc = coinRate > 0 ? computeItemRC(coinRate, parseRateKk(p)) : 0;
+                  // 116ª — última atualização do VALOR deste item neste
+                  // servidor (epoch no banco; exibição no fuso do usuário).
+                  const updatedAtMs = getExpectedItemEntry(values, server, item).u;
                   return (
                     <div key={item} className="flex items-center gap-1.5 py-0.5">
-                      <span className="flex-1 min-w-0 text-[9.5px] font-bold text-slate-200 truncate" title={item}>{item}</span>
+                      <span className="flex-1 min-w-0">
+                        <span className="block text-[9.5px] font-bold text-slate-200 truncate leading-tight" title={item}>{item}</span>
+                        <span className={`block text-[8px] leading-tight truncate ${updatedAtMs ? "text-slate-500" : "text-slate-600 italic"}`} title="Última atualização do valor deste item neste servidor">
+                          {updatedAtMs ? `Atualizado ${formatWatchedUpdatedAt(updatedAtMs, tzOffsetMinutes)}` : "Não atualizado"}
+                        </span>
+                      </span>
                       {isBoss ? (
                         <>
                           <input type="text" inputMode="decimal" value={d} placeholder="—" aria-label={`Venda Direta de ${item} (kk)`}

@@ -96,6 +96,7 @@ import {
   repriceQueryResultsForServerItem,
   saveItemsLastQuery,
   saveWatchedItemsByServer,
+  formatWatchedUpdatedAt,
   type BazaarItemsCharacterResult,
   type ItemsInterestRecord,
   type BazaarItemsLastQuery,
@@ -4413,16 +4414,6 @@ function parseDecimalKk(raw: string): number | null {
   return Number.isFinite(value) && value > 0 ? value : null;
 }
 
-/** "dd/MM às HH:mm" da última atualização do item, no fuso configurado. */
-function formatItemUpdatedAt(ms: number, offsetMinutes: number): string {
-  try {
-    const shifted = new Date(ms + offsetMinutes * 60 * 1000);
-    const day = String(shifted.getUTCDate()).padStart(2, "0");
-    const month = String(shifted.getUTCMonth() + 1).padStart(2, "0");
-    const hour = String(shifted.getUTCHours()).padStart(2, "0");
-    const minute = String(shifted.getUTCMinutes()).padStart(2, "0");
-    return `${day}/${month} às ${hour}:${minute}`;
-  } catch {
-    return "—";
-  }
-}
+/** "dd/MM às HH:mm" da última atualização do item, no fuso configurado —
+ * formato ÚNICO compartilhado com o modal Lucro Esperado (116ª). */
+const formatItemUpdatedAt = formatWatchedUpdatedAt;

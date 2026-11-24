@@ -36,6 +36,7 @@ import { appendQuestStatusHistory } from "./utils/questStatusHistory";
 // kk ⇄ RC. Substitui a antiga taxa fixa única e as taxas por usuário.
 import { getServerCoinRate, readLocalCoinRates, sanitizeCoinRateHistory, sanitizeCoinRates, writeLocalCoinRateHistory, writeLocalCoinRates } from "./utils/bazaarCoinRates";
 import { sanitizeExpectedProfitValues, writeLocalExpectedProfitValues } from "./utils/expectedProfit";
+import { reconcileExpectedProfitIntoWatchedLists } from "./utils/bazaarWatchedItems";
 import { applySanguineOutcomeToOwnServices, fetchAllSharedServicesAsWaiting, isServiceProbablyDone, readAllSharedServicesCache, readServiceRequestsCache, readSharedServicesCache, replaceOwnerSharedServicesInWaitingCache } from "./services/sharedServicesService";
 import { backfillServiceQueueEntries, buildServiceQueueKey, freeServiceQueueEntry, registerServiceQueueEntry } from "./services/serviceQueueIndexService";
 import NotesPanel from "./components/NotesPanel";
@@ -660,7 +661,15 @@ export default function App() {
       // TODOS os usuários receberem as edições do Boss em tempo real, sem
       // nenhum listener/leitura adicional (o evento sincroniza modais
       // abertos, como nas cotações).
-      writeLocalExpectedProfitValues(sanitizeExpectedProfitValues(data.expectedProfitItemValues));
+      const expectedProfitValues = sanitizeExpectedProfitValues(data.expectedProfitItemValues);
+      writeLocalExpectedProfitValues(expectedProfitValues);
+      // 116ª — Venda Direta ⇄ valor Base: aplica os valores do cadastro
+      // compartilhado sobre a Lista de Itens LOCAL (somente itens do
+      // catálogo JÁ presentes na lista, com carimbo remoto mais recente —
+      // LWW; nunca cria/remove itens). Em máquinas sem lista (usuários
+      // comuns) é um no-op; a guarda anti-loop impede regravação remota
+      // (o espelho acima já confere). Ordem importa: espelho ANTES.
+      try { reconcileExpectedProfitIntoWatchedLists(expectedProfitValues); } catch { /* lista local indisponível — espelho já aplicado */ }
       // Aplica imediatamente o status de pausa e as configurações remotas do logger local
       setLoggerPaused(newSettings.firestoreLoggerPaused);
       setLoggerRemoteConfig({

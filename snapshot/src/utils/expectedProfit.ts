@@ -33,7 +33,7 @@ import { loadUIState, saveUIState } from "../storage";
 import { serverKey } from "../constants/servers";
 import { computeItemRC } from "./itemSale";
 import { db, isSimulationMode, updateDoc as fbUpdateDoc, setDoc as fbSetDoc } from "../firebase/config";
-import { doc } from "firebase/firestore";
+import { FieldPath, deleteField, doc } from "firebase/firestore";
 
 // ── RECOMPENSAS (nomes oficiais) ─────────────────────────────────────────────
 
@@ -69,6 +69,16 @@ export const CRYPT_ITEMS: string[] = [
 /** Runas necessárias para a conversão em 1 item Crypt. */
 export const CRYPT_RUNES_REQUIRED = 5;
 
+/**
+ * CATÁLOGO COMPLETO do Lucro Esperado (49 itens) — usado pela sincronização
+ * bidirecional com a Lista de Itens do Painel Bazaar (116ª): SOMENTE itens
+ * deste catálogo participam do espelhamento Base ⇄ Venda Direta (a Lista de
+ * Itens pode conter muitos outros itens, que nunca são tocados).
+ */
+export const EXPECTED_ALL_ITEMS: string[] = [
+  ...SW_REWARD_ITEMS, ...SG_REWARD_ITEMS, ...GB_REWARD_RUNES, ...CRYPT_ITEMS,
+];
+
 // ── QUESTS (tempos/chances — requisitos da 115ª) ────────────────────────────
 
 export interface ExpectedQuestDef {
@@ -92,10 +102,21 @@ export const EXPECTED_QUESTS: ExpectedQuestDef[] = [
 
 /** Valores considerados de UM item (kk > 0; ausente = não configurado). */
 export interface ExpectedItemValueEntry {
-  /** Venda Direta — mínimo alcançável (maior oferta de compra). */
+  /** Venda Direta — mínimo alcançável (maior oferta de compra). SINCRONIZADA
+   *  com o valor BASE do item na Lista de Itens do Painel Bazaar (116ª). */
   d?: number;
-  /** Venda Paciente — média esperada sem pressa de vender. */
+  /** Venda Paciente — média esperada sem pressa de vender (NUNCA é tocada
+   *  pela sincronização com a Lista de Itens — estimativa independente). */
   p?: number;
+  /**
+   * ÚLTIMA ATUALIZAÇÃO do valor deste item NESTE servidor (ms epoch — 116ª).
+   * Epoch é o registro consistente no banco (independe de fuso); a exibição
+   * converte para o horário local do usuário. Atualizado SOMENTE quando um
+   * valor (d ou p) muda de fato e é salvo — em qualquer um dos módulos
+   * (modal Lucro Esperado OU Lista de Itens, que compartilham o timestamp).
+   * Ausente = "Não atualizado" (cadastros anteriores à 116ª inclusive).
+   */
+  u?: number;
 }
 export type ExpectedProfitServerValues = Record<string, ExpectedItemValueEntry>;
 export type ExpectedProfitValues = Record<string, ExpectedProfitServerValues>;
@@ -123,8 +144,11 @@ export function sanitizeExpectedProfitValues(raw: unknown): ExpectedProfitValues
       const out: ExpectedItemValueEntry = {};
       const d = Number(e.d);
       const p = Number(e.p);
+      const u = Number(e.u);
       if (Number.isFinite(d) && d > 0) out.d = round1(d);
       if (Number.isFinite(p) && p > 0) out.p = round1(p);
+      // Timestamp só acompanha um valor real (sozinho não significa nada).
+      if ((out.d !== undefined || out.p !== undefined) && Number.isFinite(u) && u > 0) out.u = Math.floor(u);
       if (out.d !== undefined || out.p !== undefined) cleanItems[item] = out;
     }
     if (Object.keys(cleanItems).length > 0) clean[srv] = cleanItems;
@@ -176,6 +200,70 @@ export async function persistExpectedProfitValues(values: ExpectedProfitValues):
   } catch {
     try {
       await fbSetDoc(doc(db, "appSettings", "global"), { expectedProfitItemValues: clean }, { merge: true });
+      return { remoteOk: true };
+    } catch { /* silencioso — espelho local garante esta sessão */ }
+    return { remoteOk: false };
+  }
+}
+
+// ── PERSISTÊNCIA GRANULAR (116ª — por item/servidor) ────────────────────────
+
+/** Alteração pontual de UM item em UM servidor (`entry=null` remove). */
+export interface ExpectedProfitEntryPatch {
+  server: string;
+  itemName: string;
+  entry: ExpectedItemValueEntry | null;
+}
+
+/** Aplica patches a um mapa (puro — não grava nada). */
+export function applyExpectedProfitPatches(values: ExpectedProfitValues, patches: ExpectedProfitEntryPatch[]): ExpectedProfitValues {
+  const next: ExpectedProfitValues = { ...values };
+  for (const patch of patches) {
+    const sKey = serverKey(patch.server);
+    const iKey = expectedItemKey(patch.itemName);
+    if (!sKey || !iKey) continue;
+    const serverMap = { ...(next[sKey] || {}) };
+    if (patch.entry) serverMap[iKey] = patch.entry;
+    else delete serverMap[iKey];
+    if (Object.keys(serverMap).length > 0) next[sKey] = serverMap;
+    else delete next[sKey];
+  }
+  return sanitizeExpectedProfitValues(next);
+}
+
+/**
+ * PERSISTE somente os itens alterados (116ª): espelho local mesclado na hora
+ * + `updateDoc` com UM FieldPath POR ITEM alterado
+ * (`expectedProfitItemValues.<servidor>.<item>`; remoção via deleteField).
+ * É o que evita SOBRESCRITA INDEVIDA em edições simultâneas de usuários
+ * Boss diferentes: cada gravação toca apenas os próprios itens — os demais
+ * campos do mapa permanecem intactos no servidor (diferente da gravação do
+ * campo inteiro, onde o último a salvar apagaria as alterações do outro).
+ * Mesmo doc/Rules do "RC Servidores" (backend SÓ aceita Boss). Nunca lança.
+ */
+export async function persistExpectedProfitEntryPatches(patches: ExpectedProfitEntryPatch[]): Promise<{ remoteOk: boolean }> {
+  const valid = (patches || []).filter(patch => serverKey(patch.server) && expectedItemKey(patch.itemName));
+  if (valid.length === 0) return { remoteOk: true };
+  const merged = applyExpectedProfitPatches(readLocalExpectedProfitValues(), valid);
+  writeLocalExpectedProfitValues(merged);
+  if (isSimulationMode || !db) {
+    try { saveUIState(SIM_KEY, merged); } catch { /* espelho local garante a sessão */ }
+    return { remoteOk: true };
+  }
+  try {
+    // updateDoc(ref, campo1, valor1, campo2, valor2, ...) — granular.
+    const fieldsAndValues: unknown[] = [];
+    for (const patch of valid) {
+      fieldsAndValues.push(new FieldPath("expectedProfitItemValues", serverKey(patch.server), expectedItemKey(patch.itemName)));
+      fieldsAndValues.push(patch.entry ? patch.entry : deleteField());
+    }
+    const [firstField, firstValue, ...rest] = fieldsAndValues;
+    await fbUpdateDoc(doc(db, "appSettings", "global"), firstField as FieldPath, firstValue, ...rest);
+    return { remoteOk: true };
+  } catch {
+    try {
+      // Doc ainda inexistente: cria com o estado mesclado (merge profundo).
+      await fbSetDoc(doc(db, "appSettings", "global"), { expectedProfitItemValues: merged }, { merge: true });
       return { remoteOk: true };
     } catch { /* silencioso — espelho local garante esta sessão */ }
     return { remoteOk: false };

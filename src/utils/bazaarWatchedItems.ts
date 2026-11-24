@@ -5,13 +5,28 @@
 // última consulta vivem exclusivamente no localStorage deste dispositivo.
 // NADA deste módulo grava no Firestore — requisito explícito da funcionalidade.
 //
+// EXCEÇÃO ÚNICA (116ª — sincronização Base ⇄ Venda Direta): quando o VALOR
+// BASE de um item do catálogo do Lucro Esperado muda na Lista de Itens, a
+// mudança é espelhada no cadastro compartilhado "Valores Considerados"
+// (appSettings/global.expectedProfitItemValues — fonte única da Venda
+// Direta, SÓ Boss grava no backend). O espelhamento é por DIFERENÇA: nada
+// muda ⇒ nenhuma gravação; itens fora do catálogo nunca saem do dispositivo.
+//
 // A conversão kk -> RC NÃO é reimplementada aqui: o painel usa a
 // `computeItemRC` já existente em `utils/itemSale.ts` (mesma fórmula do
 // restante do aplicativo).
 // ============================================================================
 
 import { loadUIState, saveUIState } from "../storage";
-import { OFFICIAL_SERVERS, normalizeServerName } from "../constants/servers";
+import { OFFICIAL_SERVERS, normalizeServerName, serverKey as expectedServerKey } from "../constants/servers";
+import {
+  EXPECTED_ALL_ITEMS,
+  expectedItemKey,
+  persistExpectedProfitEntryPatches,
+  readLocalExpectedProfitValues,
+  type ExpectedProfitEntryPatch,
+  type ExpectedProfitValues,
+} from "./expectedProfit";
 
 // ── Persistência (somente configurações e resultado local) ──────────────────
 export const BAZAAR_WATCHED_ITEMS_KEY = "rubinot_bazaar_watched_items";
@@ -397,7 +412,134 @@ export function loadWatchedItemsByServer(): WatchedItemsByServer {
 }
 
 export function saveWatchedItemsByServer(map: WatchedItemsByServer): void {
-  saveUIState(BAZAAR_WATCHED_ITEMS_BY_SERVER_KEY, sanitizeWatchedItemsByServer(map));
+  // FUNIL ÚNICO de gravação da Lista de Itens — TODAS as edições (inline,
+  // adicionar, importar/mesclar, propagação global, "Atualizar Valores" do
+  // Item Vendido e a própria sincronização do Lucro Esperado) passam aqui.
+  const previous = sanitizeWatchedItemsByServer(loadUIState<unknown>(BAZAAR_WATCHED_ITEMS_BY_SERVER_KEY, null) || {});
+  const next = sanitizeWatchedItemsByServer(map);
+  saveUIState(BAZAAR_WATCHED_ITEMS_BY_SERVER_KEY, next);
+  // 116ª — Painel Bazaar → Lucro Esperado: valores BASE que MUDARAM nesta
+  // gravação (e pertencem ao catálogo) viram Venda Direta no cadastro
+  // compartilhado. Por diferença e com guarda anti-loop: quando a gravação
+  // veio do próprio Lucro Esperado (ou de um snapshot já espelhado), o
+  // valor já confere e NENHUMA gravação é feita. Nunca bloqueia o save.
+  try {
+    const patches = collectExpectedProfitPatchesFromWatchedDiff(previous, next, readLocalExpectedProfitValues());
+    if (patches.length > 0) void persistExpectedProfitEntryPatches(patches);
+  } catch { /* lista local já gravada — a sincronização tenta de novo na próxima alteração */ }
+}
+
+// ── 116ª — SINCRONIZAÇÃO Base (Lista de Itens) ⇄ Venda Direta (Lucro) ──────
+
+/** Catálogo do Lucro Esperado indexado pela MESMA chave de casamento da
+ *  Lista de Itens (nome normalizado) → nome canônico do cadastro. */
+const EXPECTED_CATALOG_BY_NAME_KEY: Map<string, string> = new Map(
+  EXPECTED_ALL_ITEMS.map(name => [normalizeWatchedItemName(name), name]),
+);
+
+/**
+ * DIFF puro Lista de Itens → patches do cadastro compartilhado: devolve um
+ * patch por (servidor, item do catálogo) cujo valor BASE mudou entre as duas
+ * versões do mapa (ou passou a existir) E ainda difere do espelho atual do
+ * Lucro Esperado (guarda anti-loop/anti-regravação). Regras:
+ *   • SOMENTE itens do catálogo (49) — o resto da lista nunca sai da máquina;
+ *   • `d` (Venda Direta) recebe o Base; `p` (Venda Paciente) é PRESERVADA;
+ *   • `u` = updatedAtMs do item na lista (o MESMO carimbo nas duas pontas);
+ *   • remoção da lista NÃO remove o valor compartilhado (sem sync destrutivo).
+ */
+export function collectExpectedProfitPatchesFromWatchedDiff(
+  previous: WatchedItemsByServer,
+  next: WatchedItemsByServer,
+  mirror: ExpectedProfitValues,
+): ExpectedProfitEntryPatch[] {
+  const patches: ExpectedProfitEntryPatch[] = [];
+  for (const [server, items] of Object.entries(next || {})) {
+    const previousItems = previous[server] || [];
+    for (const item of items || []) {
+      const nameKey = normalizeWatchedItemName(item.name);
+      const canonical = EXPECTED_CATALOG_BY_NAME_KEY.get(nameKey);
+      if (!canonical) continue;
+      const before = previousItems.find(prev => normalizeWatchedItemName(prev.name) === nameKey);
+      if (before && before.valueKk === item.valueKk) continue; // Base não mudou NESTA gravação
+      const existing = mirror[expectedServerKey(server)]?.[expectedItemKey(canonical)] || {};
+      if (existing.d === item.valueKk) continue; // já espelhado — nada a gravar (anti-loop)
+      patches.push({
+        server,
+        itemName: canonical,
+        entry: { ...existing, d: item.valueKk, u: item.updatedAtMs || Date.now() },
+      });
+    }
+  }
+  return patches;
+}
+
+/**
+ * Lucro Esperado → Lista de Itens DESTA máquina (116ª): aplica os valores
+ * de Venda Direta do cadastro compartilhado (snapshot do Firestore) sobre o
+ * Base dos itens do catálogo JÁ presentes na lista local. Regras:
+ *   • SÓ ATUALIZA itens existentes — nunca cria nem remove (a criação flui
+ *     pelo salvamento do modal/Lista; listas de usuários comuns, vazias,
+ *     ficam intocadas);
+ *   • LWW por timestamp: aplica apenas quando o `u` remoto é MAIS RECENTE
+ *     que o updatedAtMs local (edições simultâneas não são sobrescritas por
+ *     dados mais antigos; sem carimbo dos dois lados, nada é alterado);
+ *   • updatedAtMs local recebe o PRÓPRIO `u` remoto — o registro de última
+ *     atualização fica idêntico nas duas interfaces;
+ *   • reaproveita o funil saveWatchedItemsByServer (a guarda anti-loop vê o
+ *     espelho já atualizado e não regrava nada) + reprice da última
+ *     consulta + evento, como toda edição oficial da lista.
+ */
+export function reconcileExpectedProfitIntoWatchedLists(values: ExpectedProfitValues): string[] {
+  const map = loadWatchedItemsByServer();
+  let nextMap: WatchedItemsByServer | null = null;
+  const touched: Array<{ server: string; name: string; valueKk: number }> = [];
+  for (const [server, items] of Object.entries(map)) {
+    let list: WatchedItem[] | null = null;
+    (items || []).forEach((item, index) => {
+      const canonical = EXPECTED_CATALOG_BY_NAME_KEY.get(normalizeWatchedItemName(item.name));
+      if (!canonical) return;
+      const entry = values[expectedServerKey(server)]?.[expectedItemKey(canonical)];
+      if (!entry || entry.d === undefined || entry.d === item.valueKk) return;
+      const remoteU = entry.u || 0;
+      if (remoteU <= (item.updatedAtMs || 0)) return; // local é tão ou mais recente (LWW)
+      if (!list) list = [...(items || [])];
+      list[index] = { ...item, valueKk: entry.d, updatedAtMs: remoteU };
+      touched.push({ server, name: item.name, valueKk: entry.d });
+    });
+    if (list) nextMap = { ...(nextMap || map), [server]: list };
+  }
+  if (!nextMap || touched.length === 0) return [];
+  saveWatchedItemsByServer(nextMap);
+  try {
+    const lastQuery = loadItemsLastQuery();
+    if (lastQuery && Array.isArray(lastQuery.results) && lastQuery.results.length > 0) {
+      let repriced = lastQuery.results;
+      for (const change of touched) {
+        repriced = repriceQueryResultsForServerItem(repriced, change.server, change.name, change.valueKk);
+      }
+      if (repriced !== lastQuery.results) saveItemsLastQuery({ ...lastQuery, results: repriced });
+    }
+  } catch { /* lista já atualizada; o botão "Atualizar" do quadro reprecifica depois */ }
+  try { window.dispatchEvent(new Event(BAZAAR_WATCHED_ITEMS_UPDATED_EVENT)); } catch {}
+  return Array.from(new Set(touched.map(change => change.server)));
+}
+
+/**
+ * "dd/MM às HH:mm" da última atualização de um valor, no fuso informado
+ * (116ª — formato ÚNICO das duas interfaces: Lista de Itens e Lucro
+ * Esperado). O armazenamento é sempre epoch (ms); só a exibição muda de fuso.
+ */
+export function formatWatchedUpdatedAt(ms: number, offsetMinutes: number): string {
+  try {
+    const shifted = new Date(ms + offsetMinutes * 60 * 1000);
+    const day = String(shifted.getUTCDate()).padStart(2, "0");
+    const month = String(shifted.getUTCMonth() + 1).padStart(2, "0");
+    const hour = String(shifted.getUTCHours()).padStart(2, "0");
+    const minute = String(shifted.getUTCMinutes()).padStart(2, "0");
+    return `${day}/${month} às ${hour}:${minute}`;
+  } catch {
+    return "—";
+  }
 }
 
 /** Lista de preços de UM servidor (vazia quando não há nada cadastrado). */
@@ -858,6 +1000,12 @@ export function applyOfficialWatchedItemUpdate(input: {
   valueKk: number;
   /** Universo oficial de servidores (SERVER_OPTIONS) — escopo "all". */
   serverUniverse: readonly string[];
+  /**
+   * Carimbo da atualização (ms; default Date.now()). A 116ª passa aqui o
+   * MESMO timestamp gravado no cadastro do Lucro Esperado, para o registro
+   * de última atualização ficar idêntico nas duas interfaces.
+   */
+  atMs?: number;
 }): OfficialItemUpdateResult {
   const fail = (error: string): OfficialItemUpdateResult => ({ ok: false, error, changedServers: [], addedServers: [] });
   if (officialItemUpdateInProgress) return fail("Já existe uma atualização em andamento — aguarde a conclusão.");
@@ -870,7 +1018,7 @@ export function applyOfficialWatchedItemUpdate(input: {
     // Valor base com a MESMA precisão aceita pela Lista de Itens (1 casa).
     const valueKk = Math.round(Number(input.valueKk) * 10) / 10;
     if (!Number.isFinite(valueKk) || valueKk < 0.1) return fail("Valor base inválido (precisa ser maior que zero, com até 1 casa decimal).");
-    const now = Date.now();
+    const now = Number.isFinite(input.atMs) && (input.atMs as number) > 0 ? Math.floor(input.atMs as number) : Date.now();
     const map = loadWatchedItemsByServer();
     // Nome CANÔNICO: se o item já está cadastrado em alguma lista, preserva
     // o nome de lá (evita variação de caixa/acentos); senão usa o base.
