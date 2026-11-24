@@ -3,9 +3,9 @@ import { createPortal } from "react-dom";
 import { Check, ChevronLeft, Clock, Coins, Package, Percent, RefreshCw, Settings2, TrendingUp, X } from "lucide-react";
 import { SERVER_OPTIONS } from "../constants/servers";
 import { formatRC } from "../types";
-import { SERVER_COIN_RATES_EVENT, coinRateText, getServerCoinRate, readLocalCoinRates } from "../utils/bazaarCoinRates";
+import { SERVER_COIN_RATES_EVENT, coinRateText, getServerCoinRate, readLocalCoinRates, saveOfficialServerCoinRate } from "../utils/bazaarCoinRates";
 import { computeItemRC, formatRateKkDisplay, parseRateKk, sanitizeRateKkInput } from "../utils/itemSale";
-import { applyOfficialWatchedItemUpdate, formatWatchedUpdatedAt } from "../utils/bazaarWatchedItems";
+import { applyOfficialWatchedItemUpdate, formatWatchedUpdatedAt, seedExpectedProfitFromWatchedLists } from "../utils/bazaarWatchedItems";
 import { readBazarPanelTimezoneOffsetMinutes } from "../utils/bazaarTime";
 import {
   CRYPT_ITEMS,
@@ -52,6 +52,11 @@ import {
  *     saveWatchedItemsByServer — sempre por diferença, sem loops). A Venda
  *     Paciente e as personalizações por usuário/personagem nunca são
  *     tocadas pela sincronização.
+ *   • 117ª: IMPORTAÇÃO INICIAL automática — aberto por um Boss, os itens
+ *     do catálogo ainda sem Venda Direta recebem o valor Base da Lista de
+ *     Itens (persistido; aberturas seguintes não gravam nada) — e edição
+ *     da COTAÇÃO RC do servidor selecionado no cabeçalho (fluxo único
+ *     saveOfficialServerCoinRate do quadro "RC Servidores").
  */
 interface Props {
   isBoss: boolean;
@@ -96,7 +101,50 @@ export default function ExpectedProfitModal({ isBoss, onClose }: Props) {
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
+  // 117ª — IMPORTAÇÃO INICIAL dos valores Base: ao abrir como BOSS, itens do
+  // catálogo SEM Venda Direta cadastrada recebem o valor Base da Lista de
+  // Itens local (todos os servidores oficiais; `d` existente NUNCA é
+  // sobrescrito; sem Base = segue não configurado). Persistida pelo MESMO
+  // funil granular da sincronização — depois da primeira importação as
+  // aberturas seguintes não geram NENHUMA gravação. O espelho/evento
+  // atualiza este modal e os demais usuários em tempo real.
+  useEffect(() => {
+    if (!isBoss) return;
+    void seedExpectedProfitFromWatchedLists();
+  }, [isBoss]);
+
   const coinRate = getServerCoinRate(coinRates, server);
+
+  // ── 117ª — edição da cotação RC do servidor (SÓ Boss) ────────────────────
+  // Rascunho pré-preenchido com o valor OFICIAL vigente (consulta fácil);
+  // re-semeado ao trocar de servidor ou quando a cotação muda por fora
+  // (outro módulo/usuário) — tempo real sem clobber de dígitos: o valor só
+  // é re-semeado quando a COTAÇÃO efetiva muda.
+  const [rateDraft, setRateDraft] = useState<string>(() => coinRateText(getServerCoinRate(readLocalCoinRates(), SERVER_OPTIONS[0] || "")));
+  const [savingRate, setSavingRate] = useState(false);
+  const [rateFeedback, setRateFeedback] = useState<{ ok: boolean; message: string } | null>(null);
+  const rateFeedbackTimerRef = useRef<number | null>(null);
+  useEffect(() => () => { if (rateFeedbackTimerRef.current !== null) window.clearTimeout(rateFeedbackTimerRef.current); }, []);
+  useEffect(() => {
+    setRateDraft(coinRateText(coinRate));
+  }, [server, coinRate]);
+
+  async function handleSaveRate() {
+    if (!isBoss || savingRate) return;
+    setSavingRate(true);
+    try {
+      // Fluxo ÚNICO oficial (69ª/113ª): valida, ignora valor já vigente
+      // ("Já atualizado", sem gravação), altera SÓ o servidor selecionado e
+      // preserva o histórico de cotações; vendas registradas NUNCA são
+      // recalculadas (os registros guardam a cotação da época).
+      const result = await saveOfficialServerCoinRate(server, rateDraft);
+      setRateFeedback({ ok: result.ok, message: result.message });
+      if (rateFeedbackTimerRef.current !== null) window.clearTimeout(rateFeedbackTimerRef.current);
+      rateFeedbackTimerRef.current = window.setTimeout(() => { setRateFeedback(null); rateFeedbackTimerRef.current = null; }, result.ok ? 2500 : 4000);
+    } finally {
+      setSavingRate(false);
+    }
+  }
 
   // ── Estatísticas por grupo (derivadas — recalculam a cada mudança) ───────
   const stats = useMemo(() => ({
@@ -302,6 +350,37 @@ export default function ExpectedProfitModal({ isBoss, onClose }: Props) {
             >
               <Coins size={9} /> {coinRate > 0 ? `RC a ${coinRateText(coinRate)}k` : "sem cotação"}
             </span>
+            {/* 117ª — edição da cotação RC (SÓ Boss; backend revalida): o
+                MESMO fluxo único do quadro "RC Servidores"
+                (saveOfficialServerCoinRate: validação, "Já atualizado" sem
+                gravação, só o servidor selecionado, histórico preservado,
+                evento em tempo real para o app inteiro). */}
+            {isBoss && (
+              <span className="inline-flex items-center gap-1">
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  value={rateDraft}
+                  onChange={e => setRateDraft(e.target.value)}
+                  aria-label={`Cotação do RC em ${server} (k por 1000 RC)`}
+                  placeholder="—"
+                  className="w-12 bg-black/40 border border-amber-500/40 focus:border-amber-400/70 rounded-md px-1.5 py-0.5 font-mono text-[9px] font-black tabular-nums text-amber-200 text-right outline-none transition-colors placeholder-slate-600"
+                  title={`Nova cotação do RC em ${server} (número > 0, até 1 casa decimal — ex.: 2,5)`}
+                />
+                <button
+                  type="button"
+                  disabled={savingRate}
+                  onClick={() => { void handleSaveRate(); }}
+                  className="inline-flex items-center gap-1 rounded-md border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[9px] font-black text-amber-300 hover:bg-amber-500/20 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                  title={`Salvar a cotação de ${server} no quadro oficial "RC Servidores"`}
+                >
+                  {savingRate ? <RefreshCw size={9} className="animate-spin" /> : <Check size={9} />} Salvar RC
+                </button>
+                {rateFeedback && (
+                  <span className={`text-[8.5px] font-bold ${rateFeedback.ok ? "text-emerald-300" : "text-red-300"}`}>{rateFeedback.message}</span>
+                )}
+              </span>
+            )}
             {view === "resumo" ? (
               <>
                 <button type="button" onClick={() => setView("crypt")} className="inline-flex items-center gap-1 rounded-md border border-violet-500/40 bg-violet-500/10 px-1.5 py-0.5 text-[9px] font-black text-violet-300 hover:bg-violet-500/20 transition-colors cursor-pointer">

@@ -473,6 +473,56 @@ export function collectExpectedProfitPatchesFromWatchedDiff(
   return patches;
 }
 
+/** Servidores oficiais contemplados pelo modal Lucro Esperado (chaves). */
+const OFFICIAL_SERVER_KEYS = new Set(OFFICIAL_SERVERS.map(server => expectedServerKey(server)));
+
+/**
+ * IMPORTAÇÃO INICIAL dos valores Base (117ª) — diff puro Lista de Itens →
+ * patches de SEMEADURA da Venda Direta: um patch por (servidor oficial,
+ * item do catálogo) que tem valor Base na lista local mas AINDA NÃO tem
+ * Venda Direta cadastrada. Regras:
+ *   • NUNCA sobrescreve `d` já cadastrado (só preenche o que falta);
+ *   • `p` (Venda Paciente) preservada; `u` = carimbo do item na lista;
+ *   • item sem valor Base ⇒ segue "não configurado" (nada é inventado);
+ *   • SOMENTE itens do catálogo e servidores oficiais do modal;
+ *   • nada a importar ⇒ lista vazia (zero gravações — abrir o modal
+ *     repetidamente não custa nada depois da primeira importação).
+ */
+export function collectExpectedProfitSeedPatchesFromWatchedLists(mirror: ExpectedProfitValues): ExpectedProfitEntryPatch[] {
+  const patches: ExpectedProfitEntryPatch[] = [];
+  const map = loadWatchedItemsByServer();
+  for (const [server, items] of Object.entries(map)) {
+    if (!OFFICIAL_SERVER_KEYS.has(expectedServerKey(server))) continue;
+    for (const item of items || []) {
+      const canonical = EXPECTED_CATALOG_BY_NAME_KEY.get(normalizeWatchedItemName(item.name));
+      if (!canonical) continue;
+      if (!(Number.isFinite(item.valueKk) && item.valueKk > 0)) continue;
+      const existing = mirror[expectedServerKey(server)]?.[expectedItemKey(canonical)] || {};
+      if (existing.d !== undefined) continue; // Venda Direta já cadastrada — intocada
+      patches.push({
+        server,
+        itemName: canonical,
+        entry: { ...existing, d: item.valueKk, u: item.updatedAtMs || Date.now() },
+      });
+    }
+  }
+  return patches;
+}
+
+/**
+ * Executa a importação inicial persistida (117ª — chamada pelo modal Lucro
+ * Esperado quando aberto por um BOSS; usuários comuns nunca semeiam). Reusa
+ * o MESMO funil granular da sincronização (persistExpectedProfitEntryPatches:
+ * espelho local + updateDoc por item + evento) — nenhuma estrutura paralela.
+ * Devolve quantos itens foram importados (0 = nada a fazer, zero gravações).
+ */
+export async function seedExpectedProfitFromWatchedLists(): Promise<number> {
+  const patches = collectExpectedProfitSeedPatchesFromWatchedLists(readLocalExpectedProfitValues());
+  if (patches.length === 0) return 0;
+  await persistExpectedProfitEntryPatches(patches);
+  return patches.length;
+}
+
 /**
  * Lucro Esperado → Lista de Itens DESTA máquina (116ª): aplica os valores
  * de Venda Direta do cadastro compartilhado (snapshot do Firestore) sobre o
