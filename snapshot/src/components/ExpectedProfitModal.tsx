@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { Check, ChevronLeft, Clock, Coins, Package, Percent, RefreshCw, Settings2, TrendingUp, X } from "lucide-react";
+import { Check, Clock, Coins, Package, Percent, RefreshCw, Settings2, TrendingUp, X } from "lucide-react";
 import { SERVER_OPTIONS } from "../constants/servers";
 import { formatRC } from "../types";
 import { SERVER_COIN_RATES_EVENT, coinRateText, getServerCoinRate, readLocalCoinRates, saveOfficialServerCoinRate } from "../utils/bazaarCoinRates";
@@ -247,25 +247,41 @@ export default function ExpectedProfitModal({ isBoss, onClose }: Props) {
   const inputCls = "w-20 bg-black/40 border rounded-md px-1.5 py-0.5 text-[10px] text-right tabular-nums outline-none transition-colors placeholder-slate-600";
 
   // ── Blocos de categoria (Venda Direta × Venda Paciente) ──────────────────
+  // 118ª (visual): valor principal maior, RC/h em selo próprio e linhas de
+  // detalhe alinhadas — MESMOS cálculos/textos de antes, só apresentação.
   function CategoryBox({ kind, questKey }: { kind: "direct" | "patient"; questKey: "sw" | "sg" | "gb" }) {
     const def = EXPECTED_QUESTS.find(q => q.key === questKey)!;
     const stat = stats[questKey][kind];
     const outcome = computeQuestOutcome(def, stat);
     const isDirect = kind === "direct";
     return (
-      <div className={`flex-1 min-w-0 rounded-lg border px-2 py-1.5 ${isDirect ? "border-sky-500/30 bg-sky-500/[0.06]" : "border-violet-500/30 bg-violet-500/[0.06]"}`}>
-        <div className={`text-[8.5px] font-black uppercase tracking-wide ${isDirect ? "text-sky-300" : "text-violet-300"}`}>
-          {isDirect ? "Venda Direta (mín.)" : "Venda Paciente (méd.)"}
+      <div className={`min-w-0 rounded-lg border px-2.5 py-2 ${isDirect ? "border-sky-500/30 bg-sky-500/[0.07]" : "border-violet-500/30 bg-violet-500/[0.07]"}`}>
+        <div className="flex items-center justify-between gap-2">
+          <span className={`inline-flex items-center gap-1.5 text-[8.5px] font-black uppercase tracking-wider ${isDirect ? "text-sky-300" : "text-violet-300"}`}>
+            <span className={`h-1.5 w-1.5 rounded-full flex-shrink-0 ${isDirect ? "bg-sky-400" : "bg-violet-400"}`} />
+            {isDirect ? "Venda Direta (mín.)" : "Venda Paciente (méd.)"}
+          </span>
+          <span
+            className={`rounded-md px-1.5 py-px font-mono text-[8.5px] font-black tabular-nums flex-shrink-0 ${isDirect ? "bg-sky-500/15 text-sky-200" : "bg-violet-500/15 text-violet-200"}`}
+            title="RC por hora — comparador de rentabilidade entre as quests"
+          >
+            {outcome.rcPerHour === null ? "— RC/h" : `${outcome.rcPerHour.toLocaleString("pt-BR")} RC/h`}
+          </span>
         </div>
-        <div className={`text-sm font-black tabular-nums leading-tight ${isDirect ? "text-sky-200" : "text-violet-200"}`}>
+        <div className={`mt-1.5 text-base font-black tabular-nums leading-none ${isDirect ? "text-sky-100" : "text-violet-100"}`} title="Valor esperado de 1 recompensa (média dos itens configurados)">
           {rcText(outcome.perRewardRc)}
         </div>
-        <div className="text-[8.5px] leading-snug text-slate-400 tabular-nums">
-          {def.dropChance < 1 && <span className="block">por rotação: {rcText(outcome.perAttemptRc)}</span>}
-          <span className="block">{outcome.rcPerHour === null ? "— RC/h" : `${outcome.rcPerHour.toLocaleString("pt-BR")} RC/h`}</span>
-          <span className={`block ${stat.configured < stats[questKey].total ? "text-amber-400/90" : "text-slate-500"}`}>
-            {stat.configured}/{stats[questKey].total} itens configurados
-          </span>
+        <div className="mt-1.5 space-y-0.5 text-[8.5px] leading-snug tabular-nums">
+          {def.dropChance < 1 && (
+            <div className="flex items-center justify-between gap-2 text-slate-400">
+              <span>por rotação ({Math.round(def.dropChance * 100)}%)</span>
+              <span className="font-bold text-slate-300">{rcText(outcome.perAttemptRc)}</span>
+            </div>
+          )}
+          <div className={`flex items-center justify-between gap-2 ${stat.configured < stats[questKey].total ? "text-amber-400/90" : "text-slate-500"}`}>
+            <span>{stat.configured}/{stats[questKey].total} itens configurados</span>
+            {stat.configured < stats[questKey].total && <span className="font-bold">parcial</span>}
+          </div>
         </div>
       </div>
     );
@@ -275,77 +291,121 @@ export default function ExpectedProfitModal({ isBoss, onClose }: Props) {
     const def = EXPECTED_QUESTS.find(q => q.key === questKey)!;
     const guaranteed = def.dropChance >= 1;
     return (
-      <div className="rounded-xl border border-[var(--th-line)]/60 bg-black/20 p-2.5 space-y-1.5">
-        <div className="flex items-center gap-2 flex-wrap">
-          <span className="text-[11px] font-black text-amber-200">{def.label}</span>
-          <span className={`inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[8.5px] font-black ${guaranteed ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300" : "border-amber-500/40 bg-amber-500/10 text-amber-300"}`}>
-            <Percent size={8} /> {guaranteed ? "Drop garantido — 100%" : `Drop de ${Math.round(def.dropChance * 100)}% por rotação`}
-          </span>
-          <span className="inline-flex items-center gap-1 text-[8.5px] font-bold text-slate-400">
-            <Clock size={8} /> {def.timeLabel}
-          </span>
-          <span className="inline-flex items-center gap-1 text-[8.5px] font-bold text-slate-400">
-            <Package size={8} /> {stats[questKey].total} recompensas possíveis
+      <div className="rounded-xl border border-[var(--th-line)]/60 bg-black/25 overflow-hidden">
+        {/* Faixa-título da quest: nome à esquerda, condições à direita */}
+        <div className="flex items-center justify-between gap-2 flex-wrap px-2.5 py-1.5 border-b border-[var(--th-line)]/40 bg-white/[0.02]">
+          <span className="text-[11.5px] font-black tracking-wide text-amber-200">{def.label}</span>
+          <span className="flex items-center gap-1.5 flex-wrap">
+            <span className={`inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[8.5px] font-black ${guaranteed ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300" : "border-amber-500/40 bg-amber-500/10 text-amber-300"}`}>
+              <Percent size={8} /> {guaranteed ? "Drop garantido — 100%" : `Drop de ${Math.round(def.dropChance * 100)}% por rotação`}
+            </span>
+            <span className="inline-flex items-center gap-1 rounded-md border border-[var(--th-line)]/50 bg-black/30 px-1.5 py-0.5 text-[8.5px] font-bold text-slate-300">
+              <Clock size={8} className="text-slate-400" /> {def.timeLabel}
+            </span>
+            <span className="inline-flex items-center gap-1 rounded-md border border-[var(--th-line)]/50 bg-black/30 px-1.5 py-0.5 text-[8.5px] font-bold text-slate-300">
+              <Package size={8} className="text-slate-400" /> {stats[questKey].total} recompensas possíveis
+            </span>
           </span>
         </div>
-        {!guaranteed && (
-          <div className="text-[8.5px] leading-snug text-amber-200/70">
-            Estatisticamente ~{Math.round(1 / def.dropChance)} rotações ({fmtHours(expectedHoursPerReward(def))}) por recompensa — o drop NÃO é garantido por rotação.
+        <div className="p-2.5 space-y-1.5">
+          {!guaranteed && (
+            <div className="rounded-md border border-amber-500/20 bg-amber-500/[0.06] px-2 py-1 text-[8.5px] leading-snug text-amber-200/80">
+              Estatisticamente ~{Math.round(1 / def.dropChance)} rotações ({fmtHours(expectedHoursPerReward(def))}) por recompensa — o drop NÃO é garantido por rotação.
+            </div>
+          )}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+            <CategoryBox kind="direct" questKey={questKey} />
+            <CategoryBox kind="patient" questKey={questKey} />
           </div>
-        )}
-        <div className="flex gap-1.5">
-          <CategoryBox kind="direct" questKey={questKey} />
-          <CategoryBox kind="patient" questKey={questKey} />
         </div>
       </div>
     );
   }
 
   // ── ÁREA CRYPT ────────────────────────────────────────────────────────────
+  // 118ª (visual): extrato alinhado (item − runas = saldo) com o saldo em
+  // destaque — MESMOS cálculos/textos de antes, só apresentação.
   function CryptConversionBox({ kind }: { kind: "direct" | "patient" }) {
     const conv = computeCryptConversion(stats.gb[kind], stats.crypt[kind]);
     const isDirect = kind === "direct";
     return (
-      <div className={`flex-1 min-w-0 rounded-lg border px-2 py-1.5 ${isDirect ? "border-sky-500/30 bg-sky-500/[0.06]" : "border-violet-500/30 bg-violet-500/[0.06]"}`}>
-        <div className={`text-[8.5px] font-black uppercase tracking-wide ${isDirect ? "text-sky-300" : "text-violet-300"}`}>
+      <div className={`min-w-0 rounded-lg border px-2.5 py-2 ${isDirect ? "border-sky-500/30 bg-sky-500/[0.07]" : "border-violet-500/30 bg-violet-500/[0.07]"}`}>
+        <div className={`inline-flex items-center gap-1.5 text-[8.5px] font-black uppercase tracking-wider ${isDirect ? "text-sky-300" : "text-violet-300"}`}>
+          <span className={`h-1.5 w-1.5 rounded-full flex-shrink-0 ${isDirect ? "bg-sky-400" : "bg-violet-400"}`} />
           {isDirect ? "Venda Direta (mín.)" : "Venda Paciente (méd.)"}
         </div>
-        <div className="text-[9px] leading-snug text-slate-300 tabular-nums space-y-0.5 mt-0.5">
-          <div className="flex items-center justify-between gap-2"><span>Item Crypt (média dos 7)</span><span className="font-bold">{rcText(conv.expectedCryptRc)}</span></div>
-          <div className="flex items-center justify-between gap-2"><span>− {CRYPT_RUNES_REQUIRED} runas (custo de oportunidade)</span><span className="font-bold">{conv.runesCostRc === null ? "—" : `−${formatRC(Math.round(conv.runesCostRc))}`}</span></div>
-          <div className={`flex items-center justify-between gap-2 border-t pt-0.5 ${isDirect ? "border-sky-500/20" : "border-violet-500/20"}`}>
-            <span className="font-black">Saldo esperado da conversão</span>
-            <span className={`font-black ${conv.netRc === null ? "text-slate-500" : conv.netRc >= 0 ? "text-emerald-300" : "text-red-300"}`}>{conv.netRc === null ? "—" : formatRC(Math.round(conv.netRc))}</span>
+        <div className="text-[9px] leading-snug text-slate-300 tabular-nums space-y-1 mt-1.5">
+          <div className="flex items-center justify-between gap-2"><span className="text-slate-400">Item Crypt (média dos 7)</span><span className="font-bold text-slate-200">{rcText(conv.expectedCryptRc)}</span></div>
+          <div className="flex items-center justify-between gap-2"><span className="text-slate-400">− {CRYPT_RUNES_REQUIRED} runas (custo de oportunidade)</span><span className="font-bold text-slate-200">{conv.runesCostRc === null ? "—" : `−${formatRC(Math.round(conv.runesCostRc))}`}</span></div>
+          <div className={`flex items-center justify-between gap-2 border-t pt-1 ${isDirect ? "border-sky-500/20" : "border-violet-500/20"}`}>
+            <span className="font-black text-slate-200">Saldo esperado da conversão</span>
+            <span className={`rounded-md px-1.5 py-px font-mono text-[10px] font-black tabular-nums ${conv.netRc === null ? "text-slate-500" : conv.netRc >= 0 ? "bg-emerald-500/15 text-emerald-300" : "bg-red-500/15 text-red-300"}`}>{conv.netRc === null ? "—" : formatRC(Math.round(conv.netRc))}</span>
           </div>
         </div>
       </div>
     );
   }
 
+  // ── 118ª (visual) — navegação do quadro principal (sempre visível) ───────
+  const navButtons: { key: View; label: string; icon: ReactNode; title: string }[] = [
+    { key: "resumo", label: "Resumo", icon: <TrendingUp size={10} />, title: "Retorno esperado das quests Soul War, Sanguine e Graveborn" },
+    { key: "crypt", label: "Itens Crypt", icon: <Package size={10} />, title: "Conversão 5 runas ➜ 1 item Crypt e valores dos 7 itens" },
+    { key: "valores", label: "Valores Considerados", icon: <Settings2 size={10} />, title: "Valores por item e servidor (Venda Direta / Venda Paciente)" },
+  ];
+
   return createPortal(
     <div className="app-modal-overlay fixed inset-0 z-[900] flex items-center justify-center bg-black/70 backdrop-blur-sm" onClick={onClose}>
       <div
-        className="app-modal-frame app-modal-size-lg app-modal-frame--scroll w-full rounded-xl border border-emerald-500/30 bg-[var(--th-bg-raised)] shadow-2xl shadow-black/60"
+        className="app-modal-frame app-modal-size-xl app-modal-frame--scroll w-full rounded-2xl border border-emerald-500/25 bg-[var(--th-bg-raised)] shadow-2xl shadow-black/60"
         onClick={e => e.stopPropagation()}
       >
-        {/* Cabeçalho */}
-        <div className="flex items-center justify-between gap-2 px-3 py-2 border-b border-[var(--th-line)]/60 bg-[var(--th-bg-overlay)] flex-shrink-0 flex-wrap">
-          <div className="flex items-center gap-2 min-w-0">
-            <TrendingUp size={14} className="text-emerald-400 flex-shrink-0" />
-            <span className="text-xs font-black text-emerald-200 truncate">Lucro Esperado — SW / SG / GB</span>
+        {/* Cabeçalho — identidade do módulo + fechar */}
+        <div className="app-modal-header flex items-center justify-between gap-3 px-3.5 py-2.5 border-b border-[var(--th-line)]/60 bg-gradient-to-r from-emerald-500/[0.08] via-[var(--th-bg-overlay)] to-[var(--th-bg-overlay)] rounded-t-2xl">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <span className="flex h-7 w-7 items-center justify-center rounded-lg border border-emerald-500/40 bg-emerald-500/15 flex-shrink-0">
+              <TrendingUp size={14} className="text-emerald-300" />
+            </span>
+            <span className="min-w-0">
+              <span className="block text-[13px] font-black leading-tight text-emerald-200 truncate">Lucro Esperado — SW / SG / GB</span>
+              <span className="block text-[8.5px] font-bold leading-tight text-slate-400 truncate">Retorno esperado por servidor, em RC — Soul War · Sanguine · Graveborn · Itens Crypt</span>
+            </span>
+          </div>
+          <button type="button" onClick={onClose} title="Fechar" className="flex h-6 w-6 items-center justify-center rounded-md text-slate-500 hover:text-white hover:bg-white/10 transition-colors cursor-pointer flex-shrink-0">
+            <X size={15} />
+          </button>
+        </div>
+
+        {/* QUADRO PRINCIPAL — navegação à esquerda; servidor + cotação RC à
+            direita (controles agrupados, fixos acima do conteúdo rolável) */}
+        <div className="flex-shrink-0 flex items-center justify-between gap-x-3 gap-y-1.5 flex-wrap px-3.5 py-2 border-b border-[var(--th-line)]/60 bg-black/25">
+          <div className="inline-flex items-center gap-0.5 rounded-lg border border-[var(--th-line)]/60 bg-black/30 p-0.5">
+            {navButtons.map(nav => (
+              <button
+                key={nav.key}
+                type="button"
+                onClick={() => setView(nav.key)}
+                title={nav.title}
+                className={`inline-flex items-center gap-1 rounded-md px-2 py-1 text-[9px] font-black transition-colors cursor-pointer ${view === nav.key ? "bg-emerald-500/20 text-emerald-200 shadow-inner" : "text-slate-400 hover:text-slate-200 hover:bg-white/5"}`}
+              >
+                {nav.icon} {nav.label}
+              </button>
+            ))}
           </div>
           <div className="flex items-center gap-1.5 flex-wrap">
             {/* Servidor + cotação (fonte única "RC Servidores", tempo real) */}
-            <select
-              value={server}
-              onChange={e => setServer(e.target.value)}
-              aria-label="Servidor"
-              className="bg-black/40 border border-[var(--th-line)]/70 rounded-md px-1.5 py-0.5 text-[10px] font-bold text-slate-200 outline-none cursor-pointer"
-            >
-              {SERVER_OPTIONS.map(s => <option key={s} value={s}>{s}</option>)}
-            </select>
+            <label className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--th-line)]/60 bg-black/30 pl-2 pr-1 py-0.5">
+              <span className="text-[8px] font-black uppercase tracking-wider text-slate-500">Servidor</span>
+              <select
+                value={server}
+                onChange={e => setServer(e.target.value)}
+                aria-label="Servidor"
+                className="bg-transparent text-[10.5px] font-black text-slate-100 outline-none cursor-pointer py-0.5"
+              >
+                {SERVER_OPTIONS.map(s => <option key={s} value={s} className="bg-[var(--th-bg-raised)]">{s}</option>)}
+              </select>
+            </label>
             <span
-              className={`inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 font-mono text-[9px] font-black tabular-nums ${coinRate > 0 ? "border-amber-500/35 bg-amber-500/10 text-amber-300" : "border-red-500/35 bg-red-500/10 text-red-300"}`}
+              className={`inline-flex items-center gap-1 rounded-lg border px-2 py-1 font-mono text-[9px] font-black tabular-nums ${coinRate > 0 ? "border-amber-500/35 bg-amber-500/10 text-amber-300" : "border-red-500/35 bg-red-500/10 text-red-300"}`}
               title={coinRate > 0 ? `Cotação do RC em ${server} (quadro "RC Servidores" do Painel Bazaar): ${coinRateText(coinRate)}k por 1000 RC` : `Servidor sem cotação de RC cadastrada no quadro "RC Servidores" — conversões indisponíveis`}
             >
               <Coins size={9} /> {coinRate > 0 ? `RC a ${coinRateText(coinRate)}k` : "sem cotação"}
@@ -364,14 +424,14 @@ export default function ExpectedProfitModal({ isBoss, onClose }: Props) {
                   onChange={e => setRateDraft(e.target.value)}
                   aria-label={`Cotação do RC em ${server} (k por 1000 RC)`}
                   placeholder="—"
-                  className="w-12 bg-black/40 border border-amber-500/40 focus:border-amber-400/70 rounded-md px-1.5 py-0.5 font-mono text-[9px] font-black tabular-nums text-amber-200 text-right outline-none transition-colors placeholder-slate-600"
+                  className="w-12 bg-black/40 border border-amber-500/40 focus:border-amber-400/70 rounded-lg px-1.5 py-1 font-mono text-[9px] font-black tabular-nums text-amber-200 text-right outline-none transition-colors placeholder-slate-600"
                   title={`Nova cotação do RC em ${server} (número > 0, até 1 casa decimal — ex.: 2,5)`}
                 />
                 <button
                   type="button"
                   disabled={savingRate}
                   onClick={() => { void handleSaveRate(); }}
-                  className="inline-flex items-center gap-1 rounded-md border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[9px] font-black text-amber-300 hover:bg-amber-500/20 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                  className="inline-flex items-center gap-1 rounded-lg border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-[9px] font-black text-amber-300 hover:bg-amber-500/20 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                   title={`Salvar a cotação de ${server} no quadro oficial "RC Servidores"`}
                 >
                   {savingRate ? <RefreshCw size={9} className="animate-spin" /> : <Check size={9} />} Salvar RC
@@ -381,70 +441,55 @@ export default function ExpectedProfitModal({ isBoss, onClose }: Props) {
                 )}
               </span>
             )}
-            {view === "resumo" ? (
-              <>
-                <button type="button" onClick={() => setView("crypt")} className="inline-flex items-center gap-1 rounded-md border border-violet-500/40 bg-violet-500/10 px-1.5 py-0.5 text-[9px] font-black text-violet-300 hover:bg-violet-500/20 transition-colors cursor-pointer">
-                  <Package size={9} /> Itens Crypt
-                </button>
-                <button type="button" onClick={() => setView("valores")} className="inline-flex items-center gap-1 rounded-md border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[9px] font-black text-amber-300 hover:bg-amber-500/20 transition-colors cursor-pointer">
-                  <Settings2 size={9} /> Valores Considerados
-                </button>
-              </>
-            ) : (
-              <button type="button" onClick={() => setView("resumo")} className="inline-flex items-center gap-1 rounded-md border border-[var(--th-line)]/70 bg-black/30 px-1.5 py-0.5 text-[9px] font-black text-slate-300 hover:text-white transition-colors cursor-pointer">
-                <ChevronLeft size={9} /> Voltar
-              </button>
-            )}
-            <button type="button" onClick={onClose} className="text-slate-500 hover:text-white transition-colors cursor-pointer" title="Fechar">
-              <X size={14} />
-            </button>
           </div>
         </div>
 
         {/* Miolo rolável — base global de modais (altura/rolagem) */}
         <div className="app-modal-body custom-scrollbar">
           {view === "resumo" && (
-            <div className="flex flex-col gap-2 p-2.5">
+            <div className="flex flex-col gap-2.5 p-3">
               <QuestCard questKey="sw" />
               <QuestCard questKey="sg" />
               <QuestCard questKey="gb" />
-              <div className="text-[8.5px] leading-snug text-slate-500 px-0.5">
+              <div className="rounded-lg border border-[var(--th-line)]/40 bg-black/20 px-2.5 py-1.5 text-[8.5px] leading-snug text-slate-500">
                 Premissa: recompensas equiprováveis dentro de cada quest (sem confirmação oficial das taxas individuais) — médias calculadas SOMENTE sobre os itens com valor cadastrado em {"\u201C"}Valores Considerados{"\u201D"}. Conversão kk → RC pela cotação de {server} do quadro {"\u201C"}RC Servidores{"\u201D"}.
               </div>
             </div>
           )}
 
           {view === "crypt" && (
-            <div className="flex flex-col gap-2 p-2.5">
-              <div className="rounded-xl border border-[var(--th-line)]/60 bg-black/20 p-2.5 space-y-1.5">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <span className="text-[11px] font-black text-amber-200">Conversão — {CRYPT_RUNES_REQUIRED} runas ➜ 1 item Crypt</span>
+            <div className="flex flex-col gap-2.5 p-3">
+              <div className="rounded-xl border border-[var(--th-line)]/60 bg-black/25 overflow-hidden">
+                <div className="flex items-center justify-between gap-2 flex-wrap px-2.5 py-1.5 border-b border-[var(--th-line)]/40 bg-white/[0.02]">
+                  <span className="text-[11.5px] font-black tracking-wide text-amber-200">Conversão — {CRYPT_RUNES_REQUIRED} runas ➜ 1 item Crypt</span>
                   <span className="inline-flex items-center gap-1 rounded-md border border-violet-500/40 bg-violet-500/10 px-1.5 py-0.5 text-[8.5px] font-black text-violet-300">
                     <Package size={8} /> {CRYPT_ITEMS.length} itens possíveis
                   </span>
                 </div>
-                <div className="text-[8.5px] leading-snug text-slate-400">
-                  Mecânica do Graveborn: {CRYPT_RUNES_REQUIRED} runas de recompensa viram 1 item Crypt aleatório. O saldo desconta o custo de oportunidade das runas gastas (média das runas configuradas) — runas e item NUNCA contam como duas recompensas.
-                </div>
-                <div className="flex gap-1.5">
-                  <CryptConversionBox kind="direct" />
-                  <CryptConversionBox kind="patient" />
+                <div className="p-2.5 space-y-1.5">
+                  <div className="rounded-md border border-[var(--th-line)]/40 bg-black/20 px-2 py-1 text-[8.5px] leading-snug text-slate-400">
+                    Mecânica do Graveborn: {CRYPT_RUNES_REQUIRED} runas de recompensa viram 1 item Crypt aleatório. O saldo desconta o custo de oportunidade das runas gastas (média das runas configuradas) — runas e item NUNCA contam como duas recompensas.
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+                    <CryptConversionBox kind="direct" />
+                    <CryptConversionBox kind="patient" />
+                  </div>
                 </div>
               </div>
               {/* Os 7 itens Crypt — valores individuais em RC */}
-              <div className="rounded-xl border border-[var(--th-line)]/60 bg-black/20 p-2.5">
-                <div className="text-[9px] font-black uppercase tracking-wide text-slate-400 mb-1.5">Itens Crypt em {server} (RC)</div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-1">
+              <div className="rounded-xl border border-[var(--th-line)]/60 bg-black/25 overflow-hidden">
+                <div className="px-2.5 py-1.5 border-b border-[var(--th-line)]/40 bg-white/[0.02] text-[9px] font-black uppercase tracking-wider text-slate-400">Itens Crypt em {server} (RC)</div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-1 p-2.5">
                   {CRYPT_ITEMS.map(item => {
                     const entry = getExpectedItemEntry(values, server, item);
                     const dRc = coinRate > 0 && entry.d ? computeItemRC(coinRate, entry.d) : null;
                     const pRc = coinRate > 0 && entry.p ? computeItemRC(coinRate, entry.p) : null;
                     return (
-                      <div key={item} className="flex items-center justify-between gap-2 rounded-md border border-[var(--th-line)]/40 bg-black/25 px-2 py-1">
+                      <div key={item} className="flex items-center justify-between gap-2 rounded-md border border-[var(--th-line)]/40 bg-black/25 px-2 py-1.5">
                         <span className="text-[9.5px] font-bold text-slate-200 truncate">{item}</span>
-                        <span className="flex items-center gap-1.5 font-mono text-[9px] font-black tabular-nums flex-shrink-0">
-                          <span className="text-sky-300" title="Venda Direta (mínimo)">D {dRc === null ? "—" : dRc.toLocaleString("pt-BR")}</span>
-                          <span className="text-violet-300" title="Venda Paciente (média)">P {pRc === null ? "—" : pRc.toLocaleString("pt-BR")}</span>
+                        <span className="flex items-center gap-1 font-mono text-[9px] font-black tabular-nums flex-shrink-0">
+                          <span className="rounded bg-sky-500/15 px-1.5 py-px text-sky-300" title="Venda Direta (mínimo)">D {dRc === null ? "—" : dRc.toLocaleString("pt-BR")}</span>
+                          <span className="rounded bg-violet-500/15 px-1.5 py-px text-violet-300" title="Venda Paciente (média)">P {pRc === null ? "—" : pRc.toLocaleString("pt-BR")}</span>
                         </span>
                       </div>
                     );
@@ -455,66 +500,78 @@ export default function ExpectedProfitModal({ isBoss, onClose }: Props) {
           )}
 
           {view === "valores" && (
-            <div className="flex flex-col gap-2 p-2.5">
-              <div className="flex items-center gap-1 flex-wrap">
-                {GROUPS.map(g => (
-                  <button
-                    key={g.key}
-                    type="button"
-                    onClick={() => setEditGroup(g.key)}
-                    className={`rounded-md border px-2 py-0.5 text-[9px] font-black transition-colors cursor-pointer ${editGroup === g.key ? "border-amber-500/60 bg-amber-500/15 text-amber-200" : "border-[var(--th-line)]/60 bg-black/25 text-slate-400 hover:text-slate-200"}`}
-                  >
-                    {g.label}
-                  </button>
-                ))}
+            <div className="flex flex-col gap-2 p-3">
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                <div className="inline-flex items-center gap-0.5 rounded-lg border border-[var(--th-line)]/60 bg-black/30 p-0.5">
+                  {GROUPS.map(g => (
+                    <button
+                      key={g.key}
+                      type="button"
+                      onClick={() => setEditGroup(g.key)}
+                      className={`rounded-md px-2 py-1 text-[9px] font-black transition-colors cursor-pointer ${editGroup === g.key ? "bg-amber-500/20 text-amber-200 shadow-inner" : "text-slate-400 hover:text-slate-200 hover:bg-white/5"}`}
+                    >
+                      {g.label}
+                    </button>
+                  ))}
+                </div>
+                <span className="text-[8.5px] font-bold text-slate-500">{group.items.length} itens em <span className="text-slate-300">{server}</span></span>
               </div>
-              <div className="text-[8.5px] leading-snug text-slate-500">
+              <div className="rounded-lg border border-[var(--th-line)]/40 bg-black/20 px-2.5 py-1.5 text-[8.5px] leading-snug text-slate-500">
                 Valores em kk por item em <span className="font-bold text-slate-300">{server}</span> — <span className="text-sky-300 font-bold">Venda Direta</span> = mínimo alcançável (maior oferta de compra); <span className="text-violet-300 font-bold">Venda Paciente</span> = média esperada sem pressa. Campo vazio = não configurado (fica fora das médias).
                 <span className="block mt-0.5">A <span className="text-sky-300 font-bold">Venda Direta</span> é o MESMO valor <span className="font-bold text-slate-300">Base</span> da Lista de Itens do Painel Bazaar (guia Personagens Com Itens): alterar e salvar em qualquer um dos dois atualiza o outro em tempo real, no servidor correspondente. A <span className="text-violet-300 font-bold">Venda Paciente</span> nunca é alterada pela sincronização.</span>
                 {!isBoss && <span className="block text-amber-400/80 font-bold mt-0.5">Somente usuários Boss podem editar e salvar estes valores.</span>}
               </div>
-              <div className="rounded-xl border border-[var(--th-line)]/60 bg-black/20 p-2 space-y-0.5">
-                {group.items.map(item => {
-                  const iKey = expectedItemKey(item);
-                  const d = draft[iKey]?.d ?? "";
-                  const p = draft[iKey]?.p ?? "";
-                  const dRc = coinRate > 0 ? computeItemRC(coinRate, parseRateKk(d)) : 0;
-                  const pRc = coinRate > 0 ? computeItemRC(coinRate, parseRateKk(p)) : 0;
-                  // 116ª — última atualização do VALOR deste item neste
-                  // servidor (epoch no banco; exibição no fuso do usuário).
-                  const updatedAtMs = getExpectedItemEntry(values, server, item).u;
-                  return (
-                    <div key={item} className="flex items-center gap-1.5 py-0.5">
-                      <span className="flex-1 min-w-0">
-                        <span className="block text-[9.5px] font-bold text-slate-200 truncate leading-tight" title={item}>{item}</span>
-                        <span className={`block text-[8px] leading-tight truncate ${updatedAtMs ? "text-slate-500" : "text-slate-600 italic"}`} title="Última atualização do valor deste item neste servidor">
-                          {updatedAtMs ? `Atualizado ${formatWatchedUpdatedAt(updatedAtMs, tzOffsetMinutes)}` : "Não atualizado"}
+              <div className="rounded-xl border border-[var(--th-line)]/60 bg-black/25 overflow-hidden">
+                {/* Cabeçalho das colunas */}
+                <div className="flex items-center gap-1.5 px-2.5 py-1.5 border-b border-[var(--th-line)]/40 bg-white/[0.02] text-[8px] font-black uppercase tracking-wider text-slate-500">
+                  <span className="flex-1 min-w-0">Item · última atualização</span>
+                  <span className="w-20 text-right text-sky-300/90">Direta (kk)</span>
+                  <span className="w-20 text-right text-violet-300/90">Paciente (kk)</span>
+                  <span className="w-24 text-right hidden sm:block">RC (D / P)</span>
+                </div>
+                <div className="p-1.5 space-y-px">
+                  {group.items.map(item => {
+                    const iKey = expectedItemKey(item);
+                    const d = draft[iKey]?.d ?? "";
+                    const p = draft[iKey]?.p ?? "";
+                    const dRc = coinRate > 0 ? computeItemRC(coinRate, parseRateKk(d)) : 0;
+                    const pRc = coinRate > 0 ? computeItemRC(coinRate, parseRateKk(p)) : 0;
+                    // 116ª — última atualização do VALOR deste item neste
+                    // servidor (epoch no banco; exibição no fuso do usuário).
+                    const updatedAtMs = getExpectedItemEntry(values, server, item).u;
+                    return (
+                      <div key={item} className="flex items-center gap-1.5 rounded-md px-1 py-1 hover:bg-white/[0.03] transition-colors">
+                        <span className="flex-1 min-w-0">
+                          <span className="block text-[9.5px] font-bold text-slate-200 truncate leading-tight" title={item}>{item}</span>
+                          <span className={`block text-[8px] leading-tight truncate ${updatedAtMs ? "text-slate-500" : "text-slate-600 italic"}`} title="Última atualização do valor deste item neste servidor">
+                            {updatedAtMs ? `Atualizado ${formatWatchedUpdatedAt(updatedAtMs, tzOffsetMinutes)}` : "Não atualizado"}
+                          </span>
                         </span>
-                      </span>
-                      {isBoss ? (
-                        <>
-                          <input type="text" inputMode="decimal" value={d} placeholder="—" aria-label={`Venda Direta de ${item} (kk)`}
-                            onChange={e => setDraft(prev => ({ ...prev, [iKey]: { d: sanitizeRateKkInput(e.target.value), p: prev[iKey]?.p ?? "" } }))}
-                            className={`${inputCls} border-sky-500/40 focus:border-sky-400/70 text-sky-200`} />
-                          <input type="text" inputMode="decimal" value={p} placeholder="—" aria-label={`Venda Paciente de ${item} (kk)`}
-                            onChange={e => setDraft(prev => ({ ...prev, [iKey]: { d: prev[iKey]?.d ?? "", p: sanitizeRateKkInput(e.target.value) } }))}
-                            className={`${inputCls} border-violet-500/40 focus:border-violet-400/70 text-violet-200`} />
-                        </>
-                      ) : (
-                        <>
-                          <span className="w-20 text-right font-mono text-[10px] font-bold tabular-nums text-sky-300">{d === "" ? "—" : `${d}kk`}</span>
-                          <span className="w-20 text-right font-mono text-[10px] font-bold tabular-nums text-violet-300">{p === "" ? "—" : `${p}kk`}</span>
-                        </>
-                      )}
-                      <span className="w-24 text-right font-mono text-[8.5px] tabular-nums text-slate-500 hidden sm:block" title="Equivalente em RC pela cotação atual do servidor">
-                        {dRc > 0 ? dRc.toLocaleString("pt-BR") : "—"} / {pRc > 0 ? pRc.toLocaleString("pt-BR") : "—"}
-                      </span>
-                    </div>
-                  );
-                })}
+                        {isBoss ? (
+                          <>
+                            <input type="text" inputMode="decimal" value={d} placeholder="—" aria-label={`Venda Direta de ${item} (kk)`}
+                              onChange={e => setDraft(prev => ({ ...prev, [iKey]: { d: sanitizeRateKkInput(e.target.value), p: prev[iKey]?.p ?? "" } }))}
+                              className={`${inputCls} border-sky-500/40 focus:border-sky-400/70 text-sky-200`} />
+                            <input type="text" inputMode="decimal" value={p} placeholder="—" aria-label={`Venda Paciente de ${item} (kk)`}
+                              onChange={e => setDraft(prev => ({ ...prev, [iKey]: { d: prev[iKey]?.d ?? "", p: sanitizeRateKkInput(e.target.value) } }))}
+                              className={`${inputCls} border-violet-500/40 focus:border-violet-400/70 text-violet-200`} />
+                          </>
+                        ) : (
+                          <>
+                            <span className="w-20 text-right font-mono text-[10px] font-bold tabular-nums text-sky-300">{d === "" ? "—" : `${d}kk`}</span>
+                            <span className="w-20 text-right font-mono text-[10px] font-bold tabular-nums text-violet-300">{p === "" ? "—" : `${p}kk`}</span>
+                          </>
+                        )}
+                        <span className="w-24 text-right font-mono text-[8.5px] tabular-nums text-slate-500 hidden sm:block" title="Equivalente em RC pela cotação atual do servidor">
+                          {dRc > 0 ? dRc.toLocaleString("pt-BR") : "—"} / {pRc > 0 ? pRc.toLocaleString("pt-BR") : "—"}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
               {isBoss && (
-                <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center justify-between gap-2 rounded-lg border border-[var(--th-line)]/40 bg-black/20 px-2.5 py-1.5">
                   <span className={`text-[9px] font-bold ${feedback ? (feedback.ok ? "text-emerald-300" : "text-red-300") : "text-transparent"}`}>
                     {feedback?.message || "."}
                   </span>
@@ -522,7 +579,7 @@ export default function ExpectedProfitModal({ isBoss, onClose }: Props) {
                     type="button"
                     disabled={saving}
                     onClick={() => { void handleSave(); }}
-                    className="inline-flex items-center gap-1 rounded-lg bg-emerald-500 hover:bg-emerald-400 px-3 py-1 text-[10px] font-black text-black transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 px-3.5 py-1.5 text-[10px] font-black text-black transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                   >
                     {saving ? <RefreshCw size={11} className="animate-spin" /> : <Check size={11} />} Salvar valores
                   </button>
