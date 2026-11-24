@@ -46,7 +46,11 @@ import { collectBusyIdsForQuest } from "../utils/questEligibility";
 // calculado), mesma formatação kk (trimZeros). Cruzamento por auction.id
 // (mesmo id nas duas consultas) — nenhuma consulta nova ao site.
 import {
+  BAZAAR_WATCHED_ITEMS_UPDATED_EVENT,
   applyOfficialWatchedItemUpdate,
+  findServerWatchedItem,
+  parseDecimalKkText,
+  sanitizeDecimalKkText,
   BAZAAR_ITEMS_LAST_QUERY_UPDATED_EVENT,
   buildCharacterMatches,
   buildWatchlistIndex,
@@ -1854,6 +1858,65 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
   const [questsViewUpdateDone, setQuestsViewUpdateDone] = useState<{ index: number; ok: boolean; message: string } | null>(null);
   const questsViewUpdateTimerRef = useRef<number | null>(null);
   useEffect(() => () => { if (questsViewUpdateTimerRef.current !== null) window.clearTimeout(questsViewUpdateTimerRef.current); }, []);
+  // ── 120ª — coluna "Valor Base" do modal "Ver" (EXCLUSIVA DO BOSS) ────────
+  // Espelho VIVO da Lista de Itens (fonte única do valor BASE global por
+  // servidor): recarregado pelo MESMO evento oficial que a guia Itens já
+  // dispara em toda gravação — qualquer edição (guia Itens, Lucro Esperado,
+  // Item Vendido ou esta coluna) reflete aqui em tempo real, sem recarregar.
+  // É um mecanismo SEPARADO do Total (kk): o Total continua sendo a
+  // personalização LOCAL por personagem (QuestsViewOverride) e NUNCA é
+  // tocado pela edição do Valor Base — e vice-versa.
+  const [questsViewWatchedVersion, setQuestsViewWatchedVersion] = useState(0);
+  useEffect(() => {
+    const bump = () => setQuestsViewWatchedVersion(version => version + 1);
+    window.addEventListener(BAZAAR_WATCHED_ITEMS_UPDATED_EVENT, bump);
+    return () => window.removeEventListener(BAZAAR_WATCHED_ITEMS_UPDATED_EVENT, bump);
+  }, []);
+  const questsViewWatchedByServer = useMemo(() => loadWatchedItemsByServer(), [questsViewWatchedVersion]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Rascunhos por linha (campo vive com o valor OFICIAL até o Boss digitar);
+  // feedback por linha substitui o campo por 2,5s (mesmo padrão do Atualizar).
+  const [questsViewBaseInputs, setQuestsViewBaseInputs] = useState<Record<string, string>>({});
+  const [questsViewBaseDone, setQuestsViewBaseDone] = useState<{ index: number; ok: boolean; message: string } | null>(null);
+  const questsViewBaseTimerRef = useRef<number | null>(null);
+  useEffect(() => () => { if (questsViewBaseTimerRef.current !== null) window.clearTimeout(questsViewBaseTimerRef.current); }, []);
+  // Troca de personagem no modal: rascunhos/feedback da coluna zerados.
+  useEffect(() => { setQuestsViewBaseInputs({}); setQuestsViewBaseDone(null); }, [questsItemsDetailResult]);
+  /**
+   * SALVA o Valor Base de UMA linha (120ª): validação idêntica à da Lista
+   * de Itens (kk > 0, até 1 casa) e gravação pelo MESMO mecanismo oficial
+   * applyOfficialWatchedItemUpdate em escopo "server" — SOMENTE o item e o
+   * servidor do personagem (demais servidores/itens intactos; idempotente:
+   * valor vigente vira "Já atualizado" sem gravação). A reprecificação da
+   * última consulta da guia Itens e o evento para os demais módulos (Lucro
+   * Esperado incluso) são os do próprio mecanismo. NUNCA toca o Total
+   * personalizado desta ou de outras linhas.
+   */
+  function saveQuestsViewBaseValue(view: QuestsItemsDetailView, index: number) {
+    if (!isBossUser || questsViewUpdateBusy) return;
+    const match = view.matches[index];
+    if (!match) return;
+    const key = questsViewItemKey(index, match.foundName);
+    const itemName = match.watchedName || parseTieredItemName(match.foundName).baseName;
+    const showDone = (ok: boolean, message: string) => {
+      setQuestsViewBaseDone({ index, ok, message });
+      if (questsViewBaseTimerRef.current !== null) window.clearTimeout(questsViewBaseTimerRef.current);
+      questsViewBaseTimerRef.current = window.setTimeout(() => { setQuestsViewBaseDone(null); questsViewBaseTimerRef.current = null; }, 2500);
+    };
+    const parsed = parseDecimalKkText(questsViewBaseInputs[key] ?? "");
+    if (parsed === null) { showDone(false, "Valor inválido"); return; }
+    const result = applyOfficialWatchedItemUpdate({
+      scope: "server",
+      server: view.server,
+      itemName,
+      valueKk: parsed,
+      serverUniverse: SERVER_OPTIONS,
+    });
+    if (!result.ok) { showDone(false, result.error || "Falha ao atualizar a Lista de Itens."); return; }
+    // Sucesso: o rascunho é dispensado — o campo volta a espelhar o valor
+    // OFICIAL vivo (que o evento acabou de atualizar).
+    setQuestsViewBaseInputs(prev => { const next = { ...prev }; delete next[key]; return next; });
+    showDone(true, result.changedServers.length + result.addedServers.length === 0 ? "Já atualizado" : `${view.server} atualizado`);
+  }
   // ── ATUALIZAÇÃO EM LOTE DO MODAL "VER" (86ª — EXCLUSIVA DO BOSS) ────────
   // Grava o valor base de TODOS os itens encontrados NESTE personagem na
   // Lista de Itens, no escopo escolhido ("server" = só o servidor dele;
@@ -5619,6 +5682,17 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
                     <th className="px-1.5 py-1.5 text-left">Item encontrado</th>
                     <th className="px-1.5 py-1.5 text-center">Tier</th>
                     <th className="px-1.5 py-1.5 text-center">QTD</th>
+                    {/* VALOR BASE (120ª — EXCLUSIVO DO BOSS): valor GLOBAL
+                        do item na Lista de Itens do SERVIDOR do personagem
+                        (espelho vivo + edição oficial). Mecanismo SEPARADO
+                        do Total (kk), que segue sendo a personalização
+                        LOCAL por personagem. Demais usuários: coluna
+                        inexistente (modal inalterado). */}
+                    {isBossUser && (
+                      <th className="px-1.5 py-1.5 text-right w-[92px] min-w-[92px]" title={`Valor Base GLOBAL do item na Lista de Itens de ${view.server} (Painel Bazaar) — editar e salvar aqui atualiza a lista oficial e todos os módulos que a usam. NÃO altera o Total (kk) personalizado deste personagem.`}>
+                        Valor Base
+                      </th>
+                    )}
                     <th className="px-1.5 py-1.5 text-right">Total (kk)</th>
                     <th className="px-1.5 py-1.5 text-right">RC</th>
                     {/* ATUALIZAR (66ª — EXCLUSIVO DO BOSS): grava o valor
@@ -5684,7 +5758,7 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
                     const bulkSkipped = view.matches.length - bulkEligible;
                     return (
                       <tr className="border-b border-[var(--th-line)]/25 bg-amber-500/5">
-                        <td colSpan={6} className="px-1.5 py-1.5">
+                        <td colSpan={7} className="px-1.5 py-1.5">
                           <span className="inline-flex flex-wrap items-center gap-1.5 text-[9px] text-amber-200">
                             <AlertTriangle size={10} className="flex-shrink-0 text-amber-300" />
                             <span>
@@ -5718,7 +5792,7 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
                       {/* Personagem só com Ouro relevante (> 1kk): sem itens
                           monitorados — o total vem exclusivamente do Ouro,
                           detalhado logo abaixo. */}
-                      <td colSpan={isBossUser ? 6 : 5} className="px-1.5 py-2.5 text-center italic text-slate-500">
+                      <td colSpan={isBossUser ? 7 : 5} className="px-1.5 py-2.5 text-center italic text-slate-500">
                         Nenhum item monitorado encontrado — o valor deste personagem vem apenas do Ouro.
                       </td>
                     </tr>
@@ -5760,6 +5834,50 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
                           : <span className="text-slate-600">—</span>}
                       </td>
                       <td className="px-1.5 py-1.5 text-center font-mono text-slate-200">{match.amount}</td>
+                      {/* VALOR BASE (120ª — Boss): campo espelha o valor
+                          OFICIAL vivo da Lista de Itens de {view.server};
+                          salvar grava pelo mecanismo único oficial (escopo
+                          servidor). Item fora da lista = campo vazio
+                          (salvar cadastra). NUNCA altera o Total ao lado. */}
+                      {isBossUser && (() => {
+                        const listedItem = findServerWatchedItem(questsViewWatchedByServer, view.server, rowItemLabel);
+                        const liveBaseText = listedItem ? questsViewInputText(listedItem.valueKk) : "";
+                        const baseDraft = questsViewBaseInputs[key];
+                        const baseValue = baseDraft ?? liveBaseText;
+                        const baseDirty = baseDraft !== undefined && baseDraft !== liveBaseText;
+                        const baseDone = questsViewBaseDone?.index === index ? questsViewBaseDone : null;
+                        return (
+                          <td className="px-1.5 py-1.5 text-right">
+                            {baseDone ? (
+                              <span className={`inline-flex items-center gap-1 text-[8px] font-black uppercase tracking-wide ${baseDone.ok ? "text-emerald-300" : "text-rose-300"}`} title={baseDone.message}>
+                                {baseDone.ok ? <Check size={10} className="flex-shrink-0" /> : <AlertTriangle size={10} className="flex-shrink-0" />}
+                                <span className="max-w-[72px] truncate">{baseDone.message}</span>
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 justify-end">
+                                <input
+                                  value={baseValue}
+                                  onChange={event => setQuestsViewBaseInputs(prev => ({ ...prev, [key]: sanitizeDecimalKkText(event.target.value) }))}
+                                  inputMode="decimal"
+                                  aria-label={`Valor Base de ${rowItemLabel} (kk)`}
+                                  placeholder="—"
+                                  title={listedItem ? `Valor Base de "${rowItemLabel}" na Lista de Itens de ${view.server}: ${formatItemsKk(listedItem.valueKk)}. Edite e salve para atualizar a lista oficial (somente este servidor).` : `"${rowItemLabel}" ainda não está na Lista de Itens de ${view.server} — informe um valor e salve para cadastrar.`}
+                                  className={`w-14 rounded border bg-black/40 px-1.5 py-0.5 text-right text-[10px] font-mono font-bold text-sky-200 outline-none transition-colors ${baseDirty ? "border-amber-500/60 focus:border-amber-400/80" : "border-[var(--th-line)]/60 focus:border-sky-500/50"}`}
+                                />
+                                <button
+                                  type="button"
+                                  disabled={questsViewUpdateBusy || parseDecimalKkText(baseValue) === null || !baseDirty}
+                                  onClick={() => saveQuestsViewBaseValue(view, index)}
+                                  title={baseDirty ? `Salvar ${baseValue}kk como Valor Base de "${rowItemLabel}" na Lista de Itens de ${view.server} (somente este servidor).` : "Edite o valor para salvar."}
+                                  className="rounded border border-sky-500/40 bg-sky-500/10 p-0.5 text-sky-300 hover:bg-sky-500/20 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                                >
+                                  <Check size={10} className="flex-shrink-0" />
+                                </button>
+                              </span>
+                            )}
+                          </td>
+                        );
+                      })()}
                       <td className="px-1.5 py-1.5 text-right">
                         <span className="inline-flex items-center gap-1 justify-end">
                           {overridden && <span className="rounded border border-fuchsia-500/40 bg-fuchsia-500/15 px-1 py-px text-[7px] font-black uppercase tracking-wide text-fuchsia-300" title={`Valor personalizado localmente (calculado pela consulta: ${formatItemsKk(Number(match.totalKk || 0))})`}>local</span>}
@@ -5818,7 +5936,7 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
                         executa — só esta linha confirma. */}
                     {isBossUser && rowConfirm && !rowDone && (
                       <tr className="border-b border-[var(--th-line)]/25 bg-amber-500/5">
-                        <td colSpan={6} className="px-1.5 pb-1.5 pt-0">
+                        <td colSpan={7} className="px-1.5 pb-1.5 pt-0">
                           <span className="inline-flex flex-wrap items-center gap-1.5 text-[9px] text-amber-200">
                             <AlertTriangle size={10} className="flex-shrink-0 text-amber-300" />
                             <span>
@@ -5852,6 +5970,8 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
                       <td className="px-1.5 py-1.5 text-left font-bold text-yellow-300" title="Ouro lido na página do leilão, convertido para kk (1.000.000 gold = 1kk) e somado ao total — uma única vez.">Ouro</td>
                       <td className="px-1.5 py-1.5 text-center font-mono"><span className="text-slate-600">—</span></td>
                       <td className="px-1.5 py-1.5 text-center font-mono"><span className="text-slate-600">—</span></td>
+                      {/* Ouro não é item da Lista de Itens — sem Valor Base. */}
+                      {isBossUser && <td className="px-1.5 py-1.5 text-right"><span className="text-slate-600">—</span></td>}
                       <td className="px-1.5 py-1.5 text-right">
                         <span className="inline-flex items-center gap-1 justify-end">
                           {Math.abs(effGoldKk - autoGoldKk) > 0.0001 && <span className="rounded border border-fuchsia-500/40 bg-fuchsia-500/15 px-1 py-px text-[7px] font-black uppercase tracking-wide text-fuchsia-300" title={`Valor personalizado localmente (lido na consulta: ${formatItemsKk(autoGoldKk)})`}>local</span>}
