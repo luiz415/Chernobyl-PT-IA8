@@ -261,11 +261,13 @@ export default function ExpectedProfitModal({ isBoss, onClose }: Props) {
             <span className={`h-1.5 w-1.5 rounded-full flex-shrink-0 ${isDirect ? "bg-sky-400" : "bg-violet-400"}`} />
             {isDirect ? "Venda Direta (mín.)" : "Venda Paciente (méd.)"}
           </span>
+          {/* RC/h em DESTAQUE — comparador principal de rentabilidade */}
           <span
-            className={`rounded-md px-1.5 py-px font-mono text-[8.5px] font-black tabular-nums flex-shrink-0 ${isDirect ? "bg-sky-500/15 text-sky-200" : "bg-violet-500/15 text-violet-200"}`}
+            className={`inline-flex items-baseline gap-1 rounded-lg border px-2 py-0.5 font-mono font-black tabular-nums flex-shrink-0 shadow-sm ${isDirect ? "border-sky-400/50 bg-sky-500/20 text-sky-100 shadow-sky-500/20" : "border-violet-400/50 bg-violet-500/20 text-violet-100 shadow-violet-500/20"}`}
             title="RC por hora — comparador de rentabilidade entre as quests"
           >
-            {outcome.rcPerHour === null ? "— RC/h" : `${outcome.rcPerHour.toLocaleString("pt-BR")} RC/h`}
+            <span className="text-[11.5px] leading-none">{outcome.rcPerHour === null ? "—" : outcome.rcPerHour.toLocaleString("pt-BR")}</span>
+            <span className={`text-[8px] font-black uppercase tracking-wide ${isDirect ? "text-sky-300/90" : "text-violet-300/90"}`}>RC/h</span>
           </span>
         </div>
         <div className={`mt-1.5 text-base font-black tabular-nums leading-none ${isDirect ? "text-sky-100" : "text-violet-100"}`} title="Valor esperado de 1 recompensa (média dos itens configurados)">
