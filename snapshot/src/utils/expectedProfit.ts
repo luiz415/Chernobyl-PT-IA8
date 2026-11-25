@@ -380,3 +380,173 @@ export function computeCryptConversion(runeStat: ExpectedCategoryStat, cryptStat
     netRc: cryptStat.avgRc - runesCost,
   };
 }
+
+// ── RANKING DE SERVIDORES (123ª) ────────────────────────────────────────────
+// Classificação de TODOS os servidores cadastrados pelas três quests (Venda
+// Direta × Venda Paciente) e pela conversão Crypt — montada EXCLUSIVAMENTE
+// sobre as funções acima (computeGroupStats/computeQuestOutcome/
+// computeCryptConversion): nenhuma fórmula ou conversão paralela. A cotação
+// de cada servidor entra por injeção (`rateOf`, fonte única bazaarCoinRates)
+// para este módulo continuar puro/testável. NADA é inventado: célula sem
+// cotação ou sem item configurado fica null ("—" na UI, sempre ao final da
+// ordenação).
+
+/** Colunas do ranking das quests: quest × categoria (d=Direta, p=Paciente). */
+export type QuestRankingColumnKey = "sw_d" | "sw_p" | "sg_d" | "sg_p" | "gb_d" | "gb_p";
+
+export const QUEST_RANKING_COLUMNS: { key: QuestRankingColumnKey; quest: "sw" | "sg" | "gb"; category: "direct" | "patient" }[] = [
+  { key: "sw_d", quest: "sw", category: "direct" },
+  { key: "sw_p", quest: "sw", category: "patient" },
+  { key: "sg_d", quest: "sg", category: "direct" },
+  { key: "sg_p", quest: "sg", category: "patient" },
+  { key: "gb_d", quest: "gb", category: "direct" },
+  { key: "gb_p", quest: "gb", category: "patient" },
+];
+
+/** Uma célula do ranking (servidor × quest × categoria), em RC. */
+export interface QuestRankingCell {
+  /** RC/h — comparador oficial (incorpora chance de drop e tempo médio). */
+  rcPerHour: number | null;
+  /** Valor esperado de 1 recompensa (RC) — detalhe da célula. */
+  perRewardRc: number | null;
+  /** Itens com valor cadastrado na categoria / total do grupo. */
+  configured: number;
+  total: number;
+}
+
+export interface QuestRankingRow {
+  server: string;
+  coinRate: number;
+  cells: Record<QuestRankingColumnKey, QuestRankingCell>;
+  /** false = servidor sem NENHUMA célula calculável (sem cotação/valores). */
+  hasAnyData: boolean;
+}
+
+/**
+ * Linhas do ranking das quests — uma por servidor do universo informado.
+ * Cada célula reusa computeGroupStats (médias SÓ dos itens configurados,
+ * premissa equiprovável sinalizada) + computeQuestOutcome (chance × média ÷
+ * tempo), com a cotação DO PRÓPRIO servidor.
+ */
+export function computeQuestRankingRows(
+  servers: string[],
+  values: ExpectedProfitValues,
+  rateOf: (server: string) => number,
+): QuestRankingRow[] {
+  return (servers || []).filter(s => typeof s === "string" && s.trim()).map(server => {
+    const rate = rateOf(server);
+    const cells = {} as Record<QuestRankingColumnKey, QuestRankingCell>;
+    for (const col of QUEST_RANKING_COLUMNS) {
+      const def = EXPECTED_QUESTS.find(q => q.key === col.quest)!;
+      const stat = computeGroupStats(def.items, values, server, rate)[col.category];
+      const outcome = computeQuestOutcome(def, stat);
+      cells[col.key] = {
+        rcPerHour: outcome.rcPerHour,
+        perRewardRc: outcome.perRewardRc,
+        configured: stat.configured,
+        total: def.items.length,
+      };
+    }
+    const hasAnyData = QUEST_RANKING_COLUMNS.some(col => cells[col.key].rcPerHour !== null);
+    return { server, coinRate: rate, cells, hasAnyData };
+  });
+}
+
+/**
+ * Ordena as linhas por UMA coluna (RC/h). Células null (não configuradas)
+ * SEMPRE ao final, independentemente da direção; empate → ordem alfabética
+ * de servidor (estável e previsível).
+ */
+export function sortQuestRankingRows(rows: QuestRankingRow[], column: QuestRankingColumnKey, dir: "desc" | "asc"): QuestRankingRow[] {
+  const mult = dir === "asc" ? 1 : -1;
+  return [...rows].sort((a, b) => {
+    const va = a.cells[column]?.rcPerHour ?? null;
+    const vb = b.cells[column]?.rcPerHour ?? null;
+    if (va === null && vb === null) return a.server.localeCompare(b.server, "pt-BR");
+    if (va === null) return 1;
+    if (vb === null) return -1;
+    if (va !== vb) return (va - vb) * mult;
+    return a.server.localeCompare(b.server, "pt-BR");
+  });
+}
+
+/**
+ * Posições (1 = melhor) de cada servidor em UMA coluna, pelo RC/h
+ * DECRESCENTE — para destacar as melhores posições SEM depender da
+ * ordenação escolhida pelo usuário. Empates compartilham a posição
+ * (competition ranking); células null ficam de fora (sem posição).
+ */
+export function questRankingPositions(rows: QuestRankingRow[], column: QuestRankingColumnKey): Record<string, number> {
+  const valued = rows
+    .map(row => ({ server: row.server, value: row.cells[column]?.rcPerHour ?? null }))
+    .filter((entry): entry is { server: string; value: number } => entry.value !== null)
+    .sort((a, b) => b.value - a.value);
+  const positions: Record<string, number> = {};
+  valued.forEach((entry, index) => {
+    positions[entry.server] = index > 0 && valued[index - 1].value === entry.value
+      ? positions[valued[index - 1].server]
+      : index + 1;
+  });
+  return positions;
+}
+
+/** Linha do ranking Crypt (123ª) — troca 5 runas GB por 1 item Crypt. */
+export interface CryptRankingRow {
+  server: string;
+  coinRate: number;
+  /** Custo das 5 runas (RC): 5 × média das runas na Venda PACIENTE. */
+  runesCostRc: number | null;
+  /** Valor esperado do item Crypt (RC): média dos 7 na Venda DIRETA. */
+  expectedCryptRc: number | null;
+  /** Resultado = valor esperado Crypt − custo das 5 runas. */
+  netRc: number | null;
+  /** Rentabilidade (%) = resultado ÷ custo das 5 runas × 100 (1 casa). */
+  profitPct: number | null;
+  /** Runas com Venda Paciente cadastrada (de 5). */
+  runesConfigured: number;
+  /** Itens Crypt com Venda Direta cadastrada (de 7). */
+  cryptConfigured: number;
+}
+
+/**
+ * Ranking da troca 5 runas ➜ 1 item Crypt, por servidor — nas categorias
+ * EXIGIDAS pela definição da análise: custo = Venda PACIENTE das runas
+ * (quem troca abre mão de vendê-las com calma); recompensa = Venda DIRETA
+ * dos 7 itens Crypt (média equiprovável — MESMA premissa do módulo, sem
+ * distribuição individual confirmada). As runas NUNCA somam como recompensa
+ * (são o custo de oportunidade — computeCryptConversion). Resultado JÁ
+ * ordenado do melhor para o pior netRc; servidores sem dados ao final, em
+ * ordem alfabética.
+ */
+export function computeCryptRankingRows(
+  servers: string[],
+  values: ExpectedProfitValues,
+  rateOf: (server: string) => number,
+): CryptRankingRow[] {
+  const rows = (servers || []).filter(s => typeof s === "string" && s.trim()).map(server => {
+    const rate = rateOf(server);
+    const runePatient = computeGroupStats(GB_REWARD_RUNES, values, server, rate).patient;
+    const cryptDirect = computeGroupStats(CRYPT_ITEMS, values, server, rate).direct;
+    const conv = computeCryptConversion(runePatient, cryptDirect);
+    const profitPct = conv.netRc !== null && conv.runesCostRc !== null && conv.runesCostRc > 0
+      ? Math.round((conv.netRc / conv.runesCostRc) * 1000) / 10
+      : null;
+    return {
+      server,
+      coinRate: rate,
+      runesCostRc: conv.runesCostRc,
+      expectedCryptRc: conv.expectedCryptRc,
+      netRc: conv.netRc,
+      profitPct,
+      runesConfigured: runePatient.configured,
+      cryptConfigured: cryptDirect.configured,
+    };
+  });
+  return rows.sort((a, b) => {
+    if (a.netRc === null && b.netRc === null) return a.server.localeCompare(b.server, "pt-BR");
+    if (a.netRc === null) return 1;
+    if (b.netRc === null) return -1;
+    if (a.netRc !== b.netRc) return b.netRc - a.netRc;
+    return a.server.localeCompare(b.server, "pt-BR");
+  });
+}

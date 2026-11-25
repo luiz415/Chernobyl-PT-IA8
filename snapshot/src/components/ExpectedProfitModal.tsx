@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { Check, Clock, Coins, Package, Percent, RefreshCw, Settings2, TrendingUp, X } from "lucide-react";
+import { ArrowDown, ArrowUp, Check, Clock, Coins, Package, Percent, RefreshCw, Settings2, TrendingUp, Trophy, X } from "lucide-react";
 import { SERVER_OPTIONS } from "../constants/servers";
 import { formatRC } from "../types";
 import { SERVER_COIN_RATES_EVENT, coinRateText, getServerCoinRate, readLocalCoinRates, saveOfficialServerCoinRate } from "../utils/bazaarCoinRates";
@@ -13,17 +13,23 @@ import {
   EXPECTED_PROFIT_VALUES_EVENT,
   EXPECTED_QUESTS,
   GB_REWARD_RUNES,
+  QUEST_RANKING_COLUMNS,
   computeCryptConversion,
+  computeCryptRankingRows,
   computeGroupStats,
   computeQuestOutcome,
+  computeQuestRankingRows,
   expectedHoursPerReward,
   expectedItemKey,
   getExpectedItemEntry,
   persistExpectedProfitEntryPatches,
+  questRankingPositions,
   readLocalExpectedProfitValues,
+  sortQuestRankingRows,
   type ExpectedItemValueEntry,
   type ExpectedProfitEntryPatch,
   type ExpectedProfitValues,
+  type QuestRankingColumnKey,
 } from "../utils/expectedProfit";
 
 /**
@@ -63,7 +69,10 @@ interface Props {
   onClose: () => void;
 }
 
-type View = "resumo" | "crypt" | "valores";
+type View = "resumo" | "crypt" | "valores" | "ranking";
+
+/** Guia interna da área Ranking (123ª). */
+type RankingTab = "quests" | "cryptRank";
 
 const GROUPS: { key: string; label: string; items: string[] }[] = [
   { key: "sw", label: "Soul War", items: EXPECTED_QUESTS[0].items },
@@ -153,6 +162,38 @@ export default function ExpectedProfitModal({ isBoss, onClose }: Props) {
     gb: computeGroupStats(EXPECTED_QUESTS[2].items, values, server, coinRate),
     crypt: computeGroupStats(CRYPT_ITEMS, values, server, coinRate),
   }), [values, server, coinRate]);
+
+  // ── RANKING (123ª) — todos os servidores, derivado em tempo real ─────────
+  // Recalculado automaticamente a cada mudança de valores/cotações (os
+  // eventos acima já atualizam `values`/`coinRates`); consulta aberta a
+  // todos os usuários — não há nada editável aqui (Boss edita nos fluxos
+  // já existentes: "Valores Considerados", Lista de Itens e cotação RC).
+  const [rankingTab, setRankingTab] = useState<RankingTab>("quests");
+  const [rankSort, setRankSort] = useState<{ col: QuestRankingColumnKey; dir: "desc" | "asc" }>({ col: "sw_d", dir: "desc" });
+  const questRankingRows = useMemo(
+    () => computeQuestRankingRows(SERVER_OPTIONS, values, s => getServerCoinRate(coinRates, s)),
+    [values, coinRates],
+  );
+  const sortedQuestRanking = useMemo(
+    () => sortQuestRankingRows(questRankingRows, rankSort.col, rankSort.dir),
+    [questRankingRows, rankSort],
+  );
+  // Posições por coluna (1 = melhor RC/h) — destaque independente da
+  // ordenação escolhida; células não configuradas ficam sem posição.
+  const questColumnPositions = useMemo(() => {
+    const map = {} as Record<QuestRankingColumnKey, Record<string, number>>;
+    for (const col of QUEST_RANKING_COLUMNS) map[col.key] = questRankingPositions(questRankingRows, col.key);
+    return map;
+  }, [questRankingRows]);
+  const cryptRankingRows = useMemo(
+    () => computeCryptRankingRows(SERVER_OPTIONS, values, s => getServerCoinRate(coinRates, s)),
+    [values, coinRates],
+  );
+
+  /** Alterna a ordenação da coluna (nova coluna = melhor primeiro). */
+  function toggleRankSort(col: QuestRankingColumnKey) {
+    setRankSort(prev => prev.col === col ? { col, dir: prev.dir === "desc" ? "asc" : "desc" } : { col, dir: "desc" });
+  }
 
   // ── EDITOR "Valores Considerados" (rascunho por servidor+grupo) ───────────
   const [editGroup, setEditGroup] = useState("sw");
@@ -349,10 +390,12 @@ export default function ExpectedProfitModal({ isBoss, onClose }: Props) {
   }
 
   // ── 118ª (visual) — navegação do quadro principal (sempre visível) ───────
-  const navButtons: { key: View; label: string; icon: ReactNode; title: string }[] = [
+  const navButtons: { key: View; label: string; icon: ReactNode; title: string; highlight?: boolean }[] = [
     { key: "resumo", label: "Resumo", icon: <TrendingUp size={10} />, title: "Retorno esperado das quests Soul War, Sanguine e Graveborn" },
     { key: "crypt", label: "Itens Crypt", icon: <Package size={10} />, title: "Conversão 5 runas ➜ 1 item Crypt e valores dos 7 itens" },
     { key: "valores", label: "Valores Considerados", icon: <Settings2 size={10} />, title: "Valores por item e servidor (Venda Direta / Venda Paciente)" },
+    // 123ª — botão em DESTAQUE (dourado): classificação dos servidores.
+    { key: "ranking", label: "Ranking", icon: <Trophy size={10} />, title: "Ranking dos servidores — quests (Venda Direta/Paciente) e troca de runas por Itens Crypt", highlight: true },
   ];
 
   return createPortal(
@@ -387,7 +430,11 @@ export default function ExpectedProfitModal({ isBoss, onClose }: Props) {
                 type="button"
                 onClick={() => setView(nav.key)}
                 title={nav.title}
-                className={`inline-flex items-center gap-1 rounded-md px-2 py-1 text-[9px] font-black transition-colors cursor-pointer ${view === nav.key ? "bg-emerald-500/20 text-emerald-200 shadow-inner" : "text-slate-400 hover:text-slate-200 hover:bg-white/5"}`}
+                className={`inline-flex items-center gap-1 rounded-md px-2 py-1 text-[9px] font-black transition-colors cursor-pointer ${nav.highlight
+                  ? (view === nav.key
+                    ? "bg-amber-400/25 text-amber-100 border border-amber-400/60 shadow-inner shadow-amber-500/20"
+                    : "bg-amber-500/10 text-amber-300 border border-amber-500/40 hover:bg-amber-500/20 hover:text-amber-200 shadow-sm shadow-amber-500/10")
+                  : (view === nav.key ? "bg-emerald-500/20 text-emerald-200 shadow-inner" : "text-slate-400 hover:text-slate-200 hover:bg-white/5")}`}
               >
                 {nav.icon} {nav.label}
               </button>
@@ -498,6 +545,207 @@ export default function ExpectedProfitModal({ isBoss, onClose }: Props) {
                   })}
                 </div>
               </div>
+            </div>
+          )}
+
+          {/* ── RANKING (123ª) — classificação dos servidores ─────────────
+              Consulta aberta a todos (nada editável aqui); derivado 100%
+              das fontes únicas (valores considerados + cotações RC) e
+              recalculado em tempo real pelos MESMOS eventos do modal. */}
+          {view === "ranking" && (
+            <div className="flex flex-col gap-2 p-3">
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                {/* Guias internas: Quests × Itens Crypt */}
+                <div className="inline-flex items-center gap-0.5 rounded-lg border border-[var(--th-line)]/60 bg-black/30 p-0.5">
+                  <button
+                    type="button"
+                    onClick={() => setRankingTab("quests")}
+                    title="Ranking dos servidores pelas três quests, em Venda Direta e Venda Paciente (RC/h)"
+                    className={`inline-flex items-center gap-1 rounded-md px-2 py-1 text-[9px] font-black transition-colors cursor-pointer ${rankingTab === "quests" ? "bg-amber-500/20 text-amber-200 shadow-inner" : "text-slate-400 hover:text-slate-200 hover:bg-white/5"}`}
+                  >
+                    <TrendingUp size={10} /> Ranking das Quests
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setRankingTab("cryptRank")}
+                    title={`Servidores mais vantajosos para trocar ${CRYPT_RUNES_REQUIRED} runas Graveborn por 1 item Crypt`}
+                    className={`inline-flex items-center gap-1 rounded-md px-2 py-1 text-[9px] font-black transition-colors cursor-pointer ${rankingTab === "cryptRank" ? "bg-amber-500/20 text-amber-200 shadow-inner" : "text-slate-400 hover:text-slate-200 hover:bg-white/5"}`}
+                  >
+                    <Package size={10} /> Itens Crypt
+                  </button>
+                </div>
+                <span className="inline-flex items-center gap-1 rounded-md border border-emerald-500/30 bg-emerald-500/[0.07] px-1.5 py-0.5 text-[8px] font-bold text-emerald-300/90" title="O ranking recalcula automaticamente quando o Boss altera valores de itens ou cotações RC — mesmos eventos em tempo real do restante do modal">
+                  <RefreshCw size={8} /> atualização automática
+                </span>
+              </div>
+
+              {rankingTab === "quests" && (
+                <>
+                  <div className="rounded-lg border border-[var(--th-line)]/40 bg-black/20 px-2.5 py-1.5 text-[8.5px] leading-snug text-slate-500">
+                    Classificação de TODOS os servidores cadastrados pelo retorno esperado em <span className="font-bold text-slate-300">RC/h</span> — valores dos itens, chance de drop e tempo médio de cada quest (mesmos cálculos do Resumo), com a cotação RC <span className="font-bold text-slate-300">do próprio servidor</span>. Clique no cabeçalho de uma coluna para ordenar por ela. <span className="text-slate-400">Célula {"\u201C"}—{"\u201D"} = servidor sem cotação ou sem item configurado na categoria (nenhum valor é inventado); itens parciais são sinalizados.</span>
+                  </div>
+                  <div className="rounded-xl border border-[var(--th-line)]/60 bg-black/25 overflow-hidden">
+                    <div className="overflow-x-auto custom-scrollbar">
+                      <table className="w-full min-w-[660px] border-collapse text-[9px]">
+                        <thead>
+                          <tr className="border-b border-[var(--th-line)]/40 bg-white/[0.02]">
+                            <th rowSpan={2} className="sticky left-0 z-[1] bg-[var(--th-bg-raised)] px-2.5 py-1.5 text-left text-[8px] font-black uppercase tracking-wider text-slate-500 border-r border-[var(--th-line)]/40">Servidor</th>
+                            {EXPECTED_QUESTS.map(def => (
+                              <th key={def.key} colSpan={2} className="px-1.5 pt-1.5 pb-0.5 text-center text-[8.5px] font-black tracking-wide text-amber-200 border-l border-[var(--th-line)]/30">
+                                {def.label}
+                                <span className="block text-[7px] font-bold text-slate-500 normal-case tracking-normal">{def.dropChance >= 1 ? "drop 100%" : `drop ${Math.round(def.dropChance * 100)}%/rotação`} · {def.timeLabel}</span>
+                              </th>
+                            ))}
+                          </tr>
+                          <tr className="border-b border-[var(--th-line)]/40 bg-white/[0.02]">
+                            {QUEST_RANKING_COLUMNS.map(col => {
+                              const isDirect = col.category === "direct";
+                              const active = rankSort.col === col.key;
+                              return (
+                                <th key={col.key} className={`px-1 pb-1 pt-0.5 text-center ${isDirect ? "border-l border-[var(--th-line)]/30" : ""}`}>
+                                  <button
+                                    type="button"
+                                    onClick={() => toggleRankSort(col.key)}
+                                    aria-label={`Ordenar por ${EXPECTED_QUESTS.find(q => q.key === col.quest)?.label} — ${isDirect ? "Venda Direta" : "Venda Paciente"}`}
+                                    title={`Ordenar os servidores por esta coluna (${active ? (rankSort.dir === "desc" ? "melhor primeiro — clique para inverter" : "pior primeiro — clique para inverter") : "melhor primeiro"})`}
+                                    className={`inline-flex items-center gap-0.5 rounded-md px-1.5 py-0.5 text-[7.5px] font-black uppercase tracking-wide transition-colors cursor-pointer border ${active
+                                      ? (isDirect ? "border-sky-400/60 bg-sky-500/20 text-sky-100" : "border-violet-400/60 bg-violet-500/20 text-violet-100")
+                                      : (isDirect ? "border-sky-500/25 bg-sky-500/[0.06] text-sky-300/80 hover:bg-sky-500/15" : "border-violet-500/25 bg-violet-500/[0.06] text-violet-300/80 hover:bg-violet-500/15")}`}
+                                  >
+                                    {isDirect ? "Direta" : "Paciente"}
+                                    {active ? (rankSort.dir === "desc" ? <ArrowDown size={8} /> : <ArrowUp size={8} />) : null}
+                                  </button>
+                                </th>
+                              );
+                            })}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {sortedQuestRanking.map(row => (
+                            <tr key={row.server} className={`border-b border-[var(--th-line)]/20 last:border-b-0 transition-colors hover:bg-white/[0.03] ${row.hasAnyData ? "" : "opacity-50"}`}>
+                              <td className="sticky left-0 z-[1] bg-[var(--th-bg-raised)] px-2.5 py-1.5 border-r border-[var(--th-line)]/40">
+                                <span className="block text-[9.5px] font-black text-slate-100 leading-tight whitespace-nowrap">{row.server}</span>
+                                <span className={`block text-[7.5px] font-bold leading-tight ${row.coinRate > 0 ? "text-slate-500" : "text-red-400/80"}`}>
+                                  {row.coinRate > 0 ? `RC a ${coinRateText(row.coinRate)}k` : "sem cotação RC"}
+                                </span>
+                              </td>
+                              {QUEST_RANKING_COLUMNS.map(col => {
+                                const cell = row.cells[col.key];
+                                const pos = questColumnPositions[col.key][row.server];
+                                const partial = cell.configured > 0 && cell.configured < cell.total;
+                                const posCls = pos === 1
+                                  ? "border-amber-400/70 bg-amber-400/20 text-amber-100 shadow-sm shadow-amber-500/20"
+                                  : pos === 2
+                                    ? "border-slate-300/50 bg-slate-300/15 text-slate-100"
+                                    : pos === 3
+                                      ? "border-orange-400/50 bg-orange-500/15 text-orange-200"
+                                      : "border-transparent text-slate-300";
+                                return (
+                                  <td key={col.key} className={`px-1 py-1 text-center ${col.category === "direct" ? "border-l border-[var(--th-line)]/30" : ""}`}>
+                                    {cell.rcPerHour === null ? (
+                                      <span className="font-mono text-[9px] text-slate-600" title={row.coinRate > 0 ? "Nenhum item desta categoria configurado neste servidor" : "Servidor sem cotação RC cadastrada"}>—</span>
+                                    ) : (
+                                      <span
+                                        className={`inline-flex items-baseline gap-0.5 rounded-md border px-1.5 py-0.5 font-mono font-black tabular-nums ${posCls}`}
+                                        title={`${row.server} — ${EXPECTED_QUESTS.find(q => q.key === col.quest)?.label} (${col.category === "direct" ? "Venda Direta" : "Venda Paciente"})${pos ? ` · ${pos}º lugar da coluna` : ""}\n1 recompensa: ${formatRC(Math.round(cell.perRewardRc ?? 0))} · ${cell.configured}/${cell.total} itens configurados${partial ? " (parcial)" : ""}`}
+                                      >
+                                        {pos === 1 && <Trophy size={8} className="self-center" />}
+                                        <span className="text-[9.5px]">{cell.rcPerHour.toLocaleString("pt-BR")}</span>
+                                        <span className="text-[6.5px] font-black uppercase opacity-80">RC/h</span>
+                                        {partial && <span className="self-center h-1 w-1 rounded-full bg-amber-400" title={`Parcial: ${cell.configured}/${cell.total} itens configurados`} />}
+                                      </span>
+                                    )}
+                                  </td>
+                                );
+                              })}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                  <div className="rounded-lg border border-[var(--th-line)]/40 bg-black/20 px-2.5 py-1.5 text-[8px] leading-snug text-slate-500 flex items-center gap-2 flex-wrap">
+                    <span className="inline-flex items-center gap-1"><span className="inline-flex items-center gap-0.5 rounded-md border border-amber-400/70 bg-amber-400/20 px-1 py-px text-amber-100 font-black"><Trophy size={7} /> 1º</span> melhor da coluna</span>
+                    <span className="inline-flex items-center gap-1"><span className="rounded-md border border-slate-300/50 bg-slate-300/15 px-1 py-px text-slate-100 font-black">2º</span><span className="rounded-md border border-orange-400/50 bg-orange-500/15 px-1 py-px text-orange-200 font-black">3º</span> demais destaques</span>
+                    <span className="inline-flex items-center gap-1"><span className="h-1 w-1 rounded-full bg-amber-400 inline-block" /> itens parciais na categoria</span>
+                    <span>Premissa: recompensas equiprováveis (médias só dos itens configurados).</span>
+                  </div>
+                </>
+              )}
+
+              {rankingTab === "cryptRank" && (
+                <>
+                  <div className="rounded-lg border border-[var(--th-line)]/40 bg-black/20 px-2.5 py-1.5 text-[8.5px] leading-snug text-slate-500">
+                    Troca de <span className="font-bold text-slate-300">{CRYPT_RUNES_REQUIRED} runas Graveborn</span> por <span className="font-bold text-slate-300">1 item Crypt aleatório</span>, por servidor — do melhor para o pior resultado. <span className="text-violet-300 font-bold">Custo</span> = soma das {CRYPT_RUNES_REQUIRED} runas na <span className="text-violet-300 font-bold">Venda Paciente</span> (custo de oportunidade: as runas gastas deixam de ser vendidas — NUNCA contam como recompensa). <span className="text-sky-300 font-bold">Recompensa</span> = valor esperado dos {CRYPT_ITEMS.length} itens Crypt na <span className="text-sky-300 font-bold">Venda Direta</span>. Premissa do módulo (sem distribuição individual confirmada): os {CRYPT_ITEMS.length} itens são <span className="font-bold text-slate-300">equiprováveis</span> — valor esperado = média dos itens configurados. Resultado = recompensa − custo; Rentabilidade = resultado ÷ custo × 100.
+                  </div>
+                  <div className="rounded-xl border border-[var(--th-line)]/60 bg-black/25 overflow-hidden">
+                    <div className="overflow-x-auto custom-scrollbar">
+                      <table className="w-full min-w-[620px] border-collapse text-[9px]">
+                        <thead>
+                          <tr className="border-b border-[var(--th-line)]/40 bg-white/[0.02] text-[8px] font-black uppercase tracking-wider text-slate-500">
+                            <th className="px-2 py-1.5 text-center w-8">#</th>
+                            <th className="px-2 py-1.5 text-left">Servidor</th>
+                            <th className="px-2 py-1.5 text-right text-violet-300/90" title={`Soma em RC das ${CRYPT_RUNES_REQUIRED} runas Graveborn na Venda Paciente do servidor`}>Custo {CRYPT_RUNES_REQUIRED} runas (P)</th>
+                            <th className="px-2 py-1.5 text-right text-sky-300/90" title={`Valor esperado em RC do item Crypt recebido — média equiprovável dos ${CRYPT_ITEMS.length} itens na Venda Direta do servidor`}>Item Crypt esperado (D)</th>
+                            <th className="px-2 py-1.5 text-right" title="Resultado = valor esperado Crypt − custo das 5 runas">Resultado</th>
+                            <th className="px-2 py-1.5 text-right" title="Rentabilidade (%) = Resultado ÷ Custo das 5 runas × 100">Rentab.</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {cryptRankingRows.map((row, index) => {
+                            const ranked = row.netRc !== null;
+                            const pos = ranked ? index + 1 : null;
+                            const missingReason = row.coinRate <= 0
+                              ? "Servidor sem cotação RC cadastrada"
+                              : row.runesConfigured === 0
+                                ? "Nenhuma runa com Venda Paciente cadastrada"
+                                : "Nenhum item Crypt com Venda Direta cadastrada";
+                            const partial = ranked && (row.runesConfigured < CRYPT_RUNES_REQUIRED || row.cryptConfigured < CRYPT_ITEMS.length);
+                            return (
+                              <tr key={row.server} className={`border-b border-[var(--th-line)]/20 last:border-b-0 transition-colors hover:bg-white/[0.03] ${ranked ? "" : "opacity-50"} ${pos === 1 ? "bg-amber-400/[0.07]" : ""}`}>
+                                <td className="px-2 py-1.5 text-center">
+                                  {pos === null ? (
+                                    <span className="text-slate-600">—</span>
+                                  ) : (
+                                    <span className={`inline-flex items-center justify-center gap-0.5 rounded-md border px-1 py-px font-mono font-black tabular-nums ${pos === 1 ? "border-amber-400/70 bg-amber-400/20 text-amber-100" : pos === 2 ? "border-slate-300/50 bg-slate-300/15 text-slate-100" : pos === 3 ? "border-orange-400/50 bg-orange-500/15 text-orange-200" : "border-transparent text-slate-400"}`}>
+                                      {pos === 1 && <Trophy size={8} />}{pos}º
+                                    </span>
+                                  )}
+                                </td>
+                                <td className="px-2 py-1.5">
+                                  <span className="block text-[9.5px] font-black text-slate-100 leading-tight whitespace-nowrap">{row.server}</span>
+                                  <span className={`block text-[7.5px] font-bold leading-tight ${row.coinRate > 0 ? "text-slate-500" : "text-red-400/80"}`}>
+                                    {row.coinRate > 0 ? `RC a ${coinRateText(row.coinRate)}k` : "sem cotação RC"}
+                                    {ranked && <span className={partial ? "text-amber-400/90" : ""}> · runas {row.runesConfigured}/{CRYPT_RUNES_REQUIRED} · crypt {row.cryptConfigured}/{CRYPT_ITEMS.length}{partial ? " (parcial)" : ""}</span>}
+                                  </span>
+                                </td>
+                                {ranked ? (
+                                  <>
+                                    <td className="px-2 py-1.5 text-right font-mono font-bold tabular-nums text-violet-300" title={`Média das runas configuradas × ${CRYPT_RUNES_REQUIRED} (Venda Paciente de ${row.server})`}>{formatRC(Math.round(row.runesCostRc ?? 0))}</td>
+                                    <td className="px-2 py-1.5 text-right font-mono font-bold tabular-nums text-sky-300" title={`Média equiprovável dos ${row.cryptConfigured} itens Crypt configurados (Venda Direta de ${row.server})`}>{formatRC(Math.round(row.expectedCryptRc ?? 0))}</td>
+                                    <td className="px-2 py-1.5 text-right">
+                                      <span className={`inline-block rounded-md px-1.5 py-px font-mono font-black tabular-nums ${(row.netRc ?? 0) >= 0 ? "bg-emerald-500/15 text-emerald-300" : "bg-red-500/15 text-red-300"}`}>
+                                        {(row.netRc ?? 0) >= 0 ? "+" : "−"}{formatRC(Math.abs(Math.round(row.netRc ?? 0)))}
+                                      </span>
+                                    </td>
+                                    <td className={`px-2 py-1.5 text-right font-mono font-black tabular-nums ${(row.profitPct ?? 0) >= 0 ? "text-emerald-300" : "text-red-300"}`}>
+                                      {(row.profitPct ?? 0) >= 0 ? "+" : "−"}{Math.abs(row.profitPct ?? 0).toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%
+                                    </td>
+                                  </>
+                                ) : (
+                                  <td colSpan={4} className="px-2 py-1.5 text-right text-[8px] font-bold text-slate-600 italic" title={missingReason}>
+                                    não configurado — {missingReason.toLowerCase()}
+                                  </td>
+                                )}
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </>
+              )}
             </div>
           )}
 
