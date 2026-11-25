@@ -684,6 +684,12 @@ export default function FoundItemsModal({
           initial={liveSaleTarget.item.sale}
           allowNoValue
           server={liveSaleTarget.group.serverName}
+          /* 122ª — valores de referência no modal "Item Vendido": Base pelo
+             nome da Lista de Itens; Considerado = snapshot da compra deste
+             match (totalKk); sem o registro (compras antigas), null = "—"
+             (o fallback sinalizado fica a cargo do chip da própria linha). */
+          watchedItemName={liveSaleTarget.item.watchedName || liveSaleTarget.item.foundName}
+          consideredKk={Number(liveSaleTarget.item.totalKk || 0) > 0 ? Number(liveSaleTarget.item.totalKk) : null}
           onCancel={() => setSaleTarget(null)}
           onSave={sale => handleConfirmSale(sale)}
         />

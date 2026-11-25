@@ -325,6 +325,43 @@ export function collectMySaleItems(
   return items;
 }
 
+/**
+ * 122ª — VALOR CONSIDERADO de um item + ORIGEM do valor — função PURA e
+ * fonte ÚNICA (exibição, somas, Texto de Venda e modal "Item Vendido"):
+ *   • Bazaar: o SNAPSHOT da compra (`match.totalKk`, capturado por item na
+ *     importação — preservado mesmo que o Base global mude depois).
+ *     REGISTROS ANTIGOS sem o snapshot (totalKk ausente/0): FALLBACK no
+ *     valor BASE do servidor correspondente — o vivo da Lista de Itens;
+ *     sem cadastro, a base congelada na compra (`snapshotBaseKk`) — com a
+ *     regra única do Tier (+30%/nível) × quantidade do match. O fallback é
+ *     SINALIZADO (`fallback: true`) e NUNCA gravado: nenhum valor
+ *     histórico é inventado.
+ *   • Manual (89ª, inalterado): base viva × Tier; sem base = desconhecido.
+ *   • Quest/negociado (73ª, inalterado): o valor da Lista do servidor.
+ * `liveBaseKk` = valor BASE vivo na Lista de Itens do servidor do item
+ * (null = não cadastrado) — resolvido pelo chamador (itemLiveBaseKk).
+ */
+export function consideredInfoForSaleItem(
+  item: MySaleItem,
+  liveBaseKk: number | null,
+): { kk: number | null; fallback: boolean } {
+  if (item.source === "bazaar") {
+    const own = Number(item.consideredKk || 0);
+    if (own > 0) return { kk: own, fallback: false };
+    const base = liveBaseKk !== null ? liveBaseKk : Number(item.snapshotBaseKk || 0) > 0 ? Number(item.snapshotBaseKk) : null;
+    if (base === null) return { kk: null, fallback: false };
+    const units = Math.max(1, Math.floor(Number(item.amount) || 1));
+    const kk = Math.round(computeTieredValueKk(base, item.tier || 0) * units * 100) / 100;
+    return kk > 0 ? { kk, fallback: true } : { kk: null, fallback: false };
+  }
+  if (item.source === "manual") {
+    if (liveBaseKk === null) return { kk: null, fallback: false };
+    const tiered = computeTieredValueKk(liveBaseKk, item.tier || 0);
+    return { kk: tiered > 0 ? tiered : null, fallback: false };
+  }
+  return { kk: liveBaseKk, fallback: false };
+}
+
 /** Total de itens AINDA NÃO VENDIDOS (contador do botão em Meus Personagens). */
 export function countMyUnsoldSaleItems(items: MySaleItem[]): number {
   return items.reduce((sum, item) => sum + (item.sold ? 0 : 1), 0);
@@ -804,17 +841,11 @@ export default function MyItemsForSaleModal({
    *  de Itens do servidor (sem Tier/quantidade); desconhecido = null. É a
    *  fonte ÚNICA usada pelos chips de valor E pelo Texto de Venda. */
   function itemConsideredKkOf(item: MySaleItem): number | null {
-    if (item.source === "bazaar") return item.consideredKk ?? null;
-    // Item MANUAL (89ª): base viva da Lista de Itens do servidor + a regra
-    // ÚNICA do Tier (+30%/nível, computeTieredValueKk) — nada recalculado à
-    // parte; sem base cadastrada, o valor é desconhecido ("—").
-    if (item.source === "manual") {
-      const base = itemLiveBaseKk(item);
-      if (base === null) return null;
-      const tiered = computeTieredValueKk(base, item.tier || 0);
-      return tiered > 0 ? tiered : null;
-    }
-    return itemLiveBaseKk(item);
+    return itemConsideredInfoOf(item).kk;
+  }
+  /** 122ª — considerado + origem (fallback?) pela função PURA única acima. */
+  function itemConsideredInfoOf(item: MySaleItem): { kk: number | null; fallback: boolean } {
+    return consideredInfoForSaleItem(item, itemLiveBaseKk(item));
   }
 
   /**
@@ -1579,7 +1610,10 @@ export default function MyItemsForSaleModal({
                     const shownBaseKk = itemShownBaseKk(item);
                     const canEditConsidered = item.source === "bazaar" && item.matchIndex !== undefined;
                     // Fonte ÚNICA do considerado (mesma usada pelo Texto de Venda).
-                    const consideredKk = itemConsideredKkOf(item);
+                    // 122ª: info completa — `fallback` sinaliza compra antiga
+                    // SEM snapshot exibindo o Base atual como referência.
+                    const consideredInfo = itemConsideredInfoOf(item);
+                    const consideredKk = consideredInfo.kk;
                     const baseKey = `${item.key}:base`;
                     const totalKey = `${item.key}:total`;
                     const rowDone = editDone && (editDone.key === baseKey || editDone.key === totalKey) ? editDone : null;
@@ -1712,13 +1746,18 @@ export default function MyItemsForSaleModal({
                               <span
                                 className="font-mono font-bold text-amber-200"
                                 title={item.source === "bazaar"
-                                  ? "Valor considerado do item para este personagem (snapshot da compra)"
+                                  ? (consideredInfo.fallback
+                                    ? "Compra sem Valor Considerado registrado — exibindo o valor BASE atual do servidor como referência (fallback; nenhum valor histórico é inventado). Edite para registrar um valor próprio."
+                                    : "Valor considerado do item para este personagem (snapshot da compra — preservado mesmo que o valor Base mude depois)")
                                   : consideredKk !== null
                                     ? `Valor considerado = valor da Lista de Itens de ${item.serverName || "—"} (item de Quest — sem Tier/quantidade)`
                                     : `Sem valor considerado — o item não está na Lista de Itens de ${item.serverName || "este servidor"}`}
                               >
                                 {consideredKk !== null && consideredKk > 0 ? formatKk(consideredKk) : "—"}
                               </span>
+                              {item.source === "bazaar" && consideredInfo.fallback && consideredKk !== null && (
+                                <span className="rounded border border-white/15 bg-white/5 px-1 py-px text-[7px] font-black uppercase tracking-wide text-slate-400" title="Fallback: compra sem snapshot do Valor Considerado — este é o valor Base atual do servidor, apenas como referência.">base atual</span>
+                              )}
                               {canEditConsidered && (
                                 <button
                                   type="button"
@@ -1899,6 +1938,12 @@ export default function MyItemsForSaleModal({
              venda sem valor; só a negociação (schema = lucro numérico) não. */
           allowNoValue={liveSaleTarget.source !== "acquisition"}
           server={liveSaleTarget.serverName}
+          /* 122ª — valores de referência exibidos no modal: lookup/edição do
+             Base pelo nome da Lista; Considerado pela MESMA fonte única dos
+             chips (snapshot da compra > fallback sinalizado no Base atual). */
+          watchedItemName={liveSaleTarget.watchedName || liveSaleTarget.itemName}
+          consideredKk={itemConsideredInfoOf(liveSaleTarget).kk}
+          consideredIsFallback={itemConsideredInfoOf(liveSaleTarget).fallback}
           onCancel={() => setSaleTarget(null)}
           onSave={sale => { void commitSale(sale); }}
         />

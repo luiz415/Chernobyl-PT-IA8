@@ -4,6 +4,18 @@ import { X, Coins, Percent, RotateCcw, Check, Minus, Plus, Globe, RefreshCw } fr
 import type { ItemSaleRecord } from "../types";
 import { formatRC } from "../types";
 import { SERVER_COIN_RATES_EVENT, getServerCoinRate, readLocalCoinRates, saveOfficialServerCoinRate } from "../utils/bazaarCoinRates";
+// 122ª — Valor BASE global do item (Lista de Itens do Painel Bazaar): leitura
+// viva + edição pelo Boss pelo MESMO núcleo oficial de sempre (escopo
+// servidor). Nenhuma fonte nova — o modal apenas espelha e delega.
+import {
+  BAZAAR_WATCHED_ITEMS_UPDATED_EVENT,
+  applyOfficialWatchedItemUpdate,
+  findServerWatchedItem,
+  loadWatchedItemsByServer,
+  parseDecimalKkText,
+  sanitizeDecimalKkText,
+} from "../utils/bazaarWatchedItems";
+import { SERVER_OPTIONS } from "../constants/servers";
 import { useAuth } from "../context/AuthContext";
 import {
   OFFER_TAX_CAP_KK,
@@ -57,11 +69,31 @@ interface Props {
    * ausente) → campo vazio, como sempre (nunca inventamos conversão).
    */
   server?: string | null;
+  /**
+   * 122ª — Nome do item na LISTA DE ITENS do Painel Bazaar (lookup/edição do
+   * Valor Base). Ausente, o lookup usa o próprio `itemName` (itens de Quest/
+   * PT, cujo nome encontrado é o nome da lista).
+   */
+  watchedItemName?: string | null;
+  /**
+   * 122ª — Valor CONSIDERADO (kk) do item: snapshot HISTÓRICO registrado no
+   * momento da compra do personagem (ou a personalização atual do usuário).
+   * `undefined` = contexto sem o conceito (a linha nem aparece); `null` =
+   * contexto com o conceito, mas sem valor conhecido ("—"). O modal apenas
+   * EXIBE o valor recebido — nunca o recalcula nem o regrava.
+   */
+  consideredKk?: number | null;
+  /**
+   * 122ª — true quando `consideredKk` é o valor BASE atual usado como
+   * FALLBACK (compra antiga sem o snapshot) — o modal sinaliza que não é um
+   * registro histórico (nenhum valor histórico é inventado).
+   */
+  consideredIsFallback?: boolean;
   onCancel: () => void;
   onSave: (record: ItemSaleRecord) => void;
 }
 
-export default function ItemSoldModal({ itemName, contextLabel, initial, allowNoValue = true, server, onCancel, onSave }: Props) {
+export default function ItemSoldModal({ itemName, contextLabel, initial, allowNoValue = true, server, watchedItemName, consideredKk, consideredIsFallback = false, onCancel, onSave }: Props) {
   // ── 113ª — ATUALIZAÇÃO DO RC OFICIAL DO SERVIDOR (EXCLUSIVA DO BOSS) ──────
   // O cargo vem do MESMO AuthContext que o app inteiro já mantém (nenhuma
   // leitura nova no Firebase). Quando o Boss digita no campo "RC no Market"
@@ -89,6 +121,58 @@ export default function ItemSoldModal({ itemName, contextLabel, initial, allowNo
   const [rateFeedback, setRateFeedback] = useState<{ ok: boolean; message: string } | null>(null);
   const rateTimerRef = useRef<number | null>(null);
   useEffect(() => () => { if (rateTimerRef.current !== null) window.clearTimeout(rateTimerRef.current); }, []);
+
+  // ── 122ª — VALORES DE REFERÊNCIA DO ITEM (Base global × Considerado) ─────
+  // VALOR BASE: espelho VIVO da Lista de Itens do SERVIDOR do item (mesma
+  // fonte única de todo o app), re-renderizado pelo evento oficial. O Boss
+  // edita em campo PRÓPRIO (separado do valor de venda) e salvar grava pelo
+  // MESMO núcleo applyOfficialWatchedItemUpdate — SÓ o servidor deste item;
+  // demais servidores, Valor Considerado e vendas registradas ficam
+  // intocados. Usuário comum: somente visualização.
+  const serverName = String(server || "").trim();
+  const baseLookupName = String(watchedItemName || itemName || "").trim();
+  const [watchedVersion, setWatchedVersion] = useState(0);
+  useEffect(() => {
+    const bump = () => setWatchedVersion(v => v + 1);
+    window.addEventListener(BAZAAR_WATCHED_ITEMS_UPDATED_EVENT, bump);
+    return () => window.removeEventListener(BAZAAR_WATCHED_ITEMS_UPDATED_EVENT, bump);
+  }, []);
+  const liveBaseKk = useMemo(() => {
+    if (!serverName || !baseLookupName) return null;
+    const listed = findServerWatchedItem(loadWatchedItemsByServer(), serverName, baseLookupName);
+    return listed ? listed.valueKk : null;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [serverName, baseLookupName, watchedVersion]);
+  const canEditBase = userProfile?.role === "Boss" && !!serverName && !!baseLookupName;
+  // Rascunho do Base (padrão 120ª): sem rascunho, o campo ESPELHA o valor
+  // vivo da lista; "sujo" = difere do oficial → botão salvar habilita.
+  const liveBaseText = liveBaseKk !== null ? String(liveBaseKk).replace(".", ",") : "";
+  const [baseDraft, setBaseDraft] = useState<string | undefined>(undefined);
+  const baseValue = baseDraft ?? liveBaseText;
+  const baseDirty = baseDraft !== undefined && baseDraft !== liveBaseText;
+  const [baseFeedback, setBaseFeedback] = useState<{ ok: boolean; message: string } | null>(null);
+  const baseTimerRef = useRef<number | null>(null);
+  useEffect(() => () => { if (baseTimerRef.current !== null) window.clearTimeout(baseTimerRef.current); }, []);
+  function confirmBaseUpdate() {
+    if (!canEditBase || !baseDirty) return;
+    const valueKk = parseDecimalKkText(baseValue);
+    const result = valueKk === null
+      ? { ok: false as const, error: "Valor base inválido — kk maior que zero, com até 1 casa decimal (ex.: 1,5).", changedServers: [] as string[], addedServers: [] as string[] }
+      : applyOfficialWatchedItemUpdate({ scope: "server", server: serverName, itemName: baseLookupName, valueKk, serverUniverse: SERVER_OPTIONS });
+    const touched = result.changedServers.length + result.addedServers.length;
+    setBaseFeedback({
+      ok: result.ok,
+      message: !result.ok
+        ? (result.error || "Falha ao atualizar a Lista de Itens.")
+        : touched === 0 ? "Já atualizado" : `${serverName} atualizado`,
+    });
+    if (result.ok) setBaseDraft(undefined); // volta a espelhar o oficial (novo)
+    if (baseTimerRef.current !== null) window.clearTimeout(baseTimerRef.current);
+    baseTimerRef.current = window.setTimeout(() => { setBaseFeedback(null); baseTimerRef.current = null; }, result.ok ? 2500 : 4000);
+  }
+  // VALOR CONSIDERADO exibido (> 0) — snapshot recebido por prop, nunca
+  // recalculado aqui; alimenta também a comparação com a venda.
+  const shownConsideredKk = typeof consideredKk === "number" && consideredKk > 0 ? consideredKk : null;
 
   // ── Estado dos campos (strings de digitação, pt-BR) ───────────────────────
   const [vendaRaw, setVendaRaw] = useState(() => initial && initial.vendaKk > 0 ? formatRateKkDisplay(initial.vendaKk) : "");
@@ -191,7 +275,105 @@ export default function ItemSoldModal({ itemName, contextLabel, initial, allowNo
           </button>
         </div>
 
-        <div className="p-4 space-y-3">
+        <div className="p-4 space-y-3 max-h-[calc(100dvh-8rem)] overflow-y-auto custom-scrollbar">
+          {/* 122ª — VALORES DO ITEM: quadro de REFERÊNCIA (separado dos
+              campos da venda): Valor BASE global do item na Lista de Itens
+              do servidor (vivo; Boss edita em campo próprio — usuário comum
+              só visualiza) e Valor CONSIDERADO (snapshot histórico/
+              personalizado recebido do chamador — NUNCA recalculado aqui).
+              Com venda digitada, a última linha compara venda × considerado. */}
+          {serverName && !!baseLookupName && (liveBaseKk !== null || consideredKk !== undefined || canEditBase) && (
+            <div className="rounded-xl border border-sky-500/25 bg-sky-500/[0.04] px-3 py-2 space-y-1.5">
+              <div className="flex items-center justify-between gap-2 min-h-6">
+                <span
+                  className="text-[9px] font-black uppercase tracking-wider text-sky-300 flex-shrink-0"
+                  title={`Valor BASE global de "${baseLookupName}" cadastrado na Lista de Itens de ${serverName} (Painel Bazaar) — referência compartilhada por todo o aplicativo. Não é o valor desta venda.`}
+                >
+                  Valor Base — {serverName}
+                </span>
+                {canEditBase ? (
+                  baseFeedback ? (
+                    <span className={`text-right text-[9px] font-bold leading-snug ${baseFeedback.ok ? "text-emerald-300" : "text-red-300"}`}>{baseFeedback.message}</span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1">
+                      <input
+                        type="text"
+                        inputMode="decimal"
+                        value={baseValue}
+                        onChange={e => setBaseDraft(sanitizeDecimalKkText(e.target.value))}
+                        onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); confirmBaseUpdate(); } }}
+                        placeholder="—"
+                        aria-label={`Valor Base de ${baseLookupName} (kk)`}
+                        title={liveBaseKk !== null
+                          ? `Valor Base atual de "${baseLookupName}" em ${serverName}: ${formatKkValue(liveBaseKk, "kk", true)}. Edite e salve para atualizar a Lista de Itens SOMENTE deste servidor — campo separado do valor de venda; o Valor Considerado histórico e as vendas registradas não mudam.`
+                          : `"${baseLookupName}" ainda não está na Lista de Itens de ${serverName} — informe um valor Base e salve para cadastrar (somente neste servidor).`}
+                        className={`h-6 w-16 rounded-md border bg-black/40 px-1.5 text-right font-mono text-[10px] font-bold text-sky-200 outline-none transition-colors ${baseDirty ? "border-amber-500/60 focus:border-amber-400/80" : "border-sky-500/30 focus:border-sky-400/60"}`}
+                      />
+                      <span className="text-[9px] font-bold text-sky-400/70 select-none">kk</span>
+                      <button
+                        type="button"
+                        disabled={!baseDirty || parseDecimalKkText(baseValue) === null}
+                        onClick={confirmBaseUpdate}
+                        title={baseDirty ? `Salvar ${baseValue}kk como Valor Base de "${baseLookupName}" na Lista de Itens de ${serverName} — os demais servidores não mudam.` : "Edite o valor para salvar na Lista de Itens."}
+                        className="w-6 h-6 inline-flex items-center justify-center rounded-md border border-sky-500/40 bg-sky-500/10 text-sky-300 hover:bg-sky-500/20 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                      >
+                        <Check size={11} strokeWidth={3} />
+                      </button>
+                    </span>
+                  )
+                ) : (
+                  <span
+                    className="font-mono text-[11px] font-black tabular-nums text-sky-200"
+                    title={liveBaseKk !== null
+                      ? `Valor Base global de "${baseLookupName}" em ${serverName} (Lista de Itens do Painel Bazaar). Somente usuários Boss podem alterá-lo.`
+                      : `"${baseLookupName}" não está na Lista de Itens de ${serverName}.`}
+                  >
+                    {liveBaseKk !== null ? formatKkValue(liveBaseKk, "kk", true) : "—"}
+                  </span>
+                )}
+              </div>
+              {consideredKk !== undefined && (
+                <div className="flex items-center justify-between gap-2">
+                  <span
+                    className="text-[9px] font-black uppercase tracking-wider text-amber-300 flex-shrink-0"
+                    title="Valor CONSIDERADO do item: referência histórica/personalizada registrada para ESTE item (snapshot do momento da compra do personagem, quando existe). Alterações no Valor Base ou na cotação NÃO mudam este valor."
+                  >
+                    Valor Considerado
+                  </span>
+                  <span className="inline-flex items-center gap-1">
+                    {consideredIsFallback && shownConsideredKk !== null && (
+                      <span
+                        className="rounded border border-white/15 bg-white/5 px-1 py-px text-[7px] font-black uppercase tracking-wide text-slate-400"
+                        title="Esta compra não tem Valor Considerado registrado — exibindo o valor BASE atual do servidor apenas como referência (fallback). Nenhum valor histórico foi inventado."
+                      >
+                        base atual
+                      </span>
+                    )}
+                    <span
+                      className="font-mono text-[11px] font-black tabular-nums text-amber-200"
+                      title={shownConsideredKk !== null
+                        ? (consideredIsFallback
+                          ? "Fallback: valor Base atual do servidor (compra sem snapshot registrado)."
+                          : "Snapshot registrado para este item — preservado mesmo que o Valor Base mude depois.")
+                        : "Sem Valor Considerado conhecido para este item (nenhum valor é inventado)."}
+                    >
+                      {shownConsideredKk !== null ? formatKkValue(shownConsideredKk, "kk", true) : "—"}
+                    </span>
+                  </span>
+                </div>
+              )}
+              {shownConsideredKk !== null && !noValue && vendaKk > 0 && (
+                <div className="flex items-center justify-between gap-2 border-t border-sky-500/15 pt-1 text-[9px]">
+                  <span className="text-slate-400" title="Diferença entre o valor que você está registrando na venda e o Valor Considerado do item (referência da compra).">Venda × Considerado</span>
+                  <span className={`font-mono font-black tabular-nums ${vendaKk >= shownConsideredKk ? "text-emerald-300" : "text-red-300"}`}>
+                    {vendaKk >= shownConsideredKk ? "+" : "−"}{formatKkValue(Math.abs(Math.round((vendaKk - shownConsideredKk) * 100) / 100), "kk", true)}
+                    {" "}({vendaKk >= shownConsideredKk ? "+" : "−"}{(Math.abs((vendaKk - shownConsideredKk) / shownConsideredKk) * 100).toLocaleString("pt-BR", { maximumFractionDigits: 1 })}%)
+                  </span>
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Valor vendido + Cotação RC */}
           <div className="grid grid-cols-2 gap-2.5">
             <label className="block">
