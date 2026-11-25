@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Clock, ExternalLink, FlagTriangleRight, Gavel, Package, Swords, X } from "lucide-react";
+import { Clock, ExternalLink, FlagTriangleRight, Gavel, History, Package, Swords, X } from "lucide-react";
 // ─────────────────────────────────────────────────────────────────────────────
 // PRÓXIMO BID (105ª tarefa; categorias + visual da 107ª) — badge no rodapé
 // (ao lado do contador de usuários) + modal de acompanhamento dos interesses
@@ -104,6 +104,18 @@ import {
   type QuestsItemsDetailView,
   type QuestsViewOverride,
 } from "../utils/bazaarItemsDetailView";
+// 121ª — "ÚLTIMOS BIDS": histórico LOCAL dos últimos 10 personagens marcados
+// como "Tenho Interesse" (snapshots congelados no instante da marcação,
+// gravados EXCLUSIVAMENTE pelos handlers do toggle nas duas guias — este
+// modal só LÊ; ver utils/bazaarLastBids). Zero Firebase.
+import {
+  BAZAAR_LAST_BIDS_KEY_PREFIX,
+  BAZAAR_LAST_BIDS_UPDATED_EVENT,
+  LAST_BIDS_LIMIT,
+  formatLastBidMarkedAt,
+  loadLastBidSnapshots,
+  type LastBidSnapshot,
+} from "../utils/bazaarLastBids";
 
 /** Chaves locais observadas via evento "storage" (gravação em OUTRA janela). */
 const WATCHED_STORAGE_KEYS = [
@@ -193,6 +205,9 @@ function formatTimeLeft(endTs: number | null, nowUnixTs: number): string | null 
 
 export default function NextBidTracker({ currentUserUid, isBoss = false }: { currentUserUid: string; isBoss?: boolean }) {
   const [isOpen, setIsOpen] = useState(false);
+  // 121ª — guia ativa do modal: lista atual ("current") × histórico
+  // ("history"); reabrir o modal sempre volta à lista atual (previsível).
+  const [modalView, setModalView] = useState<"current" | "history">("current");
   // Relógio de 30s: suficiente para o minuto do badge e para a janela de
   // 5 min do AuctionEndBadge; leilões encerrados saem sozinhos da lista.
   const [nowMs, setNowMs] = useState(() => Date.now());
@@ -213,7 +228,8 @@ export default function NextBidTracker({ currentUserUid, isBoss = false }: { cur
       if (event.key
         && !WATCHED_STORAGE_KEYS.includes(event.key)
         && !event.key.startsWith(questsViewOverridesKey(""))
-        && !event.key.startsWith(BAZAAR_ITEMS_INTERESTS_KEY_PREFIX)) return;
+        && !event.key.startsWith(BAZAAR_ITEMS_INTERESTS_KEY_PREFIX)
+        && !event.key.startsWith(BAZAAR_LAST_BIDS_KEY_PREFIX)) return;
       if (!event.key || event.key === "rubinot_bazaar_official_cache") setOfficialCache(readOfficialBazaarCache());
       setSourcesBump(v => v + 1);
     };
@@ -226,6 +242,9 @@ export default function NextBidTracker({ currentUserUid, isBoss = false }: { cur
     // cotação) dispara este aviso local — o total em RC do cabeçalho
     // recalcula NA HORA, sem fechar/reabrir o modal nem esperar o tick.
     window.addEventListener(BAZAAR_QUESTS_VIEW_OVERRIDES_UPDATED_EVENT, bump);
+    // 121ª: gravações do histórico "Últimos Bids" (marcar/desmarcar) na
+    // própria janela — a guia de histórico reflete na hora, sem reabrir.
+    window.addEventListener(BAZAAR_LAST_BIDS_UPDATED_EVENT, bump);
     window.addEventListener("storage", onStorage);
     return () => {
       window.removeEventListener(BAZAAR_OFFICIAL_CACHE_UPDATED_EVENT, refreshOfficial);
@@ -234,6 +253,7 @@ export default function NextBidTracker({ currentUserUid, isBoss = false }: { cur
       window.removeEventListener(BAZAAR_ITEMS_LAST_QUERY_UPDATED_EVENT, bump);
       window.removeEventListener(BAZAAR_ITEMS_INTERESTS_UPDATED_EVENT, bump);
       window.removeEventListener(BAZAAR_QUESTS_VIEW_OVERRIDES_UPDATED_EVENT, bump);
+      window.removeEventListener(BAZAAR_LAST_BIDS_UPDATED_EVENT, bump);
       window.removeEventListener("storage", onStorage);
     };
   }, []);
@@ -403,6 +423,18 @@ export default function NextBidTracker({ currentUserUid, isBoss = false }: { cur
     return Array.from(byEndTs.entries()).map(([endTs, count]) => ({ endTs, count }));
   }, [entries, nowUnixTs]);
   const visibleEndTimes = upcomingEndTimes.slice(0, UPCOMING_END_TIMES_LIMIT);
+
+  // ── 121ª — "ÚLTIMOS BIDS" ─────────────────────────────────────────────────
+  // Leitura PURA do histórico local (já ordenado recente → antigo e limitado
+  // a 10 na própria fonte). Os cards exibem SOMENTE estes snapshots — dados
+  // atuais do personagem/cotações NUNCA entram aqui (preservação histórica).
+  // Recarrega pelos mesmos gatilhos leves do modal (sourcesBump inclui o
+  // evento BAZAAR_LAST_BIDS_UPDATED_EVENT) — nenhuma leitura no Firebase.
+  const lastBids = useMemo<LastBidSnapshot[]>(
+    () => (currentUserUid ? loadLastBidSnapshots(currentUserUid) : []),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [currentUserUid, sourcesBump],
+  );
 
   // ── FEEDBACK de cópia no lugar do nome (mesmo padrão do painel) ──────────
   const [nameFeedback, setNameFeedback] = useState<{ key: string; ok: boolean; message: string } | null>(null);
@@ -682,12 +714,104 @@ export default function NextBidTracker({ currentUserUid, isBoss = false }: { cur
     );
   }
 
+  /**
+   * 121ª — CARD de UM registro de "Últimos Bids" (compacto, mesma linguagem
+   * visual dos cards de interesse): exibe EXCLUSIVAMENTE o snapshot
+   * congelado no instante da marcação — nome, vocação, level, servidor,
+   * badge da categoria (Quest/Item), valor dos itens em kk/RC da época,
+   * horário de encerramento registrado (tachado quando já passou) e o link
+   * do leilão. O DESTAQUE do card é a data/hora em que o interesse foi
+   * registrado. Nada aqui consulta dados atuais do personagem.
+   */
+  function renderLastBidCard(snapshot: LastBidSnapshot, index: number) {
+    const endLabel = snapshot.endTs !== null ? formatAuctionEndShort(snapshot.endTs, timezoneOffsetMinutes) : "";
+    const ended = snapshot.endTs !== null && snapshot.endTs <= nowUnixTs;
+    return (
+      <div
+        key={`${snapshot.origin}_${snapshot.auctionKey || snapshot.name}_${snapshot.markedAtMs}`}
+        className="flex items-center gap-2.5 rounded-lg border border-[var(--th-line)]/50 bg-black/20 px-2.5 py-2 hover:bg-white/[0.03] transition-colors"
+      >
+        <span className="w-5 flex-shrink-0 text-center font-mono text-[9px] font-black tabular-nums text-slate-500">{index + 1}</span>
+        <div className="flex min-w-0 flex-1 flex-col gap-1">
+          <div className="flex items-center gap-1.5 min-w-0">
+            <span className="truncate text-[11px] font-black text-white" title={`${snapshot.name || "—"} — dados congelados no momento em que o interesse foi registrado`}>
+              {snapshot.name || "—"}
+            </span>
+            <span className={`inline-flex items-center justify-center min-w-7 px-1.5 py-0.5 rounded-md border text-[10px] font-black flex-shrink-0 ${getVocationBadgeClass(snapshot.vocation || "")}`} title={`${snapshot.vocation || "Vocação desconhecida"}${snapshot.level ? ` — level ${snapshot.level}` : ""} (na marcação)`}>
+              {getVocationAbbreviation(snapshot.vocation || "")}
+            </span>
+            {snapshot.level > 0 && (
+              <span className="font-mono text-[9px] font-bold tabular-nums text-slate-400 flex-shrink-0" title={`Level ${snapshot.level} no momento da marcação`}>
+                {snapshot.level}
+              </span>
+            )}
+            {/* Badge da CATEGORIA — mesmos acentos âmbar/ciano dos cards de
+                interesse ativos (identificação imediata Quest × Item). */}
+            {snapshot.origin === "quest" ? (
+              <span className="inline-flex items-center gap-0.5 flex-shrink-0 rounded border border-amber-500/35 bg-amber-500/10 px-1 py-px text-[7px] font-black uppercase tracking-wider text-amber-300" title="Categoria do interesse: Quest (guia Personagens Para SW/SG/GB)">
+                <Swords size={7} /> Quest
+              </span>
+            ) : (
+              <span className="inline-flex items-center gap-0.5 flex-shrink-0 rounded border border-cyan-500/35 bg-cyan-500/10 px-1 py-px text-[7px] font-black uppercase tracking-wider text-cyan-300" title="Categoria do interesse: Item (guia Personagens Com Itens)">
+                <Package size={7} /> Item
+              </span>
+            )}
+          </div>
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+            <span className="rounded border border-[var(--th-line)]/60 bg-black/25 px-1.5 py-px text-[8.5px] font-bold text-slate-300" title="Servidor do personagem (na marcação)">
+              {snapshot.server || "—"}
+            </span>
+            {snapshot.valueKk === null ? (
+              <span className="font-mono text-[9.5px] font-bold text-slate-600" title="Sem itens monitorados/Ouro relevante conhecidos no momento da marcação.">
+                Itens: —
+              </span>
+            ) : (
+              <>
+                <span className="font-mono text-[9.5px] font-black text-amber-200" title="Valor dos itens (kk) no momento da marcação — snapshot congelado (alterações posteriores não mudam este registro)">
+                  {formatKkValue(snapshot.valueKk, "kk", true)}
+                </span>
+                {snapshot.valueRc !== null && (
+                  <span className="font-mono text-[9px] font-bold text-emerald-300" title="Equivalente em RC pela cotação vigente no momento da marcação — snapshot congelado">
+                    ({snapshot.valueRc.toLocaleString("pt-BR")} RC)
+                  </span>
+                )}
+              </>
+            )}
+            {endLabel && (
+              <span className={`inline-flex items-center gap-1 font-mono text-[8.5px] font-bold tabular-nums ${ended ? "text-slate-600" : "text-slate-300"}`} title={ended ? "Horário de encerramento registrado na marcação — este leilão já encerrou" : "Horário de encerramento do leilão registrado na marcação"}>
+                <Clock size={9} className="flex-shrink-0" />
+                <span className={ended ? "line-through" : ""}>{endLabel}</span>
+                {ended && <span className="text-[7px] font-black uppercase tracking-wide">Encerrado</span>}
+              </span>
+            )}
+          </div>
+        </div>
+        <div className="flex flex-shrink-0 flex-col items-end gap-1">
+          {/* DESTAQUE do requisito: quando o interesse foi registrado. */}
+          <span className="inline-flex items-center gap-1 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-1.5 py-0.5 font-mono text-[8.5px] font-black tabular-nums text-emerald-300" title={'Data e horário em que este personagem foi marcado como "Tenho Interesse" (horário deste dispositivo)'}>
+            <History size={9} className="flex-shrink-0 text-emerald-400" />
+            {formatLastBidMarkedAt(snapshot.markedAtMs)}
+          </span>
+          <button
+            type="button"
+            onClick={() => { if (snapshot.url) openExternalUrl(snapshot.url); }}
+            disabled={!snapshot.url}
+            title={snapshot.url ? "Abrir o anúncio deste leilão no Bazaar (link registrado na marcação)" : "Link do anúncio indisponível neste registro"}
+            className="inline-flex h-6 items-center justify-center gap-1 rounded-md border border-[var(--th-line)]/60 bg-black/20 px-2 text-[9px] font-black text-slate-300 hover:text-white hover:bg-white/[0.05] transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            <ExternalLink size={10} className="flex-shrink-0" /> Abrir
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <>
       {/* ── BADGE (botão) — texto EXATO "Próximo Bid: hh:mm dd/mm" ─────────── */}
       <button
         type="button"
-        onClick={() => setIsOpen(true)}
+        onClick={() => { setModalView("current"); setIsOpen(true); }}
         title={badgeTitle}
         className={`inline-flex items-center gap-1.5 rounded-md border px-2 py-0.5 text-[9px] font-black transition-colors cursor-pointer ${
           nextEndingSoon
@@ -765,6 +889,40 @@ export default function NextBidTracker({ currentUserUid, isBoss = false }: { cur
               </button>
             </div>
 
+            {/* 121ª — NAVEGAÇÃO entre a LISTA ATUAL e os "ÚLTIMOS BIDS":
+                duas guias simples, fora do miolo rolável (flex-shrink-0 —
+                sempre visíveis, sem consumir a área de rolagem). A guia de
+                histórico lê SÓ os snapshots locais; a lista atual permanece
+                exatamente como era. Reabrir o modal volta à lista atual. */}
+            <div className="flex items-center gap-1.5 px-3 py-1.5 border-b border-[var(--th-line)]/40 bg-black/15 flex-shrink-0">
+              <button
+                type="button"
+                onClick={() => setModalView("current")}
+                title="Interesses ativos no momento, em ordem de encerramento (a lista de sempre do Próximo Bid)."
+                className={`inline-flex h-6 items-center justify-center gap-1 rounded-md border px-2 text-[9px] font-black transition-colors cursor-pointer ${
+                  modalView === "current"
+                    ? "border-amber-500/45 bg-amber-500/15 text-amber-200"
+                    : "border-[var(--th-line)]/60 bg-black/20 text-slate-400 hover:text-slate-200"
+                }`}
+              >
+                <Gavel size={10} className="flex-shrink-0" /> Interesses Ativos
+                <span className={`rounded-full px-1 font-mono text-[8px] font-black leading-[13px] ${modalView === "current" ? "bg-amber-500/25 text-amber-200" : "bg-black/30 text-slate-500"}`}>{totalCount}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setModalView("history")}
+                title={`Últimos Bids — os até ${LAST_BIDS_LIMIT} personagens mais recentes marcados como "Tenho Interesse", com os dados congelados do momento da marcação (do mais recente ao mais antigo).`}
+                className={`inline-flex h-6 items-center justify-center gap-1 rounded-md border px-2 text-[9px] font-black transition-colors cursor-pointer ${
+                  modalView === "history"
+                    ? "border-emerald-500/45 bg-emerald-500/15 text-emerald-200"
+                    : "border-[var(--th-line)]/60 bg-black/20 text-slate-400 hover:text-slate-200"
+                }`}
+              >
+                <History size={10} className="flex-shrink-0" /> Últimos Bids
+                <span className={`rounded-full px-1 font-mono text-[8px] font-black leading-[13px] ${modalView === "history" ? "bg-emerald-500/25 text-emerald-200" : "bg-black/30 text-slate-500"}`}>{lastBids.length}</span>
+              </button>
+            </div>
+
             {/* 112ª — QUADRO "Próximos encerramentos": faixa compacta logo
                 abaixo do cabeçalho, FORA do miolo rolável (flex-shrink-0,
                 como o cabeçalho e a barra de seleção — fica sempre visível e
@@ -773,7 +931,7 @@ export default function NextBidTracker({ currentUserUid, isBoss = false }: { cur
                 o PRÓXIMO ganha destaque âmbar (vermelho pulsante quando
                 falta ≤ 5 min — mesmo critério isAuctionEndingSoon dos
                 cards). Some sozinho quando não há horário conhecido. */}
-            {visibleEndTimes.length > 0 && (
+            {modalView === "current" && visibleEndTimes.length > 0 && (
               <div className="flex items-center gap-1.5 flex-wrap px-3 py-1.5 border-b border-[var(--th-line)]/40 bg-black/20 flex-shrink-0">
                 <span className="inline-flex items-center gap-1 text-[9px] font-black uppercase tracking-wide text-slate-400 flex-shrink-0">
                   <Clock size={10} className="text-amber-400 flex-shrink-0" />
@@ -816,7 +974,23 @@ export default function NextBidTracker({ currentUserUid, isBoss = false }: { cur
                 global) — a barra vertical só aparece quando o conteúdo passa
                 da área útil; `custom-scrollbar` = barra discreta padrão. */}
             <div className="app-modal-body custom-scrollbar">
-              {totalCount === 0 ? (
+              {/* 121ª — guia "Últimos Bids": cards do HISTÓRICO (snapshots
+                  congelados), do mais recente ao mais antigo, no MESMO miolo
+                  rolável do modal (limites de altura/rolagem preservados). */}
+              {modalView === "history" ? (
+                lastBids.length === 0 ? (
+                  <div className="flex flex-col items-center gap-1.5 px-4 py-8 text-center">
+                    <span className="text-[11px] font-bold text-slate-300">Nenhum registro de bid ainda.</span>
+                    <span className="text-[9px] text-slate-500">
+                      Ao marcar {"\u201C"}Tenho Interesse{"\u201D"} em um personagem, os dados daquele momento são registrados aqui — os últimos {LAST_BIDS_LIMIT} ficam disponíveis para consulta (desmarcar remove o registro).
+                    </span>
+                  </div>
+                ) : (
+                  <div className="flex flex-col gap-1.5 p-2.5">
+                    {lastBids.map((snapshot, index) => renderLastBidCard(snapshot, index))}
+                  </div>
+                )
+              ) : totalCount === 0 ? (
                 <div className="flex flex-col items-center gap-1.5 px-4 py-8 text-center">
                   <span className="text-[11px] font-bold text-slate-300">Nenhum interesse ativo no momento.</span>
                   <span className="text-[9px] text-slate-500">

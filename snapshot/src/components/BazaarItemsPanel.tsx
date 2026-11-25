@@ -56,6 +56,7 @@ import {
   parseDateTimeLocalWithOffset,
 } from "../utils/bazaarTime";
 import { openExternalUrl } from "../utils/openExternal";
+import { recordLastBidSnapshot, removeLastBidSnapshot } from "../utils/bazaarLastBids";
 // PERSISTÊNCIA do "Valor Itens (KK)" na lista oficial (`bazaar/current`):
 // ao FINAL de cada consulta de itens, os totais/itens de cada personagem são
 // embutidos no próprio personagem da lista oficial — é assim que os demais
@@ -1305,11 +1306,36 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
   function toggleItemInterest(result: BazaarItemsCharacterResult) {
     const target = { id: result.id || result.url || result.name, name: result.name, server: result.server };
     if (!target.id && !(target.name && target.server)) return;
+    // 121ª — "Últimos Bids": o destino do toggle decide o histórico ANTES da
+    // gravação (marcado → vai desmarcar; desmarcado → vai marcar). Snapshot
+    // SÓ nesta ação explícita (sincronizações/consultas nunca gravam aqui):
+    // congela o que a linha exibe agora — total efetivo com os ajustes
+    // locais do modal Detalhes (rowDisplayTotalsInfo) e RC pela cotação
+    // atual do servidor (sem cotação válida, RC = null — nunca inventado).
+    const willMark = !isItemsInterestMarked(itemInterests, target);
     setItemInterests(prev => {
       const next = toggleItemsInterestRecord(prev, target);
       saveItemsInterestRecords(currentUid, next);
       return next;
     });
+    if (willMark) {
+      const { kk } = rowDisplayTotalsInfo(result);
+      const rate = rateFor(result.server);
+      recordLastBidSnapshot(currentUid, {
+        auctionKey: String(result.id || result.url || result.name || ""),
+        origin: "item",
+        name: String(result.name || ""),
+        vocation: String(result.vocation || ""),
+        level: Number(result.level || 0),
+        server: String(result.server || ""),
+        url: String(result.url || ""),
+        endTs: normalizeAuctionEndTimestamp(result.auctionEndTs ?? null),
+        valueKk: kk,
+        valueRc: rate > 0 ? computeItemRC(rate, kk) : null,
+      });
+    } else {
+      removeLastBidSnapshot(currentUid, { origin: "item", auctionKey: String(target.id || ""), name: result.name, server: result.server });
+    }
   }
 
   // ── Chips visíveis = notificações locais ∩ "Tenho Interesse" ──────────────

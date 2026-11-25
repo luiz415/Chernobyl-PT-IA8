@@ -27,7 +27,8 @@ import { copyTextToClipboard } from "../utils/clipboard";
 // 105ª: badge "Encerra" e núcleo "Valor Itens/modal Ver" movidos para
 // módulos próprios (fonte única com o modal "Próximo Bid" do rodapé).
 import { AuctionEndBadge, isAuctionStillActive } from "./AuctionEndBadge";
-import { hasRelevantLoot, itemsViewFromAuction, itemsViewFromLocalResult, questsViewAdjustedTotalKk, questsViewItemKey, readQuestsViewOverrides, saveQuestsViewOverrides, type QuestsItemsDetailView, type QuestsViewOverride, type QuestsViewOverridesMap } from "../utils/bazaarItemsDetailView";
+import { hasRelevantLoot, itemsViewFromAuction, itemsViewFromLocalResult, questsViewAdjustedTotalKk, questsViewItemKey, readQuestsViewOverrides, saveQuestsViewOverrides, type AuctionWithEmbeddedItems, type QuestsItemsDetailView, type QuestsViewOverride, type QuestsViewOverridesMap } from "../utils/bazaarItemsDetailView";
+import { recordLastBidSnapshot, removeLastBidSnapshot, removeLastBidSnapshotsByAuctionKeys } from "../utils/bazaarLastBids";
 // Reexportação de compatibilidade: o BazaarItemsPanel importa o badge daqui.
 export { AuctionEndBadge };
 import { syncNotificationPrefsToCloud } from "../services/notificationPrefsSyncService";
@@ -2168,6 +2169,42 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
   // valor mais recente do espelho.
   const questsTableCoinRates = readLocalCoinRates();
 
+  /**
+   * 121ª — SNAPSHOT "Últimos Bids" de UM interesse de QUEST: congela, NO
+   * INSTANTE do clique em "Tenho interesse", exatamente o que a linha exibe
+   * hoje — valor dos itens com a personalização local do modal "Ver"
+   * aplicada (questsViewAdjustedTotalKk: local > automático; fonte local da
+   * guia Itens > campos embutidos) e conversão em RC pela MESMA prioridade
+   * da coluna (cotação personalizada > cotação do servidor; sem cotação
+   * válida, RC fica null — nunca inventado). Nenhuma fonte nova e nenhuma
+   * leitura extra: só os espelhos que a própria linha já usa.
+   */
+  function buildQuestLastBidSnapshot(
+    auction: AuctionWithEmbeddedItems & { id?: string; vocation?: string; level?: number; url?: string; auctionEndTs?: number | null },
+    auctionKey: string,
+  ) {
+    const localResult = itemsResultByAuctionKey.get(auctionKey);
+    const itemsView = localResult ? itemsViewFromLocalResult(localResult) : itemsViewFromAuction(auction);
+    const viewOverride = questsViewOverrides[auctionKey];
+    const adjustedTotal = itemsView ? questsViewAdjustedTotalKk(itemsView, viewOverride) : null;
+    const coinRate = typeof viewOverride?.coinRateKk === "number" && viewOverride.coinRateKk > 0
+      ? viewOverride.coinRateKk
+      : getServerCoinRate(questsTableCoinRates, String(auction.server || ""));
+    const valueKk = adjustedTotal ? adjustedTotal.kk : null;
+    return {
+      auctionKey,
+      origin: "quest" as const,
+      name: String(auction.name || ""),
+      vocation: String(auction.vocation || ""),
+      level: Number(auction.level || 0),
+      server: String(auction.server || ""),
+      url: String(auction.url || ""),
+      endTs: normalizeAuctionEndTimestamp(auction.auctionEndTs ?? null),
+      valueKk,
+      valueRc: valueKk !== null && coinRate > 0 ? computeItemRC(coinRate, valueKk) : null,
+    };
+  }
+
   const persistQuestsViewOverrides = (next: QuestsViewOverridesMap) => {
     setQuestsViewOverrides(next);
     // DEMO: nada persiste (os leilões fictícios não podem sujar nem podar as
@@ -3075,6 +3112,9 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
             currentUserUid: executorUid,
             bazaarVersion: officialVersion,
           });
+          // 121ª — "Últimos Bids": interesses desmarcados em lote saem do
+          // histórico local também (mesma sincronia da remoção individual).
+          removeLastBidSnapshotsByAuctionKeys(executorUid, auctionIds);
           statusMessage += ` Seus interesses removidos: ${removedInterestCount} (leilões acima de ${limit.toLocaleString("de-DE")}).`;
         } else {
           statusMessage += " Nenhum interesse seu acima do limite.";
@@ -5345,6 +5385,10 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
                                     setBazaarInterests(confirmed);
                                     setBazaarInterestsLoaded(true);
                                     syncBazaarEndingAlerts({ characters: autoBidCharacters, interestsByAuctionId: confirmed, currentUserUid: currentUser.uid, bazaarVersion: officialMetadata.version });
+                                    // 121ª — "Últimos Bids": desmarcado = registro
+                                    // removido do histórico local (só o deste
+                                    // personagem; os demais ficam intactos).
+                                    removeLastBidSnapshot(currentUser.uid, { origin: "quest", auctionKey, name: auction.name, server: auction.server });
                                   } else {
                                     const user = { uid: currentUser.uid, name: userProfile?.nome || "Usuário", auctionId: auctionKey, bazaarVersion: officialMetadata.version, createdAtMs: Date.now() };
                                     const next = { ...previous, [auctionKey]: sortInterestUsers([...interestUsers, user]) };
@@ -5353,6 +5397,11 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
                                     setBazaarInterests(confirmed);
                                     setBazaarInterestsLoaded(true);
                                     syncBazaarEndingAlerts({ characters: autoBidCharacters, interestsByAuctionId: confirmed, currentUserUid: currentUser.uid, bazaarVersion: officialMetadata.version });
+                                    // 121ª — "Últimos Bids": marcação EXPLÍCITA e
+                                    // CONFIRMADA = snapshot novo no histórico local
+                                    // (data/hora de agora; remarcação substitui o
+                                    // registro anterior do mesmo personagem).
+                                    recordLastBidSnapshot(currentUser.uid, buildQuestLastBidSnapshot(auction, auctionKey));
                                   }
                                 } catch (error: any) {
                                   setBazaarInterests(previous);
