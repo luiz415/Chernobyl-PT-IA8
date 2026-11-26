@@ -6175,7 +6175,7 @@ export default function App() {
               a TODOS os usuários; a edição dos "Valores Considerados" dentro
               do modal é exclusiva do Boss (backend revalida nas Rules de
               appSettings). */}
-          <button onClick={() => setExpectedProfitOpen(true)} className="inline-flex items-center gap-0.5 sm:gap-1 rounded-md border border-[var(--th-line)]/80 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20 hover:border-emerald-600/50 hover:text-emerald-200 transition-all duration-200 cursor-pointer" title="Lucro Esperado — retorno das quests SW/SG/GB e Itens Crypt por servidor, em RC" style={{ padding: "clamp(2.7px, 0.54vh, 5.4px) clamp(5.4px, 0.9vw, 9px)", fontSize: "clamp(8.1px, 1.35vh, 9.9px)" }}>
+          <button onClick={() => setExpectedProfitOpen(true)} className="inline-flex items-center gap-0.5 sm:gap-1 rounded-md border border-[var(--th-line)]/80 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20 hover:border-emerald-600/50 hover:text-emerald-200 transition-all duration-200 cursor-pointer" title="Lucro Esperado — retorno das quests SW/SG/GB e Itens Crypt por servidor, em RC (benefício exclusivo para membros VIP)" style={{ padding: "clamp(2.7px, 0.54vh, 5.4px) clamp(5.4px, 0.9vw, 9px)", fontSize: "clamp(8.1px, 1.35vh, 9.9px)" }}>
             <TrendingUp size={11} className="sm:w-[13px] sm:h-[13px]" /> <span className="hidden sm:inline">Lucro Esperado</span>
           </button>
           {/* RC Servidores — cotação GLOBAL do RC por servidor (fonte única

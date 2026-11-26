@@ -1,7 +1,10 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { ArrowDown, ArrowUp, Check, Clock, Coins, Package, Percent, RefreshCw, Settings2, TrendingUp, Trophy, X } from "lucide-react";
+import { ArrowDown, ArrowUp, Check, Clock, Coins, Crown, Lock, Package, Percent, RefreshCw, Settings2, Sparkles, TrendingUp, Trophy, X } from "lucide-react";
 import { SERVER_OPTIONS } from "../constants/servers";
+import { useAuth } from "../context/AuthContext";
+import { getEffectiveUserRole } from "../utils/vipAccess";
+import BecomeVIPModal from "./BecomeVIPModal";
 import { formatRC } from "../types";
 import { SERVER_COIN_RATES_EVENT, coinRateText, getServerCoinRate, readLocalCoinRates, saveOfficialServerCoinRate } from "../utils/bazaarCoinRates";
 import { computeItemRC, formatRateKkDisplay, parseRateKk, sanitizeRateKkInput } from "../utils/itemSale";
@@ -88,22 +91,45 @@ const fmtHours = (hours: number): string => {
 };
 
 export default function ExpectedProfitModal({ isBoss, onClose }: Props) {
+  // ── RESTRIÇÃO VIP (124ª) — MESMO mecanismo de validação do app ──────────
+  // Fonte única utils/vipAccess (getEffectiveUserRole): considera a
+  // EXPIRAÇÃO real do VIP (vipExpiresAt/compat vipDays) — perfil com role
+  // "VIP" vencido conta como "Normal". O gate é validado AQUI DENTRO, pelo
+  // perfil do AuthContext (não pela prop/botão): qualquer caminho que monte
+  // este modal cai na MESMA checagem, e sem acesso NENHUM dado do módulo é
+  // materializado (estados vazios, listeners não registrados, nada computado
+  // nem renderizado). Convenção do app (VipAccessButton/Calculadora): Boss
+  // tem o VIP incluso no cargo — "Normal" é o único perfil sem acesso.
+  const { userProfile } = useAuth();
+  const effectiveRole = getEffectiveUserRole(userProfile);
+  const hasVipAccess = effectiveRole !== "Normal";
+  // Edição continua EXCLUSIVA do Boss (e só com o acesso validado acima):
+  // a prop sozinha não basta — o perfil real do AuthContext precisa conferir
+  // (anti-manipulação de interface; o backend/Rules revalida de toda forma).
+  const canEditAsBoss = isBoss && hasVipAccess && effectiveRole === "Boss";
+  const [becomeVipOpen, setBecomeVipOpen] = useState(false);
   const [view, setView] = useState<View>("resumo");
   const [server, setServer] = useState<string>(SERVER_OPTIONS[0] || "");
   // Espelhos locais (fonte única) — atualizados em TEMPO REAL pelos eventos
   // já existentes (snapshot do App/gravações locais disparam os dois).
-  const [values, setValues] = useState<ExpectedProfitValues>(() => readLocalExpectedProfitValues());
-  const [coinRates, setCoinRates] = useState(() => readLocalCoinRates());
+  // 124ª — SEM acesso VIP os espelhos NÃO são lidos nem observados (dados
+  // não entram no componente); ao ganhar acesso (perfil carrega/atualiza),
+  // o efeito sincroniza na hora e registra os listeners de tempo real.
+  const [values, setValues] = useState<ExpectedProfitValues>(() => hasVipAccess ? readLocalExpectedProfitValues() : {});
+  const [coinRates, setCoinRates] = useState(() => hasVipAccess ? readLocalCoinRates() : {});
   useEffect(() => {
+    if (!hasVipAccess) return;
     const refreshValues = () => setValues(readLocalExpectedProfitValues());
     const refreshRates = () => setCoinRates(readLocalCoinRates());
+    refreshValues();
+    refreshRates();
     window.addEventListener(EXPECTED_PROFIT_VALUES_EVENT, refreshValues);
     window.addEventListener(SERVER_COIN_RATES_EVENT, refreshRates);
     return () => {
       window.removeEventListener(EXPECTED_PROFIT_VALUES_EVENT, refreshValues);
       window.removeEventListener(SERVER_COIN_RATES_EVENT, refreshRates);
     };
-  }, []);
+  }, [hasVipAccess]);
   useEffect(() => {
     function onKey(e: KeyboardEvent) { if (e.key === "Escape") onClose(); }
     window.addEventListener("keydown", onKey);
@@ -118,9 +144,9 @@ export default function ExpectedProfitModal({ isBoss, onClose }: Props) {
   // aberturas seguintes não geram NENHUMA gravação. O espelho/evento
   // atualiza este modal e os demais usuários em tempo real.
   useEffect(() => {
-    if (!isBoss) return;
+    if (!canEditAsBoss) return;
     void seedExpectedProfitFromWatchedLists();
-  }, [isBoss]);
+  }, [canEditAsBoss]);
 
   const coinRate = getServerCoinRate(coinRates, server);
 
@@ -139,7 +165,7 @@ export default function ExpectedProfitModal({ isBoss, onClose }: Props) {
   }, [server, coinRate]);
 
   async function handleSaveRate() {
-    if (!isBoss || savingRate) return;
+    if (!canEditAsBoss || savingRate) return;
     setSavingRate(true);
     try {
       // Fluxo ÚNICO oficial (69ª/113ª): valida, ignora valor já vigente
@@ -219,7 +245,7 @@ export default function ExpectedProfitModal({ isBoss, onClose }: Props) {
   }, [server, editGroup, values, view]);
 
   async function handleSave() {
-    if (!isBoss || saving) return;
+    if (!canEditAsBoss || saving) return;
     setSaving(true);
     try {
       // 116ª — salvamento GRANULAR: um patch por item que MUDOU de fato
@@ -398,6 +424,73 @@ export default function ExpectedProfitModal({ isBoss, onClose }: Props) {
     { key: "ranking", label: "Ranking", icon: <Trophy size={10} />, title: "Ranking dos servidores — quests (Venda Direta/Paciente) e troca de runas por Itens Crypt", highlight: true },
   ];
 
+  // ── 124ª — SEM acesso VIP: tela informativa no lugar do módulo ───────────
+  // (todos os hooks acima já rodaram — nenhum hook é declarado após este
+  // retorno condicional). Conteúdo, dados e controles do módulo NÃO são
+  // renderizados nem computados; a tela apresenta o benefício e convida o
+  // usuário a se tornar VIP pelo fluxo oficial já existente (Seja VIP).
+  if (!hasVipAccess) {
+    return createPortal(
+      <div className="app-modal-overlay fixed inset-0 z-[900] flex items-center justify-center bg-black/70 backdrop-blur-sm" onClick={onClose}>
+        <div
+          className="app-modal-frame app-modal-size-md app-modal-frame--scroll w-full rounded-2xl border border-amber-500/35 bg-[var(--th-bg-raised)] shadow-2xl shadow-amber-950/50"
+          onClick={e => e.stopPropagation()}
+        >
+          <div className="app-modal-header flex items-center justify-between gap-3 px-3.5 py-2.5 border-b border-amber-500/20 bg-gradient-to-r from-amber-950/45 via-amber-900/15 to-[var(--th-bg-overlay)] rounded-t-2xl">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <span className="flex h-7 w-7 items-center justify-center rounded-lg border border-amber-500/40 bg-amber-500/15 flex-shrink-0">
+                <Crown size={14} className="text-amber-300" />
+              </span>
+              <span className="min-w-0">
+                <span className="block text-[13px] font-black leading-tight text-amber-200 truncate">Lucro Esperado — Conteúdo Exclusivo</span>
+                <span className="block text-[8.5px] font-bold leading-tight text-slate-400 truncate">Benefício exclusivo para membros VIP</span>
+              </span>
+            </div>
+            <button type="button" onClick={onClose} title="Fechar" className="flex h-6 w-6 items-center justify-center rounded-md text-slate-500 hover:text-white hover:bg-white/10 transition-colors cursor-pointer flex-shrink-0">
+              <X size={15} />
+            </button>
+          </div>
+          <div className="app-modal-body custom-scrollbar">
+            <div className="flex flex-col items-center gap-4 px-5 py-7 text-center">
+              {/* Chamada visual de exclusividade */}
+              <span className="relative flex items-center justify-center">
+                <span className="absolute h-24 w-24 rounded-full" style={{ background: "radial-gradient(circle, color-mix(in oklab, var(--color-amber-500) 20%, transparent) 0%, transparent 70%)", animation: "vipPulse 2.5s ease-in-out infinite" }} />
+                <span className="relative flex h-16 w-16 items-center justify-center rounded-full border-2 border-amber-500/40 bg-gradient-to-br from-amber-500/25 to-amber-500/10 shadow-lg shadow-amber-500/20">
+                  <Lock size={26} className="text-amber-300" />
+                </span>
+              </span>
+              <div className="space-y-1">
+                <div className="text-lg font-black tracking-wide bg-gradient-to-r from-amber-300 via-amber-500 to-amber-600 bg-clip-text text-transparent">Módulo exclusivo para membros VIP</div>
+                <p className="text-[11px] leading-relaxed text-slate-400 max-w-md">
+                  O <span className="font-bold text-slate-200">Lucro Esperado</span> é um benefício do acesso VIP: análises de rentabilidade das quests <span className="font-bold text-slate-200">Soul War, Sanguine e Graveborn</span>, valores considerados por servidor e os <span className="font-bold text-slate-200">rankings de rentabilidade</span> — incluindo a análise da troca de runas por <span className="font-bold text-slate-200">Itens Crypt</span>.
+                </p>
+              </div>
+              <span className="inline-flex items-center gap-2 rounded-xl border border-amber-500/50 px-5 py-2 shadow-lg shadow-amber-500/20" style={{ background: "linear-gradient(135deg, color-mix(in oklab, var(--color-amber-500) 25%, transparent) 0%, color-mix(in oklab, var(--color-amber-500) 18%, transparent) 50%, color-mix(in oklab, var(--color-amber-500) 22%, transparent) 100%)" }}>
+                <Crown size={16} className="text-amber-300" style={{ filter: "drop-shadow(0 0 6px color-mix(in oklab, var(--color-amber-500) 90%, transparent))" }} />
+                <span className="text-[13px] font-black uppercase tracking-widest bg-gradient-to-r from-amber-300 via-amber-400 to-amber-300 bg-clip-text text-transparent">Membro VIP</span>
+              </span>
+              <button
+                type="button"
+                onClick={() => setBecomeVipOpen(true)}
+                title="Conhecer os planos e benefícios do acesso VIP"
+                className="inline-flex items-center gap-1.5 rounded-xl border border-violet-400/60 bg-gradient-to-r from-violet-500/25 to-violet-600/20 px-5 py-2 text-[11px] font-black uppercase tracking-wider text-violet-200 shadow-lg shadow-violet-500/20 hover:from-violet-500/35 hover:to-violet-600/30 transition-colors cursor-pointer"
+              >
+                <Sparkles size={13} /> Quero ser VIP
+              </button>
+              <p className="text-[9px] leading-relaxed text-slate-600 max-w-sm">
+                Torne-se um membro VIP para desbloquear este e todos os demais recursos exclusivos do aplicativo.
+              </p>
+            </div>
+          </div>
+          <style>{`@keyframes vipPulse { 0%, 100% { opacity: 0.6; transform: scale(1); } 50% { opacity: 1; transform: scale(1.1); } }`}</style>
+        </div>
+        {/* Fluxo OFICIAL de contratação (reuso integral do Seja VIP) */}
+        <BecomeVIPModal open={becomeVipOpen} onClose={() => setBecomeVipOpen(false)} userProfile={userProfile} />
+      </div>,
+      document.body,
+    );
+  }
+
   return createPortal(
     <div className="app-modal-overlay fixed inset-0 z-[900] flex items-center justify-center bg-black/70 backdrop-blur-sm" onClick={onClose}>
       <div
@@ -464,7 +557,7 @@ export default function ExpectedProfitModal({ isBoss, onClose }: Props) {
                 (saveOfficialServerCoinRate: validação, "Já atualizado" sem
                 gravação, só o servidor selecionado, histórico preservado,
                 evento em tempo real para o app inteiro). */}
-            {isBoss && (
+            {canEditAsBoss && (
               <span className="inline-flex items-center gap-1">
                 <input
                   type="text"
@@ -769,7 +862,7 @@ export default function ExpectedProfitModal({ isBoss, onClose }: Props) {
               <div className="rounded-lg border border-[var(--th-line)]/40 bg-black/20 px-2.5 py-1.5 text-[8.5px] leading-snug text-slate-500">
                 Valores em kk por item em <span className="font-bold text-slate-300">{server}</span> — <span className="text-sky-300 font-bold">Venda Direta</span> = mínimo alcançável (maior oferta de compra); <span className="text-violet-300 font-bold">Venda Paciente</span> = média esperada sem pressa. Campo vazio = não configurado (fica fora das médias).
                 <span className="block mt-0.5">A <span className="text-sky-300 font-bold">Venda Direta</span> é o MESMO valor <span className="font-bold text-slate-300">Base</span> da Lista de Itens do Painel Bazaar (guia Personagens Com Itens): alterar e salvar em qualquer um dos dois atualiza o outro em tempo real, no servidor correspondente. A <span className="text-violet-300 font-bold">Venda Paciente</span> nunca é alterada pela sincronização.</span>
-                {!isBoss && <span className="block text-amber-400/80 font-bold mt-0.5">Somente usuários Boss podem editar e salvar estes valores.</span>}
+                {!canEditAsBoss && <span className="block text-amber-400/80 font-bold mt-0.5">Somente usuários Boss podem editar e salvar estes valores.</span>}
               </div>
               <div className="rounded-xl border border-[var(--th-line)]/60 bg-black/25 overflow-hidden">
                 {/* Cabeçalho das colunas */}
@@ -797,7 +890,7 @@ export default function ExpectedProfitModal({ isBoss, onClose }: Props) {
                             {updatedAtMs ? `Atualizado ${formatWatchedUpdatedAt(updatedAtMs, tzOffsetMinutes)}` : "Não atualizado"}
                           </span>
                         </span>
-                        {isBoss ? (
+                        {canEditAsBoss ? (
                           <>
                             <input type="text" inputMode="decimal" value={d} placeholder="—" aria-label={`Venda Direta de ${item} (kk)`}
                               onChange={e => setDraft(prev => ({ ...prev, [iKey]: { d: sanitizeRateKkInput(e.target.value), p: prev[iKey]?.p ?? "" } }))}
@@ -820,7 +913,7 @@ export default function ExpectedProfitModal({ isBoss, onClose }: Props) {
                   })}
                 </div>
               </div>
-              {isBoss && (
+              {canEditAsBoss && (
                 <div className="flex items-center justify-between gap-2 rounded-lg border border-[var(--th-line)]/40 bg-black/20 px-2.5 py-1.5">
                   <span className={`text-[9px] font-bold ${feedback ? (feedback.ok ? "text-emerald-300" : "text-red-300") : "text-transparent"}`}>
                     {feedback?.message || "."}

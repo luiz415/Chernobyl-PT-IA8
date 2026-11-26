@@ -4,6 +4,7 @@ import {
   X,
   Wrench,
   Calculator,
+  TrendingUp,
   Trophy,
   Swords,
   ShoppingBag,
@@ -46,6 +47,12 @@ const colorMap = {
     bg: "bg-rose-500/5",
     bullet: "bg-rose-400/70",
   },
+  lime: {
+    icon: "text-lime-400",
+    border: "border-lime-500/20",
+    bg: "bg-lime-500/5",
+    bullet: "bg-lime-400/70",
+  },
 } as const;
 
 /** Informações completas reutilizadas pelos fluxos "VIP" e "Seja VIP". */
@@ -65,6 +72,14 @@ const VIP_BENEFITS = [
     description:
       "Gerencie seus Services de forma completa dentro do aplicativo. Cadastre personagens, organize seus serviços e disponibilize seu formulário público para que clientes agendem diretamente com você.",
     highlight: "Seu nome entra automaticamente na lista de Serviceiros, visível para todos os jogadores.",
+  },
+  {
+    icon: TrendingUp,
+    color: "lime",
+    title: "Lucro Esperado",
+    description:
+      "Descubra onde o seu tempo rende mais: análises completas de rentabilidade das quests Soul War, Sanguine e Graveborn, com os valores considerados de cada item por servidor e conversão em RC pela cotação do próprio servidor.",
+    highlight: "Inclui os rankings de rentabilidade entre servidores e a análise exclusiva da troca de runas por Itens Crypt.",
   },
   {
     icon: Calculator,
