@@ -175,7 +175,7 @@ export function exportJSON(backup: PersonalBackup): void {
 export function normalizeImportedBackup(raw: any): { characters: Character[]; notes: string; archivedHistory: PartyTab[] } {
   // Servidor canonizado para o padrão interno (fonte única em
   // src/constants/servers.ts): um backup externo pode trazer nomenclaturas
-  // antigas ou variantes ("Infernum I" → "Infernum 1").
+  // antigas ou variantes ("Spectrum" → "Bellum").
   const characters: Character[] = (Array.isArray(raw?.characters) ? raw.characters : [])
     .map((c: Character) => ({ ...c, servidor: normalizeServerName(c?.servidor) }));
   const notes: string = typeof raw?.notes === "string" ? raw.notes : "";

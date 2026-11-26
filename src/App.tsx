@@ -4552,7 +4552,8 @@ export default function App() {
     const account = String(purchase.account || "").trim();
     const personagem = String(purchase.name || "").trim();
     // Canoniza o servidor vindo do Bazaar para o padrão interno (fonte única
-    // em src/constants/servers.ts — ex.: "Infernum I" → "Infernum 1").
+    // em src/constants/servers.ts — ex.: "Spectrum" → "Bellum"; nomes
+    // aposentados sem sucessor ficam fora da lista oficial).
     const servidor = normalizeServerName(String(purchase.server || ""));
     const voc = mapBazaarVocationToCharacterVocation(String(purchase.vocation || ""));
     const level = Math.floor(Number(purchase.level));

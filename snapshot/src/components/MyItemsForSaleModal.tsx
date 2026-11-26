@@ -4,6 +4,7 @@ import { AlertTriangle, X, Coins, Check, PackageOpen, Globe, Megaphone, Pencil, 
 import type { Character, CharacterAcquisition, CharacterAcquisitionBuyerDetails, ItemSaleRecord } from "../types";
 import { formatRC } from "../types";
 import { SERVER_OPTIONS, serverLabel } from "../constants/servers";
+import { ServerSelectOptions } from "./ServerIdentity";
 import {
   BAZAAR_WATCHED_ITEMS_UPDATED_EVENT,
   applyOfficialWatchedItemUpdate,
@@ -1330,7 +1331,7 @@ export default function MyItemsForSaleModal({
                 className="bg-black/40 border border-white/10 rounded-lg px-2.5 py-1.5 text-[11px] text-slate-200 outline-none transition-colors focus:border-teal-500/50 cursor-pointer [color-scheme:dark] flex-shrink-0"
               >
                 <option value="">Servidor...</option>
-                {SERVER_OPTIONS.map(server => <option key={server} value={server}>{server}</option>)}
+                <ServerSelectOptions />
               </select>
               <button
                 type="button"

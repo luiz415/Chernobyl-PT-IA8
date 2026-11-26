@@ -49,6 +49,7 @@ import {
   type WhatsappTemplate,
 } from "../services/whatsappTemplatesService";
 import { SERVER_OPTIONS, isSameServer, serverLabel } from "../constants/servers";
+import { ServerSelectOptions } from "./ServerIdentity";
 // SuggestPartyModal removido: o botão "Sugerir PT" foi movido para o
 // PartyManager, então o modal não é mais invocado a partir deste arquivo.
 // Lista oficial centralizada em src/constants/servers.ts
@@ -3132,9 +3133,7 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
                     autoFocus
                   >
                     <option value="" disabled>Selecione...</option>
-                    {CREATE_PT_SERVERS.map(srv => (
-                      <option key={srv} value={srv} className="bg-[var(--th-n-hi)] text-slate-300 font-semibold">{srv}</option>
-                    ))}
+                    <ServerSelectOptions servers={CREATE_PT_SERVERS} optionClassName="bg-[var(--th-n-hi)] font-semibold" optionStyle={{ backgroundColor: "var(--th-n-hi)" }} />
                   </select>
                 </div>
               ) : (

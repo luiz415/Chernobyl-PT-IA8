@@ -8,7 +8,7 @@ import { rubinotCharacterUrl } from "../utils/rubinotLinks";
 import { FilterSelect } from "./FilterTypes";
 import VipAccessButton from "./VipAccessButton";
 import { getEffectiveUserRole } from "../utils/vipAccess";
-import { SERVER_OPTIONS, isOfficialServer } from "../constants/servers";
+import { SERVER_OPTIONS, isOfficialServer, serverLabel } from "../constants/servers";
 import { QUEST_BADGE_COLOR_CLASSES } from "../constants/questBadges";
 import WhatsappMessagePicker from "./WhatsappMessagePicker";
 import FirstMessageMarker from "./FirstMessageMarker";
@@ -334,7 +334,8 @@ export default function WaitingListPanel({ items, onAdd, onUpdate, onDelete, use
     setSortDir(next === "fila" ? "asc" : "desc");
   }
 
-  const serverOptions = useMemo(() => Array.from(new Set(activeItems.map(i => i.servidor).filter(Boolean))).sort(), [activeItems]);
+  // 125ª — filtros exibem APENAS servidores oficiais (inválidos/aposentados ficam de fora; serverLabel devolve vazio para eles).
+  const serverOptions = useMemo(() => Array.from(new Set(activeItems.map(i => serverLabel(i.servidor)).filter(Boolean))).sort((a, b) => a.localeCompare(b, "pt-BR")), [activeItems]);
   const vocOptions = useMemo(() => VOCATIONS.filter(v => activeItems.some(i => i.voc === v)), [activeItems]);
 
   const filteredItems = useMemo(() => {

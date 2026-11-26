@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { X, Coins, Globe, Check, RotateCcw } from "lucide-react";
 import { SERVER_OPTIONS, serverKey } from "../constants/servers";
+import { ServerNameBadge } from "./ServerIdentity";
 import {
   SERVER_COIN_RATES_EVENT,
   coinRateText,
@@ -194,7 +195,7 @@ export default function ServerCoinRatesModal({ onClose }: Props) {
                       atual aparece UMA única vez, no bloco de histórico). */}
                   <div className="flex items-center gap-2">
                     <Globe size={11} className="text-sky-400 flex-shrink-0" />
-                    <span className="text-[11px] font-bold text-slate-200 truncate flex-1" title={server}>{server}</span>
+                    <ServerNameBadge server={server} className="flex-1" nameClassName="text-[11px] font-bold" />
                     <div className="relative flex-shrink-0">
                       <input
                         type="text"

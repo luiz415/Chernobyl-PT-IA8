@@ -298,7 +298,7 @@ function normalizeOfficialCharacter(character: OfficialBazaarCharacter): Officia
   return {
     ...character,
     id: normalizeFirestoreId(character.id, "auctionId"),
-    // Nome do servidor SEMPRE no padrão interno (ex.: "Infernum I" → "Infernum 1").
+    // Nome do servidor SEMPRE no padrão interno (ex.: "Spectrum" → "Bellum").
     // Publicar já canonizado evita que cada leitor precise se preocupar com isso.
     server: normalizeServerName(character.server),
   };
@@ -318,7 +318,7 @@ export function readOfficialBazaarCache(): OfficialBazaarCache | null {
     const parsed = raw ? JSON.parse(raw) : null;
     if (!parsed || parsed.schemaVersion !== CACHE_SCHEMA_VERSION || !parsed.version || !Array.isArray(parsed.characters)) return null;
     // Cache local gravado por versão antiga pode conter servidores na
-    // nomenclatura externa (ex.: "Infernum I") — canoniza na leitura.
+    // nomenclatura externa (alias antigo, ex.: "Spectrum") — canoniza na leitura.
     return {
       ...parsed,
       characters: parsed.characters.map((character: OfficialBazaarCharacter) => {
@@ -694,9 +694,9 @@ export async function syncOfficialBazaarList(options: { force?: boolean } = {}):
     const current = currentSnap.data() as any;
     // Além do id, o servidor também é canonizado NA LEITURA: uma lista já
     // publicada por uma versão antiga do app pode conter a nomenclatura
-    // externa (ex.: "Infernum I"); normalizar aqui garante que TODOS os
+    // externa (alias antigo, ex.: "Spectrum"); normalizar aqui garante que TODOS os
     // consumidores (tabela, filtros, resumos, notificações) vejam o padrão
-    // interno ("Infernum 1") sem depender de republicação.
+    // interno ("Bellum") sem depender de republicação.
     const characters = Array.isArray(current.characters) ? current.characters.map((character: OfficialBazaarCharacter) => ({ ...character, id: String(character.id ?? ""), server: normalizeServerName(character.server) })) : [];
     const cache: OfficialBazaarCache = {
       schemaVersion: CACHE_SCHEMA_VERSION,

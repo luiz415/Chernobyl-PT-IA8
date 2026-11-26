@@ -2,7 +2,8 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { ArrowRight, Check, Copy, Crown, Globe, HelpCircle, RotateCcw } from "lucide-react";
 import ExternalWindow from "./ExternalWindow";
 import { useAuth } from "../context/AuthContext";
-import { SERVER_OPTIONS } from "../constants/servers";
+import { serverLabel } from "../constants/servers";
+import { ServerSelectOptions } from "./ServerIdentity";
 import {
   SERVER_COIN_RATES_EVENT,
   coinRateText,
@@ -44,7 +45,8 @@ type HelpId = "servidor" | "tabela" | "conversor";
 function loadCalcServer(): string {
   try {
     const saved = localStorage.getItem(SERVER_STORAGE_KEY) || "";
-    return SERVER_OPTIONS.includes(saved) ? saved : "";
+    // 125ª — só servidor da lista oficial vigente (aposentado → vazio).
+    return serverLabel(saved);
   } catch {
     return "";
   }
@@ -730,11 +732,7 @@ function CalculatorContent() {
                 <option value="" style={{ background: "#18181b", color: "#a1a1aa" }}>
                   — selecione o servidor —
                 </option>
-                {SERVER_OPTIONS.map((s) => (
-                  <option key={s} value={s} style={{ background: "#18181b", color: "#fff" }}>
-                    {s}
-                  </option>
-                ))}
+                <ServerSelectOptions optionStyle={{ background: "#18181b" }} />
               </select>
               {server &&
                 (selectedRate > 0 ? (

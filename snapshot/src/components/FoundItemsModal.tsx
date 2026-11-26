@@ -178,7 +178,8 @@ export default function FoundItemsModal({
   const [search, setSearch] = useState("");
   const [serverFilter, setServerFilter] = useState("");
   const serverOptions = useMemo(
-    () => [...new Set(groups.map(g => g.serverName).filter(Boolean))].sort((a, b) => a.localeCompare(b, "pt-BR")),
+    // 125ª — só servidores oficiais no filtro (inválidos nunca aparecem).
+    () => [...new Set(groups.map(g => serverLabel(g.serverName)).filter(Boolean))].sort((a, b) => a.localeCompare(b, "pt-BR")),
     [groups],
   );
   const filteredGroups = useMemo(() => {

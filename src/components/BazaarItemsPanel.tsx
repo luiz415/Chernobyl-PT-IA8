@@ -110,6 +110,7 @@ import {
 // Fonte ÚNICA de servidores (mesma lista/normalização do restante do app):
 // as Listas de Itens agora são POR SERVIDOR, chaveadas pelo nome oficial.
 import { SERVER_OPTIONS } from "../constants/servers";
+import { ServerSelectOptions } from "./ServerIdentity";
 // COTAÇÃO DO RC POR SERVIDOR — fonte única GLOBAL da conversão kk → RC
 // (persistida em appSettings/global.serverCoinRates + espelho local; a
 // MESMA configuração do modal "RC Servidores" do cabeçalho; sem fallback
@@ -3531,14 +3532,10 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                   title="Cada servidor tem a própria Lista de Itens (preços independentes). O cálculo de cada personagem usa sempre a lista do servidor dele."
                   className="h-8 flex-1 min-w-0 rounded-md border border-fuchsia-500/40 bg-black/35 px-2 text-[11px] font-bold text-fuchsia-200 outline-none focus:border-fuchsia-400 cursor-pointer"
                 >
-                  {SERVER_OPTIONS.map(server => {
+                  <ServerSelectOptions labelOf={server => {
                     const count = getServerWatchedItems(watchedByServer, server).length;
-                    return (
-                      <option key={server} value={server}>
-                        {server}{count > 0 ? ` (${count})` : ""}
-                      </option>
-                    );
-                  })}
+                    return `${server}${count > 0 ? ` (${count})` : ""}`;
+                  }} />
                 </select>
               </label>
 

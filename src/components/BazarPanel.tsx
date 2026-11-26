@@ -880,8 +880,8 @@ function getAuctionKey(auction: BazaarAuction): string {
 /**
  * Canoniza o nome do servidor de cada leilão vindo de FONTE EXTERNA (consulta
  * ao vivo do Rubinot via Electron, cache local antigo). O site/API pode usar
- * outra nomenclatura (ex.: "Infernum I"); internamente o app usa SEMPRE o
- * padrão de `src/constants/servers.ts` ("Infernum 1"). Normalizar na entrada
+ * outra nomenclatura/alias antigo (ex.: "Spectrum"); internamente o app usa
+ * SEMPRE o padrão de `src/constants/servers.ts` ("Bellum"). Normalizar na entrada
  * garante que filtros, resumos, prioridades e notificações enxerguem um único
  * nome — sem tratamentos isolados por tela.
  */
@@ -1113,7 +1113,7 @@ function readBazarCache(): BazaarFetchResult | null {
     const parsed = raw ? JSON.parse(raw) : null;
     if (!parsed || !Array.isArray(parsed.auctions)) return null;
     // Cache gravado por versão antiga pode ter servidores na nomenclatura
-    // externa (ex.: "Infernum I") — canoniza na leitura para o padrão interno.
+    // externa (alias antigo, ex.: "Spectrum") — canoniza na leitura para o padrão interno.
     return { ...parsed, auctions: normalizeAuctionServers(parsed.auctions) };
   } catch {
     return null;
@@ -3351,8 +3351,8 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
       // Etapa 2.1: lista intermediária apenas com filtros resolvíveis pela API.
       // Esta lista ainda não é exibida quando há filtro de quest ativo.
       // Servidores canonizados ANTES de filtrar: a seleção de servidores do
-      // usuário usa os nomes internos ("Infernum 1"), então um leilão que
-      // chegasse como "Infernum I" escaparia do filtro sem esta normalização.
+      // usuário usa os nomes internos ("Bellum"), então um leilão que
+      // chegasse como "Spectrum" escaparia do filtro sem esta normalização.
       const apiFilteredAuctions = getApiFilteredAuctions(normalizeAuctionServers(response.auctions || []), activeFilters);
       let nextDetailsCache = readDetailsCache();
       let finalAuctions = apiFilteredAuctions;

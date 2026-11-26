@@ -23,12 +23,11 @@ export const OFFICIAL_SERVERS = [
   "Auroria",
   "Belaria",
   "Bellum",      // recebeu Spectrum
+  "Dominum",     // novo — criado na união dos antigos Infernum 1/2/3
   "Drakaria",    // Grimoria I + Grimoria III
   "Eldrian",     // Serenian + Halorian
   "Elysian",
-  "Infernum 1",  // novo (formato interno SEMPRE numérico: nunca "Infernum I")
-  "Infernum 2",  // novo
-  "Infernum 3",  // novo
+  "Infernum",    // novo — criado na união dos antigos Infernum 1/2/3
   "Lunarian",
   "Malveria",    // Grimoria II + Grimoria IV
   "Mystian",
@@ -37,6 +36,56 @@ export const OFFICIAL_SERVERS = [
   "Tenebrium",
   "Vesperia",
 ] as const;
+
+// ── CLASSIFICAÇÃO OFICIAL (tipo de PVP + situação de transferência) ─────────
+
+/** Categorias de PVP dos servidores — ordem canônica de exibição. */
+export type ServerPvpType = "PVP" | "Retro PVP" | "Non PVP";
+export const SERVER_PVP_TYPE_ORDER: readonly ServerPvpType[] = ["PVP", "Retro PVP", "Non PVP"];
+
+export interface OfficialServerMeta {
+  pvpType: ServerPvpType;
+  /** true = transferência ABERTA; false = FECHADA. */
+  transferOpen: boolean;
+}
+
+/** Catálogo oficial: tipo de PVP e transferência de CADA servidor. */
+export const SERVER_META: Readonly<Record<string, OfficialServerMeta>> = {
+  "Auroria":   { pvpType: "PVP",       transferOpen: true },
+  "Belaria":   { pvpType: "PVP",       transferOpen: true },
+  "Bellum":    { pvpType: "Retro PVP", transferOpen: true },
+  "Dominum":   { pvpType: "Retro PVP", transferOpen: false },
+  "Drakaria":  { pvpType: "PVP",       transferOpen: false },
+  "Eldrian":   { pvpType: "Non PVP",   transferOpen: false },
+  "Elysian":   { pvpType: "Non PVP",   transferOpen: true },
+  "Infernum":  { pvpType: "Retro PVP", transferOpen: false },
+  "Lunarian":  { pvpType: "Non PVP",   transferOpen: true },
+  "Malveria":  { pvpType: "PVP",       transferOpen: false },
+  "Mystian":   { pvpType: "Non PVP",   transferOpen: true },
+  "Obsidian":  { pvpType: "Non PVP",   transferOpen: false },
+  "Solarian":  { pvpType: "Non PVP",   transferOpen: true },
+  "Tenebrium": { pvpType: "Retro PVP", transferOpen: false },
+  "Vesperia":  { pvpType: "PVP",       transferOpen: true },
+};
+
+/** Metadados do servidor (aceita alias/caixa) — null para inválidos. */
+export function getServerMeta(value: string | null | undefined): OfficialServerMeta | null {
+  const label = serverLabel(value);
+  return label ? SERVER_META[label] ?? null : null;
+}
+
+/**
+ * IDENTIDADE VISUAL por categoria de PVP — fonte única de cores usada em
+ * TODAS as exibições de servidores (badges, selects, tabelas):
+ *   PVP = vermelho-rosa · Retro PVP = âmbar · Non PVP = esmeralda.
+ * `optionHex` é a cor equivalente para <option>/<optgroup> nativos (que não
+ * aceitam classes Tailwind de forma confiável).
+ */
+export const SERVER_PVP_TYPE_COLORS: Readonly<Record<ServerPvpType, { text: string; border: string; bg: string; dot: string; optionHex: string }>> = {
+  "PVP":       { text: "text-rose-300",    border: "border-rose-500/40",    bg: "bg-rose-500/10",    dot: "bg-rose-400",    optionHex: "#fda4af" },
+  "Retro PVP": { text: "text-amber-300",   border: "border-amber-500/40",   bg: "bg-amber-500/10",   dot: "bg-amber-400",   optionHex: "#fcd34d" },
+  "Non PVP":   { text: "text-emerald-300", border: "border-emerald-500/40", bg: "bg-emerald-500/10", dot: "bg-emerald-400", optionHex: "#6ee7b7" },
+};
 
 export type OfficialServer = (typeof OFFICIAL_SERVERS)[number];
 
@@ -94,21 +143,33 @@ const LEGACY_SERVER_ALIASES: Record<string, OfficialServer> = {
   // Tormentum foi substituído por Tenebrium na lista oficial.
   "tormentum": "Tenebrium",
 
-  // ── Infernum — normalização de nomenclatura externa ──────────────────────
-  // O padrão INTERNO do aplicativo é numérico ("Infernum 1/2/3"). Fontes
-  // externas (site/API do Rubinot, dados digitados) podem chegar em algarismo
-  // romano ("Infernum I/II/III") ou com zero à esquerda ("Infernum 01").
-  // Cada variação é mapeada individualmente — nunca por prefixo — para que
-  // I/II/III jamais se cruzem (mesma regra das Grimorias acima).
-  "infernum i": "Infernum 1",
-  "infernum 01": "Infernum 1",
-
-  "infernum ii": "Infernum 2",
-  "infernum 02": "Infernum 2",
-
-  "infernum iii": "Infernum 3",
-  "infernum 03": "Infernum 3",
+  // ── Infernum 1/2/3 — NÃO há alias (decisão da união) ─────────────────────
+  // Os antigos Infernum 1, 2 e 3 foram unidos e deram origem a DOIS novos
+  // servidores (Infernum e Dominum). Como não existe correspondência 1:1,
+  // NENHUM personagem antigo é associado automaticamente: esses nomes são
+  // APOSENTADOS (ver RETIRED_SERVER_KEYS) — o campo fica sem definição até
+  // o próprio usuário editar o cadastro e escolher o servidor correto.
 };
+
+/**
+ * SERVIDORES APOSENTADOS (125ª — união Infernum): nomes que deixaram de
+ * existir SEM servidor sucessor automático. Qualquer dado com estes nomes é
+ * tratado como "sem servidor definido": `serverLabel`/`serverKey` devolvem
+ * vazio, então eles somem de filtros, relatórios, cálculos e exibições —
+ * mas o valor ORIGINAL permanece intacto no armazenamento (o usuário decide
+ * o novo servidor ao editar). Inclui as variações históricas de grafia.
+ */
+export const RETIRED_SERVERS: readonly string[] = ["Infernum 1", "Infernum 2", "Infernum 3"];
+const RETIRED_SERVER_KEYS = new Set<string>([
+  "infernum 1", "infernum 01", "infernum i",
+  "infernum 2", "infernum 02", "infernum ii",
+  "infernum 3", "infernum 03", "infernum iii",
+]);
+
+/** true quando o valor corresponde a um servidor aposentado (sem sucessor). */
+export function isRetiredServer(value: string | null | undefined): boolean {
+  return RETIRED_SERVER_KEYS.has((value || "").trim().toLowerCase());
+}
 
 /**
  * Merges de servidores, em forma legível.
@@ -118,6 +179,9 @@ const LEGACY_SERVER_ALIASES: Record<string, OfficialServer> = {
  * passava (`normalizeServerName` → `serverKey`/`serverLabel`).
  */
 export const SERVER_MERGES: ReadonlyArray<{ from: readonly string[]; to: OfficialServer }> = [
+  // A união dos Infernum 1/2/3 (→ Infernum + Dominum) NÃO está aqui de
+  // propósito: por ter DOIS sucessores, não existe tradução automática —
+  // ver RETIRED_SERVERS.
   { from: ["Bellum", "Spectrum"], to: "Bellum" },
   { from: ["Serenian", "Halorian"], to: "Eldrian" },
   { from: ["Etherian", "Divinian"], to: "Obsidian" },
@@ -179,7 +243,11 @@ export function isOfficialServer(value: string | null | undefined): boolean {
  * Retorna string vazia para entradas vazias, permitindo descartá-las.
  */
 export function serverKey(value: string | null | undefined): string {
-  return normalizeServerName(value).toLowerCase();
+  const lowercase = normalizeServerName(value).toLowerCase();
+  // 125ª — servidores INVÁLIDOS (aposentados ou desconhecidos) não têm
+  // chave: caem fora de agrupamentos, filtros, relatórios e cálculos sem
+  // nunca se misturar com os oficiais. O dado bruto permanece onde está.
+  return OFFICIAL_BY_LOWERCASE.has(lowercase) ? lowercase : "";
 }
 
 /** Compara dois servidores pelo nome completo, tolerando caixa/alias/espaços. */
@@ -194,5 +262,9 @@ export function isSameServer(a: string | null | undefined, b: string | null | un
  * de "Grimoria I" como se fossem servidores distintos.
  */
 export function serverLabel(value: string | null | undefined): string {
-  return normalizeServerName(value);
+  const normalized = normalizeServerName(value);
+  // 125ª — nome antigo/inválido NUNCA é exibido: o campo aparece sem
+  // definição ("" → "—"/placeholder na UI) até o usuário escolher um
+  // servidor da lista oficial. O valor original segue preservado nos dados.
+  return OFFICIAL_BY_LOWERCASE.has(normalized.toLowerCase()) ? normalized : "";
 }

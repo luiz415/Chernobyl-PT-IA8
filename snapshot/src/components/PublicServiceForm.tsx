@@ -848,7 +848,7 @@ export default function PublicServiceForm() {
   // Grupos do seletor de servidor (fonte: configuração persistida do dono,
   // via isServerAttended): TODOS os servidores continuam visíveis —
   // atendidos primeiro e não atendidos ao final, cada grupo em ordem
-  // alfabética ("Infernum 1/2/3" em ordem numérica natural).
+  // alfabética (fonte única: lista oficial de src/constants/servers.ts).
   const serverGroups = useMemo(() => {
     const byName = (a: string, b: string) => a.localeCompare(b, "pt-BR", { sensitivity: "base", numeric: true });
     return {

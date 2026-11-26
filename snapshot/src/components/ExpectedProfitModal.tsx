@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { ArrowDown, ArrowUp, Check, Clock, Coins, Crown, Lock, Package, Percent, RefreshCw, Settings2, Sparkles, TrendingUp, Trophy, X } from "lucide-react";
 import { SERVER_OPTIONS } from "../constants/servers";
+import { ServerNameBadge, ServerSelectOptions } from "./ServerIdentity";
 import { useAuth } from "../context/AuthContext";
 import { getEffectiveUserRole } from "../utils/vipAccess";
 import BecomeVIPModal from "./BecomeVIPModal";
@@ -543,7 +544,7 @@ export default function ExpectedProfitModal({ isBoss, onClose }: Props) {
                 aria-label="Servidor"
                 className="bg-transparent text-[10.5px] font-black text-slate-100 outline-none cursor-pointer py-0.5"
               >
-                {SERVER_OPTIONS.map(s => <option key={s} value={s} className="bg-[var(--th-bg-raised)]">{s}</option>)}
+                <ServerSelectOptions optionStyle={{ backgroundColor: "var(--th-bg-raised)" }} />
               </select>
             </label>
             <span
@@ -717,7 +718,7 @@ export default function ExpectedProfitModal({ isBoss, onClose }: Props) {
                           {sortedQuestRanking.map(row => (
                             <tr key={row.server} className={`border-b border-[var(--th-line)]/20 last:border-b-0 transition-colors hover:bg-white/[0.03] ${row.hasAnyData ? "" : "opacity-50"}`}>
                               <td className="sticky left-0 z-[1] bg-[var(--th-bg-raised)] px-2.5 py-1.5 border-r border-[var(--th-line)]/40">
-                                <span className="block text-[9.5px] font-black text-slate-100 leading-tight whitespace-nowrap">{row.server}</span>
+                                <ServerNameBadge server={row.server} className="whitespace-nowrap" nameClassName="text-[9.5px] font-black leading-tight" />
                                 <span className={`block text-[7.5px] font-bold leading-tight ${row.coinRate > 0 ? "text-slate-500" : "text-red-400/80"}`}>
                                   {row.coinRate > 0 ? `RC a ${coinRateText(row.coinRate)}k` : "sem cotação RC"}
                                 </span>
@@ -806,7 +807,7 @@ export default function ExpectedProfitModal({ isBoss, onClose }: Props) {
                                   )}
                                 </td>
                                 <td className="px-2 py-1.5">
-                                  <span className="block text-[9.5px] font-black text-slate-100 leading-tight whitespace-nowrap">{row.server}</span>
+                                  <ServerNameBadge server={row.server} className="whitespace-nowrap" nameClassName="text-[9.5px] font-black leading-tight" />
                                   <span className={`block text-[7.5px] font-bold leading-tight ${row.coinRate > 0 ? "text-slate-500" : "text-red-400/80"}`}>
                                     {row.coinRate > 0 ? `RC a ${coinRateText(row.coinRate)}k` : "sem cotação RC"}
                                     {ranked && <span className={partial ? "text-amber-400/90" : ""}> · runas {row.runesConfigured}/{CRYPT_RUNES_REQUIRED} · crypt {row.cryptConfigured}/{CRYPT_ITEMS.length}{partial ? " (parcial)" : ""}</span>}

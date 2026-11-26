@@ -1,8 +1,8 @@
 import { useState, useEffect, useRef, useMemo } from "react";
-import { X, Save, Swords, Ban, Percent, Search, Check, ChevronDown, Link2, Lock } from "lucide-react";
+import { X, Save, Swords, Ban, Percent, Search, Check, ChevronDown, Link2, Lock, Unlock } from "lucide-react";
 import type { Character } from "../types";
 import { VOCATIONS, VOC_COLORS, todayISO } from "../types";
-import { SERVER_OPTIONS, normalizeServerName } from "../constants/servers";
+import { SERVER_OPTIONS, getServerMeta, normalizeServerName, serverLabel, SERVER_PVP_TYPE_COLORS } from "../constants/servers";
 import { describeSgCooldown, formatSgCooldownRemaining, isSgCooldownActive } from "../utils/sanguineRotation";
 import SgCooldownModal from "./SgCooldownModal";
 import { computeCharacterItemsRc, isItemsProfitModel } from "../utils/characterItemsValue";
@@ -106,7 +106,11 @@ export default function CharacterModal({ open, initial, accounts, servers, onSav
       // modal do personagem tenha sido fechado com ele aberto.
       setSgCooldownOpen(false);
       if (initial) {
-        setData({ ...initial });
+        // 125ª — servidor fora da lista oficial vigente (ex.: antigos
+        // Infernum 1/2/3) entra como SEM DEFINIÇÃO: o nome antigo não é
+        // exibido e o usuário precisa escolher o servidor correto para
+        // salvar. Todos os demais dados do personagem são preservados.
+        setData({ ...initial, servidor: serverLabel(initial.servidor) });
         if (initial.taxaAplicada != null && initial.valorVendaOriginal != null) {
           setTaxPercent(initial.taxaAplicada);
           setTaxApplied(true);
@@ -226,7 +230,7 @@ export default function CharacterModal({ open, initial, accounts, servers, onSav
         voc: data.voc as Character["voc"],
         account: data.account.trim(),
         personagem: data.personagem.trim(),
-        // Canoniza para o padrão interno (ex.: "Infernum I" → "Infernum 1"):
+        // Canoniza para o padrão interno (ex.: "Spectrum" → "Bellum"):
         // cobre valores antigos carregados na edição e importações externas.
         servidor: normalizeServerName(data.servidor),
         aVenda: data.vendido ? false : !!data.aVenda,
@@ -938,7 +942,9 @@ function ServerField({ value, onChange, existingServers, highlightClass = "" }: 
     // Normaliza os servidores vindos dos dados salvos para que nomenclaturas
     // antigas ("Grimoria 1", "Grimoria 01", "Tormentum") não apareçam
     // duplicadas ao lado do nome oficial correspondente.
-    const normalizedExisting = existingServers.map(normalizeServerName);
+    // 125ª — somente servidores da lista OFICIAL vigente são selecionáveis
+    // (serverLabel descarta aposentados/inválidos vindos de dados antigos).
+    const normalizedExisting = existingServers.map(s => serverLabel(s));
     return Array.from(new Set([...BUILTIN_SERVERS, ...normalizedExisting]))
       .filter(Boolean)
       .sort((a, b) => a.localeCompare(b, "pt-BR"));
@@ -1024,8 +1030,11 @@ function ServerField({ value, onChange, existingServers, highlightClass = "" }: 
                         : "text-slate-300 hover:bg-red-900/20 hover:text-white"
                     }`}
                   >
-                    <span className="truncate">{srv}</span>
-                    {srv === value && <Check size={12} className="text-red-400 flex-shrink-0" />}
+                    <span className={`truncate ${(() => { const m = getServerMeta(srv); return m ? SERVER_PVP_TYPE_COLORS[m.pvpType].text : ""; })()}`} title={(() => { const m = getServerMeta(srv); return m ? `${srv} — ${m.pvpType} · transferência ${m.transferOpen ? "aberta" : "fechada"}` : srv; })()}>{srv}</span>
+                    <span className="flex items-center gap-1.5 flex-shrink-0">
+                      {(() => { const m = getServerMeta(srv); return m ? (m.transferOpen ? <Unlock size={9} className="text-emerald-400/80" aria-label="Transferência aberta" /> : <Lock size={9} className="text-red-400/70" aria-label="Transferência fechada" />) : null; })()}
+                      {srv === value && <Check size={12} className="text-red-400" />}
+                    </span>
                   </button>
                 ))
               )}
