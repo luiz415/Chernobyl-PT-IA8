@@ -23,6 +23,7 @@
 // ============================================================================
 
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { ServerNameBadge } from "./ServerIdentity";
 import { AlertTriangle, Check, Coins, Globe, Package, RefreshCw, X } from "lucide-react";
 import type { Character } from "../types";
 import { SERVER_OPTIONS } from "../constants/servers";
@@ -312,8 +313,8 @@ export default function CharacterBazaarItemsModal({ character, onToggleForSale, 
             <Package size={16} className="text-fuchsia-400 flex-shrink-0" />
             <span className="text-sm font-bold text-fuchsia-300 truncate">{character.personagem || "Personagem"}</span>
             {snapshot.server && (
-              <span className="inline-flex items-center gap-1 rounded border border-fuchsia-500/30 bg-fuchsia-500/10 px-1.5 py-0.5 text-[9px] font-black uppercase tracking-wide text-fuchsia-300 flex-shrink-0" title="Os valores desta tabela vieram da Lista de Itens deste servidor no momento da consulta">
-                <Globe size={9} /> {snapshot.server}
+              <span className="inline-flex items-center gap-1 rounded border border-fuchsia-500/30 bg-fuchsia-500/10 px-1.5 py-0.5 text-[9px] font-black uppercase tracking-wide flex-shrink-0" title="Os valores desta tabela vieram da Lista de Itens deste servidor no momento da consulta">
+                <Globe size={9} className="text-fuchsia-300" /> <ServerNameBadge server={snapshot.server} />
               </span>
             )}
             <span className="inline-flex items-center rounded border border-white/15 bg-white/5 px-1.5 py-0.5 text-[9px] font-bold text-slate-400 flex-shrink-0" title="Snapshot capturado na compra — mesmos dados da consulta de origem, sem nova consulta ao Bazaar">
@@ -523,7 +524,7 @@ export default function CharacterBazaarItemsModal({ character, onToggleForSale, 
                       <span className="inline-flex flex-wrap items-center gap-1.5 text-[9px] text-amber-200">
                         <AlertTriangle size={10} className="flex-shrink-0 text-amber-300" />
                         <span>
-                          Gravar <span className="font-mono font-bold">{formatKkValue(rowBaseKk, "kk")}</span> como valor base de <span className="font-bold">“{rowItemLabel}”</span> {rowConfirm.scope === "all" ? "na Lista de Itens de TODOS os servidores" : <>SOMENTE na lista de <span className="font-bold">{snapshot.server || "—"}</span> (demais servidores intactos)</>}?
+                          Gravar <span className="font-mono font-bold">{formatKkValue(rowBaseKk, "kk")}</span> como valor base de <span className="font-bold">“{rowItemLabel}”</span> {rowConfirm.scope === "all" ? "na Lista de Itens de TODOS os servidores" : <>SOMENTE na lista de <ServerNameBadge server={snapshot.server} nameClassName="font-bold" className="align-middle" /> (demais servidores intactos)</>}?
                         </span>
                         <button
                           type="button"
@@ -592,10 +593,10 @@ export default function CharacterBazaarItemsModal({ character, onToggleForSale, 
                  dependendo da cotação. */
               <span className="text-slate-300" title="Sem cotação de RC configurada para o servidor — valor composto apenas pelas vendas registradas (RC real) e/ou pelo RC registrado na importação. Defina a cotação na guia Bazaar → Itens (Lista de Itens) para converter os pendentes.">
                 Valor Itens (RC): <span className="font-mono font-bold text-emerald-300">{itemsBreakdown.totalRc.toLocaleString("de-DE")} RC</span>
-                <span className="ml-1 text-[9px] text-slate-500">(sem cotação p/ {snapshot.server || "o servidor"})</span>
+                <span className="ml-1 text-[9px] text-slate-500">(sem cotação p/ {snapshot.server ? <ServerNameBadge server={snapshot.server} className="align-middle" /> : "o servidor"})</span>
               </span>
             ) : (
-              <span className="text-slate-500">Sem cotação do RC para {snapshot.server || "este servidor"} — defina na guia Bazaar → Itens (Lista de Itens) para ver a conversão.</span>
+              <span className="text-slate-500">Sem cotação do RC para {snapshot.server ? <ServerNameBadge server={snapshot.server} className="align-middle" /> : "este servidor"} — defina na guia Bazaar → Itens (Lista de Itens) para ver a conversão.</span>
             )}
             {/* RC GLOBAL DO SERVIDOR (70ª — EXCLUSIVO DO BOSS): edita a
                 cotação OFICIAL do servidor deste personagem
@@ -607,7 +608,7 @@ export default function CharacterBazaarItemsModal({ character, onToggleForSale, 
             {canUpdateOfficialList && !!snapshot.server && (
               <span className="inline-flex flex-wrap items-center gap-1.5">
                 <label className="inline-flex items-center gap-1.5" title="Cotação do Rubini Coin no Market: quantos k equivalem a 1000 RC. Mesma regra de conversão usada no restante do aplicativo — floor(kk ÷ cotação × 1000).">
-                  <span className="text-[8px] font-black uppercase tracking-wide text-amber-300">RC de {snapshot.server}:</span>
+                  <span className="inline-flex items-center gap-1 text-[8px] font-black uppercase tracking-wide text-amber-300">RC de <ServerNameBadge server={snapshot.server} /> :</span>
                   <input
                     value={rateInput}
                     onChange={event => setRateInput(event.target.value)}
@@ -632,7 +633,7 @@ export default function CharacterBazaarItemsModal({ character, onToggleForSale, 
                   >
                     {rateSaving
                       ? <><RefreshCw size={9} className="animate-spin flex-shrink-0" /> Salvando…</>
-                      : <><Globe size={9} className="flex-shrink-0" /> Salvar p/ {snapshot.server}</>}
+                      : <><Globe size={9} className="flex-shrink-0" /> Salvar p/ <ServerNameBadge server={snapshot.server} /></>}
                   </button>
                 )}
               </span>

@@ -131,7 +131,7 @@ import type { CharacterBazaarItemsSnapshot } from "../types";
 // da guia de quests (conta/valor/validações/última conta usada/checkbox
 // "Descontar valor dos itens"), exibido numa linha logo abaixo do personagem.
 import BazaarInlinePurchaseForm from "./BazaarInlinePurchaseForm";
-import { renderServerOption } from "./ServerIdentity";
+import { ServerNameBadge, renderServerOption } from "./ServerIdentity";
 
 // ── Tipos mínimos do IPC (mesmo contrato dos handlers existentes) ───────────
 interface ItemsAuction {
@@ -3164,7 +3164,7 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                       );
                     })()}
                   </td>
-                  <td className="px-2 py-1.5 text-center text-slate-300">{result.server || "—"}</td>
+                  <td className="px-2 py-1.5 text-center"><ServerNameBadge server={result.server} className="justify-center" /></td>
                   <td className="px-2 py-1.5 text-center font-mono">
                     {/* "ENCERRA" (87ª): MESMO badge da tabela "Personagens
                         Para SW/SG/GB" (AuctionEndBadge, fonte única) — ≤5min
@@ -3439,7 +3439,7 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                           <BazaarInlinePurchaseForm
                             formId={`items_${auctionKey}`}
                             characterName={result.name || ""}
-                            characterSummary={`${result.server || "—"} · ${result.vocation || "—"} · Lv ${result.level || 0}`}
+                            characterSummary={<><ServerNameBadge server={result.server} /> · {result.vocation || "—"} · Lv {result.level || 0}</>}
                             accounts={purchaseAccounts || []}
                             initialAccount={inlinePurchase?.initialAccount || ""}
                             itemsValue={itemsValueInfo}
@@ -3863,8 +3863,8 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                 <Package size={16} className="text-fuchsia-400 flex-shrink-0" />
                 <span className="text-sm font-bold text-fuchsia-300 truncate">{detailResult.name || "Personagem"}</span>
                 {detailResult.server && (
-                  <span className="inline-flex items-center gap-1 rounded border border-fuchsia-500/30 bg-fuchsia-500/10 px-1.5 py-0.5 text-[9px] font-black uppercase tracking-wide text-fuchsia-300 flex-shrink-0" title="Os valores desta tabela vêm da Lista de Itens deste servidor">
-                    <Globe size={9} /> {detailResult.server}
+                  <span className="inline-flex items-center gap-1 rounded border border-fuchsia-500/30 bg-fuchsia-500/10 px-1.5 py-0.5 text-[9px] font-black uppercase tracking-wide flex-shrink-0" title="Os valores desta tabela vêm da Lista de Itens deste servidor">
+                    <Globe size={9} className="text-fuchsia-300" /> <ServerNameBadge server={detailResult.server} />
                   </span>
                 )}
                 {detailResult.url && (() => {
@@ -3992,7 +3992,7 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                           <span className="inline-flex flex-wrap items-center gap-1.5 text-[9px] text-amber-200">
                             <AlertTriangle size={10} className="flex-shrink-0 text-amber-300" />
                             <span>
-                              Gravar o valor base de <span className="font-bold">{bulkEligible} item(ns)</span> encontrados em <span className="font-bold">“{detailResult.name}”</span> {detailBulkConfirm === "all" ? "na Lista de Itens de TODOS os servidores" : <>SOMENTE na lista de <span className="font-bold">{detailResult.server}</span> (demais servidores intactos)</>}?
+                              Gravar o valor base de <span className="font-bold">{bulkEligible} item(ns)</span> encontrados em <span className="font-bold">“{detailResult.name}”</span> {detailBulkConfirm === "all" ? "na Lista de Itens de TODOS os servidores" : <>SOMENTE na lista de <ServerNameBadge server={detailResult.server} nameClassName="font-bold" className="align-middle" /> (demais servidores intactos)</>}?
                               {bulkSkipped > 0 && <> <span className="text-slate-400">({bulkSkipped} sem valor base será(ão) ignorado(s).)</span></>}
                               {" "}Somente os itens deste personagem são alterados.
                             </span>
@@ -4265,7 +4265,7 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                           <span className="inline-flex flex-wrap items-center gap-1.5 text-[9px] text-amber-200">
                             <AlertTriangle size={10} className="flex-shrink-0 text-amber-300" />
                             <span>
-                              Gravar <span className="font-mono font-bold">{formatKkValue(rowBaseValueKk, "kk")}</span> como valor base de <span className="font-bold">“{match.watchedName}”</span> {isConfirmingApply.scope === "all" ? "na Lista de Itens de TODOS os servidores" : <>SOMENTE na lista de <span className="font-bold">{detailResult.server}</span> (demais servidores intactos)</>}?
+                              Gravar <span className="font-mono font-bold">{formatKkValue(rowBaseValueKk, "kk")}</span> como valor base de <span className="font-bold">“{match.watchedName}”</span> {isConfirmingApply.scope === "all" ? "na Lista de Itens de TODOS os servidores" : <>SOMENTE na lista de <ServerNameBadge server={detailResult.server} nameClassName="font-bold" className="align-middle" /> (demais servidores intactos)</>}?
                             </span>
                             <button
                               type="button"
@@ -4333,7 +4333,7 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                     ele, na hora — sem nova consulta ao Bazaar. */}
                 {detailRateEdit !== null ? (
                   <span className="inline-flex items-center gap-1 text-slate-300">
-                    Coin (k) de {detailResult.server}:
+                    Coin (k) de <ServerNameBadge server={detailResult.server} className="align-middle" />:
                     <input
                       type="text"
                       inputMode="decimal"
@@ -4357,7 +4357,7 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                   </span>
                 ) : detailServerRate > 0 ? (
                   <span className="inline-flex items-center gap-1 text-slate-300" title={`floor((${displayTotalKk} / ${detailServerRate}) × 1000) — mesma fórmula de conversão do restante do aplicativo, com a cotação de ${detailResult.server}`}>
-                    Em RC (coin de {detailResult.server} a {String(detailServerRate).replace(".", ",")}k): <span className="font-mono font-bold text-emerald-300">{computeItemRC(detailServerRate, displayTotalKk).toLocaleString("de-DE")} RC</span>
+                    Em RC (coin de <ServerNameBadge server={detailResult.server} className="align-middle" /> a {String(detailServerRate).replace(".", ",")}k): <span className="font-mono font-bold text-emerald-300">{computeItemRC(detailServerRate, displayTotalKk).toLocaleString("de-DE")} RC</span>
                     {detailRateSaved && <span className="inline-flex items-center gap-0.5 text-[9px] font-black text-emerald-300"><Check size={10} strokeWidth={3} /> Salvo</span>}
                     <button
                       type="button"
@@ -4370,7 +4370,7 @@ export default function BazaarItemsPanel({ isBossUser, isElectron, timezoneOffse
                   </span>
                 ) : (
                   <span className="inline-flex items-center gap-1 text-slate-500">
-                    Sem cotação do RC para {detailResult.server} — sem conversão.
+                    Sem cotação do RC para <ServerNameBadge server={detailResult.server} className="align-middle" /> — sem conversão.
                     <button
                       type="button"
                       onClick={() => { setDetailRateEdit(""); setDetailRateError(null); }}

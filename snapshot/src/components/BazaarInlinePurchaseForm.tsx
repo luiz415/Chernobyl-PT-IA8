@@ -19,7 +19,7 @@
 // ignorada — nada é migrado nem apagado).
 // ============================================================================
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Check, ChevronDown, X } from "lucide-react";
 
 /**
@@ -58,7 +58,8 @@ interface BazaarInlinePurchaseFormProps {
   formId: string;
   characterName: string;
   /** Resumo "Servidor · VOC · Lv X" exibido ao lado do nome. */
-  characterSummary: string;
+  /** Resumo "Servidor · VOC · Lv" — aceita JSX para o badge padronizado do servidor (ServerNameBadge). */
+  characterSummary: ReactNode;
   /** Contas já cadastradas no app (projeção visual — nenhuma fonte nova). */
   accounts: string[];
   /** Conta pré-preenchida (última utilizada pelo usuário; "" = nenhuma). */

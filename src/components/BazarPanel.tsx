@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
-import { ServerNameBadge } from "./ServerIdentity";
+import { ServerNameBadge, renderServerOption } from "./ServerIdentity";
 import bazarBgUrl from "../assets/bazar-bg.webp"; // WebP: 1,78 MB → ~157 KB (mesma imagem)
 import { AlertTriangle, ArrowDownUp, BarChart3, Check, CheckCircle2, ChevronDown, ChevronUp, Coins, Copy, Crown, ExternalLink, Eye, EyeOff, Filter, FlagTriangleRight, Flame, Globe, Package, Plus, RefreshCw, RotateCcw, ShieldAlert, ShoppingBag, Sparkles, Star, Target, Users, X } from "lucide-react";
 import BazaarItemsPanel from "./BazaarItemsPanel";
@@ -5094,7 +5094,7 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
                   <th className={`${STICKY_FILTER_CELL_CLASS} h-10 px-1 py-1.5 text-center align-middle text-[10px] text-slate-600`}>—</th>
                   <th className={`${STICKY_FILTER_CELL_CLASS} h-10 px-1 py-1.5 align-middle`}><div className="flex w-full items-center justify-center [&>button]:w-full [&>button]:max-w-[90px]"><FilterMulti label="Vocação" options={tableVocationOptions} selected={tableFilters.vocations} onApply={values => updateTableFilters({ vocations: values })} placeholder="Vocação" searchable /></div></th>
                   <th className={`${STICKY_FILTER_CELL_CLASS} h-10 px-1 py-1.5 align-middle`}><div className="flex w-full items-center justify-center [&>button]:w-full [&>button]:max-w-[74px]"><FilterNumber label="Level" value={tableFilters.levelValue} operator={tableFilters.levelOperator} onChange={(value, operator) => updateTableFilters({ levelValue: value, levelOperator: operator })} placeholder="Level" /></div></th>
-                  <th className={`${STICKY_FILTER_CELL_CLASS} h-10 px-1 py-1.5 align-middle`}><div className="flex w-full items-center justify-center [&>button]:w-full [&>button]:max-w-[96px]"><FilterMulti label="Servidor" options={tableServerOptions} selected={tableFilters.servers} onApply={values => updateTableFilters({ servers: values })} placeholder="Servidor" searchable /></div></th>
+                  <th className={`${STICKY_FILTER_CELL_CLASS} h-10 px-1 py-1.5 align-middle`}><div className="flex w-full items-center justify-center [&>button]:w-full [&>button]:max-w-[96px]"><FilterMulti label="Servidor" options={tableServerOptions} selected={tableFilters.servers} onApply={values => updateTableFilters({ servers: values })} placeholder="Servidor" searchable renderOption={renderServerOption} /></div></th>
                   <th className={`${STICKY_FILTER_CELL_CLASS} h-10 px-1 py-1.5 align-middle`}><div className="flex w-full items-center justify-center [&>button]:w-full [&>button]:max-w-[80px]"><FilterNumber label="Valor" value={tableFilters.bidValue} operator={tableFilters.bidOperator} onChange={(value, operator) => updateTableFilters({ bidValue: value, bidOperator: operator })} placeholder="Valor" /></div></th>
                   <th className={`${STICKY_FILTER_CELL_CLASS} h-10 px-1 py-1.5 align-middle`}><div className="flex w-full items-center justify-center [&>div]:w-full [&>div]:max-w-[122px]"><FilterDateMax label="Encerra até" value={tableFilters.endUntil} onChange={value => updateTableFilters({ endUntil: value })} placeholder="Encerra" /></div></th>
                   {/* Valor Itens (kk): sem filtro próprio. */}
@@ -5284,7 +5284,7 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
                         </span>
                       </td>
                       <td className="h-12 px-1 py-2 text-center align-middle font-mono text-amber-300">{auction.level || 0}</td>
-                      <td className="h-12 px-1 py-2 text-center align-middle text-slate-300">{auction.server || "—"}</td>
+                      <td className="h-12 px-1 py-2 text-center align-middle"><ServerNameBadge server={auction.server} className="justify-center" /></td>
                       <td className="h-12 px-1 py-2 text-center align-middle font-mono text-emerald-300">{auction.bid?.toLocaleString("de-DE") || 0} coins</td>
                       <td className="h-12 px-1 py-2 text-center align-middle font-mono">
                         {/* FONTE ÚNICA (87ª): mesmo badge importado pela guia
@@ -5497,7 +5497,7 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
                               <BazaarInlinePurchaseForm
                                 formId={auctionKey}
                                 characterName={auction.name || ""}
-                                characterSummary={`${auction.server || "—"} · ${getVocationAbbreviation(auction.vocation)} · Lv ${auction.level || 0}`}
+                                characterSummary={<><ServerNameBadge server={auction.server} /> · {getVocationAbbreviation(auction.vocation)} · Lv {auction.level || 0}</>}
                                 accounts={availableInlineAccounts}
                                 initialAccount={inlinePurchaseDraft.initialAccount}
                                 itemsValue={itemsValueInfo}
@@ -5694,7 +5694,7 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
                       >
                         {questsViewRateSaving
                           ? <><RefreshCw size={9} className="animate-spin flex-shrink-0" /> Salvando…</>
-                          : <><Globe size={9} className="flex-shrink-0" /> Salvar p/ {view.server || "servidor"}</>}
+                          : <><Globe size={9} className="flex-shrink-0" /> Salvar p/ {view.server ? <ServerNameBadge server={view.server} /> : "servidor"}</>}
                       </button>
                     )}
                   </span>
@@ -5812,7 +5812,7 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
                           <span className="inline-flex flex-wrap items-center gap-1.5 text-[9px] text-amber-200">
                             <AlertTriangle size={10} className="flex-shrink-0 text-amber-300" />
                             <span>
-                              Gravar o valor base de <span className="font-bold">{bulkEligible} item(ns)</span> encontrados em <span className="font-bold">“{view.name}”</span> {questsViewBulkConfirm === "all" ? "na Lista de Itens de TODOS os servidores" : <>SOMENTE na lista de <span className="font-bold">{view.server}</span> (demais servidores intactos)</>}?
+                              Gravar o valor base de <span className="font-bold">{bulkEligible} item(ns)</span> encontrados em <span className="font-bold">“{view.name}”</span> {questsViewBulkConfirm === "all" ? "na Lista de Itens de TODOS os servidores" : <>SOMENTE na lista de <ServerNameBadge server={view.server} nameClassName="font-bold" className="align-middle" /> (demais servidores intactos)</>}?
                               {bulkSkipped > 0 && <> <span className="text-slate-400">({bulkSkipped} sem valor base será(ão) ignorado(s).)</span></>}
                               {" "}Somente os itens deste personagem são alterados.
                             </span>
@@ -5885,7 +5885,7 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
                       </td>
                       <td className="px-1.5 py-1.5 text-center font-mono text-slate-200">{match.amount}</td>
                       {/* VALOR BASE (120ª — Boss): campo espelha o valor
-                          OFICIAL vivo da Lista de Itens de {view.server};
+                          OFICIAL vivo da Lista de Itens de <ServerNameBadge server={view.server} className="align-middle" />;
                           salvar grava pelo mecanismo único oficial (escopo
                           servidor). Item fora da lista = campo vazio
                           (salvar cadastra). NUNCA altera o Total ao lado. */}
@@ -5990,7 +5990,7 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
                           <span className="inline-flex flex-wrap items-center gap-1.5 text-[9px] text-amber-200">
                             <AlertTriangle size={10} className="flex-shrink-0 text-amber-300" />
                             <span>
-                              Gravar <span className="font-mono font-bold">{formatItemsKk(rowBaseKk)}</span> como valor base de <span className="font-bold">“{rowItemLabel}”</span> {rowConfirm.scope === "all" ? "na Lista de Itens de TODOS os servidores" : <>SOMENTE na lista de <span className="font-bold">{view.server}</span> (demais servidores intactos)</>}?
+                              Gravar <span className="font-mono font-bold">{formatItemsKk(rowBaseKk)}</span> como valor base de <span className="font-bold">“{rowItemLabel}”</span> {rowConfirm.scope === "all" ? "na Lista de Itens de TODOS os servidores" : <>SOMENTE na lista de <ServerNameBadge server={view.server} nameClassName="font-bold" className="align-middle" /> (demais servidores intactos)</>}?
                             </span>
                             <button
                               type="button"
