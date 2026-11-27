@@ -1367,6 +1367,17 @@ interface BazaarCharacterPurchase {
    * (ver buildPurchaseItemsSnapshot). Ausente = sem itens na consulta.
    */
   items?: CharacterBazaarItemsSnapshot;
+  /** Valor dos itens em RC no momento da compra (ganho potencial — 82ª). */
+  itemsValueRc?: number;
+  /**
+   * QUESTS REAIS exibidas na linha da tabela (128ª — mesma fonte `detail`
+   * da exibição: cache de detalhes > dados embutidos da lista oficial):
+   * true = quest JÁ FEITA ⇒ importa como indisponível; false = disponível;
+   * null/ausente = inconclusivo ("?") ⇒ o App mantém o padrão "disponível".
+   */
+  soulwarCompleted?: boolean | null;
+  sanguineCompleted?: boolean | null;
+  cryptCompleted?: boolean | null;
 }
 
 interface BazarPanelProps {
@@ -5520,6 +5531,18 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
                                     vocation: auction.vocation || "",
                                     account,
                                     valorPago,
+                                    // QUESTS (128ª): estados REAIS da MESMA fonte
+                                    // que as colunas SW/SG/Crypt desta linha
+                                    // exibem (`detail` — cache de detalhes >
+                                    // embutido na lista oficial). "Concl." ⇒
+                                    // importa indisponível; "Disp." ⇒ disponível;
+                                    // "?" (null) ⇒ padrão "disponível" preservado
+                                    // (o app nunca presume). Antes a guia Quests
+                                    // não enviava nada e TODA quest chegava como
+                                    // disponível, divergindo do exibido.
+                                    soulwarCompleted: detail?.soulwarCompleted ?? null,
+                                    sanguineCompleted: detail?.sanguineCompleted ?? null,
+                                    cryptCompleted: detail?.cryptCompleted ?? null,
                                     ...(purchaseItems ? { items: purchaseItems } : {}),
                                     // VALOR ITENS (82ª): registrado SEPARADO do
                                     // custo, como ganho potencial (0 = sem

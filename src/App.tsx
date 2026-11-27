@@ -4588,10 +4588,10 @@ export default function App() {
       servidor,
       voc,
       level,
-      // QUESTS: a guia "Personagens com Itens" envia o estado REAL apurado na
-      // consulta (true = já feita ⇒ indisponível; null/undefined mantém o
-      // padrão "disponível" — o usuário confere depois). A guia de quests não
-      // envia os campos e preserva o comportamento anterior (tudo disponível).
+      // QUESTS: as DUAS guias (Quests — 128ª — e "Personagens com Itens")
+      // enviam o estado REAL exibido na tabela (true = já feita ⇒
+      // indisponível; false = disponível; null/undefined = inconclusivo "?"
+      // ⇒ mantém o padrão "disponível" — o usuário confere depois).
       soulwar: purchase.soulwarCompleted === true ? false : true,
       sanguine: purchase.sanguineCompleted === true ? false : true,
       crypt: purchase.cryptCompleted === true ? false : true,
