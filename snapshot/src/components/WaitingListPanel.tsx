@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from "react";
+import { ServerNameBadge, renderServerOption } from "./ServerIdentity";
 import { Plus, Pencil, Trash2, X, Save, Ban, Clock, MessageCircle, ArrowDown, ArrowUp, ArrowUpDown, RotateCcw, Check, CheckCircle2, ExternalLink, Crown, Star, Shield, Zap, ChevronRight } from "lucide-react";
 import type { PartyTab, ServicePaymentMethod, WaitingService, Vocation } from "../types";
 import { VOCATIONS, VOC_COLORS, VOC_LABEL, formatRC, todayISO, formatDateBR, formatDateTimeBR, SERVICE_PAYMENT_LABELS, customAlert, customConfirm } from "../types";
@@ -845,7 +846,7 @@ export default function WaitingListPanel({ items, onAdd, onUpdate, onDelete, use
                         </button>
                       </span>
                     </td>
-                    <td className="px-2 py-1 text-center text-slate-300 whitespace-nowrap">{item.servidor || "—"}</td>
+                    <td className="px-2 py-1 text-center whitespace-nowrap"><ServerNameBadge server={item.servidor} className="justify-center" /></td>
                     <td className="px-2 py-1 text-center whitespace-nowrap"><span className="font-bold" style={{ color: VOC_COLORS[item.voc] }}>{item.voc}</span></td>
                     <td className="px-2 py-1 text-center tabular-nums whitespace-nowrap">{item.level || "—"}</td>
                     <td className="px-2 py-1 text-center text-cyan-300 whitespace-nowrap">{item.ownerName || "—"}</td>
@@ -1122,6 +1123,7 @@ function ServiceModal({ open, initial, userName, eligibleServiceiros, userProfil
                 searchPlaceholder="Buscar servidor..."
                 allLabel=""
                 activeColor="cyan"
+                renderOption={renderServerOption}
                 className={`w-full flex items-center justify-between gap-2 px-3 py-2 rounded-md bg-[var(--th-n-elev)] border border-white/[0.07] hover:border-white/15 focus:border-cyan-500/50 focus:outline-none transition-colors text-sm ${!data.servidor ? "text-slate-500" : "text-slate-200"}`}
               />
             </Field>

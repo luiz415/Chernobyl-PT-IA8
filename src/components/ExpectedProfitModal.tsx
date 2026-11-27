@@ -595,7 +595,7 @@ export default function ExpectedProfitModal({ isBoss, onClose }: Props) {
               <QuestCard questKey="sg" />
               <QuestCard questKey="gb" />
               <div className="rounded-lg border border-[var(--th-line)]/40 bg-black/20 px-2.5 py-1.5 text-[8.5px] leading-snug text-slate-500">
-                Premissa: recompensas equiprováveis dentro de cada quest (sem confirmação oficial das taxas individuais) — médias calculadas SOMENTE sobre os itens com valor cadastrado em {"\u201C"}Valores Considerados{"\u201D"}. Conversão kk → RC pela cotação de {server} do quadro {"\u201C"}RC Servidores{"\u201D"}.
+                Premissa: recompensas equiprováveis dentro de cada quest (sem confirmação oficial das taxas individuais) — médias calculadas SOMENTE sobre os itens com valor cadastrado em {"\u201C"}Valores Considerados{"\u201D"}. Conversão kk → RC pela cotação de <ServerNameBadge server={server} className="align-middle" /> do quadro {"\u201C"}RC Servidores{"\u201D"}.
               </div>
             </div>
           )}
@@ -621,7 +621,7 @@ export default function ExpectedProfitModal({ isBoss, onClose }: Props) {
               </div>
               {/* Os 7 itens Crypt — valores individuais em RC */}
               <div className="rounded-xl border border-[var(--th-line)]/60 bg-black/25 overflow-hidden">
-                <div className="px-2.5 py-1.5 border-b border-[var(--th-line)]/40 bg-white/[0.02] text-[9px] font-black uppercase tracking-wider text-slate-400">Itens Crypt em {server} (RC)</div>
+                <div className="px-2.5 py-1.5 border-b border-[var(--th-line)]/40 bg-white/[0.02] text-[9px] font-black uppercase tracking-wider text-slate-400">Itens Crypt em <ServerNameBadge server={server} className="align-middle" /> (RC)</div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-1 p-2.5">
                   {CRYPT_ITEMS.map(item => {
                     const entry = getExpectedItemEntry(values, server, item);
@@ -858,10 +858,10 @@ export default function ExpectedProfitModal({ isBoss, onClose }: Props) {
                     </button>
                   ))}
                 </div>
-                <span className="text-[8.5px] font-bold text-slate-500">{group.items.length} itens em <span className="text-slate-300">{server}</span></span>
+                <span className="text-[8.5px] font-bold text-slate-500">{group.items.length} itens em <ServerNameBadge server={server} className="align-middle" /></span>
               </div>
               <div className="rounded-lg border border-[var(--th-line)]/40 bg-black/20 px-2.5 py-1.5 text-[8.5px] leading-snug text-slate-500">
-                Valores em kk por item em <span className="font-bold text-slate-300">{server}</span> — <span className="text-sky-300 font-bold">Venda Direta</span> = mínimo alcançável (maior oferta de compra); <span className="text-violet-300 font-bold">Venda Paciente</span> = média esperada sem pressa. Campo vazio = não configurado (fica fora das médias).
+                Valores em kk por item em <ServerNameBadge server={server} nameClassName="font-bold" className="align-middle" /> — <span className="text-sky-300 font-bold">Venda Direta</span> = mínimo alcançável (maior oferta de compra); <span className="text-violet-300 font-bold">Venda Paciente</span> = média esperada sem pressa. Campo vazio = não configurado (fica fora das médias).
                 <span className="block mt-0.5">A <span className="text-sky-300 font-bold">Venda Direta</span> é o MESMO valor <span className="font-bold text-slate-300">Base</span> da Lista de Itens do Painel Bazaar (guia Personagens Com Itens): alterar e salvar em qualquer um dos dois atualiza o outro em tempo real, no servidor correspondente. A <span className="text-violet-300 font-bold">Venda Paciente</span> nunca é alterada pela sincronização.</span>
                 {!canEditAsBoss && <span className="block text-amber-400/80 font-bold mt-0.5">Somente usuários Boss podem editar e salvar estes valores.</span>}
               </div>

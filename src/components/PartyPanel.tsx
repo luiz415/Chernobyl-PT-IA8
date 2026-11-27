@@ -49,7 +49,7 @@ import {
   type WhatsappTemplate,
 } from "../services/whatsappTemplatesService";
 import { SERVER_OPTIONS, isSameServer, serverLabel } from "../constants/servers";
-import { ServerSelectOptions } from "./ServerIdentity";
+import { ServerNameBadge, ServerSelectOptions } from "./ServerIdentity";
 // SuggestPartyModal removido: o botão "Sugerir PT" foi movido para o
 // PartyManager, então o modal não é mais invocado a partir deste arquivo.
 // Lista oficial centralizada em src/constants/servers.ts
@@ -3160,7 +3160,9 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
                       : "Servidor da PT"
                   }
                 >
-                  {serverLabel(party.servidor)}
+                  {/* 126ª — nome na cor da categoria + modo de PVP compacto
+                      ("Infernum · Retro") + cadeado de transferência. */}
+                  <ServerNameBadge server={party.servidor} showPvpSuffix />
                 </button>
               )}
             </>
@@ -4336,7 +4338,7 @@ export default function PartyPanel({ party, characters, waitingList, allParties,
                         {copiedCharId === id ? <Check size={12} className="text-emerald-400" /> : charName || "—"}
                       </button>
                     </td>
-                    <td className={srvCellClass}>{srv || "—"}</td>
+                    <td className={srvCellClass}><ServerNameBadge server={srv} className="justify-center" /></td>
                     <td className="px-2 py-0.5 text-center whitespace-nowrap"><span className="font-bold" style={{ color: VOC_COLORS[voc!] }}>{voc}</span></td>
                     <td className="px-2 py-0.5 text-center tabular-nums whitespace-nowrap">{lvl}</td>
                     {isSanguinePT && (() => {

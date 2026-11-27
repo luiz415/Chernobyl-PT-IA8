@@ -1,4 +1,5 @@
 import type { CSSProperties } from "react";
+import { ServerNameBadge } from "./ServerIdentity";
 import { BarChart3, Filter, Server, X } from "lucide-react";
 import type { Character, PartyTab, Vocation, WaitingService } from "../types";
 import { analyzeServerPotential, resolveServiceResponsible } from "../utils/suggestionAlgorithm";
@@ -315,7 +316,7 @@ export default function FriendsSummaryModal({ isOpen, onClose, characters, waiti
                   <div className="flex items-start justify-between gap-3">
                     <div>
                       <div className="flex items-center gap-2 text-amber-200 font-black text-sm">
-                        <Server size={14} className="text-amber-400" /> {summary.server}
+                        <Server size={14} className="text-amber-400" /> <ServerNameBadge server={summary.server} />
                       </div>
                       <div className="text-[10px] text-slate-500 mt-1">
                         Total: <span className="font-mono text-slate-300">{summary.total}</span> • Vocações: <span className="font-mono text-slate-300">{summary.differentVocations}/5</span> • PT's possíveis: <span className="font-mono text-amber-300">{summary.possiblePTs}</span>

@@ -6,6 +6,7 @@ import { VOCATIONS, VOC_COLORS, VOC_LABEL, SERVICE_PAYMENT_LABELS, resolveServic
 import { SERVER_OPTIONS } from "../constants/servers";
 import { FilterSelect } from "./FilterTypes";
 import { toIsoDate } from "../services/sharedServicesService";
+import { renderServerOption } from "./ServerIdentity";
 
 // ============================================================================
 // MODAL DE "MEUS SERVICES" — layout compacto
@@ -272,6 +273,7 @@ export default function MyServiceModal({ open, initial, onClose, onSave }: Props
                 searchPlaceholder="Buscar servidor..."
                 allLabel=""
                 activeColor="cyan"
+                renderOption={renderServerOption}
                 // Este modal é z-[1000]; sem isso o dropdown (z-600 padrão)
                 // ficaria atrás do overlay e a lista pareceria não abrir.
                 dropdownZIndex={1050}

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { renderServerOption } from "./ServerIdentity";
 import {
   Briefcase, Plus, Pencil, Trash2, Crown, Shield, Star, Zap,
   MessageCircle, ChevronRight, CheckCircle2, Clock, History as HistoryIcon, Check, X, ThumbsUp, ThumbsDown,
@@ -1442,6 +1443,7 @@ export default function MyServicesPanel({
                     searchable
                     searchPlaceholder="Buscar servidor..."
                     activeColor="cyan"
+                    renderOption={renderServerOption}
                     className={`w-full flex items-center justify-between gap-1 rounded border bg-[var(--th-n-elev)] px-1.5 py-0.5 text-[10px] transition-colors ${
                       serverFilter ? "border-sky-500/50 text-sky-300" : "border-white/10 text-slate-400 hover:border-white/20"
                     }`}

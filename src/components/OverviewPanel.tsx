@@ -1,4 +1,5 @@
 import { useState, useMemo } from "react";
+import { ServerNameBadge } from "./ServerIdentity";
 import { 
   BarChart3, 
   Swords, Filter, RotateCcw, Users
@@ -285,7 +286,7 @@ export default function OverviewPanel({ characters, waitingList, activeParties }
                 {/* 1ª Linha: Nome do Servidor • Quantidade de personagens • Indicador do Potencial */}
                 <div className="flex items-center justify-between gap-1.5 pb-1.5 border-b border-[var(--th-line)]/30 min-w-0">
                   <div className="flex items-baseline gap-1.5 min-w-0">
-                    <h3 className="text-xs font-black text-white truncate tracking-wide">{srv.serverName}</h3>
+                    <h3 className="text-xs font-black truncate tracking-wide"><ServerNameBadge server={srv.serverName} /></h3>
                     <span className="text-[10px] text-slate-400 font-bold tabular-nums flex-shrink-0">
                       ({srv.eligibleChars} chars)
                     </span>

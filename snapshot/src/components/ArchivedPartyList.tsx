@@ -6,6 +6,7 @@ import { QUEST_BADGE_COLOR_CLASSES } from "../constants/questBadges";
 import { useAuth } from "../context/AuthContext";
 import { FilterSelect } from "./FilterTypes";
 import { serverLabel } from "../constants/servers";
+import { ServerNameBadge, renderServerOption } from "./ServerIdentity";
 
 const ITEM_COLORS: Record<string, string> = {
   "Soulbleeder": "#22c55e", "Soulkamas": "#22c55e", "Soulshredder": "#22c55e",
@@ -444,7 +445,7 @@ export default function ArchivedPartyList({ parties, userName, highlightedId, on
             className="mt-1 px-2 py-0.5 rounded bg-sky-500/10 border border-sky-500/30 text-sky-300 text-[8px] font-black uppercase tracking-wider max-w-[110px] truncate"
             title={`Servidor: ${getPartyMainServer(p)}`}
           >
-            <span className="opacity-70 mr-0.5"></span>{getPartyMainServer(p)}
+            <span className="opacity-70 mr-0.5"></span><ServerNameBadge server={getPartyMainServer(p)} />
           </div>
         </div>
 
@@ -633,6 +634,7 @@ export default function ArchivedPartyList({ parties, userName, highlightedId, on
               onSelect={setServerFilter}
               searchable
               placeholder="Filtrar Servidor"
+              renderOption={renderServerOption}
             />
 
             <FilterSelect

@@ -4,8 +4,8 @@ import type { Character } from "../types";
 import { VOC_COLORS } from "../types";
 import { FilterSelect, FilterMulti, FilterToggle, FilterNumber, FilterInline, type ToggleState } from "./FilterTypes";
 import RefreshButton from "./RefreshButton";
-import { serverLabel } from "../constants/servers";
 import { useAuth } from "../context/AuthContext";
+import { ServerNameBadge, renderServerOption } from "./ServerIdentity";
 
 /**
  * Informações de uma PT na qual o personagem já está — alimenta o tooltip do
@@ -235,6 +235,7 @@ export default function AvailableCharacter({
                     onSelect={setFilterServer}
                     searchable
                     disabled={serverLocked}
+                    renderOption={renderServerOption}
                   />
                 </div>
               </th>
@@ -383,7 +384,7 @@ export default function AvailableCharacter({
                       )}
                     </button>
                   </td>
-                  <td className="px-2 py-1.5 text-center text-slate-300 whitespace-nowrap">{serverLabel(c.servidor)}</td>
+                  <td className="px-2 py-1.5 text-center whitespace-nowrap"><ServerNameBadge server={c.servidor} className="justify-center" /></td>
                   <td className="px-2 py-1.5 text-center whitespace-nowrap"><span className="font-bold" style={{ color: VOC_COLORS[c.voc!] }}>{c.voc}</span></td>
                   <td className="px-2 py-1.5 text-center tabular-nums whitespace-nowrap">{c.level}</td>
                   <td className="px-2 py-1.5 text-center whitespace-nowrap">{c.soulwar ? <span className="text-emerald-400 font-bold text-[10px]">✓</span> : <span className="text-rose-500 font-bold text-[10px]">✕</span>}</td>

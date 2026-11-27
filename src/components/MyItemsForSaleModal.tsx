@@ -4,7 +4,7 @@ import { AlertTriangle, X, Coins, Check, PackageOpen, Globe, Megaphone, Pencil, 
 import type { Character, CharacterAcquisition, CharacterAcquisitionBuyerDetails, ItemSaleRecord } from "../types";
 import { formatRC } from "../types";
 import { SERVER_OPTIONS, serverLabel } from "../constants/servers";
-import { ServerSelectOptions } from "./ServerIdentity";
+import { ServerNameBadge, ServerSelectOptions } from "./ServerIdentity";
 import {
   BAZAAR_WATCHED_ITEMS_UPDATED_EVENT,
   applyOfficialWatchedItemUpdate,
@@ -1560,7 +1560,7 @@ export default function MyItemsForSaleModal({
                     />
                   )}
                   <Globe size={11} className="text-sky-400 flex-shrink-0" />
-                  <span className="text-[10px] font-black uppercase tracking-wider text-sky-300 truncate">{server}</span>
+                  <ServerNameBadge server={server} className="text-[10px] font-black uppercase tracking-wider min-w-0" />
                   {/* RESUMO DE VALORES DO SERVIDOR (ajuste atual) — itens
                       exibidos (pós-filtros): Base = Σ base exibida ×
                       quantidade; Considerado = Σ valor considerado

@@ -1,4 +1,5 @@
 import { Filter, Server, ShieldCheck, Swords, X } from "lucide-react";
+import { ServerNameBadge } from "./ServerIdentity";
 
 type QuestFilter = "all" | "available" | "completed";
 type ServerSelectionMode = "all" | "custom";
@@ -163,7 +164,7 @@ export default function BazaarSearchFiltersModal({
                   return (
                     <label key={server} className={`flex items-center gap-2 rounded-lg border px-2 py-2 text-xs cursor-pointer transition-colors ${checked ? "border-amber-500/30 bg-amber-500/10 text-amber-200" : "border-white/10 bg-white/5 text-slate-500 hover:text-slate-300"}`}>
                       <input type="checkbox" checked={checked} onChange={() => toggleServer(server)} className="accent-amber-500" />
-                      <span className="truncate">{server}</span>
+                      <ServerNameBadge server={server} className="min-w-0" />
                     </label>
                   );
                 })}

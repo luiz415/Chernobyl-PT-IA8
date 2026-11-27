@@ -1,4 +1,5 @@
 import { useMemo, useState, useEffect } from "react";
+import { ServerNameBadge } from "./ServerIdentity";
 import { createPortal } from "react-dom";
 import { X, Coins, Copy, Check, PackageOpen, Users, Swords, Globe, ExternalLink } from "lucide-react";
 import type { Character, ItemSaleRecord, PartyTab, WaitingService } from "../types";
@@ -508,9 +509,9 @@ export default function ItemsForSaleModal({ parties, characters, waitingList, on
                       </span>
                     )}
                     {g.serverName && (
-                      <span className="inline-flex items-center gap-1 text-[10px] font-bold px-1.5 py-px rounded-md border border-sky-500/35 bg-sky-500/15 text-sky-300 flex-shrink-0">
-                        <Globe size={9} className="flex-shrink-0" />
-                        {g.serverName}
+                      <span className="inline-flex items-center gap-1 text-[10px] font-bold px-1.5 py-px rounded-md border border-sky-500/35 bg-sky-500/15 flex-shrink-0">
+                        <Globe size={9} className="flex-shrink-0 text-sky-300" />
+                        <ServerNameBadge server={g.serverName} />
                       </span>
                     )}
                     {/* Copiar (WA) da PT — mesmo texto/comportamento do botão da PT */}

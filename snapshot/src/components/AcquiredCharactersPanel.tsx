@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { ServerNameBadge } from "./ServerIdentity";
 import { BriefcaseBusiness, Check, Clock3, Copy, Handshake, Pencil, RotateCcw, Send, UserRound } from "lucide-react";
 import type { Character, CharacterAcquisition, CharacterAcquisitionBuyerDetails, NegotiationTimestamp, PtType } from "../types";
 import { formatRC } from "../types";
@@ -121,7 +122,7 @@ function CharacterCell({ record }: { record: CharacterAcquisition }) {
           : <Copy size={10} className="flex-shrink-0 text-slate-500 opacity-0 transition-opacity group-hover:opacity-80" />}
       </button>
       <div className="mt-0.5 truncate font-mono text-[9px] text-slate-500" title={`${record.server || "—"} · ${record.vocation || "—"} · Lv ${record.level || 0}`}>
-        {record.server || "—"} · {record.vocation || "—"} · Lv {record.level || 0}
+        <ServerNameBadge server={record.server} iconSize={8} /> · {record.vocation || "—"} · Lv {record.level || 0}
       </div>
     </div>
   );

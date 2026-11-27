@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { ServerNameBadge } from "./ServerIdentity";
 import { createPortal } from "react-dom";
 import { AlertTriangle, X, Package, Globe, Search, User, Coins, Check, Pencil, Trash2, Swords } from "lucide-react";
 import type { Character, ItemSaleRecord } from "../types";
@@ -441,7 +442,7 @@ export default function FoundItemsModal({
                     </button>
                   )}
                   <span className="inline-flex items-center gap-1 text-[9px] font-black uppercase tracking-wider text-sky-300" title="Servidor do snapshot — os valores vieram da Lista de Itens deste servidor">
-                    <Globe size={9} className="flex-shrink-0" /> {group.serverName || "—"}
+                    <Globe size={9} className="flex-shrink-0" /> <ServerNameBadge server={group.serverName} />
                   </span>
                   <span className="ml-auto inline-flex items-center gap-1.5 text-[9px] text-slate-400 tabular-nums flex-shrink-0">
                     {group.items.length} ite{group.items.length === 1 ? "m" : "ns"}

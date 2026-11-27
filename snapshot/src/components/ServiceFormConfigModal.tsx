@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { ServerNameBadge } from "./ServerIdentity";
 import { X, Check, SlidersHorizontal, Server, AlertTriangle, Settings2 } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 import { db, isSimulationMode } from "../firebase/config";
@@ -699,7 +700,7 @@ export default function ServiceFormConfigModal({ open, onClose }: Props) {
                             <span className={`w-3.5 h-3.5 rounded border flex items-center justify-center flex-shrink-0 ${selected ? "border-cyan-400 bg-cyan-500/40" : "border-slate-600"}`}>
                               {selected && <Check size={10} className="text-white" />}
                             </span>
-                            <span className="truncate">{server}</span>
+                            <ServerNameBadge server={server} className="min-w-0" />
                           </button>
                         );
                       })}

@@ -181,6 +181,7 @@ interface SortEntry { key: string; dir: "asc" | "desc"; }
 interface ContextMenuState { colKey: string; label: string; x: number; y: number; }
 
 import { createPortal } from "react-dom";
+import { ServerNameBadge, renderServerOption } from "./ServerIdentity";
 
 export function ItemSelect({ value, onChange, itemList, disabled = false, disabledReason }: { value: string; onChange: (v: string) => void | Promise<void>; itemList: string[]; disabled?: boolean; disabledReason?: string }) {
   const [open, setOpen] = useState(false);
@@ -661,6 +662,9 @@ export default function CharTable({ characters, activeParties = [], readOnly, sh
       // Nome canônico: um personagem gravado como "Spectrum" aparece (e é
       // filtrado/ordenado) como "Bellum". O dado salvo não muda.
       get: (c) => serverLabel(c.servidor),
+      // 126ª — identidade visual: cor da categoria de PVP + cadeado de
+      // transferência (ordenação/filtragem seguem pelo `get` acima).
+      render: (c) => <ServerNameBadge server={c.servidor} className="justify-center" />,
     },
     {
       key: "voc", label: "Voc", align: "center",
@@ -1238,6 +1242,7 @@ export default function CharTable({ characters, activeParties = [], readOnly, sh
             onApply={(values) => setMultiChoiceFilters((f) => ({ ...f, servidor: values }))}
             placeholder="Servidor"
             searchable
+            renderOption={renderServerOption}
           />
         </div>
       );

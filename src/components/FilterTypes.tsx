@@ -20,6 +20,13 @@ interface FilterSelectProps {
   searchPlaceholder?: string;
   emptyMessage?: string;
   /**
+   * Renderização custom de cada opção (e da opção selecionada no botão).
+   * Usado p/ dar identidade visual às opções SEM duplicar lógica nos
+   * consumidores — ex.: servidores coloridos por categoria de PVP
+   * (renderServerOption de ServerIdentity). A busca continua pelo TEXTO.
+   */
+  renderOption?: (opt: string) => React.ReactNode;
+  /**
    * z-index do dropdown. O padrão (600) atende os painéis, mas dentro de um
    * modal — que usa z-index bem mais alto — a lista ficaria PINTADA ATRÁS do
    * overlay e pareceria não abrir. Nesse caso passe um valor acima do modal.
@@ -36,6 +43,8 @@ interface FilterMultiProps {
   placeholder?: string;
   searchable?: boolean;
   disabled?: boolean;
+  /** Renderização custom de cada opção — ver FilterSelectProps.renderOption. */
+  renderOption?: (opt: string) => React.ReactNode;
 }
 
 interface FilterToggleProps {
@@ -176,6 +185,7 @@ function FilterSelect({
   activeColor = "red",
   searchPlaceholder = "Buscar...",
   emptyMessage = "Nenhuma opção encontrada",
+  renderOption,
   dropdownZIndex,
 }: FilterSelectProps) {
   const { open, setOpen, dropPos, btnRef, dropRef, updatePosition } = useFilterDropdown();
@@ -221,13 +231,13 @@ function FilterSelect({
       >
         {className ? (
           <>
-            <span className="truncate">{displayText}</span>
+            <span className="truncate">{selected && renderOption ? renderOption(selected) : displayText}</span>
             <ChevronDown size={14} className={`flex-shrink-0 transition-transform duration-150 ${open ? "rotate-180" : ""} text-slate-500`} />
           </>
         ) : (
           <>
             {icon && <span className="flex-shrink-0">{icon}</span>}
-            <span className="truncate max-w-[120px]">{displayText}</span>
+            <span className="truncate max-w-[120px]">{selected && renderOption ? renderOption(selected) : displayText}</span>
             <ChevronDown size={10} className={`flex-shrink-0 transition-transform ${open ? "rotate-180" : ""} ${hasSelection ? "text-red-400" : "text-slate-500"}`} />
           </>
         )}
@@ -258,7 +268,7 @@ function FilterSelect({
                   onMouseDown={(e) => { e.preventDefault(); handleSelect(opt); }}
                   className={`px-3 py-1.5 text-[11px] cursor-pointer transition-colors ${opt === selected ? (isCyan ? "bg-cyan-500/15 text-cyan-200 font-semibold border-l-2 border-cyan-500" : "bg-red-500/15 text-red-300 font-bold border-l-2 border-red-500") : (isCyan ? "text-slate-300 hover:bg-cyan-500/10 hover:text-cyan-300" : "text-slate-300 hover:bg-red-500/10 hover:text-red-300")}`}
                 >
-                  {opt}
+                  {renderOption ? renderOption(opt) : opt}
                 </div>
               ))
             )}
@@ -279,6 +289,7 @@ function FilterMulti({
   placeholder = "Filtro",
   searchable = false,
   disabled = false,
+  renderOption,
 }: FilterMultiProps) {
   const { open, setOpen, dropPos, btnRef, dropRef, updatePosition } = useFilterDropdown(220, 260);
   const [search, setSearch] = useState("");
@@ -355,7 +366,7 @@ function FilterMulti({
                       onChange={() => toggleValue(opt)}
                       className="w-3.5 h-3.5 accent-red-500 cursor-pointer"
                     />
-                    <span className="truncate">{opt}</span>
+                    <span className="truncate">{renderOption ? renderOption(opt) : opt}</span>
                   </label>
                 );
               })

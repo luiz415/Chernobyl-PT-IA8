@@ -39,9 +39,25 @@ export const OFFICIAL_SERVERS = [
 
 // ── CLASSIFICAÇÃO OFICIAL (tipo de PVP + situação de transferência) ─────────
 
-/** Categorias de PVP dos servidores — ordem canônica de exibição. */
-export type ServerPvpType = "PVP" | "Retro PVP" | "Non PVP";
-export const SERVER_PVP_TYPE_ORDER: readonly ServerPvpType[] = ["PVP", "Retro PVP", "Non PVP"];
+/**
+ * Categorias de PVP dos servidores — ordem canônica de exibição.
+ * 126ª — nomenclatura oficial: a categoria antes chamada só de "PVP" passou a
+ * se chamar "Open PVP" em todo o aplicativo; "Retro PVP" e "Non PVP" são
+ * nomes próprios e permanecem como estão.
+ */
+export type ServerPvpType = "Open PVP" | "Retro PVP" | "Non PVP";
+export const SERVER_PVP_TYPE_ORDER: readonly ServerPvpType[] = ["Open PVP", "Retro PVP", "Non PVP"];
+
+/**
+ * Forma COMPACTA da categoria, para quando ela acompanha o nome do servidor
+ * (ex.: "Infernum · Retro", "Auroria · Open", "Eldrian · Non" no PartyPanel).
+ * Fonte única — nunca recrie estas abreviações nos componentes.
+ */
+export const SERVER_PVP_TYPE_SHORT: Readonly<Record<ServerPvpType, string>> = {
+  "Open PVP": "Open",
+  "Retro PVP": "Retro",
+  "Non PVP": "Non",
+};
 
 export interface OfficialServerMeta {
   pvpType: ServerPvpType;
@@ -51,21 +67,21 @@ export interface OfficialServerMeta {
 
 /** Catálogo oficial: tipo de PVP e transferência de CADA servidor. */
 export const SERVER_META: Readonly<Record<string, OfficialServerMeta>> = {
-  "Auroria":   { pvpType: "PVP",       transferOpen: true },
-  "Belaria":   { pvpType: "PVP",       transferOpen: true },
+  "Auroria":   { pvpType: "Open PVP",  transferOpen: true },
+  "Belaria":   { pvpType: "Open PVP",  transferOpen: true },
   "Bellum":    { pvpType: "Retro PVP", transferOpen: true },
   "Dominum":   { pvpType: "Retro PVP", transferOpen: false },
-  "Drakaria":  { pvpType: "PVP",       transferOpen: false },
+  "Drakaria":  { pvpType: "Open PVP",  transferOpen: false },
   "Eldrian":   { pvpType: "Non PVP",   transferOpen: false },
   "Elysian":   { pvpType: "Non PVP",   transferOpen: true },
   "Infernum":  { pvpType: "Retro PVP", transferOpen: false },
   "Lunarian":  { pvpType: "Non PVP",   transferOpen: true },
-  "Malveria":  { pvpType: "PVP",       transferOpen: false },
+  "Malveria":  { pvpType: "Open PVP",  transferOpen: false },
   "Mystian":   { pvpType: "Non PVP",   transferOpen: true },
   "Obsidian":  { pvpType: "Non PVP",   transferOpen: false },
   "Solarian":  { pvpType: "Non PVP",   transferOpen: true },
   "Tenebrium": { pvpType: "Retro PVP", transferOpen: false },
-  "Vesperia":  { pvpType: "PVP",       transferOpen: true },
+  "Vesperia":  { pvpType: "Open PVP",  transferOpen: true },
 };
 
 /** Metadados do servidor (aceita alias/caixa) — null para inválidos. */
@@ -77,13 +93,13 @@ export function getServerMeta(value: string | null | undefined): OfficialServerM
 /**
  * IDENTIDADE VISUAL por categoria de PVP — fonte única de cores usada em
  * TODAS as exibições de servidores (badges, selects, tabelas):
- *   PVP = vermelho-rosa · Retro PVP = âmbar · Non PVP = esmeralda.
+ *   Open PVP = amarelo · Retro PVP = vermelho · Non PVP = esmeralda (126ª).
  * `optionHex` é a cor equivalente para <option>/<optgroup> nativos (que não
  * aceitam classes Tailwind de forma confiável).
  */
 export const SERVER_PVP_TYPE_COLORS: Readonly<Record<ServerPvpType, { text: string; border: string; bg: string; dot: string; optionHex: string }>> = {
-  "PVP":       { text: "text-rose-300",    border: "border-rose-500/40",    bg: "bg-rose-500/10",    dot: "bg-rose-400",    optionHex: "#fda4af" },
-  "Retro PVP": { text: "text-amber-300",   border: "border-amber-500/40",   bg: "bg-amber-500/10",   dot: "bg-amber-400",   optionHex: "#fcd34d" },
+  "Open PVP":  { text: "text-yellow-300",  border: "border-yellow-500/40",  bg: "bg-yellow-500/10",  dot: "bg-yellow-400",  optionHex: "#fde047" },
+  "Retro PVP": { text: "text-red-300",     border: "border-red-500/40",     bg: "bg-red-500/10",     dot: "bg-red-400",     optionHex: "#fca5a5" },
   "Non PVP":   { text: "text-emerald-300", border: "border-emerald-500/40", bg: "bg-emerald-500/10", dot: "bg-emerald-400", optionHex: "#6ee7b7" },
 };
 

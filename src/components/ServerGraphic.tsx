@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import { ServerNameBadge } from "./ServerIdentity";
 import { Swords, X } from "lucide-react";
 import type { Character, WaitingService } from "../types";
 import { serverKey, serverLabel } from "../constants/servers";
@@ -80,7 +81,9 @@ export default function ServersPyramidChart({ availableChars, waitingItems, sele
                   }`}
                 >
                   {isPartyServer && !isActive && <Swords size={8} className="text-sky-300 flex-shrink-0" />}
-                  <span>{item.srv}</span>
+                  {/* 126ª — cor da categoria; agregados sem servidor oficial
+                      ("Desconhecido") permanecem como texto simples. */}
+                  {serverLabel(item.srv) ? <ServerNameBadge server={item.srv} /> : <span>{item.srv}</span>}
                   <span className={`font-bold font-mono ${isActive ? "text-amber-300" : isPartyServer ? "text-sky-300" : "text-emerald-400"}`}>({item.count})</span>
                   {isActive && <X size={9} className="text-amber-300 ml-0.5" />}
                 </button>

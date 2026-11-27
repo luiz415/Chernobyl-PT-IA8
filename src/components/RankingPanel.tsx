@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from "react";
+import { ServerNameBadge } from "./ServerIdentity";
 import {
   Trophy,
   ChevronDown,
@@ -980,7 +981,7 @@ export default function RankingPanel({
                       const srvPct = Math.round((cnt / concl) * 100);
                       return (
                         <div key={srv} className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-black/40 border border-sky-500/20 text-xs">
-                          <span className="font-bold text-sky-300">{srv}</span>
+                          <ServerNameBadge server={srv} nameClassName="font-bold" />
                           <span className="text-[10px] font-black text-sky-400 bg-sky-500/10 px-1 rounded tabular-nums">{cnt}× ({srvPct}%)</span>
                         </div>
                       );

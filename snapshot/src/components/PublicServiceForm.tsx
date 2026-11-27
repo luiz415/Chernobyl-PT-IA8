@@ -2,6 +2,7 @@
 // via AuthContext/config, então o import() dinâmico era inócuo (warning
 // INEFFECTIVE_DYNAMIC_IMPORT do build) e nunca criava chunk separado.
 import { signInAnonymously } from "firebase/auth";
+import { ServerNameBadge } from "./ServerIdentity";
 import { useState, useEffect, useRef, useMemo } from "react";
 import type { CSSProperties } from "react";
 import publicFormBgUrl from "../assets/public-form-bg.webp"; // WebP: 609 KB → ~229 KB
@@ -247,8 +248,8 @@ function ServerPicker({
               : "border-white/20 hover:border-white/30"
         }`}
       >
-        <span className={`truncate ${selected ? "text-white font-semibold" : "text-slate-500"}`}>
-          {selected || "Selecione o servidor"}
+        <span className={`truncate ${selected ? "font-semibold" : "text-slate-500"}`}>
+          {selected ? <ServerNameBadge server={selected} /> : "Selecione o servidor"}
         </span>
         <ChevronDown size={16} className={`flex-shrink-0 transition-transform duration-200 ${open ? "rotate-180 text-cyan-300" : "text-slate-400"}`} />
       </button>
@@ -281,7 +282,7 @@ function ServerPicker({
                       : "border-transparent text-slate-200 hover:bg-cyan-500/10 hover:text-cyan-100"
                   }`}
                 >
-                  <span className="truncate">{server}</span>
+                  <ServerNameBadge server={server} className="min-w-0" />
                   {sel && <Check size={13} className="flex-shrink-0 text-cyan-300" />}
                 </button>
               );

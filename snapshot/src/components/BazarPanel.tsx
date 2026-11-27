@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { ServerNameBadge } from "./ServerIdentity";
 import bazarBgUrl from "../assets/bazar-bg.webp"; // WebP: 1,78 MB → ~157 KB (mesma imagem)
 import { AlertTriangle, ArrowDownUp, BarChart3, Check, CheckCircle2, ChevronDown, ChevronUp, Coins, Copy, Crown, ExternalLink, Eye, EyeOff, Filter, FlagTriangleRight, Flame, Globe, Package, Plus, RefreshCw, RotateCcw, ShieldAlert, ShoppingBag, Sparkles, Star, Target, Users, X } from "lucide-react";
 import BazaarItemsPanel from "./BazaarItemsPanel";
@@ -5622,8 +5623,8 @@ function BazarPanelContent({ sharedCharacters = [], waitingList = [], activePart
                 <Package size={16} className="text-fuchsia-400 flex-shrink-0" />
                 <span className="text-sm font-bold text-fuchsia-300 truncate">{view.name || "Personagem"}</span>
                 {view.server && (
-                  <span className="inline-flex items-center gap-1 rounded border border-fuchsia-500/30 bg-fuchsia-500/10 px-1.5 py-0.5 text-[9px] font-black uppercase tracking-wide text-fuchsia-300 flex-shrink-0" title="Os valores vêm da Lista de Itens deste servidor (última consulta da guia Itens)">
-                    {view.server}
+                  <span className="inline-flex items-center gap-1 rounded border border-fuchsia-500/30 bg-fuchsia-500/10 px-1.5 py-0.5 text-[9px] font-black uppercase tracking-wide flex-shrink-0" title="Os valores vêm da Lista de Itens deste servidor (última consulta da guia Itens)">
+                    <ServerNameBadge server={view.server} />
                   </span>
                 )}
                 <span className="inline-flex items-center rounded border border-white/15 bg-white/5 px-1.5 py-0.5 text-[9px] font-bold text-slate-400 flex-shrink-0" title="Os ajustes feitos aqui (Coin, itens e Ouro) valem só para você, neste dispositivo — nada é gravado no Firestore nem muda a visualização de outros usuários. São descartados quando o personagem sai da lista atual.">

@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
+import { ServerNameBadge } from "./ServerIdentity";
 import { createPortal } from "react-dom";
 import { X, Check, Copy, Sparkles, UserCheck, ShieldAlert, RefreshCw, Save, Ban, Users, ChevronUp, ChevronDown, Lock, LockOpen, Settings2, Target, Server, Zap, Swords, Eye, CalendarDays, Clock, AlertTriangle } from "lucide-react";
 import type { Character, PartyTab, WaitingService, Vocation } from "../types";
@@ -1625,7 +1626,7 @@ export default function SuggestPartyModal({
                           className={`px-3 py-1.5 text-[10px] cursor-pointer transition-colors flex items-center justify-between gap-3 ${isSelected ? "bg-red-500/15 text-red-300 font-bold border-l-2 border-red-500" : "text-slate-300 hover:bg-red-500/5 hover:text-red-200"}`}
                         >
                           <div className="flex items-center gap-2 min-w-0">
-                            <span className="truncate font-semibold">{srv}</span>
+                            <ServerNameBadge server={srv} nameClassName="font-semibold" />
                             <span className="font-mono text-[9px] text-amber-500 font-black">[{String(count).padStart(2, "0")}]</span>
                           </div>
                           <span className={`text-[9px] font-bold uppercase tracking-wider flex-shrink-0 ${statusColorClass}`}>
@@ -1757,7 +1758,7 @@ export default function SuggestPartyModal({
               {liveCandidates.length > 0 && (
                 <div className="flex items-center gap-1.5">
                   <span className="px-2 py-0.5 rounded bg-red-900/30 border border-red-800/40 text-[9px] font-bold text-red-300">{result?.templateName || "PT"}</span>
-                  <span className="px-2 py-0.5 rounded bg-sky-900/30 border border-sky-800/40 text-[9px] font-bold text-sky-300">{result?.server}</span>
+                  <span className="px-2 py-0.5 rounded bg-sky-900/30 border border-sky-800/40 text-[9px] font-bold"><ServerNameBadge server={result?.server} /></span>
                   <span className="px-2 py-0.5 rounded bg-amber-900/30 border border-amber-800/40 text-[9px] font-bold text-amber-300">Lv {avgLevel}</span>
                   <span className={`px-2 py-0.5 rounded text-[9px] font-bold flex items-center gap-0.5 ${levelGapIndices.size === 0 ? "bg-emerald-900/30 border border-emerald-800/40 text-emerald-300" : "bg-rose-900/30 border border-rose-800/40 text-rose-300"}`}>
                     {levelGapIndices.size === 0 ? <Check size={9} /> : <X size={9} />} Share
@@ -1876,7 +1877,7 @@ export default function SuggestPartyModal({
                           </button>
                           {cand.type === "waiting" && <span className="ml-1 px-1 py-0.5 rounded bg-cyan-900/30 text-cyan-400 text-[7px] font-mono border border-cyan-800/40">Svc</span>}
                         </td>
-                        <td className="px-3 py-2 text-slate-300 text-[10px]">{cand.servidor}</td>
+                        <td className="px-3 py-2 text-[10px]"><ServerNameBadge server={cand.servidor} /></td>
                         <td className="px-3 py-2 text-center">
                           <div className="flex items-center justify-center gap-1">
                             {/* Vocação atual: elemento PRINCIPAL da coluna. */}

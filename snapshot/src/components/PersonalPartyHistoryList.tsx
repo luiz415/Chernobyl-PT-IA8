@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { renderServerOption } from "./ServerIdentity";
 import { Archive, Check, Clock, Coins, Copy, Crown, ExternalLink, Lock, Pencil, RotateCcw, ShieldCheck, Swords, User, Users, X } from "lucide-react";
 import type { PersonalPartyHistory, PersonalPartyHistorySlot } from "../types";
 import { customAlert, formatRC } from "../types";
@@ -967,6 +968,7 @@ export default function PersonalPartyHistoryList({ entries, uid, userName, readO
           searchable
           allLabel="Todos"
           emptyMessage="Nenhum servidor registrado no histórico"
+          renderOption={renderServerOption}
         />
         <FilterSelect
           label="Ordenar por"

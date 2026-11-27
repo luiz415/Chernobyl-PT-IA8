@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
+import { ServerNameBadge, renderServerOption } from "./ServerIdentity";
 import { createPortal } from "react-dom";
 import { Plus, Users, X, Lock, LockOpen, RotateCcw, ChevronDown, UserCheck, ArrowDown, ArrowUp, ArrowUpDown, Sparkles, RefreshCw, BarChart3, Eye, EyeOff, MousePointerClick, Coins, Globe, Crown, CalendarClock, Timer, PauseCircle, CheckCircle2 } from "lucide-react";
 import type { Character, CharacterAcquisition, PartyFinalizationReason, PartyTab, WaitingService } from "../types";
@@ -1134,7 +1135,7 @@ export default function PartyManager({ parties, characters, waitingList, userNam
                       filterServer === srv ? "bg-red-900/30 text-red-300" : "text-slate-300 hover:bg-red-900/20 hover:text-white"
                     }`}
                   >
-                    {srv}
+                    {renderServerOption(srv)}
                   </div>
                 ))
               )}
@@ -1256,7 +1257,7 @@ export default function PartyManager({ parties, characters, waitingList, userNam
                               : "text-slate-300 hover:bg-red-900/20 hover:text-white"
                           }`}
                         >
-                          {srv}
+                          {renderServerOption(srv)}
                         </div>
                       ))}
                     </div>
@@ -1718,7 +1719,7 @@ export default function PartyManager({ parties, characters, waitingList, userNam
                                 ) : null}
                                 <span className="ml-auto inline-flex items-center gap-1 text-[9px] font-bold text-slate-400 flex-shrink-0">
                                   <Globe size={9} className="text-slate-500" />
-                                  {serverLabel(p.servidor) || "—"}
+                                  <ServerNameBadge server={p.servidor} />
                                 </span>
                               </div>
                               {/* Líder + status do estágio */}

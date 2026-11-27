@@ -7,6 +7,7 @@ import { useAuth } from "../context/AuthContext";
 import { openExternalUrl } from "../utils/openExternal";
 import { rubinotCharacterUrl } from "../utils/rubinotLinks";
 import type { OtherPartyInfo } from "./AvailableCharacter";
+import { ServerNameBadge, renderServerOption } from "./ServerIdentity";
 export default function WaitingServiceAvailableList({ items, selectedIds, isFull, onAdd, filters, setFilters, swLocked = false, sgLocked = false, serverLocked = false, idsInOtherParties, otherPartiesInfoFor }: {
   items: WaitingService[];
   selectedIds: Set<string>;
@@ -193,6 +194,7 @@ export default function WaitingServiceAvailableList({ items, selectedIds, isFull
                   onSelect={(v) => updateFilter("servidor", v)}
                   searchable
                   disabled={serverLocked}
+                  renderOption={renderServerOption}
                 />
               </div>
             </th>
@@ -331,7 +333,7 @@ export default function WaitingServiceAvailableList({ items, selectedIds, isFull
                     </button>
                   </span>
                 </td>
-                <td className="px-2 py-1.5 text-center whitespace-nowrap">{w.servidor || "—"}</td>
+                <td className="px-2 py-1.5 text-center whitespace-nowrap"><ServerNameBadge server={w.servidor} className="justify-center" /></td>
                 <td className="px-2 py-1.5 text-center whitespace-nowrap"><span className="font-bold" style={{ color: VOC_COLORS[w.voc!] }}>{w.voc}</span></td>
                 <td className="px-2 py-1.5 text-center tabular-nums whitespace-nowrap">{w.level || "—"}</td>
                 <td className="px-2 py-1.5 text-center whitespace-nowrap">{w.ownerName || "—"}</td>

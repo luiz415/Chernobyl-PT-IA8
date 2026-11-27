@@ -24,6 +24,7 @@
 // ============================================================================
 
 import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { renderServerOption } from "./ServerIdentity";
 import { AlertTriangle, BarChart3, Coins, Database, Eraser, HelpCircle, RefreshCw, SlidersHorizontal, Square } from "lucide-react";
 import { FilterMulti } from "./FilterTypes";
 import BazaarBrowserModal, { DEFAULT_BAZAAR_QUEST_SOURCE, normalizeBazaarQuestSource } from "./BazaarBrowserModal";
@@ -808,7 +809,7 @@ export default function BazaarStatsPanel({ isBossUser, isElectron, isOtherQueryR
             </div>
             <div className="flex flex-col gap-0.5" title="Servidores dos personagens vendidos. Seleção múltipla; nenhum selecionado = todos os servidores.">
               <FieldLabel text="Servidor" hint="Servidores dos personagens vendidos. Seleção múltipla; nenhum selecionado = todos os servidores." active={filters.servers.length > 0} />
-              <FilterMulti label="Servidor" options={serverOptions} selected={filters.servers} onApply={values => updateFilters({ servers: values })} placeholder="Servidor" searchable />
+              <FilterMulti label="Servidor" options={serverOptions} selected={filters.servers} onApply={values => updateFilters({ servers: values })} placeholder="Servidor" searchable renderOption={renderServerOption} />
             </div>
           </FilterCategory>
 

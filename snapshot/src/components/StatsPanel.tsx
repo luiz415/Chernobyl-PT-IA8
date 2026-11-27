@@ -31,6 +31,7 @@ import { computeCharacterItemsRc } from "../utils/characterItemsValue";
 import { collectCharacterDropEvents } from "../utils/questStatusHistory";
 import { SERVER_COIN_RATES_EVENT, getServerCoinRate, readLocalCoinRates } from "../utils/bazaarCoinRates";
 import { toFirestoreMillis } from "../utils/firestoreTimestamp";
+import { ServerNameBadge, renderServerOption } from "./ServerIdentity";
 
 // ============================================================================
 // STATS — Dashboard de estatísticas do usuário
@@ -1185,7 +1186,7 @@ export default function StatsPanel({ characters, parties = [], partyHistory = []
               </div>
               <div className="flex flex-col gap-0.5" title="Servidores considerados (seleção múltipla). Nenhum selecionado = todos. Também delimita o Relatório de PT's, a seção Servidor e o Lucro de Services.">
                 <span className={`text-[9px] font-black uppercase tracking-wide ${adv.servers.length > 0 ? "text-amber-300" : "text-slate-400"}`}>Servidor</span>
-                <FilterMulti label="Servidor" options={serverOptions} selected={adv.servers} onApply={(values) => updateAdvanced({ servers: values })} placeholder="Servidor" searchable />
+                <FilterMulti label="Servidor" options={serverOptions} selected={adv.servers} onApply={(values) => updateAdvanced({ servers: values })} placeholder="Servidor" searchable renderOption={renderServerOption} />
               </div>
               <StatsRangeField label="Level" range={adv.level} onChange={(range) => updateAdvanced({ level: range })} hint="Faixa de level do personagem (mín/máx livres). Vazio em um lado = sem limite naquele lado." />
               <button
@@ -1310,7 +1311,7 @@ export default function StatsPanel({ characters, parties = [], partyHistory = []
             {serverStats.map((s) => (
               <div key={s.srv} className="rounded-lg border border-[var(--th-line)]/20 bg-black/20 px-2.5 py-2 flex flex-col gap-1 transition-colors hover:border-amber-500/30" title={`${s.srv}\n\nPT's concluídas: ${s.ptCount}\nLucro médio por personagem: ${moneyAvg(s.avgProfit)}\nLucro total: ${money(s.totalProfit)}`}>
                 <div className="flex items-center justify-between gap-2">
-                  <span className="text-[11px] font-black text-slate-100 truncate">{s.srv}</span>
+                  <ServerNameBadge server={s.srv} className="text-[11px] font-black min-w-0" />
                   <span className="flex-shrink-0 text-[9px] font-bold text-slate-400 tabular-nums bg-white/[0.04] border border-white/10 px-1.5 py-px rounded-full">{s.ptCount} PT{s.ptCount !== 1 ? "s" : ""}</span>
                 </div>
                 <div className="grid grid-cols-2 gap-x-2 gap-y-1 mt-1">
